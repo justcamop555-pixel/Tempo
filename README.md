@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.26**
+**Version 1.0.29**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -102,6 +102,8 @@ startup check explains how to install it manually.
   - *Current cursor position* — clicks wherever the pointer is.
   - *Fixed position* — clicks a single captured coordinate.
   - *Multi-point* — cycles through a list of points (see the Multi-Point tab).
+  - *Restore cursor when stopped* — for Fixed / Multi-Point modes, return the
+    pointer to where it was before the run started.
 - **Repeat** — run until stopped, stop after a fixed number of clicks, or run
   for a set duration (seconds), after which clicking stops automatically.
 - **Randomization** — add ± jitter to the interval (ms) and/or the click
@@ -139,7 +141,8 @@ button, click type, dwell time, per-point repeat count and enabled flag.
 A live dashboard of cards: session & launch clicks, current/peak/average CPS,
 clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
 - **Session goal** — set a target click count for the session and watch a live
-  progress bar; Tempo notifies you when the goal is reached.
+  progress bar with an ETA at the current rate; Tempo notifies you when the goal
+  is reached.
 - **Per-button breakdown** with a stacked distribution bar.
 - **Lifetime totals** and **records** (most clicks per run, longest run,
   averages per session) that persist across runs.
@@ -176,6 +179,9 @@ show/hide window.
 | Emergency stop  | **F8**      |
 
 The emergency stop immediately halts clicking, macro playback and recording.
+
+You can also switch tabs from the keyboard: **Ctrl+1…9** jump to a tab, and
+**Ctrl+Tab** / **Ctrl+Shift+Tab** cycle through them.
 
 ---
 
@@ -292,6 +298,17 @@ files — one per tab — so each section stays focused and readable.
 ---
 
 ## Changelog
+
+### 1.0.29
+**New**
+- Tabs: **keyboard navigation** — Ctrl+1…9 jump straight to a tab, and
+  Ctrl+Tab / Ctrl+Shift+Tab cycle through them.
+- Clicker: **Restore cursor position when stopped** — for Fixed and Multi-Point
+  modes, the cursor returns to where it was before the run started.
+- Macros: the playback panel now shows the **estimated total time** for the
+  selected macro at its current loop/speed/delay settings.
+- Statistics: the **session goal** now shows a live **ETA** ("~time left") at the
+  current click rate while running.
 
 ### 1.0.26
 **New**
