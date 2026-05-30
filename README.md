@@ -15,6 +15,39 @@ themes.
 
 ---
 
+## ⚠️ Only download Tempo from the official source
+
+**The only official place to get Tempo is this GitHub repository:**
+
+### → <https://github.com/justcamop555-pixel/Tempo/releases>
+
+Always download `Tempo.exe` from the **Releases** page above. That is the single
+official source. **Do not download Tempo from anywhere else.**
+
+Copies offered on other websites — "free download" portals, software mirrors,
+ad links, search-result downloads, file-sharing sites, YouTube descriptions,
+Discord messages, or anyone claiming to share "Tempo" — are **not official** and
+**may be modified to contain malware, spyware, or miners.** If you didn't get it
+from the link above, don't trust it.
+
+**How to stay safe:**
+
+- Get every release **only** from the official Releases page (or via the app's
+  built-in updater, which only ever connects to this same GitHub repository).
+- Tempo is **free**. Nobody should ever charge you for it, ask for your password,
+  payment details, or personal information, or tell you to disable your
+  antivirus. If something does, it isn't the real Tempo.
+- Tempo only connects to the internet for **one** thing: checking GitHub for a
+  newer version. It does not collect or send your data anywhere.
+- A **"Windows protected your PC" / "Unknown publisher"** prompt on the official
+  build is normal (it isn't code-signed) — click **More info → Run anyway**. This
+  is *not* the same as downloading from an untrusted source; it appears even on
+  the genuine file. When in doubt, re-download from the official link above.
+- If you find Tempo being distributed somewhere else, treat it as untrusted and
+  don't run it.
+
+---
+
 ## Requirements
 
 - **Windows 10 or 11**
