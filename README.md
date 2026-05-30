@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.36**
+**Version 1.0.37**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -348,6 +348,15 @@ files — one per tab — so each section stays focused and readable.
 ---
 
 ## Changelog
+
+### 1.0.37
+**Improved**
+- Full code audit — no bugs, dead code, leaks or compiler warnings found.
+- **Language now covers runtime status text too**, so the interface stays in your
+  language everywhere: the RUNNING / IDLE / PAUSED state, the profile label, macro
+  playback/recording status, the session-goal message, and the detection readout.
+- The "Check for updates" button keeps its language after a check instead of
+  reverting to English.
 
 ### 1.0.36
 **Fixed**
