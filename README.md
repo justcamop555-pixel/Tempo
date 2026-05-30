@@ -345,6 +345,19 @@ files — one per tab — so each section stays focused and readable.
 - Statistics: the **session goal** now shows a live **ETA** (“~time left”) at the
   current click rate while running.
 
+### 1.0.29
+
+**New**
+
+- Tabs: **keyboard navigation** — Ctrl+1…9 jump straight to a tab, and
+  Ctrl+Tab / Ctrl+Shift+Tab cycle through them.
+- Clicker: **Restore cursor position when stopped** — for Fixed and Multi-Point
+  modes, the cursor returns to where it was before the run started.
+- Macros: the playback panel now shows the **estimated total time** for the
+  selected macro at its current loop/speed/delay settings.
+- Statistics: the **session goal** now shows a live **ETA** ("~time left") at the
+  current click rate while running.  
+
 ### 1.0.26
 
 **New**
