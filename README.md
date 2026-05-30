@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.34**
+**Version 1.0.35**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -168,6 +168,9 @@ button, click type, dwell time, per-point repeat count and enabled flag.
 - **Organise** — rename, duplicate, search/filter, add notes, and **sort** by
   name, most-played or newest.
 - **Backup** — export/import a single macro or the whole collection at once.
+- **Merge** — append another macro's steps onto the selected one.
+- **Smooth movement** — optionally interpolate mouse motion during playback for
+  natural, human-like movement (per macro).
 - **Quick-play hotkeys** — bind keys to instantly play macros #1/#2/#3.
 
 ### Statistics tab
@@ -197,6 +200,7 @@ clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
 - **Behaviour** — minimise to tray, start in tray, tray notifications, confirm
   on exit while running, Escape as an emergency stop, and a start delay.
 - **Updates** — check for updates on demand, and optionally on launch.
+- **Language** — English, Spanish, French and German (applied on restart).
 - **Data & backup** — open the data folder, open the log file, export/import all
   settings, and **uninstall Tempo** (removes the start-up entry and all saved
   data, and can optionally delete the program file).
@@ -344,6 +348,20 @@ files — one per tab — so each section stays focused and readable.
 ---
 
 ## Changelog
+
+### 1.0.35
+**New**
+- Macros: **smooth mouse movement** option — playback interpolates motion between
+  points for natural, human-like movement (per macro).
+- Macros: **Merge** — append another macro's steps onto the selected one.
+- **Language support** — English, Spanish, French and German, selectable in
+  Settings (applied on restart). A foundation covering the main UI strings.
+- Statistics: the live **CPS readout is now smoothed** so it eases to its value
+  instead of jumping around.
+
+**Improved**
+- Redesigned tab bar — rounded selection pills, a hover state, and a cleaner
+  accent indicator.
 
 ### 1.0.34
 **New — Settings overhaul**
