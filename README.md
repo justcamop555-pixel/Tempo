@@ -1,13 +1,13 @@
 # Tempo
 
-**Version 1.0.32**
+**Version 1.0.33**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
 click sequences, burst and hold modes, randomization, full macro
 recording/playback, fully rebindable global hotkeys (keyboard **and** mouse
 buttons), anti-freeze protection, a system-tray presence, a live statistics
-dashboard with history and charts, in-app update checking, and **ten** built-in
+dashboard with history and charts, in-app update checking, and **fourteen** built-in
 themes.
 
 > **Use responsibly.** Auto-clicking may violate the terms of service of some
@@ -189,7 +189,7 @@ clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
 
 ### Settings tab
 - **Theme** — Dark, Light, Midnight, Ocean, Forest, Crimson, Solarized, AMOLED,
-  Nord and Dracula (applied instantly).
+  Nord, Dracula, Monokai, Gruvbox, Synthwave and Coffee (applied instantly).
 - **Startup & window** — launch Tempo when you sign in to Windows, and hide the
   window to the tray when clicking starts.
 - **Behaviour** — minimise to tray, start in tray, tray notifications, confirm
@@ -342,6 +342,15 @@ files — one per tab — so each section stays focused and readable.
 ---
 
 ## Changelog
+
+### 1.0.33
+**New**
+- **Four new themes** — Monokai, Gruvbox, Synthwave and Coffee (14 themes total).
+- Tabs: Tempo now **reopens the tab you were last on** when it starts.
+- Macros: a **"Once"** button plays the selected macro a single time, ignoring
+  the configured loop count.
+- Statistics: the **last-7-days chart** now shows the week's total and peak-day
+  click counts in its title.
 
 ### 1.0.32
 **New**
