@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.29**
+**Version 1.0.30**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -13,7 +13,7 @@ themes.
 > **Use responsibly.** Auto-clicking may violate the terms of service of some
 > games and applications. You are responsible for how you use this tool.
 
----
+-----
 
 ## Requirements
 
@@ -33,15 +33,15 @@ build or run on macOS or Linux.
 > **self-contained** build (see below) bundles the runtime, so nothing extra
 > needs installing at all.
 
----
+-----
 
 ## Building & running
 
 ### Option A — Visual Studio 2022
 
 1. Open `AutoClicker.csproj` (or the folder) in Visual Studio 2022.
-2. Build configuration `Debug` or `Release`, platform `Any CPU` (or x64/x86).
-3. Press **F5** to build and run.
+1. Build configuration `Debug` or `Release`, platform `Any CPU` (or x64/x86).
+1. Press **F5** to build and run.
 
 ### Option B — Command line
 
@@ -77,14 +77,15 @@ is given, so ordinary Debug/Release builds are unaffected and stay
 framework-dependent.)
 
 A framework-dependent build (no `-r`/`SelfContained`) is smaller but requires
-the .NET 8 Desktop Runtime on the target machine; if it's missing, Tempo's
+the .NET 8 Desktop Runtime on the target machine; if it’s missing, Tempo’s
 startup check explains how to install it manually.
 
----
+-----
 
 ## Feature overview
 
 ### Clicker tab
+
 - **Profiles** — create, save, duplicate, rename and delete named
   configurations. The last used profile is restored on launch.
 - **Interval** — set the delay between clicks in hours / minutes / seconds /
@@ -113,8 +114,10 @@ startup check explains how to install it manually.
   measured CPU% and effective rate are shown.
 
 ### Multi-Point tab
+
 Build an ordered list of click points. Each point has its own label, X/Y,
 button, click type, dwell time, per-point repeat count and enabled flag.
+
 - **Quick Capture** grabs coordinates from a full-screen overlay — and keeps
   capturing point after point until you press **Esc**.
 - **Tick a row** to enable/disable that point; **Delete** removes the selected
@@ -124,12 +127,13 @@ button, click type, dwell time, per-point repeat count and enabled flag.
 - The currently-clicked point is highlighted live during a run.
 
 ### Macros tab
+
 - **Record** real mouse movements, clicks and key presses, preserving the
   original timing. Append new recordings onto an existing macro.
 - **Play back** with per-macro defaults: loop count (0 = infinite), speed
   multiplier (0.1×–10×), pre-play countdown, and a delay between loops.
 - **Live monitor** shows each step as it plays, with a loop counter and the
-  macro's notes.
+  macro’s notes.
 - **Step editor** — reorder, delete, edit delays/positions/keys, strip mouse
   moves, and insert click/key/position steps.
 - **Organise** — rename, duplicate, search/filter, add notes, and **sort** by
@@ -138,8 +142,10 @@ button, click type, dwell time, per-point repeat count and enabled flag.
 - **Quick-play hotkeys** — bind keys to instantly play macros #1/#2/#3.
 
 ### Statistics tab
+
 A live dashboard of cards: session & launch clicks, current/peak/average CPS,
-clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
+clicks-per-minute, elapsed time and a “today” total, plus a live CPS graph.
+
 - **Session goal** — set a target click count for the session and watch a live
   progress bar with an ETA at the current rate; Tempo notifies you when the goal
   is reached.
@@ -155,6 +161,7 @@ clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
   clear history.
 
 ### Settings tab
+
 - **Theme** — Dark, Light, Midnight, Ocean, Forest, Crimson, Solarized, AMOLED,
   Nord and Dracula (applied instantly).
 - **Startup & window** — launch Tempo when you sign in to Windows, and hide the
@@ -165,6 +172,7 @@ clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
 - **Data & backup** — open the data folder, export/import all settings.
 
 ### Keybinds tab
+
 Every action is rebindable to a keyboard shortcut **or a mouse button**, with
 live conflict highlighting. Bindable actions include Start/Stop, Pause/Resume,
 Pick position, Emergency stop, profile switching, macro play/stop, quick-play
@@ -172,18 +180,19 @@ macros #1–#3, show points overlay, toggle anti-freeze, add point at cursor and
 show/hide window.
 
 ### Global hotkeys (defaults)
-| Action          | Default key |
-|-----------------|-------------|
-| Start / Stop    | **F6**      |
-| Pick position   | **F7**      |
-| Emergency stop  | **F8**      |
+
+|Action        |Default key|
+|--------------|-----------|
+|Start / Stop  |**F6**     |
+|Pick position |**F7**     |
+|Emergency stop|**F8**     |
 
 The emergency stop immediately halts clicking, macro playback and recording.
 
 You can also switch tabs from the keyboard: **Ctrl+1…9** jump to a tab, and
 **Ctrl+Tab** / **Ctrl+Shift+Tab** cycle through them.
 
----
+-----
 
 ## Updates
 
@@ -191,10 +200,11 @@ Tempo can check whether a newer version is available, using the **GitHub
 Releases** for its own repository.
 
 - **In the app:** Settings → **Check for updates** runs a check on demand. With
-  *"Check for updates when Tempo starts"* enabled (the default), Tempo also does
+  *“Check for updates when Tempo starts”* enabled (the default), Tempo also does
   a quiet background check shortly after launch and notifies you **only if** an
   update exists. When a newer version is found it shows the installed and latest
-  versions plus the release notes, and offers to open the download.
+  versions plus the release notes, and offers to **install it in place** (or to
+  open the download page).
 
 ### How updates are distributed (for maintainers)
 
@@ -208,12 +218,12 @@ https://api.github.com/repos/justcamop555-pixel/Tempo/releases/latest
 To ship an update:
 
 1. Build the self-contained executable (`publish.cmd`).
-2. On the repo, go to **Releases → Draft a new release**.
-3. Set a tag like `v1.0.26` (a leading `v` is fine), write the release notes in
+1. On the repo, go to **Releases → Draft a new release**.
+1. Set a tag like `v1.0.26` (a leading `v` is fine), write the release notes in
    the description, and **attach `Tempo.exe`** as a release asset.
-4. **Publish release.**
+1. **Publish release.**
 
-The app compares the latest release's tag to its own version. When the tag is
+The app compares the latest release’s tag to its own version. When the tag is
 higher it shows the release notes and links to the attached `.exe` (falling back
 to the release page if no `.exe` asset is attached). The repository is set in
 `UpdateChecker.Repository` in `Utils/UpdateChecker.cs`.
@@ -223,18 +233,24 @@ to the release page if no `.exe` asset is attached). The repository is set in
 
 ### How users get the update
 
-Because Tempo is a single self-contained `.exe`, "updating" means downloading the
-new build and replacing the old one:
+When an update is found, Tempo offers to install it **in place**:
 
-1. The user clicks **Yes** on the update prompt (or opens the download link).
-2. They download the new `Tempo.exe`.
-3. They close Tempo and replace the old file. Settings, profiles, macros and
-   history live in `%LocalAppData%\AutoClicker\`, so they are kept.
+1. The user chooses **Yes** to update now.
+1. Tempo downloads the new `Tempo.exe` (with a progress dialog).
+1. A small helper waits for Tempo to close, overwrites the old executable with
+   the new one, and relaunches it automatically.
 
-If you distribute via an installer instead of a bare `.exe`, attach the
-installer to the release and users simply run it.
+Settings, profiles, macros and history live in `%LocalAppData%\AutoClicker\`, so
+they are always preserved across an update.
 
----
+If in-place update isn’t possible — for example Tempo is installed somewhere the
+user can’t write to (such as `Program Files` without admin rights), or the
+release has no attached `.exe` — Tempo instead offers to open the download page
+so the user can replace the file manually. Running Tempo from a normal, writable
+location (Downloads, Desktop, a folder in your user profile) keeps one-click
+updating working without needing administrator rights.
+
+-----
 
 ## Where data is stored
 
@@ -251,7 +267,7 @@ Configuration lives under your local app-data folder:
 
 Deleting these files resets the app to defaults.
 
----
+-----
 
 ## Project structure
 
@@ -278,12 +294,12 @@ AutoClicker/
 The `MainForm` is implemented as a C# `partial class` split across several
 files — one per tab — so each section stays focused and readable.
 
----
+-----
 
 ## Notes & tips
 
-- **"Unknown publisher" warning:** Windows may warn the first time you run
-  `Tempo.exe` because it isn't code-signed. Click **More info → Run anyway** —
+- **“Unknown publisher” warning:** Windows may warn the first time you run
+  `Tempo.exe` because it isn’t code-signed. Click **More info → Run anyway** —
   this is expected for an unsigned app and is safe.
 - If a global hotkey fails to register, another application is probably already
   using that combination. Pick a different one on the Keybinds tab.
@@ -295,24 +311,32 @@ files — one per tab — so each section stays focused and readable.
 - If the window ends up off-screen, it is automatically nudged back into view on
   launch.
 
----
+-----
 
 ## Changelog
 
-### 1.0.29
+### 1.0.30
+
 **New**
+
+- Updates: **one-click in-place update** — Tempo can download the new build and
+  replace the running executable for you (via a small helper that waits for exit
+  and relaunches), instead of only opening the download page. Falls back to the
+  manual download when the install folder isn’t writable.
 - Tabs: **keyboard navigation** — Ctrl+1…9 jump straight to a tab, and
   Ctrl+Tab / Ctrl+Shift+Tab cycle through them.
 - Clicker: **Restore cursor position when stopped** — for Fixed and Multi-Point
   modes, the cursor returns to where it was before the run started.
 - Macros: the playback panel now shows the **estimated total time** for the
   selected macro at its current loop/speed/delay settings.
-- Statistics: the **session goal** now shows a live **ETA** ("~time left") at the
+- Statistics: the **session goal** now shows a live **ETA** (“~time left”) at the
   current click rate while running.
 
 ### 1.0.26
+
 **New**
-- Clicker: **"For (seconds)" run duration** — auto-stops clicking after a set
+
+- Clicker: **“For (seconds)” run duration** — auto-stops clicking after a set
   time (works in interval, hold and burst modes).
 - Statistics: **session goal** with a live progress bar and a notification when
   the goal is reached.
@@ -320,10 +344,12 @@ files — one per tab — so each section stays focused and readable.
   total-clicks summary.
 
 **Improved**
+
 - Cleaner self-contained single-file build (drops extra language-resource
   folders).
 
 ### 1.0.25
+
 - **Update checking** — Settings → Check for updates, plus an optional quiet
   check on launch, driven by the GitHub Releases API for the project repository.
 - A **self-contained single-file publish** option (`publish.cmd` / VS profile)
