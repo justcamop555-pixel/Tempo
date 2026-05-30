@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.35**
+**Version 1.0.36**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -348,6 +348,13 @@ files — one per tab — so each section stays focused and readable.
 ---
 
 ## Changelog
+
+### 1.0.36
+**Fixed**
+- **Language support now applies across the whole app**, not just the tab names.
+  All buttons, group titles, labels and options are translated (English, Spanish,
+  French, German); anything not yet translated falls back cleanly to English.
+  Language still applies on restart.
 
 ### 1.0.35
 **New**
