@@ -294,3 +294,15 @@ files — one per tab — so each section stays focused and readable.
   right-clickable session history, and chart hover tooltips.
 - Ten themes, a redesigned true-colour header, Windows-startup launch, settings
   backup, anti-freeze protection and many clicker/multi-point refinements.
+
+## Tempo 1.0.26
+
+**New**
+- Clicker: "For (seconds)" option to auto-stop after a set duration.
+- Statistics: session goal with progress bar + notification.
+- Statistics: filter session history by profile, with a totals summary.
+
+**Improved**
+- Cleaner single-file build output.
+
+Windows may show "Unknown publisher" because the app isn't code-signed — click **More info → Run anyway**. It's safe.
