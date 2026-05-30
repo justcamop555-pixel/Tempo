@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.33**
+**Version 1.0.34**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -189,7 +189,9 @@ clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
 
 ### Settings tab
 - **Theme** — Dark, Light, Midnight, Ocean, Forest, Crimson, Solarized, AMOLED,
-  Nord, Dracula, Monokai, Gruvbox, Synthwave and Coffee (applied instantly).
+  Nord, Dracula, Monokai, Gruvbox, Synthwave and Coffee (applied instantly), with
+  a **live preview** and an optional **custom accent colour** that recolours the
+  whole app.
 - **Startup & window** — launch Tempo when you sign in to Windows, and hide the
   window to the tray when clicking starts.
 - **Behaviour** — minimise to tray, start in tray, tray notifications, confirm
@@ -342,6 +344,14 @@ files — one per tab — so each section stays focused and readable.
 ---
 
 ## Changelog
+
+### 1.0.34
+**New — Settings overhaul**
+- **Custom accent colour** — pick any colour and Tempo recolours the whole app
+  (buttons, highlights, charts), layered on top of whichever theme you choose.
+- **Live theme preview** — a swatch strip and sample button/text in the
+  Appearance section update instantly as you change the theme or accent, so you
+  can see a theme before committing to it.
 
 ### 1.0.33
 **New**
