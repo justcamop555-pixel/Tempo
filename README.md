@@ -1,13 +1,14 @@
 # Tempo
 
-**Version 1.0.25**
+**Version 1.0.26**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
 click sequences, burst and hold modes, randomization, full macro
 recording/playback, fully rebindable global hotkeys (keyboard **and** mouse
 buttons), anti-freeze protection, a system-tray presence, a live statistics
-dashboard with history and charts, and **ten** built-in themes.
+dashboard with history and charts, in-app update checking, and **ten** built-in
+themes.
 
 > **Use responsibly.** Auto-clicking may violate the terms of service of some
 > games and applications. You are responsible for how you use this tool.
@@ -28,10 +29,9 @@ build or run on macOS or Linux.
 > **First run:** Tempo checks the host on startup. If a requirement is missing
 > (for example the .NET 8 Desktop Runtime, or an unsupported Windows version) it
 > shows a clear message telling you what to install **manually** and offers to
-> open the download page, instead of failing with a cryptic error. If the
-> runtime is entirely absent, Windows itself will prompt you to install it the
-> first time you launch `Tempo.exe` — install the **Desktop Runtime** (x64) from
-> the link above.
+> open the download page, instead of failing with a cryptic error. A
+> **self-contained** build (see below) bundles the runtime, so nothing extra
+> needs installing at all.
 
 ---
 
@@ -102,7 +102,8 @@ startup check explains how to install it manually.
   - *Current cursor position* — clicks wherever the pointer is.
   - *Fixed position* — clicks a single captured coordinate.
   - *Multi-point* — cycles through a list of points (see the Multi-Point tab).
-- **Repeat** — run until stopped, or stop after a fixed number of clicks.
+- **Repeat** — run until stopped, stop after a fixed number of clicks, or run
+  for a set duration (seconds), after which clicking stops automatically.
 - **Randomization** — add ± jitter to the interval (ms) and/or the click
   position (px) to avoid a perfectly regular pattern.
 - **Anti-freeze protection** — caps the maximum clicks/second and adaptively
@@ -137,13 +138,16 @@ button, click type, dwell time, per-point repeat count and enabled flag.
 ### Statistics tab
 A live dashboard of cards: session & launch clicks, current/peak/average CPS,
 clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
+- **Session goal** — set a target click count for the session and watch a live
+  progress bar; Tempo notifies you when the goal is reached.
 - **Per-button breakdown** with a stacked distribution bar.
 - **Lifetime totals** and **records** (most clicks per run, longest run,
   averages per session) that persist across runs.
 - **Charts** — clicks per recent session and clicks over the last 7 days, both
   with hover tooltips.
 - **Session history** — every completed run is logged; double-click for
-  details, right-click to copy or delete, and click a column header to sort.
+  details, right-click to copy or delete, click a column header to sort, and
+  **filter by profile** with a running totals summary.
 - **Export CSV** of the full summary and history; reset session/lifetime or
   clear history.
 
@@ -154,6 +158,7 @@ clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
   window to the tray when clicking starts.
 - **Behaviour** — minimise to tray, start in tray, tray notifications, confirm
   on exit while running, Escape as an emergency stop, and a start delay.
+- **Updates** — check for updates on demand, and optionally on launch.
 - **Data & backup** — open the data folder, export/import all settings.
 
 ### Keybinds tab
@@ -176,19 +181,19 @@ The emergency stop immediately halts clicking, macro playback and recording.
 
 ## Updates
 
-Tempo can check whether a newer version is available.
+Tempo can check whether a newer version is available, using the **GitHub
+Releases** for its own repository.
 
-- **In the app:** Settings -> **Check for updates** runs a check on demand. With
-  *"Check for updates when Tempo starts"* enabled (the default), Tempo also does a
-  quiet background check a couple of seconds after launch and notifies you **only
-  if** an update exists. Either way, if a newer version is found it shows the
-  installed/latest versions and what's new, and offers to open the download page.
+- **In the app:** Settings → **Check for updates** runs a check on demand. With
+  *"Check for updates when Tempo starts"* enabled (the default), Tempo also does
+  a quiet background check shortly after launch and notifies you **only if** an
+  update exists. When a newer version is found it shows the installed and latest
+  versions plus the release notes, and offers to open the download.
 
 ### How updates are distributed (for maintainers)
 
-Tempo reads the **GitHub Releases API** for its repository
-(`justcamop555-pixel/Tempo`) — no manifest file or server to maintain, and no
-authentication for a public repo:
+Tempo reads the **GitHub Releases API** for its repository — no manifest file or
+server to maintain, and no authentication for a public repo:
 
 ```
 https://api.github.com/repos/justcamop555-pixel/Tempo/releases/latest
@@ -198,15 +203,17 @@ To ship an update:
 
 1. Build the self-contained executable (`publish.cmd`).
 2. On the repo, go to **Releases → Draft a new release**.
-3. Set a tag like `v1.0.26` (a leading `v` is fine), write release notes in the
-   description, and **attach `Tempo.exe`** as a release asset.
+3. Set a tag like `v1.0.26` (a leading `v` is fine), write the release notes in
+   the description, and **attach `Tempo.exe`** as a release asset.
 4. **Publish release.**
 
 The app compares the latest release's tag to its own version. When the tag is
 higher it shows the release notes and links to the attached `.exe` (falling back
-to the release page if no `.exe` asset is attached).
+to the release page if no `.exe` asset is attached). The repository is set in
+`UpdateChecker.Repository` in `Utils/UpdateChecker.cs`.
 
-> The repository is set in `UpdateChecker.Repository` in `Utils/UpdateChecker.cs`.
+> Make sure the `Tempo.exe` you attach was built **after** bumping the version,
+> or it will still report the old version when it checks for updates.
 
 ### How users get the update
 
@@ -218,8 +225,8 @@ new build and replacing the old one:
 3. They close Tempo and replace the old file. Settings, profiles, macros and
    history live in `%LocalAppData%\AutoClicker\`, so they are kept.
 
-If you distribute via an installer/MSI instead, point the manifest `url` at the
-new installer and users simply run it.
+If you distribute via an installer instead of a bare `.exe`, attach the
+installer to the release and users simply run it.
 
 ---
 
@@ -246,11 +253,12 @@ Deleting these files resets the app to defaults.
 AutoClicker/
 ├── Program.cs                 entry point, single-instance guard
 ├── app.manifest               DPI awareness / OS compatibility
+├── publish.cmd                helper to build a self-contained Tempo.exe
 ├── Native/                    P/Invoke, hotkeys, low-level hooks
 ├── Models/                    data types (profiles, points, macros, settings)
 ├── Engine/                    input simulation, click engine, macro record/play
 ├── Persistence/               JSON load/save for settings, profiles, macros, history
-├── Utils/                     logging, screen-geometry, CPU monitor, startup registry
+├── Utils/                     logging, screen-geometry, CPU monitor, startup, updates
 └── UI/                        forms, theming, controls, tab implementations
     ├── MainForm.cs            shell, tray, hotkeys, engine wiring
     ├── MainForm.Clicker.cs    clicker tab
@@ -268,6 +276,9 @@ files — one per tab — so each section stays focused and readable.
 
 ## Notes & tips
 
+- **"Unknown publisher" warning:** Windows may warn the first time you run
+  `Tempo.exe` because it isn't code-signed. Click **More info → Run anyway** —
+  this is expected for an unsigned app and is safe.
 - If a global hotkey fails to register, another application is probably already
   using that combination. Pick a different one on the Keybinds tab.
 - To click inside an elevated (administrator) window, run Tempo as
@@ -282,27 +293,28 @@ files — one per tab — so each section stays focused and readable.
 
 ## Changelog
 
-### 1.0.25
-- **Update checking** — Settings -> Check for updates, plus an optional quiet
-  check on launch, driven by a small hosted JSON version manifest.
-- A **self-contained single-file publish** option (`publish.cmd` / VS profile) so
-  the distributable `Tempo.exe` runs with no .NET install required; a startup
-  **prerequisite check** advises manual installation when something is missing.
-- Macro playback now shows a live **loop counter** (Loop X / Y) and estimated
-  total time; macros can be **sorted** by name, most-played or newest.
-- Statistics gained a **last-7-days chart**, derived average cards, sortable and
-  right-clickable session history, and chart hover tooltips.
-- Ten themes, a redesigned true-colour header, Windows-startup launch, settings
-  backup, anti-freeze protection and many clicker/multi-point refinements.
-
-## Tempo 1.0.26
-
+### 1.0.26
 **New**
-- Clicker: "For (seconds)" option to auto-stop after a set duration.
-- Statistics: session goal with progress bar + notification.
-- Statistics: filter session history by profile, with a totals summary.
+- Clicker: **"For (seconds)" run duration** — auto-stops clicking after a set
+  time (works in interval, hold and burst modes).
+- Statistics: **session goal** with a live progress bar and a notification when
+  the goal is reached.
+- Statistics: **filter session history by profile**, with a shown-sessions and
+  total-clicks summary.
 
 **Improved**
-- Cleaner single-file build output.
+- Cleaner self-contained single-file build (drops extra language-resource
+  folders).
 
-Windows may show "Unknown publisher" because the app isn't code-signed — click **More info → Run anyway**. It's safe.
+### 1.0.25
+- **Update checking** — Settings → Check for updates, plus an optional quiet
+  check on launch, driven by the GitHub Releases API for the project repository.
+- A **self-contained single-file publish** option (`publish.cmd` / VS profile)
+  so the distributable `Tempo.exe` runs with no .NET install required; a startup
+  **prerequisite check** advises manual installation when something is missing.
+- Macros: a live **loop counter** (Loop X / Y) during playback, and sorting by
+  name, most-played or newest.
+- Statistics: a **last-7-days chart**, derived average cards, sortable and
+  right-clickable session history, and chart hover tooltips.
+- Ten themes, a redesigned true-colour header, Windows-startup launch, settings
+  backup, anti-freeze protection, and many clicker/multi-point refinements.
