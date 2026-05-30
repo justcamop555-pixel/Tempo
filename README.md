@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.30**
+**Version 1.0.31**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -314,6 +314,19 @@ files — one per tab — so each section stays focused and readable.
 -----
 
 ## Changelog
+
+### 1.0.31
+
+**Hardening & fixes**
+
+- Self-update now verifies the downloaded file is a real Windows executable
+  (checks size and the `MZ` header) before it ever replaces `Tempo.exe`, so a
+  corrupted download or server error page can’t overwrite the app.
+- Made the update swap-helper script more robust (proper delayed-variable
+  expansion in the copy-retry loop).
+- Tab shortcuts now also accept the numeric keypad (Ctrl+NumPad 1–9).
+- Full code audit: no compiler warnings, dead code, unused members, undisposed
+  GDI objects, or unguarded collection access.
 
 ### 1.0.30
 
