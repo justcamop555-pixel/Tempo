@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.40**
+**Version 1.0.41**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -364,6 +364,14 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.41
+**Improved**
+- **High-DPI displays** — Tempo now scales correctly on displays set above 100%
+  (e.g. 125 %, 150 %, 175 %). Previously it claimed per-monitor DPI support it
+  didn't implement, so the window came up tiny and cramped on scaled screens. It
+  now uses system-DPI scaling with font-based layout across the main window and all
+  dialogs, and the tab bar grows with the display scale. (No change at 100 %.)
 
 ### 1.0.40
 **Privacy & reporting**
