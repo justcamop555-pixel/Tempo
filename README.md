@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.46**
+**Version 1.0.47**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -395,6 +395,16 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.47
+**New**
+- **Custom logo** — drag any image or GIF onto the logo in the About screen to use
+  it as your own logo. Works with a local file **or** an image dragged straight
+  from a web browser (Tempo downloads it). A "Reset logo" link restores the default.
+
+**Fixed**
+- Settings → Appearance: the **"Always on top" text no longer overlaps the Language
+  selector**, including in German and French where the labels are longer.
 
 ### 1.0.46
 **New**
