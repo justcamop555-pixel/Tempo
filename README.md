@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.37**
+**Version 1.0.38**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -50,7 +50,9 @@ from the link above, don't trust it.
 
 ## Requirements
 
-- **Windows 10 or 11**
+- **Windows 10 (version 1607 or later) or Windows 11**, 64-bit.
+  **Windows 7 and Windows 8.1 are not supported** — Tempo runs on .NET 8, which
+  itself requires Windows 10 or newer, so it will not run on those older versions.
 - **.NET 8 Desktop Runtime** to run a published build, or the **.NET 8 SDK** to
   build from source — <https://dotnet.microsoft.com/download/dotnet/8.0>
 - Visual Studio 2022 (any edition) is recommended, but not required.
@@ -348,6 +350,27 @@ files — one per tab — so each section stays focused and readable.
 ---
 
 ## Changelog
+
+### 1.0.38
+**New**
+- **Automatic bug reporting** — if Tempo ever hits an unexpected error, it now
+  shows a clear dialog, saves a full crash report next to the log, and offers a
+  one-click **Report on GitHub** button that opens a pre-filled issue (with the
+  version, your Windows build and the error details) on the project's issue
+  tracker. Nothing is ever sent automatically or silently — the report only
+  leaves your PC when you submit the GitHub form.
+- **Report a bug…** button in Settings → Data & Backup for reporting issues even
+  when nothing has crashed.
+- Statistics: **Copy summary** button copies your key numbers to the clipboard.
+- Macros: the info line now shows when a macro was **last played**.
+
+**Improved**
+- Clearer message when Tempo is launched on an unsupported Windows version
+  (Windows 7 / 8.1), explaining that Windows 10 or 11 is required.
+
+**Compatibility**
+- Tempo requires **Windows 10 (1607+) or Windows 11**. Windows 7 and 8.1 are not
+  supported (a limitation of .NET 8, which Tempo is built on).
 
 ### 1.0.37
 **Improved**
