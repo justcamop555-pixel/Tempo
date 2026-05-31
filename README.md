@@ -1,3 +1,7 @@
+<p align="center">
+  <img width="200" height="200" alt="Tempo logo" src="https://github.com/user-attachments/assets/471bd647-9993-40fc-8930-8beb925518d6" />
+</p>
+
 # Tempo
 
 **Version 1.0.42**
@@ -7,8 +11,8 @@ A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 click sequences, burst and hold modes, randomization, full macro
 recording/playback, fully rebindable global hotkeys (keyboard **and** mouse
 buttons), anti-freeze protection, a system-tray presence, a live statistics
-dashboard with history and charts, in-app update checking, and **fourteen** built-in
-themes.
+dashboard with history and charts, in-app update checking, **fourteen** built-in
+themes, **four interface languages**, and built-in **bug/crash reporting**.
 
 > **Use responsibly.** Auto-clicking may violate the terms of service of some
 > games and applications. You are responsible for how you use this tool.
@@ -253,7 +257,7 @@ To ship an update:
 
 1. Build the self-contained executable (`publish.cmd`).
 2. On the repo, go to **Releases → Draft a new release**.
-3. Set a tag like `v1.0.26` (a leading `v` is fine), write the release notes in
+3. Set a tag like `v1.0.42` (a leading `v` is fine), write the release notes in
    the description, and **attach `Tempo.exe`** as a release asset.
 4. **Publish release.**
 
@@ -309,14 +313,16 @@ Windows start-up entry, and (optionally) deletes `Tempo.exe` itself.
 
 ```
 AutoClicker/
-├── Program.cs                 entry point, single-instance guard
+├── Program.cs                 entry point, single-instance guard, crash handlers
 ├── app.manifest               DPI awareness / OS compatibility
 ├── publish.cmd                helper to build a self-contained Tempo.exe
+├── Assets/tempo.ico           application icon
 ├── Native/                    P/Invoke, hotkeys, low-level hooks
 ├── Models/                    data types (profiles, points, macros, settings)
 ├── Engine/                    input simulation, click engine, macro record/play
 ├── Persistence/               JSON load/save for settings, profiles, macros, history
-├── Utils/                     logging, screen-geometry, CPU monitor, startup, updates
+├── Utils/                     logging, screen-geometry, CPU monitor, startup,
+│                              updates, localization, crash/bug reporting, app icon
 └── UI/                        forms, theming, controls, tab implementations
     ├── MainForm.cs            shell, tray, hotkeys, engine wiring
     ├── MainForm.Clicker.cs    clicker tab
@@ -324,8 +330,12 @@ AutoClicker/
     ├── MainForm.Macros.cs     macros tab
     ├── MainForm.Statistics.cs statistics tab
     ├── MainForm.Settings.cs   settings tab
-    └── MainForm.Keybinds.cs   keybinds tab
+    ├── MainForm.Keybinds.cs   keybinds tab
+    └── CrashReportForm.cs     error/bug report dialog
 ```
+
+(Other dialogs, custom controls and the theme engine also live under `UI/`; the
+tree above lists the main pieces rather than every file.)
 
 The `MainForm` is implemented as a C# `partial class` split across several
 files — one per tab — so each section stays focused and readable.
@@ -348,6 +358,22 @@ files — one per tab — so each section stays focused and readable.
   launch.
 
 ---
+
+## Reporting bugs
+
+Found a problem? There are three easy ways to report it — pick whichever suits you:
+
+- **In the app:** if Tempo hits an unexpected error it shows a report window with
+  one-click **Report on GitHub** and **Email report** buttons. You can also report
+  proactively any time from **Settings → Data & Backup** (**Report a bug…** or
+  **Email a bug…**).
+- **On GitHub:** open an issue at
+  <https://github.com/justcamop555-pixel/Tempo/issues>.
+- **By email:** <jompikoo@gmail.com>.
+
+Reports are pre-filled with the version, your Windows version and the error
+details — and nothing is sent until you submit. See **Privacy** below for exactly
+what a report contains.
 
 ## Privacy
 
