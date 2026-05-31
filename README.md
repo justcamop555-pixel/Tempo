@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.39**
+**Version 1.0.40**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -349,7 +349,32 @@ files — one per tab — so each section stays focused and readable.
 
 ---
 
+## Privacy
+
+Tempo is built to respect your privacy:
+
+- **Nothing is sent anywhere automatically.** Bug reports only leave your PC when
+  *you* press send/submit in your own browser or email app.
+- **Reports contain only** Tempo's version, your Windows version, and the technical
+  error details — **never** your clicks, recorded macros, settings, or files.
+- **Your Windows account name is removed** from report text automatically (paths
+  like `C:\Users\YourName\…` become `C:\Users\<user>\…`).
+- **You can review and edit** the report before sending — the crash window shows
+  the full text in an editable box so you can delete anything you don't want to share.
+- Tempo has no servers and collects no analytics or telemetry.
+
 ## Changelog
+
+### 1.0.40
+**Privacy & reporting**
+- Bug/crash reports now **remove your Windows account name** automatically.
+- The crash window is now **editable and shows a clear privacy note**, so you can
+  review and trim the details before reporting by GitHub or email.
+
+**Macros**
+- **Smoother cursor movement** — when "Smooth mouse movement" is on, the cursor now
+  glides from your real pointer position at a natural, constant speed with gentle
+  easing, instead of a coarser step.
 
 ### 1.0.39
 **New**
