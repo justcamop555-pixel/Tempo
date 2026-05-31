@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.41**
+**Version 1.0.42**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -364,6 +364,12 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.42
+**New**
+- **App icon** — Tempo now has its own icon (the Tempo wordmark) shown on the
+  window title bar, the taskbar, and the system-tray icon, instead of the generic
+  Windows default.
 
 ### 1.0.41
 **Improved**
