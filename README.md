@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.47**
+**Version 1.0.48**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -395,6 +395,17 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.48
+**Fixed — layout / text conflicts**
+- **Keybinds tab:** the intro paragraph no longer overlaps the "Interval step"
+  control. The header now measures its own height and lays the buttons, interval
+  control, and table below it, so it stays clean in every language.
+- **Macros tab:** the **Pin** and **Reset stats** buttons moved to sit neatly under
+  the macro list (they were overlapping the Live Monitor panel), and the Live
+  Monitor panel was nudged down so it no longer clips the Playback box.
+- **Settings:** group titles like "Startup & Window" and "Data & Backup" now show
+  the "&" correctly (it was being swallowed as a keyboard mnemonic).
 
 ### 1.0.47
 **New**
