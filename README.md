@@ -4,14 +4,14 @@
 
 # Tempo
 
-**Version 1.0.44**
+**Version 1.0.46**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
 click sequences, burst and hold modes, randomization, full macro
 recording/playback, fully rebindable global hotkeys (keyboard **and** mouse
 buttons), anti-freeze protection, a system-tray presence, a live statistics
-dashboard with history and charts, in-app update checking, **seventeen** built-in
+dashboard with history and charts, in-app update checking, **twenty** built-in
 themes, **four interface languages**, and built-in **bug/crash reporting**.
 
 > **Use responsibly.** Auto-clicking may violate the terms of service of some
@@ -175,6 +175,8 @@ button, click type, dwell time, per-point repeat count and enabled flag.
   name, most-played or newest.
 - **Backup** — export/import a single macro or the whole collection at once.
 - **Merge** — append another macro's steps onto the selected one.
+- **Pin favourites** — star a macro to keep it at the top of the list.
+- **Reset stats** — clear a macro's play count and last-played time.
 - **Smooth movement** — optionally interpolate mouse motion during playback for
   natural, human-like movement (per macro).
 - **Quick-play hotkeys** — bind keys to instantly play macros #1/#2/#3.
@@ -198,7 +200,8 @@ clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
 
 ### Settings tab
 - **Theme** — Dark, Light, Midnight, Ocean, Forest, Crimson, Solarized, AMOLED,
-  Nord, Dracula, Monokai, Gruvbox, Synthwave, Coffee, Cosmos, Rose and Slate
+  Nord, Dracula, Monokai, Gruvbox, Synthwave, Coffee, Cosmos, Rose, Slate,
+  Sunset, Mint and Sand
   (applied instantly), with
   a **live preview** and an optional **custom accent colour** that recolours the
   whole app.
@@ -392,6 +395,18 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.46
+**New**
+- **Animated logo** in the About screen — a subtle, gently pulsing Tempo logo.
+
+### 1.0.45
+**New**
+- **Three more themes** — **Sunset** (warm orange), **Mint** (fresh teal-green) and
+  **Sand** (a warm light theme) — 20 themes total.
+- Macros: **pin favourites** to keep them at the top of the list (★), and **reset a
+  macro's play stats** (play count / last-played).
+- CPS test: now tracks an **all-time best** that persists across sessions.
 
 ### 1.0.44
 **Improved — update experience**
