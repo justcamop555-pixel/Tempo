@@ -1,6 +1,6 @@
 # Tempo
 
-**Version 1.0.38**
+**Version 1.0.39**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -350,6 +350,13 @@ files — one per tab — so each section stays focused and readable.
 ---
 
 ## Changelog
+
+### 1.0.39
+**New**
+- **Email bug reports** — the crash dialog now has an **Email report** button, and
+  Settings → Data & Backup has an **Email a bug…** button. Both open your email app
+  with a message pre-filled (and pre-addressed) so you can report without a GitHub
+  account. Nothing is sent until you press send in your email app.
 
 ### 1.0.38
 **New**
