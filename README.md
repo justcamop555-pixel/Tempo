@@ -4,14 +4,14 @@
 
 # Tempo
 
-**Version 1.0.42**
+**Version 1.0.44**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
 click sequences, burst and hold modes, randomization, full macro
 recording/playback, fully rebindable global hotkeys (keyboard **and** mouse
 buttons), anti-freeze protection, a system-tray presence, a live statistics
-dashboard with history and charts, in-app update checking, **fourteen** built-in
+dashboard with history and charts, in-app update checking, **seventeen** built-in
 themes, **four interface languages**, and built-in **bug/crash reporting**.
 
 > **Use responsibly.** Auto-clicking may violate the terms of service of some
@@ -198,7 +198,8 @@ clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
 
 ### Settings tab
 - **Theme** — Dark, Light, Midnight, Ocean, Forest, Crimson, Solarized, AMOLED,
-  Nord, Dracula, Monokai, Gruvbox, Synthwave and Coffee (applied instantly), with
+  Nord, Dracula, Monokai, Gruvbox, Synthwave, Coffee, Cosmos, Rose and Slate
+  (applied instantly), with
   a **live preview** and an optional **custom accent colour** that recolours the
   whole app.
 - **Startup & window** — launch Tempo when you sign in to Windows, and hide the
@@ -239,10 +240,11 @@ Releases** for its own repository.
 
 - **In the app:** Settings → **Check for updates** runs a check on demand. With
   *"Check for updates when Tempo starts"* enabled (the default), Tempo also does
-  a quiet background check shortly after launch and notifies you **only if** an
-  update exists. When a newer version is found it shows the installed and latest
-  versions plus the release notes, and offers to **install it in place** (or to
-  open the download page).
+  a quiet background check shortly after launch (at most about once a day) and
+  notifies you **only if** an update exists. When a newer version is found it shows
+  the installed and latest versions plus scrollable release notes, and offers to
+  **install it in place**, **open the download page**, or **skip that version** so
+  the automatic check won't mention it again.
 
 ### How updates are distributed (for maintainers)
 
@@ -390,6 +392,30 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.44
+**Improved — update experience**
+- A cleaner, themed **"update available" dialog** with **scrollable release notes**
+  and clear actions, replacing the old cramped message box.
+- **Skip this version** — choose to skip a release and the automatic check won't
+  nag you about it again (until a newer one appears).
+- **Last-checked time** is shown in Settings, and any skipped version is noted.
+- Automatic launch checks are now **throttled to about once a day** to avoid
+  hitting GitHub's rate limits; the manual *Check for updates* button always runs
+  immediately.
+
+### 1.0.43
+**New**
+- **New app icon** — updated to the cosmic Tempo artwork.
+- **Three new themes** — **Cosmos** (deep-space violet, matching the icon),
+  **Rose**, and **Slate** (17 themes total).
+
+**Improved**
+- **Always on top** now applies **instantly** when you tick the box in Settings
+  (and stays in sync with the tray toggle), instead of only on Save.
+- **CPS test** — now reports a **Peak (1-second burst)** rate using actual click
+  timing, and lets you pick the **test length** (5 / 10 / 15 / 30 s). The "best"
+  reading is no longer skewed by the first few clicks.
 
 ### 1.0.42
 **New**
