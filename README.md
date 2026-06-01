@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.51**
+**Version 1.0.52**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -395,6 +395,19 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.52
+**Improved — a pass across the tabs**
+- **Clicker:** the Repeat options now show a live estimate — "Fixed count" shows the
+  approximate run time, and "For (seconds)" shows the approximate number of clicks,
+  at your current speed.
+- **Macros:** right-click a macro for a quick menu (Play, Edit, Rename, Duplicate,
+  Pin/Unpin, Delete).
+- **Multi-Point:** right-click a point for a quick menu (Edit, Duplicate, Toggle,
+  Remove).
+- **Statistics:** "Copy summary" now includes the new insights (this week, this
+  month, busiest hour, top profile).
+- (Keybinds already flags duplicate hotkeys live and on save; Settings unchanged.)
 
 ### 1.0.51
 **New — Statistics "Insights"**
