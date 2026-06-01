@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.49**
+**Version 1.0.50**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -395,6 +395,22 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.50
+**Fixed — update checker getting stuck**
+- The "Check for updates" button could hang on "Checking…" on some networks. The
+  check now skips slow proxy auto-detection (the usual cause) and has a hard
+  safety timeout, so the button always recovers and reports a clear message
+  instead of getting stuck.
+
+**Improved — clicker**
+- The **Manual Speed** slider now goes up to **200 CPS** (was capped at 100), so it
+  can reach the faster rates people actually use.
+
+**Improved — macros**
+- Keyboard shortcuts in the macro list: **Enter** plays, **Delete** removes, **F2**
+  renames the selected macro.
+- A small summary under the list shows the **total number of macros and steps**.
 
 ### 1.0.49
 **Fixed — high-DPI / scaled displays**
