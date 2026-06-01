@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.50**
+**Version 1.0.51**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -395,6 +395,21 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.51
+**New — Statistics "Insights"**
+A new Insights section on the Statistics tab, plus a couple of extras — 10 new
+things in all, all derived from your existing session history:
+1. **This Week** — clicks in the last 7 days.
+2. **This Month** — clicks in the current calendar month.
+3. **Lifetime Avg CPS** — your overall average click rate.
+4. **Active Days** — how many distinct days you've used Tempo.
+5. **Best Day** — your biggest single day, with the date.
+6. **Busiest Weekday** — the day of the week you click most.
+7. **Busiest Hour** — your most active time of day.
+8. **Top Profile** — the profile with the most clicks.
+9. **Clicks by hour of day** — a 24-hour activity chart.
+10. **Search box** for the session history (filter by date or profile).
 
 ### 1.0.50
 **Fixed — update checker getting stuck**
