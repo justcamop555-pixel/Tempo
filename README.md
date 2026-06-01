@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.48**
+**Version 1.0.49**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -395,6 +395,24 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.49
+**Fixed — high-DPI / scaled displays**
+- On laptops/monitors at a higher display scale, the intro paragraph on the
+  **Macros** and **Multi-Point** tabs could grow tall enough to overlap the
+  controls beneath it. The layout now measures the paragraph and shifts the rest
+  of the tab down so nothing overlaps at any scale.
+
+**New — custom logo is easier**
+- The About screen now has a **"Choose image…" button** — pick a .gif/.png/.jpg
+  with a normal file dialog instead of needing to drag. Drag-and-drop still works.
+
+**New — privacy**
+- Added a **"Write a log file to disk"** toggle (Settings → Behaviour). Turn it off
+  and Tempo writes nothing to its log file.
+- Added a plain-language **privacy note** in Settings: Tempo runs entirely on your
+  PC and never sends your data anywhere; the only network use is the optional
+  update check.
 
 ### 1.0.48
 **Fixed — layout / text conflicts**
