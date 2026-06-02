@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.54**
+**Version 1.0.55**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -395,6 +395,19 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.55
+**Fixed**
+- **Multi-Point:** the "Enable / Disable all" button was overlapping the "Tip:
+  press Save…" note — the note now sits below it.
+
+**Improved — existing features (no new ones)**
+- **Multi-Point table:** X, Y, Dwell and Rep columns are now right-aligned and
+  column widths were tuned, so point data lines up and reads cleanly.
+- **Multi-Point:** the active-points readout now also shows total dwell time per
+  cycle when any point has a dwell.
+- **Clicker:** the Repeat estimate (≈ time / ≈ clicks) now appears only next to the
+  option you've actually selected, instead of beside greyed-out fields.
 
 ### 1.0.54
 **Improved — Clicker**
