@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.53**
+**Version 1.0.54**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -395,6 +395,16 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.54
+**Improved — Clicker**
+- New **Humanize** button in the Randomization box: one click switches on both
+  randomizers with sensible starting values (interval jitter ≈ 20% of your delay,
+  position ± 2 px) so the clicking looks less robotic. Fine-tune from there.
+
+**Improved — Multi-Point**
+- New **Enable / Disable all** button to turn every point on or off at once —
+  handy when you've got a long list of points.
 
 ### 1.0.53
 **Changed — header**
