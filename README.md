@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.55**
+**Version 1.0.56**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -395,6 +395,22 @@ Tempo is built to respect your privacy:
 - Tempo has no servers and collects no analytics or telemetry.
 
 ## Changelog
+
+### 1.0.56
+**Improved — clarity & polish across every tab (no new features)**
+- **Tooltips everywhere** — hovering almost any control (interval fields, click
+  options, position/repeat/burst/randomization, multi-point and macro buttons,
+  statistics filters, and every setting) now shows a short plain-language
+  explanation. Existing features are much easier to understand at a glance.
+- **Clicker:** the "For (seconds)" click estimate now accounts for double/triple
+  click style, so the "≈ clicks" figure is accurate, and it updates when you change
+  the click type.
+
+This release focuses on making the features Tempo already has clearer and more
+robust, rather than adding anything new. The data files were already saved
+atomically with corrupt-file backups, profile names are validated, hotkey
+conflicts are flagged, and every tab scrolls safely at high display scales — all
+verified during this pass.
 
 ### 1.0.55
 **Fixed**
