@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.57**
+**Version 1.0.58**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -393,8 +393,37 @@ Tempo is built to respect your privacy:
 - **You can review and edit** the report before sending — the crash window shows
   the full text in an editable box so you can delete anything you don't want to share.
 - Tempo has no servers and collects no analytics or telemetry.
+- **Local-only controls for your own data:**
+  - **Record session history and statistics** (Settings → Behaviour) — turn off and
+    finished runs leave no trace: nothing is written to the session history and your
+    lifetime totals stop changing. Clicks made while it's off never count later.
+  - **Write a log file to disk** — turn off and Tempo writes nothing to its log file.
+  - Everything Tempo stores lives only on your PC, and you can wipe it any time from
+    Statistics (Reset session / Reset lifetime / Clear history) or by deleting the
+    data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.58
+**New — autoclicker**
+- **Hold each click (ms):** a new field in *Click Options* lets you hold the mouse
+  button down for a set time on every click before releasing it (0 = a normal
+  instant click, exactly as before). Useful for games that need a press-and-hold,
+  charged actions, or breaking/holding. Works with single/double/triple and with
+  fixed, current and multi-point positions.
+
+**New — privacy**
+- **"Record session history and statistics"** toggle (Settings → Behaviour). Turn it
+  off and finished runs leave **no trace**: nothing is written to your session
+  history and your lifetime totals stop changing. Clicks made while it's off are
+  never folded into your totals later, even if you turn it back on. Combined with
+  the existing "Write a log file" toggle, Tempo can run with no activity record at
+  all.
+
+**Improved**
+- The new control carries a tooltip and screen-reader description like the rest of
+  the app, and the held-click path leaves the fast batched click path completely
+  unchanged when hold is 0 — so existing profiles behave exactly as before.
 
 ### 1.0.57
 **Performance**
