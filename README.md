@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.58**
+**Version 1.0.59**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -403,6 +403,20 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.59
+**Improved — Clicker (smart rate preview)**
+- The line under the interval fields is now a live, accurate preview of the *actual*
+  click rate, not just the raw delay:
+  - **Click type counts:** double/triple click now shows the true clicks-per-second
+    (e.g. Triple at 100 ms reads ≈ 30 CPS, not 10).
+  - **Randomization range:** with "Randomize interval ±" on, it shows the resulting
+    range, e.g. `≈ 8.3–12.5 CPS · 100 ± 20 ms`.
+  - **Burst mode:** shows the average rate across a full burst-plus-pause cycle.
+  - **Hold-time:** notes `hold N ms`, and warns `(caps rate)` when the hold is long
+    enough to limit the rate you asked for.
+- The preview updates instantly as you change the click type, randomization, hold,
+  burst size/pause, or mode — so what you see always matches what the engine will do.
 
 ### 1.0.58
 **New — autoclicker**
