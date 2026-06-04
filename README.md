@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.60**
+**Version 1.0.61**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -105,6 +105,10 @@ publish.cmd            REM win-x64 (default)
 publish.cmd win-x86    REM 32-bit
 publish.cmd win-arm64  REM ARM64
 ```
+
+The script checks that the .NET SDK is installed, builds a compressed,
+**ReadyToRun** single file (faster startup) with debug symbols stripped, prints
+the final size, and offers to open the output folder when it finishes.
 
 In Visual Studio you can instead right-click the project → **Publish** and pick
 the included **win-x64-selfcontained** profile.
@@ -403,6 +407,22 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.61
+**New — themes**
+- **Six new colour themes**, bringing the total to **26**: **Lavender** (soft purple
+  dark), **Sakura** (cherry-blossom light), **Emerald** (deep green dark), **Steel**
+  (cool blue-grey dark), **Grape** (purple with a fuchsia accent), and **Arctic**
+  (icy cyan light).
+
+**Improved — Settings**
+- The Settings page now shows the **app version** at the bottom (read from the build,
+  so it's always accurate), so you can check it without opening About.
+
+**Improved — publish**
+- `publish.cmd` now verifies the .NET SDK is installed first, builds a **ReadyToRun**
+  single file for faster startup, strips debug symbols, prints the final file size,
+  and offers to open the output folder when done.
 
 ### 1.0.60
 **New — Statistics**
