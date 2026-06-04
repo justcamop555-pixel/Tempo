@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.61**
+**Version 1.0.62**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -407,6 +407,23 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.62
+**Improved — publish**
+- `publish.cmd` now writes a **`publish-log.txt`** every run: it captures the full
+  build output and appends a final **SUCCESS / FAILED** result (with timestamps)
+  after it finishes. On failure it points you to the log and prints the lines
+  containing "error" so problems are easy to find.
+
+**Improved — Statistics**
+- **Export CSV** now also includes the insight metrics (this week/month/year, active
+  days, daily average, current & longest streak, busiest weekday/hour, top profile),
+  so the exported file matches the dashboard.
+
+**Improved — Macros**
+- The macro detail header now shows the estimated duration in a friendly format
+  (e.g. `≈2.1s` or `≈1m 5.0s`) instead of raw milliseconds — matching the saved-macros
+  list.
 
 ### 1.0.61
 **New — themes**
