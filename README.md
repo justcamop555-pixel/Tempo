@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.67**
+**Version 1.0.68**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -407,6 +407,16 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.68
+**Improved — Statistics**
+- The **session-goal progress bar** is now drawn in the app's own style — a rounded,
+  accent-coloured bar that matches the active theme — instead of the stock green
+  Windows progress bar that ignored theming.
+
+**Improved — Macros**
+- Added hover tooltips to the macro **Export / Import / Export all / Import all**
+  buttons and the macro **search box**, so they're documented like the rest of the app.
 
 ### 1.0.67
 **Improved — consistency & polish**
