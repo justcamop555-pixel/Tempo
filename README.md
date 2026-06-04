@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.62**
+**Version 1.0.63**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -407,6 +407,17 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.63
+**Design — more detail and polish on the dashboard**
+- **Stat cards** (used throughout Statistics) are redesigned with a soft drop
+  shadow, a gentle top-to-bottom surface gradient, a hairline edge highlight, and a
+  rounded gradient accent pill — so they read as real, lifted cards instead of flat
+  rectangles. Looks good on every theme, light or dark.
+- **Bar charts** (recent sessions, last 7 days, by hour, by weekday) now draw
+  gradient bars with rounded tops, a faint full-height track behind each bar, a
+  subtler baseline, and a gradient card surface — a much richer, more finished look.
+  Hovered bars brighten with the same gradient treatment.
 
 ### 1.0.62
 **Improved — publish**
