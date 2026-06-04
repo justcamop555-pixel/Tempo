@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.63**
+**Version 1.0.64**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -407,6 +407,20 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.64
+**New — themes**
+- **Six more colour themes** (now **32** total): **Indigo**, **Teal**, **Tangerine**,
+  **Bubblegum** (playful light), **Carbon** (minimal monochrome) and **Honey**
+  (warm amber).
+
+**Improved — Multi-Point**
+- The points table now shows a friendly **empty-state hint** ("No points yet — use
+  Add… or Quick Capture…") instead of a bare empty grid.
+
+**Improved — Macros**
+- Trying to play a macro with **no steps** now shows a short prompt to record/edit it
+  first, instead of running a countdown that does nothing.
 
 ### 1.0.63
 **Design — more detail and polish on the dashboard**
