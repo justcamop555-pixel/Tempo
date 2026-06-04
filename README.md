@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.59**
+**Version 1.0.60**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -403,6 +403,20 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.60
+**New — Statistics**
+- **Streaks:** new *Current Streak* and *Longest Streak* cards count consecutive
+  active days (the current one ending today or yesterday).
+- **Daily Average** card — average clicks across every day you've actually used Tempo.
+- **This Year** card to sit alongside This Week / This Month.
+- **"Clicks by day of week" chart** — a full 7-bar Sun→Sat breakdown (previously only
+  the single busiest weekday was shown as a number).
+
+**Improved — Statistics**
+- **Copy summary** now also includes this year, daily average, and both streaks.
+- The new cards and chart follow the active theme and update live like the rest of
+  the dashboard.
 
 ### 1.0.59
 **Improved — Clicker (smart rate preview)**
