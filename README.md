@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.65**
+**Version 1.0.66**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -407,6 +407,14 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.66
+**New — second GIF backdrop (experimental)**
+- You can now set **two** animated backdrops in Settings → Appearance: a **Header
+  GIF** (top, as before) and a new **Footer GIF** that plays in a band along the
+  bottom of the window. The footer band only appears when you choose a GIF, so it
+  takes no space otherwise. Each has its own Choose / Clear, and both stay readable
+  behind a scrim. Local files only — no network.
 
 ### 1.0.65
 **New — animated GIF backdrop (experimental)**
