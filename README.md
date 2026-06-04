@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.66**
+**Version 1.0.67**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -407,6 +407,13 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.67
+**Improved — consistency & polish**
+- The new Header/Footer GIF buttons now have hover tooltips and screen-reader
+  descriptions, matching the rest of the app's documented controls.
+- General health pass: clean build with zero compiler warnings, no dead code, and
+  balanced braces verified across all 75 source files (~20k lines).
 
 ### 1.0.66
 **New — second GIF backdrop (experimental)**
