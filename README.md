@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.71** · [Changelog](CHANGELOG.md) · [Releases](https://github.com/justcamop555-pixel/Tempo/releases)
+**Version 1.0.72** · [Changelog](CHANGELOG.md) · [Releases](https://github.com/justcamop555-pixel/Tempo/releases)
 
 A fast, modern, **free** Windows mouse auto-clicker built with C# and Windows
 Forms (**.NET 8**). It goes well beyond a basic clicker, while staying lightweight
