@@ -4,7 +4,7 @@
 
 # Tempo
 
-**Version 1.0.69**
+**Version 1.0.70**
 
 A full-featured Windows mouse auto-clicker built with C# and Windows Forms
 (**.NET 8**). It goes well beyond a basic clicker: named profiles, multi-point
@@ -407,6 +407,24 @@ Tempo is built to respect your privacy:
     data folder (Settings → Data & Backup → open data folder).
 
 ## Changelog
+
+### 1.0.70
+**Fixed — "Update now" reliability**
+- The in-place updater is more robust: it waits for Tempo to close with a bounded
+  loop (so it can never hang), retries the file swap more times in case antivirus
+  briefly locks the new exe, and relaunches from the app's own folder. This addresses
+  cases where "Update now" could appear stuck or fail to restart.
+
+**Improved — update dialog**
+- The "Update available" dialog was redesigned: an accent top strip, an accent
+  heading, a clear "Installed → Latest" line, and a rounded notes card. Release notes
+  are now shown as **clean text** — the raw `##`/`**` markdown markers and the
+  duplicate title/footer lines are stripped before display.
+
+**Improved — Keybinds**
+- Each hotkey row now has a tooltip and screen-reader description explaining how to
+  set a binding and that Backspace/Delete clears it; the interval-step field is
+  documented too.
 
 ### 1.0.69
 **Improved — publish**
