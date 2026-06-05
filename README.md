@@ -24,7 +24,7 @@ and easy to use.
   history, and CSV export.
 - **Hotkeys** — fully rebindable global shortcuts using keyboard **and** mouse
   buttons, with live conflict detection.
-- **Make it yours** — **32 built-in themes**, a custom accent colour, optional
+- **Make it yours** — **38 built-in themes**, a custom accent colour, optional
   animated GIF backdrops (header and footer), **four languages** (English, Spanish,
   French, German), system-tray presence, and launch-at-startup.
 - **Dependable** — anti-freeze protection, crash-safe saves, in-app update checking
@@ -219,10 +219,10 @@ clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
   clear history.
 
 ### Settings tab
-- **Theme** — 32 built-in themes (Dark, Light, Midnight, Ocean, Forest, Crimson,
+- **Theme** — 38 built-in themes (Dark, Light, Midnight, Ocean, Forest, Crimson,
   Solarized, AMOLED, Nord, Dracula, Monokai, Gruvbox, Synthwave, Coffee, Cosmos,
   Rose, Slate, Sunset, Mint, Sand, Lavender, Sakura, Emerald, Steel, Grape, Arctic,
-  Indigo, Teal, Tangerine, Bubblegum, Carbon and Honey), applied instantly, with a
+  Indigo, Teal, Tangerine, Bubblegum, Carbon, Honey, Sapphire, Olive, Cyan, Peach, Wine and Magenta), applied instantly, with a
   **live preview** and an optional **custom accent colour** that recolours the whole
   app.
 - **Background GIF** *(experimental)* — set an animated GIF behind the header and/or
