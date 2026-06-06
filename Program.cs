@@ -36,7 +36,7 @@ namespace AutoClicker
             Application.ThreadException += OnThreadException;
             AppDomain.CurrentDomain.UnhandledException += OnDomainException;
 
-            Logger.Info("Application starting (version 1.0.25).");
+            Logger.Info("Application starting (version 1.0.86).");
             EnvironmentInfo.LogSummary();
 
             // Verify the host meets Tempo's requirements. If not, explain what to
@@ -68,11 +68,7 @@ namespace AutoClicker
                 catch (Exception ex)
                 {
                     Logger.Error("Fatal error while running the application.", ex);
-                    MessageBox.Show(
-                        "A fatal error occurred and the application must close.\n\n" + ex.Message,
-                        "AutoClicker - Fatal Error",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Error);
+                    ShowCrashReport(ex, "main loop / fatal", true);
                 }
                 finally
                 {
@@ -85,23 +81,50 @@ namespace AutoClicker
         private static void OnThreadException(object sender, ThreadExceptionEventArgs e)
         {
             Logger.Error("Unhandled UI thread exception.", e.Exception);
-            var result = MessageBox.Show(
-                "An unexpected error occurred:\n\n" + e.Exception.Message +
-                "\n\nDo you want to continue running the application?",
-                "AutoClicker - Error",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning);
-
-            if (result == DialogResult.No)
-            {
-                Application.Exit();
-            }
+            ShowCrashReport(e.Exception, "UI thread", false);
         }
 
         private static void OnDomainException(object sender, UnhandledExceptionEventArgs e)
         {
             var ex = e.ExceptionObject as Exception;
             Logger.Error("Unhandled application domain exception.", ex);
+            // The process is usually terminating here, so don't try to show UI —
+            // just preserve the report on disk for later.
+            try
+            {
+                CrashReporter.WriteReportFile(CrashReporter.BuildReport(ex, "background thread"));
+            }
+            catch
+            {
+                // Nothing more we can safely do during a hard shutdown.
+            }
+        }
+
+        /// <summary>Saves a crash report and shows the reporting dialog.</summary>
+        private static void ShowCrashReport(Exception ex, string context, bool fatal)
+        {
+            try
+            {
+                string report = CrashReporter.BuildReport(ex, context);
+                string path = CrashReporter.WriteReportFile(report);
+                using (var form = new CrashReportForm(ex, context, report, path, fatal))
+                {
+                    form.ShowDialog();
+                    if (form.UserChoseQuit)
+                    {
+                        Application.Exit();
+                    }
+                }
+            }
+            catch (Exception reportingError)
+            {
+                Logger.Error("The crash reporter itself failed.", reportingError);
+                MessageBox.Show(
+                    "An unexpected error occurred:\n\n" + (ex == null ? "(unknown)" : ex.Message),
+                    "Tempo - Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
         }
 
         private static void ReleaseMutex()
