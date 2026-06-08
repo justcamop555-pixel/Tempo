@@ -1,16 +1,17 @@
 Tempo publish log
-Started : Sat 06/06/2026  2:34:21.54
+Started : Mon 06/08/2026 13:24:39.75
 Version : Version
 Runtime : win-x64
 ---------------------------------------------------------------------------
 SDK     : 10.0.300
   Determining projects to restore...
-  Restored C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\AutoClicker.csproj (in 233 ms).
-C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\Utils\CustomLogo.cs(139,47): warning SYSLIB0014: 'WebRequest.Create(string)' is obsolete: 'WebRequest, HttpWebRequest, ServicePoint, and WebClient are obsolete. Use HttpClient instead.' (https://aka.ms/dotnet-warnings/SYSLIB0014) [C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\AutoClicker.csproj]
-C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\Utils\UpdateInstaller.cs(67,47): warning SYSLIB0014: 'WebRequest.Create(string)' is obsolete: 'WebRequest, HttpWebRequest, ServicePoint, and WebClient are obsolete. Use HttpClient instead.' (https://aka.ms/dotnet-warnings/SYSLIB0014) [C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\AutoClicker.csproj]
-C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\Utils\UpdateChecker.cs(91,47): warning SYSLIB0014: 'WebRequest.Create(string)' is obsolete: 'WebRequest, HttpWebRequest, ServicePoint, and WebClient are obsolete. Use HttpClient instead.' (https://aka.ms/dotnet-warnings/SYSLIB0014) [C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\AutoClicker.csproj]
-CSC : warning WFAC010: Remove high DPI settings from C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\app.manifest and configure via Application.SetHighDpiMode API or 'ApplicationHighDpiMode' project property [C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\AutoClicker.csproj]
-  AutoClicker -> C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\bin\publish\win-x64\Tempo.dll
-  AutoClicker -> C:\Users\justc\OneDrive\Desktop\Tempo\AutoClicker\bin\publish\win-x64\
+  Restored C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\AutoClicker.csproj (in 585 ms).
+C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\Utils\UpdateInstaller.cs(68,47): warning SYSLIB0014: 'WebRequest.Create(string)' is obsolete: 'WebRequest, HttpWebRequest, ServicePoint, and WebClient are obsolete. Use HttpClient instead.' (https://aka.ms/dotnet-warnings/SYSLIB0014) [C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\AutoClicker.csproj]
+C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\Utils\UpdateInstaller.cs(251,47): warning SYSLIB0014: 'WebRequest.Create(string)' is obsolete: 'WebRequest, HttpWebRequest, ServicePoint, and WebClient are obsolete. Use HttpClient instead.' (https://aka.ms/dotnet-warnings/SYSLIB0014) [C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\AutoClicker.csproj]
+C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\Utils\UpdateChecker.cs(94,47): warning SYSLIB0014: 'WebRequest.Create(string)' is obsolete: 'WebRequest, HttpWebRequest, ServicePoint, and WebClient are obsolete. Use HttpClient instead.' (https://aka.ms/dotnet-warnings/SYSLIB0014) [C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\AutoClicker.csproj]
+C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\Utils\CustomLogo.cs(139,47): warning SYSLIB0014: 'WebRequest.Create(string)' is obsolete: 'WebRequest, HttpWebRequest, ServicePoint, and WebClient are obsolete. Use HttpClient instead.' (https://aka.ms/dotnet-warnings/SYSLIB0014) [C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\AutoClicker.csproj]
+CSC : warning WFAC010: Remove high DPI settings from C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\app.manifest and configure via Application.SetHighDpiMode API or 'ApplicationHighDpiMode' project property [C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\AutoClicker.csproj]
+  AutoClicker -> C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\bin\publish\win-x64\Tempo.dll
+  AutoClicker -> C:\Users\OUtto\Desktop\AutoClicker\AutoClicker\bin\publish\win-x64\
 ---------------------------------------------------------------------------
-Finished: Sat 06/06/2026  2:34:54.43
+Finished: Mon 06/08/2026 13:25:32.78

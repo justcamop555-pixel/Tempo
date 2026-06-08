@@ -36,7 +36,7 @@ namespace AutoClicker
             Application.ThreadException += OnThreadException;
             AppDomain.CurrentDomain.UnhandledException += OnDomainException;
 
-            Logger.Info("Application starting (version 1.0.86).");
+            Logger.Info("Application starting (version 1.0.105).");
             EnvironmentInfo.LogSummary();
 
             // Verify the host meets Tempo's requirements. If not, explain what to
