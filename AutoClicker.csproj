@@ -11,9 +11,9 @@
     <LangVersion>12.0</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\tempo.ico</ApplicationIcon>
-    <Version>1.0.86</Version>
-    <AssemblyVersion>1.0.86.0</AssemblyVersion>
-    <FileVersion>1.0.86.0</FileVersion>
+    <Version>1.0.105</Version>
+    <AssemblyVersion>1.0.105.0</AssemblyVersion>
+    <FileVersion>1.0.105.0</FileVersion>
     <Company>Tempo Project</Company>
     <Product>Tempo</Product>
     <AssemblyTitle>Tempo</AssemblyTitle>
