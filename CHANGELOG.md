@@ -2,6 +2,311 @@
 
 All notable changes to Tempo. Newest first. Per-release notes are also in the `release-notes/` folder and on the [Releases page](https://github.com/justcamop555-pixel/Tempo/releases).
 
+### 1.0.105
+**Installer (big one) - save users time**
+- Tempo now ships with a one-click installer. publish.cmd bundles install.cmd and
+  uninstall.cmd next to Tempo.exe and zips a Tempo-Setup-<version>.zip you can attach
+  to a release.
+- Users just unzip and run install.cmd: it installs Tempo to their profile (no admin
+  needed), creates a Start Menu shortcut (Desktop optional), and registers an entry in
+  Settings > Apps so it uninstalls like any normal app. uninstall.cmd (or the Apps
+  entry) removes everything cleanly. Running the bare Tempo.exe still works for anyone
+  who prefers portable.
+
+### 1.0.104
+**Report a bug (email)**
+- "Email a bug" now lets you choose how to send it: your email app, Gmail or Outlook
+  in any browser, or copy the pre-filled report to the clipboard to paste anywhere.
+  Every option is pre-filled with a template and your system details.
+
+**Restart effect**
+- The restart used when changing language now shows a brief "Restarting to apply
+  changes" message and fades out more smoothly instead of blinking.
+
+### 1.0.103
+**Report a bug**
+- The "Report a bug" link now opens a GitHub issue pre-filled with a clear template
+  (describe / steps / expected / actual) and auto-filled diagnostics — Tempo version,
+  Windows build, architecture, .NET runtime, processor count and display refresh rate —
+  so reports are easier to act on.
+
+**CPS test**
+- The tester now shows a summary of your attempts this session (count, average and best)
+  so you can compare recent tries without losing them.
+
+**publish.cmd**
+- Now does a true from-scratch build (clears the old output *and* the intermediate
+  obj/bin folders) and shows a cleaner animated loading bar with an elapsed timer.
+
+### 1.0.102
+**Redesign**
+- Added a divider down the right edge of the navigation sidebar to separate it cleanly
+  from the page content.
+
+**Downloading**
+- Updates are now verified with a SHA-256 checksum when the release publishes one
+  (Tempo.exe.sha256). A mismatch aborts the update so a corrupted or tampered download
+  can never replace your copy; if no checksum is published, the existing size and
+  executable-header checks still apply.
+
+**Update checker**
+- The "update available" dialog now shows the release date alongside the version.
+
+**Clicker**
+- The Stop button now also shows your Start/Stop hotkey, matching the Start button.
+
+### 1.0.101
+**Sidebar icons**
+- Each navigation item now has a small icon so the sections are recognisable at a
+  glance: a cursor for Clicker, three points for Multi-Point, a play glyph for Macros,
+  bars for Statistics, a keyboard for Keybinds, and a gear for Settings. The icons are
+  drawn as crisp vectors and follow the active/inactive colours.
+
+**publish.cmd**
+- The build step now shows a live spinner with an elapsed-time counter while it works,
+  instead of sitting silently, so you can see it's still going. Full build output is
+  still captured to publish-log.txt, and it falls back to a plain build if PowerShell
+  isn't available.
+
+### 1.0.100
+**Restart effect**
+- The window now fades in smoothly when it launches, and fades out before the app
+  restarts itself (e.g. after a language change), so the hand-off looks polished
+  instead of an abrupt flash. The fade respects your window-opacity setting.
+
+**Clicker**
+- The Start button now shows your Start/Stop hotkey (e.g. "▶ Start · F6") so the
+  shortcut is visible without opening the Keybinds tab. Updates automatically when you
+  change the binding.
+
+**Statistics**
+- The Left / Right / Middle cards now show each button's share of clicks as a
+  percentage under the count.
+
+**Multi-Point**
+- Added "Move to top" and "Move to bottom" (right-click menu, plus Ctrl+Home / Ctrl+End)
+  for quickly reordering long point lists.
+
+### 1.0.99
+**Redesign — navigation moved to a left sidebar**
+- The tabs are no longer a strip across the top; they're now a vertical sidebar of
+  rounded "cards" down the left side (Clicker, Multi-Point, Macros, Statistics,
+  Keybinds, Settings), with the active one highlighted in the accent colour. The page
+  content sits to the right. The default window is a little wider to fit the sidebar
+  alongside the content.
+
+**Window chrome**
+- The title bar now renders in dark mode to match the app, so the minimize / maximize /
+  close buttons fit the dark theme instead of sitting under a bright white bar. (Falls
+  back gracefully on older Windows versions.)
+
+### 1.0.98
+**Fixed — the full-screen scrollbar, at the root this time**
+- Removed the OS-level scrollbar hack (which fought the layout and made the bar flicker
+  in and out). Content centering now measures against the page's real client width and
+  hard-clamps so no control can ever sit past the right edge — so there is genuinely
+  nothing to scroll sideways and the horizontal scrollbar can't appear at all. Every tab
+  also re-centers the moment it's shown, so switching tabs after full-screen is clean.
+
+**Clicker**
+- The status bar now shows elapsed run time ("Time: MM:SS") alongside clicks and CPS, on
+  every tab. The status labels are localized.
+
+**Statistics**
+- The charts are now translated too (recent sessions, last 7 days, by hour, by weekday),
+  and weekday/month names in the cards and charts follow the chosen language instead of
+  the Windows locale. The Statistics tab is now fully localized.
+
+**Macros**
+- Playback status ("Loop … / step …") is now localized.
+
+### 1.0.97
+**Fixed — the stray bottom scrollbar after full-screen, for good**
+- The earlier centering fixes still left a horizontal scrollbar on the tabs after
+  exiting full-screen in some cases. The tab pages now suppress the horizontal
+  scrollbar outright at the Windows level — the content is always centred and fits
+  the width at any allowed window size, so a sideways scrollbar is never needed.
+  Vertical scrolling (for small windows) is unaffected.
+
+**Improved — language coverage (no new languages added)**
+- The entire Statistics tab is now translated in all six supported languages
+  (Spanish, French, German, Italian, Portuguese). Previously every stat card title —
+  Session Clicks, Peak CPS, Lifetime Clicks, This Week, Active Days, streaks, and the
+  rest — stayed in English even when the app language was changed. The "Insights"
+  heading and the "Unlock max speed (advanced)" option are now translated too.
+
+### 1.0.96
+**Fixed — full-screen left a stray scrollbar on the tabs**
+- After exiting full-screen (F11), tabs could show a pointless horizontal scrollbar at
+  the bottom. Full-screen makes the window very wide, so the content gets centred for
+  that width — but Windows only resizes the *active* tab, so other tabs kept the wide
+  offset and overflowed when you switched to them. Centering now uses the tab area's
+  real width (consistent for every tab) and every tab is re-centred after a full-screen
+  toggle, so the stray scrollbar is gone.
+
+**Design — buttons now match the rounded cards**
+- Buttons across the app are drawn with rounded corners to match the card panels, with
+  subtle hover/pressed shading, for a more cohesive modern look. The accent buttons
+  (Start = green, Stop = red, the primary Save buttons) keep their colours.
+
+### 1.0.95
+**Improved — closing the app**
+- If you close Tempo while it's still clicking (or playing a macro), it now stops the
+  run cleanly *before* exiting, so the worker finishes its current click and releases
+  the mouse button — no more risk of a held mouse button being left "stuck" if you
+  close during a hold-click. A button-release safety net runs on exit too, just in
+  case.
+
+**Improved — Statistics**
+- "Reset session" now asks for confirmation before clearing, since it can't be undone.
+  It still only clears the current session (counters, peak CPS, live charts) — your
+  lifetime totals and saved history are untouched.
+
+### 1.0.94
+**Fixed — stray horizontal scrollbar on the tabs**
+- When a tab's content was tall enough to need a vertical scrollbar, that scrollbar
+  ate into the usable width but the content-centering still used the old width, so the
+  content spilled past the right edge and a horizontal scrollbar appeared (and stuck
+  around). Centering now reserves room for the vertical scrollbar, so the stray
+  bottom scrollbar is gone.
+
+**Improved — Clicker**
+- A live **click-rate readout** now sits next to the big status word and updates in
+  real time while clicking (e.g. "120.0 CPS"), so you can see the actual rate at a
+  glance without looking down at the status bar. It clears when idle or paused.
+
+### 1.0.93
+**Fixed — recording keyboard shortcuts (Ctrl+C, Ctrl+D, …)**
+- Macro recording was dropping the modifier from shortcuts when the Record or
+  Emergency-stop hotkey used a modifier, so a press of **Ctrl+C / Ctrl+D / Ctrl+V**
+  recorded as just "C"/"D"/"V". The recorder now keeps modifiers; only the control
+  hotkey's own main key is held back, so everyday shortcuts record correctly.
+- Playback is more faithful too: right-side modifiers and navigation keys (arrows,
+  Home/End/Insert/Delete, Page Up/Down, etc.) now replay with the correct
+  "extended key" flag instead of occasionally landing as the wrong key.
+
+**Fixed — full-window background GIF could play too fast**
+- The wallpaper page could register its animation twice (on a tab switch combined
+  with a window resize/restore), making the GIF speed up. Added a guard so it
+  animates exactly once.
+
+**Improved — Multi-Point**
+- The per-point buttons (Edit, Duplicate, Toggle, Remove, Move Up/Down) now grey out
+  when no point is selected, and Move Up/Down disable at the top/bottom of the list,
+  so the buttons reflect what's actually possible.
+
+**Improved — publish.cmd**
+- After building, it reads the produced Tempo.exe's version and warns if it doesn't
+  match the project version — a guard against accidentally shipping an old build.
+
+### 1.0.92
+**Improved — across the tabs**
+- **Clicker:** the Manual Speed −/+ buttons now step by a useful amount (5 CPS
+  normally, 25 when max speed is unlocked) instead of 1 at a time, so they're far
+  quicker to use across the wide range.
+- **Macros:** press **Ctrl+D** in the list to duplicate the selected macro (matching
+  the Multi-Point list). The on-tab help now lists the list shortcuts.
+- **Multi-Point:** press **Ctrl+↑ / Ctrl+↓** to reorder the selected point from the
+  keyboard (same as the Move Up / Move Down buttons).
+- **Settings:** if Windows blocks the "Launch Tempo when I sign in" registry write
+  (common on locked-down work PCs), Tempo now tells you instead of silently failing.
+
+**Improved — full-window background GIF**
+- Only the visible tab now animates the wallpaper GIF, instead of all six pages
+  animating the shared image at once — lighter on the CPU and avoids the image
+  playing too fast.
+
+Keybinds was already fully covered (live conflict highlighting, a conflict warning on
+save, confirm-on-reset) so it was left as-is.
+
+### 1.0.91
+**Redesigned — group boxes are now modern cards (app-wide)**
+- Every panel on every tab (Clicker, Multi-Point, Macros, Keybinds, Settings) is now
+  drawn as a clean rounded **card**: a softly-filled surface with a rounded 1px border
+  and a title preceded by a small **accent tab**, instead of the old etched grey
+  outline. The cards sit slightly raised from the page background so each section
+  reads as its own group, giving the whole app a more modern, cohesive look.
+- This is a purely visual change applied centrally — no controls moved, no behaviour
+  changed — so all your existing layouts, shortcuts and settings are untouched.
+- The cards automatically match whichever of the 38 themes you've chosen (they use the
+  theme's surface, border, accent and text colours).
+
+### 1.0.90
+**New — monitor refresh rate detected**
+- Tempo now detects each monitor's **refresh rate (Hz)**, logs it with the rest of
+  the environment info, and shows your primary display's resolution and Hz in the
+  About dialog. (Note: animated GIFs only contain a fixed number of frames at their
+  own authored rate, so a higher-Hz monitor can't make a GIF play "smoother" than the
+  file itself — the rate is shown for information.)
+
+**Improved — GIF in full-screen**
+- When you enter full-screen (F11) and a footer GIF is set, the GIF band now grows to
+  a large banner for a more immersive look, and shrinks back when you exit.
+
+**Improved — auto-clicker**
+- With interval randomization on, the per-click **hold time** is now also slightly
+  varied (when a hold is set), so held clicks aren't all identical — a more
+  human-like pattern. No effect when randomization is off or no hold is set.
+
+**Audit**
+- Reviewed the GIF rendering, macro playback and click engine for bugs — no issues
+  found; all three are correctly guarded (thread-safe frame updates, interruptible
+  waits, held-input release on stop).
+
+### 1.0.89
+**Fixed — advanced speed layout**
+- The "Unlock max (advanced)" checkbox was overlapping the "Target: … CPS" label in
+  the Manual Speed box (especially at high CPS). It now sits on its own row beneath
+  the slider, and the Manual Speed / Anti-Freeze boxes are the same height again.
+
+**Improved — Macros**
+- The macro right-click menu now also has **Play once** and **Export…**, so you can
+  run a single pass or export one macro to a file without leaving the list.
+
+### 1.0.88
+**New — advanced (unlocked) click speed**
+- The Manual Speed slider has a new **"Unlock max (advanced)"** option. Normally the
+  slider tops out at 200 CPS; unlocking raises it to **1000 CPS** for maximum speed.
+  Turning it on shows a clear warning first — extreme speeds use a lot of CPU, can
+  make the mouse hard to control, and are easily detected by games that ban
+  auto-clickers. (1000 CPS is the engine's real ceiling; Tempo deliberately doesn't
+  offer an uncapped busy-loop rate that could freeze your PC.) Pair it with
+  Anti-Freeze to cap CPU.
+
+**Improved — update check & download**
+- Clearer messages when a check fails: GitHub **rate-limiting**, a **timeout**, or a
+  specific server error are now reported distinctly instead of a generic message.
+- Downloads now detect a **truncated/interrupted** transfer (by comparing against the
+  server's reported size), in addition to the existing empty-file and
+  "is-it-really-an-exe" checks.
+
+**Improved — publish.cmd**
+- Writes a **`Tempo.exe.sha256`** checksum file next to the build (ready to attach to
+  a release so users can verify their download), and warns if you pass a runtime ID
+  that isn't a standard Windows one.
+
+### 1.0.87
+**Fixed — overlay memory leaks**
+- The recording badge and the pre-play countdown overlay were leaking two GDI fonts
+  each time they appeared (the fonts were never disposed). Both now dispose them
+  properly, so repeated recording/playback no longer slowly leaks GDI handles.
+
+**Improved — overlay design**
+- The recording badge and countdown overlay now have **rounded corners** with a
+  smooth anti-aliased border, matching the look of the on-screen running overlay.
+
+**Improved — CPS Test**
+- Beating your all-time best is now celebrated: the result turns the accent colour
+  and shows "★ New best!".
+
+**Improved — Multi-Point**
+- The cycle summary now shows **"N of M points active"** when some points are
+  disabled, so it's clear at a glance how many are in the rotation.
+
+**Improved — Macros**
+- The estimate line now also shows the macro's **step count** next to the estimated
+  run time.
+
 ### 1.0.86
 **New — milestone notifications**
 - When your lifetime clicks pass a milestone (1K → 10M), Tempo now pops a one-off
