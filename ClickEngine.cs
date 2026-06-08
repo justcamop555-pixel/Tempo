@@ -70,6 +70,9 @@ namespace AutoClicker.Engine
         /// being clicked, or -1 when not in multi-point mode. For the live UI.</summary>
         public int CurrentPointIndex => _currentPointIndex;
         private ClickProfile _activeProfile;
+        private int _cursorStartX;
+        private int _cursorStartY;
+        private bool _cursorStartValid;
         private bool _disposed;
 
         public event EventHandler<EngineStateChangedEventArgs> StateChanged;
@@ -122,6 +125,11 @@ namespace AutoClicker.Engine
 
                 // Work on a private copy so the UI can keep editing the original.
                 _activeProfile = profile.Clone();
+
+                // Remember where the cursor was, so we can optionally restore it
+                // when the run stops (useful for Fixed / Multi-Point modes).
+                _cursorStartValid = ScreenGeometry.TryGetCursorPosition(out _cursorStartX, out _cursorStartY);
+
                 _stopSignal.Reset();
                 _running = true;
                 _paused = false;
@@ -301,6 +309,22 @@ namespace AutoClicker.Engine
                     SetState(EngineState.Idle);
                 }
 
+                // Optionally return the cursor to where it was before the run, for
+                // Fixed / Multi-Point modes that moved it away.
+                try
+                {
+                    if (_cursorStartValid && _activeProfile != null && _activeProfile.RestoreCursorOnStop &&
+                        (_activeProfile.PositionMode == PositionMode.FixedPosition ||
+                         _activeProfile.PositionMode == PositionMode.MultiPoint))
+                    {
+                        InputSimulator.MoveTo(_cursorStartX, _cursorStartY);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn("Could not restore cursor position: " + ex.Message);
+                }
+
                 RunCompleted?.Invoke(this, EventArgs.Empty);
             }
         }
@@ -309,11 +333,20 @@ namespace AutoClicker.Engine
         {
             long performed = 0;
             long max = p.RepeatMode == RepeatMode.FixedCount ? p.RepeatCount : long.MaxValue;
+            long durationMs = p.RepeatMode == RepeatMode.ForDuration
+                ? (long)p.RepeatDurationSeconds * 1000L : 0;
+            var runClock = Stopwatch.StartNew();
 
             _scheduler.Start();
 
             while (_running && performed < max)
             {
+                // Stop once the configured run duration has elapsed.
+                if (durationMs > 0 && runClock.ElapsedMilliseconds >= durationMs)
+                {
+                    break;
+                }
+
                 // Block here while paused; realign the schedule on resume.
                 if (WaitWhilePaused())
                 {
@@ -350,9 +383,17 @@ namespace AutoClicker.Engine
         {
             long performed = 0;
             long max = p.RepeatMode == RepeatMode.FixedCount ? p.RepeatCount : long.MaxValue;
+            long durationMs = p.RepeatMode == RepeatMode.ForDuration
+                ? (long)p.RepeatDurationSeconds * 1000L : 0;
+            var runClock = Stopwatch.StartNew();
 
             while (_running && performed < max)
             {
+                if (durationMs > 0 && runClock.ElapsedMilliseconds >= durationMs)
+                {
+                    break;
+                }
+
                 if (WaitWhilePaused())
                 {
                     break;
@@ -364,7 +405,8 @@ namespace AutoClicker.Engine
                 _scheduler.Start();
                 _resyncScheduler = false;
 
-                for (int i = 0; i < burst && _running && performed < max; i++)
+                for (int i = 0; i < burst && _running && performed < max
+                     && (durationMs == 0 || runClock.ElapsedMilliseconds < durationMs); i++)
                 {
                     long interval = PerformOneActuation(p);
                     performed++;
@@ -385,7 +427,14 @@ namespace AutoClicker.Engine
                 }
 
                 // Pause between bursts (precise, but does not need drift tracking).
-                if (WaitInterruptible(p.BurstPauseMilliseconds))
+                // When interval randomization is on, jitter this pause too so the
+                // gap between bursts isn't a fixed, detectable rhythm.
+                long burstPause = p.BurstPauseMilliseconds;
+                if (p.RandomizeInterval && burstPause > 0)
+                {
+                    burstPause = _random.JitterInterval(burstPause, p.IntervalJitterMilliseconds);
+                }
+                if (WaitInterruptible(burstPause))
                 {
                     break;
                 }
@@ -402,12 +451,50 @@ namespace AutoClicker.Engine
         /// atomic from the OS's point of view and removes the inter-event latency
         /// that would otherwise cap the achievable click rate.
         /// </summary>
+        /// <summary>
+        /// Performs one click. When <paramref name="holdMs"/> is 0 this uses the exact
+        /// same batched <see cref="InputSimulator"/> calls as before (no behaviour
+        /// change). When it's positive, the button is held down for that long.
+        /// </summary>
+        private static void Actuate(bool move, int x, int y, MouseButtonType button, ClickStyle style, int holdMs)
+        {
+            if (holdMs > 0)
+            {
+                if (move)
+                {
+                    InputSimulator.MoveTo(x, y);
+                }
+                InputSimulator.ClickStyledHeld(button, style, holdMs);
+            }
+            else if (move)
+            {
+                InputSimulator.MoveAndClick(x, y, button, style);
+            }
+            else
+            {
+                InputSimulator.ClickStyled(button, style);
+            }
+        }
+
         private long PerformOneActuation(ClickProfile p)
         {
             MouseButtonType button = p.Button;
             ClickStyle style = p.Style;
             MouseButtonType actuatedButton = button;
             long interval = p.GetBaseIntervalMilliseconds();
+            int hold = p.ClickHoldMilliseconds;
+
+            // When anti-pattern randomization is on, vary the per-click hold a little
+            // too, so held clicks aren't all exactly the same length. Bounded by the
+            // hold itself so it always stays positive.
+            if (p.RandomizeInterval && hold > 0)
+            {
+                int holdJitter = Math.Min(p.IntervalJitterMilliseconds, hold);
+                if (holdJitter > 0)
+                {
+                    hold = (int)_random.JitterInterval(hold, holdJitter);
+                }
+            }
 
             if (p.PositionMode == PositionMode.MultiPoint)
             {
@@ -421,7 +508,7 @@ namespace AutoClicker.Engine
                         _random.JitterPosition(ref x, ref y, p.PositionJitterPixels);
                     }
 
-                    InputSimulator.MoveAndClick(x, y, point.Button, point.Style);
+                    Actuate(true, x, y, point.Button, point.Style, hold);
                     style = point.Style;
                     actuatedButton = point.Button;
 
@@ -440,26 +527,26 @@ namespace AutoClicker.Engine
                     _random.JitterPosition(ref x, ref y, p.PositionJitterPixels);
                 }
 
-                InputSimulator.MoveAndClick(x, y, button, style);
+                Actuate(true, x, y, button, style, hold);
             }
             else if (p.RandomizePosition)
             {
                 // Current position but with jitter applied around it: read the
-                // cursor, jitter, then issue a batched move + click.
+                // cursor, jitter, then issue a move + click.
                 if (ScreenGeometry.TryGetCursorPosition(out int cx, out int cy))
                 {
                     _random.JitterPosition(ref cx, ref cy, p.PositionJitterPixels);
-                    InputSimulator.MoveAndClick(cx, cy, button, style);
+                    Actuate(true, cx, cy, button, style, hold);
                 }
                 else
                 {
-                    InputSimulator.ClickStyled(button, style);
+                    Actuate(false, 0, 0, button, style, hold);
                 }
             }
             else
             {
                 // Pure "click where the cursor is" — no move event needed.
-                InputSimulator.ClickStyled(button, style);
+                Actuate(false, 0, 0, button, style, hold);
             }
 
             // Count every real mouse click, not just the actuation. A double-click
