@@ -2,6 +2,134 @@
 
 All notable changes to Tempo. Newest first. Per-release notes are also in the `release-notes/` folder and on the [Releases page](https://github.com/justcamop555-pixel/Tempo/releases).
 
+### 1.0.115
+**Clicker - new: finish notification**
+- New option under the Start button: "Notify when a fixed run finishes". When a
+  fixed-count or fixed-duration run completes on its own, Tempo plays a chime and
+  shows a tray notice with the session click count. Stopping a run yourself stays
+  silent - the engine now tracks whether a run ended naturally or was stopped.
+
+**Macros - "Save Macro" redesigned**
+- Recordings no longer drop straight into the list under a timestamp name. A proper
+  Save Recording dialog now appears when you stop: it shows what was captured
+  (steps and length), lets you name it, add an optional note, and pin it to the top
+  of the list. "Keep default" (or closing) still saves under the automatic name, so
+  a recording is never lost.
+
+### 1.0.114
+**Fixed: publish.cmd never showed its build animation**
+- Found and proved the real cause: the elapsed-time format used a doubled backslash
+  (mm\\:ss), which makes .NET throw a FormatException on every frame - so the console
+  printed nothing, every version, while the build itself still worked. With the correct
+  escape (mm\:ss) the comet animation and elapsed timer finally show.
+
+**Full screen**
+- Entering full screen now shows a brief "Full screen - press F11 or Esc to exit"
+  notice top-centre, so nobody gets stuck in the borderless window. It disappears on
+  its own (and immediately when you exit).
+
+**Background images (GIFs)**
+- Choosing a file that can't actually be loaded as an image is now rejected with a
+  clear message instead of being saved and silently showing nothing.
+- If a saved background image goes missing or fails to load at startup, Tempo now
+  writes the reason and the path to the log instead of failing silently.
+
+### 1.0.113
+**Clicker - richer detail in existing displays**
+- The Manual Speed readout now also shows clicks per minute, e.g.
+  "Target: 10 CPS (100 ms · 600/min)".
+
+**Macros - richer detail in existing displays**
+- Playback progress now shows an estimated time remaining for finite runs, e.g.
+  "Loop 2 / 5  •  step 14 / 80  •  ~1:42 left".
+- While playing, the Live Monitor header shows the macro's size and length
+  ("▶ Playing Farm run — 80 steps, ≈2.1 min") instead of just its name.
+
+**publish.cmd**
+- New build animation: a comet sweeping across a dotted track with a fading tail,
+  alongside the elapsed timer.
+
+### 1.0.112
+**Status bar - useful info in the empty middle**
+- The status bar's blank centre now shows a live hint. While idle it reads what the
+  clicker is set to and how to start it (e.g. "Interval · 10 CPS · Left  ·  F6 to start");
+  while clicking it shows "Clicking — F6 to stop" (or resume when paused); and while a
+  macro plays it shows "Playing macro: <name>". Clicks / CPS / Time stay on the right.
+
+### 1.0.111
+**CPS test rating now easy to see**
+- The result rating (Slow / Average / Good / Fast / Very fast / Insane) now shows in a
+  bold, colour-coded line — red for slow through green/gold for the fastest — so it's
+  clear at a glance instead of small grey text.
+
+**Fixed: cursor trail wasn't visible**
+- The colourful cursor trail used a window style that made it click-through but also
+  stopped it from drawing. It now paints correctly and stays click-through, so when
+  the Macros-tab option is on you'll see the rainbow trail follow the mouse (including
+  while recording a macro). If you don't see it, make sure the checkbox is ticked.
+
+### 1.0.110
+**Fixed: CPS test window cut off**
+- The CPS test now sizes its content area directly, so the bottom line ("This
+  session…") is fully visible on every screen and DPI — previously the title bar and
+  borders ate into a fixed window size and clipped the bottom. The big button text no
+  longer truncates either ("Click to retry").
+
+**Cursor trail (just for fun)**
+- New option on the Macros tab: "Colorful cursor trail". When on, a rainbow trail
+  follows your mouse across the screen. It's click-through, so it never interferes with
+  clicking or anything else, and it only repaints the area around the trail to stay
+  light on a laptop.
+
+**publish.cmd**
+- The final summary now shows more detail: size in MB, output folder, target
+  (net8.0-windows / win-x64), the .NET SDK it was built with, and the installer package.
+
+### 1.0.109
+**Fixed: tabs still jumping to the top (the rest of it)**
+- Tracked down the remaining cause: Windows was scrolling a page to bring a control
+  into view whenever one got focus — which happens when you click a control, change a
+  setting, or start the clicker (focus shifts as buttons enable/disable). Pages no
+  longer auto-scroll on focus, so the occasional jump is gone.
+
+**CPS test**
+- Your result now shows a quick rating next to the number (Slow / Average / Good /
+  Fast / Very fast / Insane) so you can see how a run stacks up at a glance.
+
+### 1.0.108
+**Fixed: tabs jumping back to the top**
+- A scrolled-down tab no longer snaps back to the top when you start the clicker, when
+  live numbers update, or when the page re-centres. Tempo now keeps your scroll
+  position. (The cause was live labels resizing themselves and the re-centre snapping
+  the view to the top; the scroll position is now preserved through both.)
+
+### 1.0.107
+**Manual speed - up to 2000 CPS**
+- With "Unlock max speed" on, the Manual Speed slider now goes up to 2000 CPS (was
+  1000). Above 1000 CPS the engine switches to a sub-millisecond interval, since a
+  whole-millisecond interval tops out at exactly 1000 CPS. The Anti-Freeze cap was
+  raised to 2000 to match. Note: very high rates use more CPU, and Windows and the
+  target app may not actually register every click much above ~1000/s.
+
+**publish.cmd**
+- Added a big "TEMPO" title banner at the top, drawn with a 24-bit colour gradient on
+  terminals that support it (modern Windows Terminal / console).
+
+**Email a bug**
+- Added Yahoo Mail as another "open in your browser" option.
+- The "Copy report to clipboard" option now also includes the most recent log lines,
+  which often help pin down a problem.
+
+### 1.0.106
+**Clicker**
+- The main button now works as Start / Pause / Resume: it reads "Start" when idle,
+  "Pause" while clicking, and "Resume" once paused. Pausing and resuming were already
+  possible via the hotkey, but now they're reachable by mouse too. Stop is unchanged.
+
+**publish.cmd**
+- Refreshed the build animation: a rotating spinner plus a bouncing bar on a dotted
+  track, with the elapsed timer.
+
 ### 1.0.105
 **Installer (big one) - save users time**
 - Tempo now ships with a one-click installer. publish.cmd bundles install.cmd and

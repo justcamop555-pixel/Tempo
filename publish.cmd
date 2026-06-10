@@ -12,6 +12,17 @@ REM  Log:     publish-log.txt        - full build output + final result.
 REM ===========================================================================
 setlocal EnableExtensions EnableDelayedExpansion
 
+REM --- Branded TEMPO banner (24-bit colour where the console supports it) ----
+where powershell >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo     =====  T E M P O  =====
+  echo.
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$e=[char]27; $b=[char]0x2588; $rows=@('11111011110100010111001111','00100010000110110100101001','00100011100101010111001001','00100010000100010100001001','00100011110100010100001111'); $w=$rows[0].Length; for($r=0;$r -lt $rows.Count;$r++){ $line=''; $s=$rows[$r]; for($x=0;$x -lt $s.Length;$x++){ if($s[$x] -eq '1'){ $t=$x/[Math]::Max(1,$w-1); $rr=[int](56+(167-56)*$t); $gg=[int](211+(139-211)*$t); $bb=[int](248+(250-248)*$t); $line=$line+$e+'[38;2;'+$rr+';'+$gg+';'+$bb+'m'+$b } else { $line=$line+' ' } }; Write-Host ('    '+$line+$e+'[0m') }; Write-Host ''"
+)
+
+
 REM --- Remember when we started (for an elapsed-time report at the end) -------
 set "T0=%TIME: =0%"
 
@@ -131,7 +142,7 @@ if errorlevel 1 (
   dotnet publish AutoClicker.csproj -c Release -r %RID% -p:SelfContained=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:PublishReadyToRun=true -p:DebugType=none -p:DebugSymbols=false -o "%OUTDIR%" >> "%LOG%" 2>&1
   set "RESULT=!ERRORLEVEL!"
 ) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $a=@('publish','AutoClicker.csproj','-c','Release','-r','%RID%','-p:SelfContained=true','-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true','-p:EnableCompressionInSingleFile=true','-p:PublishReadyToRun=true','-p:DebugType=none','-p:DebugSymbols=false','-o','%OUTDIR%'); $p=Start-Process dotnet -ArgumentList $a -NoNewWindow -PassThru -RedirectStandardOutput '%PSOUT%' -RedirectStandardError '%PSERR%'; $w=14; $pos=0; $dir=1; $t=[Diagnostics.Stopwatch]::StartNew(); while(-not $p.HasExited){ $bar=(' '*$pos)+'==='+(' '*[Math]::Max(0,$w-$pos-3)); [Console]::Write([char]13 + '        Building  [' + $bar + ']  ' + ('{0:mm\:ss}' -f $t.Elapsed) + ' elapsed   '); $pos+=$dir; if($pos -le 0){$dir=1}; if($pos -ge ($w-3)){$dir=-1}; Start-Sleep -Milliseconds 90 }; [Console]::Write([char]13 + (' '*60) + [char]13); Get-Content '%PSOUT%','%PSERR%' -ErrorAction SilentlyContinue | Add-Content '%LOG%'; exit $p.ExitCode"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $a=@('publish','AutoClicker.csproj','-c','Release','-r','%RID%','-p:SelfContained=true','-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true','-p:EnableCompressionInSingleFile=true','-p:PublishReadyToRun=true','-p:DebugType=none','-p:DebugSymbols=false','-o','%OUTDIR%'); $p=Start-Process dotnet -ArgumentList $a -NoNewWindow -PassThru -RedirectStandardOutput '%PSOUT%' -RedirectStandardError '%PSERR%'; $w=22; $pos=0; $t=[Diagnostics.Stopwatch]::StartNew(); while(-not $p.HasExited){ $a=@(); for($k=0;$k -lt $w;$k++){ $a+='.' }; $a[$pos %% $w]='#'; $a[($pos-1+$w) %% $w]='='; $a[($pos-2+$w) %% $w]=':'; $bar=-join $a; [Console]::Write([char]13 + '        Building  [' + $bar + ']  ' + ('{0:mm\:ss}' -f $t.Elapsed) + ' elapsed   '); $pos++; Start-Sleep -Milliseconds 70 }; [Console]::Write([char]13 + (' '*72) + [char]13); Get-Content '%PSOUT%','%PSERR%' -ErrorAction SilentlyContinue | Add-Content '%LOG%'; exit $p.ExitCode"
   set "RESULT=!ERRORLEVEL!"
 )
 del "%PSOUT%" "%PSERR%" >nul 2>&1
@@ -240,14 +251,26 @@ set /a "EMIN=ELAPSED/60"
 set /a "ESEC=ELAPSED%%60"
 >> "%LOG%" echo Elapsed : !EMIN!m !ESEC!s
 
+REM --- Gather a few extra details for the summary ----------------------------
+set "SDKVER="
+for /f "usebackq delims=" %%S in (`dotnet --version 2^>nul`) do set "SDKVER=%%S"
+set "SIZEMB="
+set /a SIZEMB=%SIZE%/1048576 >nul 2>&1
+set "ZIPSIZE="
+if defined MADEZIP for %%Z in ("%SETUPZIP%") do set "ZIPSIZE=%%~zZ"
+
 echo.
 echo  ===========================================================================
 echo    DONE  -  Tempo %VER% built in !EMIN!m !ESEC!s
 echo  ---------------------------------------------------------------------------
 echo    Executable : %EXE%
-echo    Size       : %SIZE% bytes
+if defined SIZEMB (echo    Size       : %SIZE% bytes  ^(~%SIZEMB% MB^)) else (echo    Size       : %SIZE% bytes)
+echo    Output dir : %OUTDIR%
+echo    Target     : net8.0-windows  /  win-x64  ^(self-contained, single file^)
+if defined SDKVER echo    Built with : .NET SDK %SDKVER%
 if defined SHA echo    SHA-256    : %SHA%
-if defined SHA echo    Checksum   : %EXE%.sha256  (optional - attach to the release)
+if defined SHA echo    Checksum   : %EXE%.sha256  ^(optional - attach to the release^)
+if defined MADEZIP echo    Installer  : %SETUPZIP%  ^(%ZIPSIZE% bytes^)
 echo    Build log  : publish-log.txt
 echo  ---------------------------------------------------------------------------
 echo    Next steps:
