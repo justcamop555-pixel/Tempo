@@ -19,13 +19,13 @@ namespace AutoClicker.UI
 
         private void BuildMultiPointTab()
         {
-            var page = new TabPage("Multi-Point");
+            var page = new BackdropTabPage(Utils.Localization.T("Multi-Point")) { AutoScroll = true };
 
-            var help = UiFactory.Label(
+            string helpText =
                 "Define a sequence of points. In Multi-Point mode the engine visits the " +
                 "enabled points using the chosen order. Tick a row to enable/disable it; " +
-                "Delete removes the selected point, Ctrl+D duplicates it.",
-                12, 12);
+                "Delete removes the selected point, Ctrl+D duplicates it, Ctrl+\u2191/\u2193 reorders, Ctrl+Home/End jumps it to the ends.";
+            var help = UiFactory.Label(helpText, 12, 12);
             help.MaximumSize = new Size(720, 0);
             help.AutoSize = true;
             help.ForeColor = _theme.TextMuted;
@@ -36,7 +36,10 @@ namespace AutoClicker.UI
             _pointOrderCombo.SelectedIndex = 0;
 
             _cycleInfoLabel = UiFactory.Label("", 232, 56, FontStyle.Italic, 9f);
-            _cycleInfoLabel.AutoSize = true;
+            _cycleInfoLabel.AutoSize = false;
+            _cycleInfoLabel.Width = 360;
+            _cycleInfoLabel.Height = 18;
+            _cycleInfoLabel.AutoEllipsis = true;
             _cycleInfoLabel.ForeColor = _theme.TextMuted;
 
             _pointsList = new ListView
@@ -52,18 +55,38 @@ namespace AutoClicker.UI
                 MultiSelect = false,
                 CheckBoxes = true
             };
-            _pointsList.Columns.Add("#", 40);
-            _pointsList.Columns.Add("Label", 130);
-            _pointsList.Columns.Add("X", 66);
-            _pointsList.Columns.Add("Y", 66);
-            _pointsList.Columns.Add("Button", 70);
-            _pointsList.Columns.Add("Type", 64);
-            _pointsList.Columns.Add("Dwell", 56);
-            _pointsList.Columns.Add("Rep", 44);
+            _pointsList.Columns.Add("#", 36);
+            _pointsList.Columns.Add("Label", 136);
+            _pointsList.Columns.Add("X", 58, HorizontalAlignment.Right);
+            _pointsList.Columns.Add("Y", 58, HorizontalAlignment.Right);
+            _pointsList.Columns.Add("Button", 74);
+            _pointsList.Columns.Add("Type", 74);
+            _pointsList.Columns.Add("Dwell", 56, HorizontalAlignment.Right);
+            _pointsList.Columns.Add("Rep", 48, HorizontalAlignment.Right);
             _pointsList.DoubleClick += (s, e) => EditSelectedPoint();
             _pointsList.ItemActivate += (s, e) => EditSelectedPoint();
             _pointsList.ItemChecked += OnPointItemChecked;
             _pointsList.KeyDown += OnPointsListKeyDown;
+            _pointsList.SelectedIndexChanged += (s, e) => UpdatePointButtonStates();
+
+            var pointMenu = new ContextMenuStrip();
+            pointMenu.Items.Add("Edit…", null, (s, e) => EditSelectedPoint());
+            pointMenu.Items.Add("Duplicate", null, OnDuplicatePoint);
+            pointMenu.Items.Add("Toggle On / Off", null, OnTogglePoint);
+            pointMenu.Items.Add(new ToolStripSeparator());
+            pointMenu.Items.Add("Move to top", null, (s, e) => MovePointToEnd(true));
+            pointMenu.Items.Add("Move to bottom", null, (s, e) => MovePointToEnd(false));
+            pointMenu.Items.Add(new ToolStripSeparator());
+            pointMenu.Items.Add("Remove", null, OnRemovePoint);
+            _pointsList.ContextMenuStrip = pointMenu;
+            _pointsList.MouseDown += (s, e) =>
+            {
+                if (e.Button == MouseButtons.Right)
+                {
+                    var hit = _pointsList.HitTest(e.Location);
+                    if (hit.Item != null) hit.Item.Selected = true;
+                }
+            };
 
             int bx = 568;
             _addPointBtn = UiFactory.Button("Add…", bx, 86, 130, 30);
@@ -96,9 +119,12 @@ namespace AutoClicker.UI
             _clearPointsBtn = UiFactory.Button("Clear All", bx, 414, 130, 30);
             _clearPointsBtn.Click += OnClearPoints;
 
+            _toggleAllPointsBtn = UiFactory.Button("Enable / Disable all", bx, 448, 130, 30);
+            _toggleAllPointsBtn.Click += OnToggleAllPoints;
+
             var applyNote = UiFactory.Label(
                 "Tip: press Save on the\nClicker tab to store these\npoints in the profile.",
-                bx, 470, FontStyle.Italic, 8.25f);
+                bx, 488, FontStyle.Italic, 8.25f);
             applyNote.ForeColor = _theme.TextMuted;
 
             page.Controls.Add(help);
@@ -106,6 +132,22 @@ namespace AutoClicker.UI
             page.Controls.Add(_pointOrderCombo);
             page.Controls.Add(_cycleInfoLabel);
             page.Controls.Add(_pointsList);
+
+            _pointsEmptyHint = new Label
+            {
+                Text = "No points yet.\r\nUse \u201CAdd\u2026\u201D or \u201CQuick Capture\u201D to create one,\r\nthen tick its row to enable it.",
+                Left = _pointsList.Left + 1,
+                Top = _pointsList.Top + 70,
+                Width = _pointsList.Width - 2,
+                Height = 90,
+                TextAlign = ContentAlignment.TopCenter,
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Italic),
+                ForeColor = _theme.TextMuted,
+                BackColor = _pointsList.BackColor,
+                Visible = false
+            };
+            page.Controls.Add(_pointsEmptyHint);
+            _pointsEmptyHint.BringToFront();
             page.Controls.Add(_addPointBtn);
             page.Controls.Add(_capturePointBtn);
             page.Controls.Add(_editPointBtn);
@@ -116,7 +158,10 @@ namespace AutoClicker.UI
             page.Controls.Add(_movePointDownBtn);
             page.Controls.Add(_showPointsBtn);
             page.Controls.Add(_clearPointsBtn);
+            page.Controls.Add(_toggleAllPointsBtn);
             page.Controls.Add(applyNote);
+
+            ShiftBelowIntro(page, help, helpText, 720, firstRowY: 52);
 
             _tabs.TabPages.Add(page);
         }
@@ -156,7 +201,35 @@ namespace AutoClicker.UI
 
             _pointsList.EndUpdate();
             _suppressPointCheck = false;
+
+            if (_pointsEmptyHint != null)
+            {
+                _pointsEmptyHint.BackColor = _pointsList.BackColor;
+                _pointsEmptyHint.ForeColor = _theme.TextMuted;
+                _pointsEmptyHint.Visible = _workingPoints.Count == 0;
+                if (_pointsEmptyHint.Visible) _pointsEmptyHint.BringToFront();
+            }
+
             UpdateCycleInfo();
+            UpdatePointButtonStates();
+        }
+
+        /// <summary>
+        /// Greys out the per-point action buttons when nothing is selected (and the
+        /// Move buttons at the ends of the list), so the buttons reflect what's
+        /// actually possible rather than always looking clickable.
+        /// </summary>
+        private void UpdatePointButtonStates()
+        {
+            int index = GetSelectedPointIndex();
+            bool hasSelection = index >= 0 && index < _workingPoints.Count;
+
+            if (_editPointBtn != null) _editPointBtn.Enabled = hasSelection;
+            if (_duplicatePointBtn != null) _duplicatePointBtn.Enabled = hasSelection;
+            if (_togglePointBtn != null) _togglePointBtn.Enabled = hasSelection;
+            if (_removePointBtn != null) _removePointBtn.Enabled = hasSelection;
+            if (_movePointUpBtn != null) _movePointUpBtn.Enabled = hasSelection && index > 0;
+            if (_movePointDownBtn != null) _movePointDownBtn.Enabled = hasSelection && index < _workingPoints.Count - 1;
         }
 
         /// <summary>Shows how many points are active and the clicks per full cycle.</summary>
@@ -169,18 +242,36 @@ namespace AutoClicker.UI
 
             int enabled = 0;
             long clicksPerCycle = 0;
+            long dwellPerCycle = 0;
             foreach (ClickPoint p in _workingPoints)
             {
                 if (p.Enabled)
                 {
                     enabled++;
                     clicksPerCycle += p.Repeat < 1 ? 1 : p.Repeat;
+                    if (p.DwellMilliseconds > 0) dwellPerCycle += p.DwellMilliseconds;
                 }
             }
 
-            _cycleInfoLabel.Text = enabled == 0
-                ? "No active points"
-                : $"{enabled} active point(s)  •  {clicksPerCycle} click(s) per cycle";
+            if (enabled == 0)
+            {
+                _cycleInfoLabel.Text = "No active points";
+            }
+            else
+            {
+                int total = _workingPoints.Count;
+                string pointsText = enabled == total
+                    ? $"{enabled} active point(s)"
+                    : $"{enabled} of {total} points active";
+                string text = $"{pointsText}  \u2022  {clicksPerCycle} click(s) per cycle";
+                if (dwellPerCycle > 0)
+                {
+                    text += dwellPerCycle >= 1000
+                        ? $"  \u2022  {dwellPerCycle / 1000.0:0.0} s dwell/cycle"
+                        : $"  \u2022  {dwellPerCycle} ms dwell/cycle";
+                }
+                _cycleInfoLabel.Text = text;
+            }
         }
 
         private int GetSelectedPointIndex()
@@ -309,6 +400,30 @@ namespace AutoClicker.UI
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
+            else if (e.Control && e.KeyCode == Keys.Up)
+            {
+                MovePoint(-1);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            else if (e.Control && e.KeyCode == Keys.Down)
+            {
+                MovePoint(1);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            else if (e.Control && e.KeyCode == Keys.Home)
+            {
+                MovePointToEnd(true);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            else if (e.Control && e.KeyCode == Keys.End)
+            {
+                MovePointToEnd(false);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
         }
 
         private void OnRemovePoint(object sender, EventArgs e)
@@ -348,6 +463,33 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>Moves the selected point straight to the top or bottom of the list.</summary>
+        private void MovePointToEnd(bool toTop)
+        {
+            int index = GetSelectedPointIndex();
+            if (index < 0 || _workingPoints.Count < 2)
+            {
+                return;
+            }
+
+            int target = toTop ? 0 : _workingPoints.Count - 1;
+            if (target == index)
+            {
+                return;
+            }
+
+            ClickPoint p = _workingPoints[index];
+            _workingPoints.RemoveAt(index);
+            _workingPoints.Insert(target, p);
+
+            RefreshPointsList();
+            if (target < _pointsList.Items.Count)
+            {
+                _pointsList.Items[target].Selected = true;
+                _pointsList.Items[target].EnsureVisible();
+            }
+        }
+
         private void OnClearPoints(object sender, EventArgs e)
         {
             if (_workingPoints.Count == 0)
@@ -384,6 +526,23 @@ namespace AutoClicker.UI
             {
                 _pointsList.Items[index + 1].Selected = true;
             }
+        }
+
+        private void OnToggleAllPoints(object sender, EventArgs e)
+        {
+            if (_workingPoints.Count == 0)
+            {
+                return;
+            }
+
+            // If every point is already enabled, turn them all off; otherwise on.
+            bool allEnabled = _workingPoints.TrueForAll(p => p.Enabled);
+            bool newState = !allEnabled;
+            foreach (ClickPoint p in _workingPoints)
+            {
+                p.Enabled = newState;
+            }
+            RefreshPointsList();
         }
 
         private void OnTogglePoint(object sender, EventArgs e)

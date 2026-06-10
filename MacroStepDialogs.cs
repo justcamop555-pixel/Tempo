@@ -25,6 +25,7 @@ namespace AutoClicker.UI
 
         public InsertClickForm(Theme theme)
         {
+            AutoScaleMode = AutoScaleMode.Font;
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = "Insert Click";
@@ -88,6 +89,7 @@ namespace AutoClicker.UI
 
         public KeyCaptureForm(Theme theme)
         {
+            AutoScaleMode = AutoScaleMode.Font;
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = "Insert Key Press";
@@ -136,6 +138,7 @@ namespace AutoClicker.UI
 
         public PointInputForm(Theme theme, int x, int y)
         {
+            AutoScaleMode = AutoScaleMode.Font;
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = "Edit Position";

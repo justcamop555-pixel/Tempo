@@ -15,6 +15,9 @@ namespace AutoClicker.Utils
         private static string _logPath;
         private static bool _initialised;
 
+        /// <summary>When false, nothing is written to the log file (privacy option).</summary>
+        public static bool Enabled { get; set; } = true;
+
         public static void Initialize()
         {
             lock (Sync)
@@ -81,6 +84,11 @@ namespace AutoClicker.Utils
 
         private static void Write(string level, string message, Exception ex)
         {
+            if (!Enabled)
+            {
+                return;
+            }
+
             lock (Sync)
             {
                 if (!_initialised)

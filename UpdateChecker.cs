@@ -35,6 +35,7 @@ namespace AutoClicker.Utils
             public string body { get; set; }
             public bool prerelease { get; set; }
             public bool draft { get; set; }
+            public string published_at { get; set; }
             public GitHubAsset[] assets { get; set; }
         }
 
@@ -51,7 +52,9 @@ namespace AutoClicker.Utils
             public bool UpdateAvailable { get; set; }
             public Version LatestVersion { get; set; }
             public string DownloadUrl { get; set; }
+            public string Sha256Url { get; set; }
             public string Notes { get; set; }
+            public DateTime? ReleaseDate { get; set; }
         }
 
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
@@ -86,11 +89,17 @@ namespace AutoClicker.Utils
             try
             {
                 ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+                ServicePointManager.Expect100Continue = false;
 
                 var request = (HttpWebRequest)WebRequest.Create(ManifestUrl);
                 request.Method = "GET";
                 request.Timeout = 8000;
                 request.ReadWriteTimeout = 8000;
+                // Skip automatic proxy (WPAD) discovery — it isn't covered by Timeout
+                // and is the usual cause of the check intermittently hanging for a long
+                // time on networks without a proxy.
+                request.Proxy = null;
+                request.KeepAlive = false;
                 // GitHub requires a User-Agent and recommends an explicit API version.
                 request.UserAgent = "Tempo/" + CurrentVersion + " (+https://github.com/" + Repository + ")";
                 request.Accept = "application/vnd.github+json";
@@ -130,7 +139,16 @@ namespace AutoClicker.Utils
                 result.LatestVersion = latest;
                 result.Notes = string.IsNullOrWhiteSpace(release.body) ? release.name : release.body;
                 result.DownloadUrl = PickDownloadUrl(release);
+                result.Sha256Url = PickChecksumUrl(release);
                 result.UpdateAvailable = latest > CurrentVersion;
+
+                if (!string.IsNullOrWhiteSpace(release.published_at) &&
+                    DateTime.TryParse(release.published_at,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AdjustToUniversal, out DateTime pub))
+                {
+                    result.ReleaseDate = pub;
+                }
 
                 Logger.Info($"Update check: current {CurrentVersion}, latest {latest} " +
                             $"(tag {release.tag_name}), update available: {result.UpdateAvailable}.");
@@ -138,11 +156,26 @@ namespace AutoClicker.Utils
             }
             catch (WebException wex)
             {
-                // A 404 here usually just means no release has been published yet.
                 var http = wex.Response as HttpWebResponse;
                 if (http != null && http.StatusCode == HttpStatusCode.NotFound)
                 {
+                    // A 404 here usually just means no release has been published yet.
                     result.Error = "No published release was found for " + Repository + " yet.";
+                }
+                else if (http != null && (int)http.StatusCode == 403)
+                {
+                    // GitHub rate-limits unauthenticated API requests (60/hour).
+                    result.Error = "GitHub is rate-limiting update checks right now. " +
+                                   "Please wait a little while and try again.";
+                }
+                else if (wex.Status == WebExceptionStatus.Timeout)
+                {
+                    result.Error = "The update check timed out. Check your connection and try again.";
+                }
+                else if (http != null)
+                {
+                    result.Error = "The update server returned an error (" + (int)http.StatusCode +
+                                   "). Please try again later.";
                 }
                 else
                 {
@@ -205,6 +238,27 @@ namespace AutoClicker.Utils
             }
 
             return string.IsNullOrWhiteSpace(release.html_url) ? ReleasesPageUrl : release.html_url;
+        }
+
+        /// <summary>
+        /// Finds the SHA-256 checksum asset (e.g. Tempo.exe.sha256) if the release
+        /// publishes one, so the download can be integrity-checked. Returns null when
+        /// there isn't one — verification is then simply skipped.
+        /// </summary>
+        private static string PickChecksumUrl(GitHubRelease release)
+        {
+            if (release.assets != null)
+            {
+                foreach (GitHubAsset asset in release.assets)
+                {
+                    if (asset != null && !string.IsNullOrWhiteSpace(asset.browser_download_url) &&
+                        asset.name != null && asset.name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return asset.browser_download_url;
+                    }
+                }
+            }
+            return null;
         }
     }
 }

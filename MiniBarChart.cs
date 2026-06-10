@@ -110,10 +110,17 @@ namespace AutoClicker.UI
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
             var card = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (var bg = new SolidBrush(CardColor))
             using (var path = Rounded(card, 10))
             {
-                g.FillPath(bg, path);
+                using (var bg = new LinearGradientBrush(new Rectangle(0, 0, Width, Height),
+                           Brighten(CardColor, 0.05), CardColor, LinearGradientMode.Vertical))
+                {
+                    g.FillPath(bg, path);
+                }
+                using (var border = new Pen(Brighten(CardColor, 0.10)))
+                {
+                    g.DrawPath(border, path);
+                }
             }
 
             using (var titleBrush = new SolidBrush(MutedColor))
@@ -151,19 +158,38 @@ namespace AutoClicker.UI
             int n = _values.Length;
             float slot = plot.Width / (float)n;
             float barW = Math.Max(2f, slot * 0.7f);
+            float barRadius = Math.Min(4f, barW / 2f);
 
-            using (var barBrush = new SolidBrush(BarColor))
-            using (var hoverBrush = new SolidBrush(Brighten(BarColor, 0.3)))
             using (var labelFont = new Font("Segoe UI", 7.5f, FontStyle.Regular))
             using (var labelBrush = new SolidBrush(MutedColor))
+            using (var trackBrush = new SolidBrush(Color.FromArgb(28, MutedColor)))
             {
                 for (int i = 0; i < n; i++)
                 {
                     float h = (float)(_values[i] / (double)max) * plot.Height;
                     if (h < 2 && _values[i] > 0) h = 2;
                     float x = plot.Left + i * slot + (slot - barW) / 2f;
-                    float y = plot.Bottom - h;
-                    g.FillRectangle(i == _hoverIndex ? hoverBrush : barBrush, x, y, barW, h);
+
+                    // Faint full-height track behind each bar.
+                    using (var tp = RoundedTop(new RectangleF(x, plot.Top, barW, plot.Height), barRadius))
+                    {
+                        g.FillPath(trackBrush, tp);
+                    }
+
+                    if (h > 0)
+                    {
+                        bool hot = i == _hoverIndex;
+                        Color topCol = Brighten(BarColor, hot ? 0.55 : 0.30);
+                        Color botCol = hot ? Brighten(BarColor, 0.12) : BarColor;
+                        var barRect = new RectangleF(x, plot.Bottom - h, barW, h);
+                        using (var bp = RoundedTop(barRect, barRadius))
+                        using (var grad = new LinearGradientBrush(
+                                   new RectangleF(x, plot.Bottom - h, barW, h + 1f),
+                                   topCol, botCol, LinearGradientMode.Vertical))
+                        {
+                            g.FillPath(grad, bp);
+                        }
+                    }
 
                     if (i < _labels.Length && !string.IsNullOrEmpty(_labels[i]))
                     {
@@ -175,7 +201,7 @@ namespace AutoClicker.UI
             }
 
             // Baseline.
-            using (var pen = new Pen(MutedColor))
+            using (var pen = new Pen(Color.FromArgb(120, MutedColor)))
             {
                 g.DrawLine(pen, plot.Left, plot.Bottom, plot.Right, plot.Bottom);
             }
@@ -187,6 +213,24 @@ namespace AutoClicker.UI
                 Math.Min(255, (int)(c.R + (255 - c.R) * amount)),
                 Math.Min(255, (int)(c.G + (255 - c.G) * amount)),
                 Math.Min(255, (int)(c.B + (255 - c.B) * amount)));
+        }
+
+        private static GraphicsPath RoundedTop(RectangleF r, float radius)
+        {
+            var path = new GraphicsPath();
+            radius = Math.Min(radius, Math.Min(r.Width, r.Height) / 2f);
+            if (radius <= 0.5f)
+            {
+                path.AddRectangle(r);
+                return path;
+            }
+            float d = radius * 2f;
+            path.AddArc(r.Left, r.Top, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+            path.AddLine(r.Right, r.Top + radius, r.Right, r.Bottom);
+            path.AddLine(r.Right, r.Bottom, r.Left, r.Bottom);
+            path.CloseFigure();
+            return path;
         }
 
         private static GraphicsPath Rounded(Rectangle r, int radius)

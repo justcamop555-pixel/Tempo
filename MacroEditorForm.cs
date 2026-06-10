@@ -23,6 +23,7 @@ namespace AutoClicker.UI
 
         public MacroEditorForm(Theme theme, Macro macro)
         {
+            AutoScaleMode = AutoScaleMode.Font;
             _theme = theme ?? Theme.ForKind(ThemeKind.Dark);
             _working = (macro ?? new Macro("Macro")).Clone();
 

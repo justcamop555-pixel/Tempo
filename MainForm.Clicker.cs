@@ -12,10 +12,15 @@ namespace AutoClicker.UI
         private string _currentProfileName = string.Empty;
         private bool _suppressProfileEvents;
         private Label _intervalHint;
+        private Label _repeatCountEstLabel;
+        private CheckBox _notifyFinishCheck;
+        private bool _lastRunWasFinite;
+        private Label _repeatDurationEstLabel;
 
         // Manual speed slider
         private TrackBar _speedTrack;
         private Label _speedLabel;
+        private CheckBox _unlockSpeedCheck;
         private Button _speedMinusBtn;
         private Button _speedPlusBtn;
         private bool _suppressSpeedSync;
@@ -29,7 +34,7 @@ namespace AutoClicker.UI
 
         private void BuildClickerTab()
         {
-            var page = new TabPage("Clicker") { AutoScroll = true };
+            var page = new BackdropTabPage(Utils.Localization.T("Clicker")) { AutoScroll = true };
 
             // ── Profile bar ───────────────────────────────────────────────────
             var profileLabel = UiFactory.Label("Profile:", 12, 16, FontStyle.Bold);
@@ -84,6 +89,7 @@ namespace AutoClicker.UI
 
             clickGroup.Controls.Add(UiFactory.Caption("Type", 116, 28));
             _styleCombo = UiFactory.Combo(116, 46, 90, "Single", "Double", "Triple");
+            _styleCombo.SelectedIndexChanged += (s, e) => UpdateIntervalHint();
             clickGroup.Controls.Add(_styleCombo);
 
             clickGroup.Controls.Add(UiFactory.Caption("Mode", 216, 28));
@@ -91,8 +97,13 @@ namespace AutoClicker.UI
             _modeCombo.SelectedIndexChanged += OnModeChanged;
             clickGroup.Controls.Add(_modeCombo);
 
+            clickGroup.Controls.Add(UiFactory.Caption("Hold each click (ms)", 16, 80));
+            _holdMsNum = UiFactory.Numeric(170, 78, 70, 0, 5000, 0);
+            _holdMsNum.ValueChanged += (s, e) => UpdateIntervalHint();
+            clickGroup.Controls.Add(_holdMsNum);
+
             // ── Position group ─────────────────────────────────────────────────
-            var positionGroup = UiFactory.Group("Click Position", 12, 200, 360, 150);
+            var positionGroup = UiFactory.Group("Click Position", 12, 200, 360, 172);
 
             _posCurrentRadio = UiFactory.Radio("Current cursor position", 16, 26, true);
             _posCurrentRadio.CheckedChanged += OnPositionModeChanged;
@@ -117,32 +128,60 @@ namespace AutoClicker.UI
             _pickFixedBtn.Click += (s, e) => PickFixedPosition();
             positionGroup.Controls.Add(_pickFixedBtn);
 
+            _restoreCursorCheck = UiFactory.Check("Restore cursor position when stopped", 16, 138);
+            positionGroup.Controls.Add(_restoreCursorCheck);
+
             // ── Repeat group ───────────────────────────────────────────────────
-            var repeatGroup = UiFactory.Group("Repeat", 384, 200, 324, 78);
-            _repeatUntilRadio = UiFactory.Radio("Until stopped", 16, 26, true);
+            var repeatGroup = UiFactory.Group("Repeat", 384, 200, 324, 102);
+            _repeatUntilRadio = UiFactory.Radio("Until stopped", 16, 24, true);
             _repeatUntilRadio.CheckedChanged += OnRepeatModeChanged;
-            _repeatCountRadio = UiFactory.Radio("Fixed count:", 16, 50);
+            _repeatCountRadio = UiFactory.Radio("Fixed count:", 16, 48);
             _repeatCountRadio.CheckedChanged += OnRepeatModeChanged;
-            _repeatCountNum = UiFactory.Numeric(130, 47, 110, 1, 100000000, 100);
+            _repeatCountNum = UiFactory.Numeric(130, 45, 110, 1, 100000000, 100);
+            _repeatDurationRadio = UiFactory.Radio("For (seconds):", 16, 72);
+            _repeatDurationRadio.CheckedChanged += OnRepeatModeChanged;
+            _repeatDurationNum = UiFactory.Numeric(130, 69, 110, 1, 86400, 60);
             repeatGroup.Controls.Add(_repeatUntilRadio);
             repeatGroup.Controls.Add(_repeatCountRadio);
             repeatGroup.Controls.Add(_repeatCountNum);
+            repeatGroup.Controls.Add(_repeatDurationRadio);
+            repeatGroup.Controls.Add(_repeatDurationNum);
+
+            _repeatCountEstLabel = UiFactory.Caption("", 246, 48);
+            _repeatCountEstLabel.AutoSize = false;
+            _repeatCountEstLabel.Width = 74;
+            _repeatCountEstLabel.Height = 16;
+            _repeatCountEstLabel.ForeColor = _theme.TextMuted;
+            repeatGroup.Controls.Add(_repeatCountEstLabel);
+
+            _repeatDurationEstLabel = UiFactory.Caption("", 246, 72);
+            _repeatDurationEstLabel.AutoSize = false;
+            _repeatDurationEstLabel.Width = 74;
+            _repeatDurationEstLabel.Height = 16;
+            _repeatDurationEstLabel.ForeColor = _theme.TextMuted;
+            repeatGroup.Controls.Add(_repeatDurationEstLabel);
+
+            _repeatCountNum.ValueChanged += (s, e) => UpdateRepeatEstimates();
+            _repeatDurationNum.ValueChanged += (s, e) => UpdateRepeatEstimates();
 
             // ── Burst group ────────────────────────────────────────────────────
-            _burstGroup = UiFactory.Group("Burst Settings", 384, 284, 324, 66);
+            _burstGroup = UiFactory.Group("Burst Settings", 384, 310, 324, 66);
             _burstGroup.Controls.Add(UiFactory.Caption("Clicks per burst", 16, 24));
             _burstSizeNum = UiFactory.Numeric(120, 36, 70, 1, 100000, 10);
+            _burstSizeNum.ValueChanged += (s, e) => UpdateIntervalHint();
             _burstGroup.Controls.Add(_burstSizeNum);
             _burstGroup.Controls.Add(UiFactory.Caption("Pause (ms)", 200, 24));
             _burstPauseNum = UiFactory.Numeric(200, 36, 100, 0, 3600000, 1000);
+            _burstPauseNum.ValueChanged += (s, e) => UpdateIntervalHint();
             _burstGroup.Controls.Add(_burstPauseNum);
 
             // ── Randomization group ────────────────────────────────────────────
-            var randGroup = UiFactory.Group("Randomization (anti-pattern)", 12, 356, 696, 72);
+            var randGroup = UiFactory.Group("Randomization (anti-pattern)", 12, 382, 696, 72);
             _randIntervalCheck = UiFactory.Check("Randomize interval  ±", 16, 30);
-            _randIntervalCheck.CheckedChanged += (s, e) => _intervalJitterNum.Enabled = _randIntervalCheck.Checked;
+            _randIntervalCheck.CheckedChanged += (s, e) => { _intervalJitterNum.Enabled = _randIntervalCheck.Checked; UpdateIntervalHint(); };
             _intervalJitterNum = UiFactory.Numeric(180, 28, 80, 0, 100000, 0);
             _intervalJitterNum.Enabled = false;
+            _intervalJitterNum.ValueChanged += (s, e) => UpdateIntervalHint();
             randGroup.Controls.Add(UiFactory.Caption("ms", 264, 32));
 
             _randPosCheck = UiFactory.Check("Randomize position  ±", 320, 30);
@@ -156,12 +195,16 @@ namespace AutoClicker.UI
             randGroup.Controls.Add(_randPosCheck);
             randGroup.Controls.Add(_posJitterNum);
 
+            _humanizeBtn = UiFactory.Button("Humanize", 600, 27, 96, 28);
+            _humanizeBtn.Click += OnHumanizeClicked;
+            randGroup.Controls.Add(_humanizeBtn);
+
             // ── Action area ────────────────────────────────────────────────────
             _bigStatusLabel = new Label
             {
                 Text = "IDLE",
                 Left = 12,
-                Top = 440,
+                Top = 466,
                 Width = 200,
                 Height = 60,
                 Font = new Font("Segoe UI", 26f, FontStyle.Bold),
@@ -170,14 +213,28 @@ namespace AutoClicker.UI
                 BackColor = Color.Transparent
             };
 
-            _startBtn = UiFactory.Button("▶  Start", 360, 446, 130, 48);
+            // Live click-rate readout next to the big status word (only while running).
+            _liveCpsLabel = new Label
+            {
+                Text = string.Empty,
+                Left = 216,
+                Top = 488,
+                Width = 138,
+                Height = 28,
+                Font = new Font("Segoe UI", 11f, FontStyle.Bold),
+                ForeColor = _theme.Accent,
+                TextAlign = ContentAlignment.MiddleLeft,
+                BackColor = Color.Transparent
+            };
+
+            _startBtn = UiFactory.Button("▶  Start", 360, 472, 130, 48);
             _startBtn.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
             _startBtn.BackColor = _theme.Success;
             _startBtn.ForeColor = Color.White;
             _startBtn.FlatAppearance.BorderSize = 0;
-            _startBtn.Click += (s, e) => BeginStartWithCountdown();
+            _startBtn.Click += (s, e) => OnStartOrPauseClicked();
 
-            _stopBtn = UiFactory.Button("■  Stop", 498, 446, 130, 48);
+            _stopBtn = UiFactory.Button("■  Stop", 498, 472, 130, 48);
             _stopBtn.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
             _stopBtn.BackColor = _theme.Danger;
             _stopBtn.ForeColor = Color.White;
@@ -185,15 +242,31 @@ namespace AutoClicker.UI
             _stopBtn.Enabled = false;
             _stopBtn.Click += (s, e) => _engine.Stop();
 
-            _cpsTestBtn = UiFactory.Button("CPS Test", 636, 446, 72, 48);
+            _cpsTestBtn = UiFactory.Button("CPS Test", 636, 472, 72, 48);
+
+            // Optional chime + tray notice when a fixed-count / fixed-duration run
+            // completes on its own (manual stops stay silent).
+            _notifyFinishCheck = UiFactory.Check("Notify when a fixed run finishes", 16, 486);
+            _notifyFinishCheck.CheckedChanged += (s, e) =>
+            {
+                if (_settings == null) return;
+                _settings.NotifyOnRepeatFinish = _notifyFinishCheck.Checked;
+                SettingsManager.Save(_settings);
+            };
+            page.Controls.Add(_notifyFinishCheck);
             _cpsTestBtn.Click += (s, e) => OpenCpsTest();
 
             // ── Manual speed (quick adjust slider) ─────────────────────────────
-            var speedGroup = UiFactory.Group("Manual Speed", 12, 506, 360, 96);
+            var speedGroup = UiFactory.Group("Manual Speed", 12, 532, 360, 128);
 
-            _speedLabel = UiFactory.Label("Target: 10.0 CPS", 16, 26, FontStyle.Bold, 10f);
-            _speedLabel.AutoSize = true;
+            _speedLabel = UiFactory.Label("Target: 10 CPS  (100 ms)", 16, 26, FontStyle.Bold, 10f);
+            _speedLabel.AutoSize = false;
+            _speedLabel.Width = 330;
+            _speedLabel.Height = 20;
+            _speedLabel.AutoEllipsis = true;
             speedGroup.Controls.Add(_speedLabel);
+
+            bool unlockedInit = _settings != null && _settings.AdvancedUnlockSpeed;
 
             _speedTrack = new TrackBar
             {
@@ -201,14 +274,21 @@ namespace AutoClicker.UI
                 Top = 46,
                 Width = 250,
                 Minimum = 1,
-                Maximum = 100,
-                TickFrequency = 10,
+                Maximum = unlockedInit ? 2000 : 200,
+                TickFrequency = unlockedInit ? 200 : 20,
                 SmallChange = 1,
-                LargeChange = 5,
+                LargeChange = unlockedInit ? 50 : 5,
                 Value = 10
             };
             _speedTrack.Scroll += (s, e) => OnSpeedSlider();
             speedGroup.Controls.Add(_speedTrack);
+
+            // Own row beneath the slider so it never overlaps the target label.
+            _unlockSpeedCheck = UiFactory.Check("Unlock max speed (advanced)", 16, 98);
+            _unlockSpeedCheck.AutoSize = true;
+            _unlockSpeedCheck.Checked = unlockedInit;            // set before wiring → no warning
+            _unlockSpeedCheck.CheckedChanged += OnToggleSpeedUnlock;
+            speedGroup.Controls.Add(_unlockSpeedCheck);
 
             _speedMinusBtn = UiFactory.Button("−", 268, 48, 40, 30);
             _speedMinusBtn.Click += (s, e) => NudgeSpeed(-1);
@@ -219,14 +299,14 @@ namespace AutoClicker.UI
             speedGroup.Controls.Add(_speedPlusBtn);
 
             // ── Anti-freeze protection ─────────────────────────────────────────
-            var afGroup = UiFactory.Group("Anti-Freeze Protection", 384, 506, 324, 96);
+            var afGroup = UiFactory.Group("Anti-Freeze Protection", 384, 532, 324, 128);
 
             _antiFreezeCheck = UiFactory.Check("Enabled (prevents system freeze)", 16, 24, true);
             _antiFreezeCheck.CheckedChanged += (s, e) => OnAntiFreezeChanged();
             afGroup.Controls.Add(_antiFreezeCheck);
 
             afGroup.Controls.Add(UiFactory.Caption("Max CPS", 16, 50));
-            _maxCpsNum = UiFactory.Numeric(78, 46, 70, 1, 1000, 200);
+            _maxCpsNum = UiFactory.Numeric(78, 46, 70, 1, 2000, 200);
             _maxCpsNum.ValueChanged += (s, e) => OnAntiFreezeChanged();
             afGroup.Controls.Add(_maxCpsNum);
 
@@ -257,6 +337,7 @@ namespace AutoClicker.UI
             page.Controls.Add(_burstGroup);
             page.Controls.Add(randGroup);
             page.Controls.Add(_bigStatusLabel);
+            page.Controls.Add(_liveCpsLabel);
             page.Controls.Add(_startBtn);
             page.Controls.Add(_stopBtn);
             page.Controls.Add(_cpsTestBtn);
@@ -280,6 +361,22 @@ namespace AutoClicker.UI
         /// manual-speed slider in sync, and — if a run is in progress in Interval
         /// mode — applies the new interval live so tweaks take effect immediately.
         /// </summary>
+        private void OnHumanizeClicked(object sender, EventArgs e)
+        {
+            // One-click "make the clicks look less robotic": switch on both
+            // randomizers with sensible starting values the user can fine-tune.
+            long ms = GetUiIntervalMs();
+            int intervalJitter = (int)Math.Max(5, Math.Round(ms * 0.2));
+
+            _randIntervalCheck.Checked = true;
+            _intervalJitterNum.Enabled = true;
+            _intervalJitterNum.Value = Math.Min(_intervalJitterNum.Maximum, intervalJitter);
+
+            _randPosCheck.Checked = true;
+            _posJitterNum.Enabled = true;
+            _posJitterNum.Value = Math.Min(_posJitterNum.Maximum, 2);
+        }
+
         private void OnIntervalFieldChanged(object sender, EventArgs e)
         {
             UpdateIntervalHint();
@@ -312,22 +409,195 @@ namespace AutoClicker.UI
             long ms = GetUiIntervalMs();
             if (ms < 1) ms = 1;
 
-            double cps = 1000.0 / ms;
-            string rate = cps >= 1
-                ? $"≈ {cps:0.0} clicks/sec"
-                : $"≈ 1 click every {ms / 1000.0:0.0} s";
+            int styleFactor = (_styleCombo != null ? _styleCombo.SelectedIndex : 0) + 1;
+            if (styleFactor < 1) styleFactor = 1;
 
-            _intervalHint.Text = $"Delay between clicks: {ms:N0} ms   ({rate})";
+            string text;
+            ClickMode mode = GetSelectedMode();
+
+            if (mode == ClickMode.Burst)
+            {
+                // Average rate over a whole burst-plus-pause cycle.
+                long burst = _burstSizeNum != null ? (long)_burstSizeNum.Value : 1;
+                if (burst < 1) burst = 1;
+                long pause = _burstPauseNum != null ? (long)_burstPauseNum.Value : 0;
+                double cycleMs = burst * ms + pause;
+                double avgCps = cycleMs > 0 ? burst * styleFactor * 1000.0 / cycleMs : 0;
+                text = $"≈ {avgCps:0.0} CPS avg   ·   burst {burst:N0} / {pause:N0} ms";
+            }
+            else
+            {
+                double cps = 1000.0 / ms * styleFactor;
+
+                bool rand = _randIntervalCheck != null && _randIntervalCheck.Checked;
+                long jitter = (_intervalJitterNum != null) ? (long)_intervalJitterNum.Value : 0;
+
+                if (rand && jitter > 0)
+                {
+                    long lo = Math.Max(1, ms - jitter);
+                    long hi = ms + jitter;
+                    double cpsHi = 1000.0 / lo * styleFactor;   // shortest delay = fastest
+                    double cpsLo = 1000.0 / hi * styleFactor;   // longest delay = slowest
+                    text = $"≈ {cpsLo:0.0}–{cpsHi:0.0} CPS   ·   {ms:N0} ± {jitter:N0} ms";
+                }
+                else if (cps >= 1)
+                {
+                    text = $"≈ {cps:0.0} CPS   ·   {ms:N0} ms between clicks";
+                }
+                else
+                {
+                    text = $"1 click every {ms / 1000.0:0.0} s   ·   {ms:N0} ms";
+                }
+            }
+
+            // If each click is held down, note it — and warn if the hold is long
+            // enough to cap the rate you asked for.
+            long hold = _holdMsNum != null ? (long)_holdMsNum.Value : 0;
+            if (hold > 0)
+            {
+                text += $"   ·   hold {hold:N0} ms";
+                if (mode != ClickMode.Burst && hold >= ms)
+                {
+                    text += " (caps rate)";
+                }
+            }
+
+            _intervalHint.Text = text;
+            UpdateRepeatEstimates();
         }
 
-        /// <summary>Maps the slider (1–100 CPS) to the interval and live engine.</summary>
+        /// <summary>Shows an "≈ time / ≈ clicks" estimate next to the Repeat fields.</summary>
+        private void UpdateRepeatEstimates()
+        {
+            if (_repeatCountEstLabel == null || _repeatDurationEstLabel == null)
+            {
+                return;
+            }
+
+            long ms = GetUiIntervalMs();
+            if (ms < 1) ms = 1;
+
+            // Each click can't fire faster than its hold time, so the real period
+            // between clicks is whichever is longer — keep the estimates honest.
+            long hold = _holdMsNum != null ? (long)_holdMsNum.Value : 0;
+            long period = Math.Max(ms, hold);
+
+            long count = (long)_repeatCountNum.Value;
+            double seconds = count * period / 1000.0;
+            _repeatCountEstLabel.Text = "≈ " + FormatShortDuration(seconds);
+
+            int dur = (int)_repeatDurationNum.Value;
+            int styleFactor = (_styleCombo != null ? _styleCombo.SelectedIndex : 0) + 1;
+            if (styleFactor < 1) styleFactor = 1;
+            double clicks = dur * 1000.0 / period * styleFactor;
+            _repeatDurationEstLabel.Text = "≈ " + FormatShortCount(clicks) + " clicks";
+
+            // Only show the estimate next to the mode that's actually selected.
+            _repeatCountEstLabel.Visible = _repeatCountRadio != null && _repeatCountRadio.Checked;
+            _repeatDurationEstLabel.Visible = _repeatDurationRadio != null && _repeatDurationRadio.Checked;
+        }
+
+        private static string FormatShortDuration(double seconds)
+        {
+            if (seconds >= 3600) return $"{seconds / 3600.0:0.0} h";
+            if (seconds >= 60) return $"{seconds / 60.0:0.0} min";
+            return $"{seconds:0.0} s";
+        }
+
+        private static string FormatShortCount(double n)
+        {
+            if (n >= 1_000_000) return $"{n / 1_000_000.0:0.0}M";
+            if (n >= 1_000) return $"{n / 1_000.0:0.0}k";
+            return ((long)Math.Round(n)).ToString("N0");
+        }
+
+        // Highest CPS the slider exposes once "Unlock max" is on. Above 1000 CPS the
+        // engine uses a sub-millisecond interval (a whole-millisecond value tops out
+        // at 1000 CPS). Note that very high rates can saturate a CPU core, and Windows
+        // and the target app may not actually register every click at these speeds.
+        private const int UnlockedMaxCps = 2000;
+        private const int NormalMaxCps = 200;
+
+        private void OnToggleSpeedUnlock(object sender, EventArgs e)
+        {
+            if (_suppressSettingsEvents)
+            {
+                return;
+            }
+
+            if (_unlockSpeedCheck.Checked)
+            {
+                DialogResult ok = MessageBox.Show(this,
+                    "Unlock maximum click speed?\n\n" +
+                    "This raises the speed slider far above the normal limit " +
+                    "(up to " + UnlockedMaxCps + " clicks/second).\n\n" +
+                    "At extreme speeds Tempo can:\n" +
+                    "   •  use a lot of CPU and make the mouse hard to control,\n" +
+                    "   •  be obviously automated — many games ban auto-clickers.\n\n" +
+                    "Windows and the target app may not register every click above ~1000/s.\n" +
+                    "Use the Anti-Freeze option on this tab to cap CPU if needed.\n\n" +
+                    "Enable advanced speed?",
+                    "Advanced speed", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+
+                if (ok != DialogResult.Yes)
+                {
+                    _suppressSettingsEvents = true;
+                    _unlockSpeedCheck.Checked = false;
+                    _suppressSettingsEvents = false;
+                    return;
+                }
+            }
+
+            ApplySpeedUnlock(_unlockSpeedCheck.Checked);
+
+            if (_settings != null)
+            {
+                _settings.AdvancedUnlockSpeed = _unlockSpeedCheck.Checked;
+                SettingsManager.Save(_settings);
+            }
+        }
+
+        /// <summary>Raises or restores the speed slider's ceiling.</summary>
+        private void ApplySpeedUnlock(bool unlocked)
+        {
+            if (_speedTrack == null)
+            {
+                return;
+            }
+
+            int newMax = unlocked ? UnlockedMaxCps : NormalMaxCps;
+            if (!unlocked && _speedTrack.Value > NormalMaxCps)
+            {
+                _speedTrack.Value = NormalMaxCps;
+            }
+            _speedTrack.Maximum = newMax;
+            _speedTrack.TickFrequency = unlocked ? 200 : 20;
+            _speedTrack.LargeChange = unlocked ? 50 : 5;
+            OnSpeedSlider();
+        }
+
+        /// <summary>Maps the slider to the interval and live engine.</summary>
         private void OnSpeedSlider()
         {
             int cps = _speedTrack.Value;
             if (cps < 1) cps = 1;
 
-            long ms = (long)Math.Round(1000.0 / cps);
-            if (ms < 1) ms = 1;
+            // Above 1000 CPS a whole-millisecond interval can't express the rate, so
+            // keep the millisecond field at 1 (for validation/display) and drive the
+            // real timing with a sub-millisecond value.
+            long ms;
+            double precise = 0.0;
+            if (cps > 1000)
+            {
+                ms = 1;
+                precise = 1000.0 / cps;   // e.g. 0.5 ms at 2000 CPS
+            }
+            else
+            {
+                ms = (long)Math.Round(1000.0 / cps);
+                if (ms < 1) ms = 1;
+            }
 
             _suppressSpeedSync = true;
             try
@@ -339,19 +609,25 @@ namespace AutoClicker.UI
                 _suppressSpeedSync = false;
             }
 
-            _speedLabel.Text = $"Target: {cps}.0 CPS  ({ms} ms)";
+            string perMin = (cps * 60).ToString("N0");
+            _speedLabel.Text = precise > 0
+                ? $"Target: {cps} CPS  (~{precise:0.00} ms \u00b7 {perMin}/min)"
+                : $"Target: {cps} CPS  ({ms} ms \u00b7 {perMin}/min)";
 
             if (_engine.IsRunning && GetSelectedMode() == ClickMode.Interval)
             {
                 _engine.UpdateInterval(
                     (int)_hoursNum.Value, (int)_minutesNum.Value,
-                    (int)_secondsNum.Value, (int)_millisNum.Value);
+                    (int)_secondsNum.Value, (int)_millisNum.Value, precise);
             }
         }
 
         private void NudgeSpeed(int delta)
         {
-            int v = _speedTrack.Value + delta;
+            // Step by the slider's LargeChange (5 normally, 25 when unlocked) so the
+            // buttons move at a useful pace across the wide CPS range, not 1 at a time.
+            int step = _speedTrack.LargeChange > 0 ? _speedTrack.LargeChange : 1;
+            int v = _speedTrack.Value + delta * step;
             if (v < _speedTrack.Minimum) v = _speedTrack.Minimum;
             if (v > _speedTrack.Maximum) v = _speedTrack.Maximum;
             _speedTrack.Value = v;
@@ -376,9 +652,10 @@ namespace AutoClicker.UI
             try { _speedTrack.Value = v; }
             finally { _suppressSpeedSync = false; }
 
+            string perMin = (cps * 60).ToString("N0");
             _speedLabel.Text = cps > _speedTrack.Maximum
-                ? $"Target: {cps:0.0} CPS  ({ms} ms)"
-                : $"Target: {v}.0 CPS  ({ms} ms)";
+                ? $"Target: {cps:0.0} CPS  ({ms} ms \u00b7 {perMin}/min)"
+                : $"Target: {v}.0 CPS  ({ms} ms \u00b7 {perMin}/min)";
         }
 
         // ── Anti-freeze ──────────────────────────────────────────────────────────
@@ -394,7 +671,11 @@ namespace AutoClicker.UI
             try
             {
                 _antiFreezeCheck.Checked = _settings.AntiFreezeEnabled;
-                _maxCpsNum.Value = Clamp(_settings.MaxClicksPerSecond, 1, 1000);
+                if (_notifyFinishCheck != null)
+                {
+                    _notifyFinishCheck.Checked = _settings.NotifyOnRepeatFinish;
+                }
+                _maxCpsNum.Value = Clamp(_settings.MaxClicksPerSecond, 1, 2000);
                 _cpuThresholdNum.Value = Clamp(_settings.AntiFreezeCpuThreshold, 10, 99);
             }
             finally
@@ -448,15 +729,27 @@ namespace AutoClicker.UI
                 Mode = GetSelectedMode(),
                 FixedX = (int)_fixedXNum.Value,
                 FixedY = (int)_fixedYNum.Value,
-                RepeatMode = _repeatCountRadio.Checked ? RepeatMode.FixedCount : RepeatMode.UntilStopped,
+                RepeatMode = _repeatCountRadio.Checked ? RepeatMode.FixedCount
+                           : _repeatDurationRadio.Checked ? RepeatMode.ForDuration
+                           : RepeatMode.UntilStopped,
                 RepeatCount = (long)_repeatCountNum.Value,
+                RepeatDurationSeconds = (int)_repeatDurationNum.Value,
                 BurstSize = (int)_burstSizeNum.Value,
                 BurstPauseMilliseconds = (int)_burstPauseNum.Value,
                 RandomizeInterval = _randIntervalCheck.Checked,
                 IntervalJitterMilliseconds = (int)_intervalJitterNum.Value,
                 RandomizePosition = _randPosCheck.Checked,
-                PositionJitterPixels = (int)_posJitterNum.Value
+                PositionJitterPixels = (int)_posJitterNum.Value,
+                ClickHoldMilliseconds = (int)_holdMsNum.Value,
+                RestoreCursorOnStop = _restoreCursorCheck.Checked
             };
+
+            // Above 1000 CPS the manual slider needs a sub-millisecond interval that
+            // the whole-millisecond fields can't hold; supply it here for Interval mode.
+            if (p.Mode == ClickMode.Interval && _speedTrack != null && _speedTrack.Value > 1000)
+            {
+                p.ManualPreciseIntervalMs = 1000.0 / _speedTrack.Value;
+            }
 
             if (_posFixedRadio.Checked)
             {
@@ -510,10 +803,13 @@ namespace AutoClicker.UI
 
                 _fixedXNum.Value = Clamp(p.FixedX, -100000, 100000);
                 _fixedYNum.Value = Clamp(p.FixedY, -100000, 100000);
+                _restoreCursorCheck.Checked = p.RestoreCursorOnStop;
 
                 _repeatUntilRadio.Checked = p.RepeatMode == RepeatMode.UntilStopped;
                 _repeatCountRadio.Checked = p.RepeatMode == RepeatMode.FixedCount;
+                _repeatDurationRadio.Checked = p.RepeatMode == RepeatMode.ForDuration;
                 _repeatCountNum.Value = Clamp(p.RepeatCount, 1, 100000000);
+                _repeatDurationNum.Value = Clamp(p.RepeatDurationSeconds, 1, 86400);
 
                 _burstSizeNum.Value = Clamp(p.BurstSize, 1, 100000);
                 _burstPauseNum.Value = Clamp(p.BurstPauseMilliseconds, 0, 3600000);
@@ -524,6 +820,7 @@ namespace AutoClicker.UI
 
                 _randPosCheck.Checked = p.RandomizePosition;
                 _posJitterNum.Value = Clamp(p.PositionJitterPixels, 0, 1000);
+                _holdMsNum.Value = Clamp(p.ClickHoldMilliseconds, 0, 5000);
                 _posJitterNum.Enabled = p.RandomizePosition;
 
                 // Working points list.
@@ -626,10 +923,10 @@ namespace AutoClicker.UI
                 _suppressProfileEvents = false;
             }
 
-            _statusProfile.Text = "Profile: " + name;
+            _statusProfile.Text = Localization.T("Profile: ") + name;
             if (_headerProfile != null)
             {
-                _headerProfile.Text = "Profile  •  " + name;
+                _headerProfile.Text = Localization.T("Profile  •  ") + name;
             }
         }
 
@@ -650,10 +947,10 @@ namespace AutoClicker.UI
             if (profile != null)
             {
                 LoadProfileIntoUi(profile);
-                _statusProfile.Text = "Profile: " + name;
+                _statusProfile.Text = Localization.T("Profile: ") + name;
                 if (_headerProfile != null)
                 {
-                    _headerProfile.Text = "Profile  •  " + name;
+                    _headerProfile.Text = Localization.T("Profile  •  ") + name;
                 }
                 _settings.LastProfileName = name;
             }
@@ -705,10 +1002,10 @@ namespace AutoClicker.UI
             SelectProfileInCombo(edited.Name);
             _currentProfileName = edited.Name;
             _settings.LastProfileName = edited.Name;
-            _statusProfile.Text = "Profile: " + edited.Name;
+            _statusProfile.Text = Localization.T("Profile: ") + edited.Name;
             if (_headerProfile != null)
             {
-                _headerProfile.Text = "Profile  •  " + edited.Name;
+                _headerProfile.Text = Localization.T("Profile  •  ") + edited.Name;
             }
             ShowInfo($"Profile '{edited.Name}' saved.");
         }
@@ -772,6 +1069,7 @@ namespace AutoClicker.UI
         private void OnModeChanged(object sender, EventArgs e)
         {
             UpdateBurstGroupEnabled();
+            UpdateIntervalHint();
 
             // Hold mode polls the key directly, so re-evaluate hotkey registration.
             ApplyHotkeysFromSettings();
@@ -798,6 +1096,8 @@ namespace AutoClicker.UI
         private void UpdateRepeatControlsEnabled()
         {
             _repeatCountNum.Enabled = _repeatCountRadio.Checked;
+            _repeatDurationNum.Enabled = _repeatDurationRadio.Checked;
+            UpdateRepeatEstimates();
         }
 
         private void UpdateBurstGroupEnabled()
@@ -841,9 +1141,14 @@ namespace AutoClicker.UI
 
         private void OpenCpsTest()
         {
-            using (var form = new CpsTestForm(_theme))
+            using (var form = new CpsTestForm(_theme, _settings.CpsTestBest))
             {
                 form.ShowDialog(this);
+                if (form.AllTimeBest > _settings.CpsTestBest)
+                {
+                    _settings.CpsTestBest = form.AllTimeBest;
+                    SettingsManager.Save(_settings);
+                }
             }
         }
 

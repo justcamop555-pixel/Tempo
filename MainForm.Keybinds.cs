@@ -16,38 +16,50 @@ namespace AutoClicker.UI
 
         private void BuildKeybindsTab()
         {
-            var page = new TabPage("Keybinds") { AutoScroll = true };
+            var page = new BackdropTabPage(Utils.Localization.T("Keybinds")) { AutoScroll = true };
 
-            var help = UiFactory.Label(
+            string helpText =
                 "Bind any action to a global hotkey. Click a field, then press a key " +
                 "combo (any letter or F-key with Ctrl/Alt/Shift/Win) OR click the " +
                 "middle / side mouse buttons. Bare left & right click are reserved — " +
                 "add a modifier to bind them. Backspace or Delete clears a field. " +
-                "Hotkeys work even when the window is in the tray. Save to apply.",
-                12, 12);
-            help.MaximumSize = new Size(700, 0);
+                "Hotkeys work even when the window is in the tray. Save to apply.";
+
+            var help = UiFactory.Label(helpText, 12, 12);
+            help.MaximumSize = new Size(760, 0);
             help.AutoSize = true;
             help.ForeColor = _theme.TextMuted;
 
-            var saveBtn = UiFactory.PrimaryButton("Save Keybinds", 12, 56, 150, 32, _theme);
+            // Measure the wrapped height so the controls below never collide with it,
+            // regardless of translation length.
+            int helpHeight = TextRenderer.MeasureText(
+                helpText, help.Font, new Size(760, 0), TextFormatFlags.WordBreak).Height;
+            int rowY = 12 + helpHeight + 12;
+
+            var saveBtn = UiFactory.PrimaryButton("Save Keybinds", 12, rowY, 150, 32, _theme);
             saveBtn.Click += OnSaveKeybinds;
 
-            var resetBtn = UiFactory.Button("Reset to defaults", 172, 56, 150, 32);
+            var resetBtn = UiFactory.Button("Reset to defaults", 172, rowY, 150, 32);
             resetBtn.Click += OnResetKeybinds;
 
-            page.Controls.Add(UiFactory.Caption("Interval step (ms) for increase/decrease:", 344, 50));
-            _intervalStepNum = UiFactory.Numeric(344, 66, 90, 1, 600000, 10);
+            var stepCaption = UiFactory.Caption("Interval step (ms) for increase / decrease:", 344, rowY + 1);
+            stepCaption.AutoSize = false;
+            stepCaption.Width = 250;
+            stepCaption.Height = 16;
+            page.Controls.Add(stepCaption);
+            _intervalStepNum = UiFactory.Numeric(344, rowY + 18, 90, 1, 600000, 10);
 
             page.Controls.Add(help);
             page.Controls.Add(saveBtn);
             page.Controls.Add(resetBtn);
             page.Controls.Add(_intervalStepNum);
 
-            // Column headers.
-            page.Controls.Add(UiFactory.Label("Action", 16, 104, FontStyle.Bold));
-            page.Controls.Add(UiFactory.Label("Hotkey", 300, 104, FontStyle.Bold));
+            // Column headers, placed safely below the header block.
+            int headerY = rowY + 52;
+            page.Controls.Add(UiFactory.Label("Action", 16, headerY, FontStyle.Bold));
+            page.Controls.Add(UiFactory.Label("Hotkey", 300, headerY, FontStyle.Bold));
 
-            int y = 130;
+            int y = headerY + 26;
             const int rowHeight = 32;
 
             _bindingControls.Clear();
@@ -73,6 +85,8 @@ namespace AutoClicker.UI
 
                 _bindingControls[info.Action] = capture;
                 capture.HotkeyChanged += (s, e) => HighlightConflicts();
+                capture.AccessibleName = "Hotkey for " + info.Label;
+                capture.AccessibleDescription = info.Description;
 
                 page.Controls.Add(label);
                 page.Controls.Add(capture);

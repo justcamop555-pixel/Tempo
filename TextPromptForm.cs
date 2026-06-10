@@ -16,6 +16,7 @@ namespace AutoClicker.UI
 
         public TextPromptForm(Theme theme, string title, string prompt, string initial)
         {
+            AutoScaleMode = AutoScaleMode.Font;
             theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
 
             Text = title ?? "Input";

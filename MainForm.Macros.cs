@@ -20,6 +20,11 @@ namespace AutoClicker.UI
         private Button _notesMacroBtn;
         private Button _exportAllBtn;
         private Button _importAllBtn;
+        private Button _mergeMacroBtn;
+        private Button _pinMacroBtn;
+        private Button _resetMacroStatsBtn;
+        private Label _macroSummaryLabel;
+        private CheckBox _macroSmoothCheck;
         private Button _macroMoveUpBtn;
         private Button _macroMoveDownBtn;
         private NumericUpDown _macroCountdownNum;
@@ -32,7 +37,9 @@ namespace AutoClicker.UI
 
         // Live monitor + append-recording state.
         private CheckBox _appendRecordCheck;
+        private CheckBox _cursorTrailCheck;
         private ListView _liveStepList;
+        private int _liveHighlightIndex = -1;
         private Label _liveHeaderLabel;
         private Macro _appendTarget;
         private Macro _liveMonitorMacro;
@@ -43,20 +50,23 @@ namespace AutoClicker.UI
         private int _playbackTotalSteps;
         private int _playbackTotalLoops;
         private int _playbackCurrentLoop;
+        private DateTime _playbackStartUtc;
+        private double _playbackTotalEstimateMs;
         private bool _suppressMacroDefaults;
         private RecordingIndicatorForm _recordIndicator;
 
         private void BuildMacrosTab()
         {
-            var page = new TabPage("Macros") { AutoScroll = true };
+            var page = new BackdropTabPage(Utils.Localization.T("Macros")) { AutoScroll = true };
 
-            var help = UiFactory.Label(
+            string helpText =
                 "Record mouse and keyboard input, edit the steps, then play it back. " +
                 "The Live Monitor below fills in real time as you record and highlights " +
                 "each step during playback. Tick \"Append to selected macro\" to add onto " +
-                "an existing recording. Bind \"Record\" and \"Play\" on the Keybinds tab " +
-                "to control it hands-free.",
-                12, 12);
+                "an existing recording. In the list: Enter plays, Ctrl+D duplicates, " +
+                "F2 renames, Delete removes. Bind \"Record\" and \"Play\" on the Keybinds tab " +
+                "to control it hands-free.";
+            var help = UiFactory.Label(helpText, 12, 12);
             help.MaximumSize = new Size(720, 0);
             help.AutoSize = true;
             help.ForeColor = _theme.TextMuted;
@@ -75,6 +85,27 @@ namespace AutoClicker.UI
             };
             _macroListBox.DoubleClick += (s, e) => EditSelectedMacro();
             _macroListBox.SelectedIndexChanged += (s, e) => LoadMacroDefaultsIntoUi();
+            _macroListBox.KeyDown += OnMacroListKeyDown;
+
+            var macroMenu = new ContextMenuStrip();
+            macroMenu.Items.Add("Play", null, OnPlayMacroClicked);
+            macroMenu.Items.Add("Play once", null, OnPlayMacroOnceClicked);
+            macroMenu.Items.Add("Edit…", null, (s, e) => EditSelectedMacro());
+            macroMenu.Items.Add("Rename…", null, OnRenameMacro);
+            macroMenu.Items.Add("Duplicate", null, OnDuplicateMacro);
+            macroMenu.Items.Add("Export…", null, OnExportMacro);
+            macroMenu.Items.Add(new ToolStripSeparator());
+            macroMenu.Items.Add("Pin / Unpin", null, OnPinMacroClicked);
+            macroMenu.Items.Add("Delete", null, OnDeleteMacroClicked);
+            _macroListBox.ContextMenuStrip = macroMenu;
+            _macroListBox.MouseDown += (s, e) =>
+            {
+                if (e.Button == MouseButtons.Right)
+                {
+                    int i = _macroListBox.IndexFromPoint(e.Location);
+                    if (i >= 0) _macroListBox.SelectedIndex = i;
+                }
+            };
 
             // ── Management button column ───────────────────────────────────────
             int mx = 320;
@@ -116,6 +147,21 @@ namespace AutoClicker.UI
             _importAllBtn = UiFactory.Button("Import all…", mx, 470, mw, 30);
             _importAllBtn.Click += OnImportAllMacros;
 
+            _mergeMacroBtn = UiFactory.Button("Merge…", mx, 506, mw, 30);
+            _mergeMacroBtn.Click += OnMergeMacroClicked;
+
+            _pinMacroBtn = UiFactory.Button("★ Pin", 12, 468, 146, 30);
+            _pinMacroBtn.Click += OnPinMacroClicked;
+
+            _resetMacroStatsBtn = UiFactory.Button("Reset stats", 166, 468, 146, 30);
+            _resetMacroStatsBtn.Click += OnResetMacroStats;
+
+            _macroSummaryLabel = UiFactory.Caption("", 12, 504);
+            _macroSummaryLabel.AutoSize = false;
+            _macroSummaryLabel.Width = 300;
+            _macroSummaryLabel.Height = 16;
+            _macroSummaryLabel.ForeColor = _theme.TextMuted;
+
             // ── Record group ───────────────────────────────────────────────────
             var recGroup = UiFactory.Group("Record", 444, 80, 268, 202);
 
@@ -144,7 +190,7 @@ namespace AutoClicker.UI
             recGroup.Controls.Add(_recordStatusLabel);
 
             // ── Playback group ─────────────────────────────────────────────────
-            var playGroup = UiFactory.Group("Playback", 444, 292, 268, 236);
+            var playGroup = UiFactory.Group("Playback", 444, 292, 268, 270);
 
             playGroup.Controls.Add(UiFactory.Caption("Loops (0 = infinite)", 16, 26));
             _macroLoopNum = UiFactory.Numeric(170, 22, 86, 0, 1000000, 1);
@@ -167,11 +213,19 @@ namespace AutoClicker.UI
             _macroLoopDelayNum.ValueChanged += OnMacroDefaultChanged;
             playGroup.Controls.Add(_macroLoopDelayNum);
 
-            _playMacroBtn = UiFactory.PrimaryButton("▶ Play", 16, 140, 118, 38, _theme);
+            _playMacroBtn = UiFactory.PrimaryButton("▶ Play", 16, 140, 80, 38, _theme);
             _playMacroBtn.Click += OnPlayMacroClicked;
             playGroup.Controls.Add(_playMacroBtn);
 
-            _stopPlayBtn = UiFactory.Button("■ Stop", 140, 140, 112, 38);
+            _playOnceBtn = UiFactory.Button("Once", 102, 140, 70, 38);
+            _playOnceBtn.Click += OnPlayMacroOnceClicked;
+            playGroup.Controls.Add(_playOnceBtn);
+
+            _macroSmoothCheck = UiFactory.Check("Smooth mouse movement", 12, 238);
+            _macroSmoothCheck.CheckedChanged += OnMacroSmoothChanged;
+            playGroup.Controls.Add(_macroSmoothCheck);
+
+            _stopPlayBtn = UiFactory.Button("■ Stop", 178, 140, 74, 38);
             _stopPlayBtn.BackColor = _theme.Danger;
             _stopPlayBtn.ForeColor = Color.White;
             _stopPlayBtn.FlatAppearance.BorderSize = 0;
@@ -200,7 +254,7 @@ namespace AutoClicker.UI
             // A real-time view of macro steps: it fills as you record, shows the
             // selected macro at rest, and highlights the current step during
             // playback (auto-scrolling to follow along).
-            var liveGroup = UiFactory.Group("Live Monitor", 12, 540, 700, 250);
+            var liveGroup = UiFactory.Group("Live Monitor", 12, 576, 700, 240);
 
             _liveHeaderLabel = UiFactory.Label("Select, record, or play a macro to see steps here.", 16, 26, FontStyle.Italic, 9f);
             _liveHeaderLabel.AutoSize = false;
@@ -244,11 +298,50 @@ namespace AutoClicker.UI
             page.Controls.Add(_notesMacroBtn);
             page.Controls.Add(_exportAllBtn);
             page.Controls.Add(_importAllBtn);
+            page.Controls.Add(_mergeMacroBtn);
+            page.Controls.Add(_pinMacroBtn);
+            page.Controls.Add(_resetMacroStatsBtn);
+            page.Controls.Add(_macroSummaryLabel);
             page.Controls.Add(recGroup);
             page.Controls.Add(playGroup);
             page.Controls.Add(liveGroup);
 
+            // Just-for-fun: a colourful trail that follows the mouse cursor.
+            _cursorTrailCheck = UiFactory.Check("Colorful cursor trail (just for fun)", 12, 824);
+            _cursorTrailCheck.Checked = _settings != null && _settings.CursorTrailEnabled;
+            _cursorTrailCheck.CheckedChanged += OnCursorTrailChanged;
+            page.Controls.Add(_cursorTrailCheck);
+
+            // If the intro paragraph wraps to more lines than designed (e.g. at a
+            // higher display scale), push everything below it down so nothing
+            // overlaps. The intro itself stays put.
+            ShiftBelowIntro(page, help, helpText, 720, firstRowY: 60);
+
             _tabs.TabPages.Add(page);
+        }
+
+        /// <summary>
+        /// Measures an intro label's wrapped height and, if it would reach below the
+        /// first row of controls, shifts every other control on the page down by the
+        /// overflow. Keeps hand-positioned layouts from overlapping at higher DPI.
+        /// </summary>
+        private static void ShiftBelowIntro(Control page, Control intro, string text, int wrapWidth, int firstRowY)
+        {
+            int introBottom = 12 + TextRenderer.MeasureText(
+                text, intro.Font, new Size(wrapWidth, 0), TextFormatFlags.WordBreak).Height;
+            int delta = (introBottom + 12) - firstRowY;
+            if (delta <= 0)
+            {
+                return;
+            }
+
+            foreach (Control c in page.Controls)
+            {
+                if (!ReferenceEquals(c, intro))
+                {
+                    c.Top += delta;
+                }
+            }
         }
 
         private void WireMacroEvents()
@@ -270,10 +363,18 @@ namespace AutoClicker.UI
             {
                 _playMacroBtn.Enabled = false;
                 _stopPlayBtn.Enabled = true;
-                _statusState.Text = "Playing macro";
+                RefreshBusyLock();
+                if (_playOnceBtn != null) _playOnceBtn.Enabled = false;
+                _statusState.Text = Utils.Localization.T("Playing macro");
                 _macroProgressBar.Value = 0;
                 _playbackCurrentLoop = 0;
-                _macroProgressLabel.Text = "Playing…";
+                _macroProgressLabel.Text = Utils.Localization.T("Playing…");
+                _liveHeaderLabel.ForeColor = _theme.Accent;
+                string playName = _liveMonitorMacro != null ? _liveMonitorMacro.Name : "macro";
+                string playMeta = _liveMonitorMacro != null
+                    ? $"  \u2014  {_liveMonitorMacro.StepCount} steps, \u2248{FormatLiveTime(_liveMonitorMacro.EstimatedDurationMs)}"
+                    : "";
+                _liveHeaderLabel.Text = "\u25B6 Playing " + playName + playMeta;
             });
 
             _player.LoopChanged += (s, loop) => UiInvoke(() =>
@@ -290,10 +391,26 @@ namespace AutoClicker.UI
                     if (pct > 100) pct = 100;
                     _macroProgressBar.Value = pct;
 
+                    string loop = Utils.Localization.T("Loop");
+                    string step = Utils.Localization.T("step");
                     string loopText = _playbackTotalLoops <= 0
-                        ? $"Loop {_playbackCurrentLoop} (∞)"
-                        : $"Loop {_playbackCurrentLoop} / {_playbackTotalLoops}";
-                    _macroProgressLabel.Text = $"{loopText}  •  step {index + 1} / {_playbackTotalSteps}";
+                        ? $"{loop} {_playbackCurrentLoop} (∞)"
+                        : $"{loop} {_playbackCurrentLoop} / {_playbackTotalLoops}";
+
+                    // Estimated time remaining for finite runs, from the precomputed
+                    // total minus elapsed. Clamped at zero so it never shows negative
+                    // when a run overshoots the estimate.
+                    string remainText = "";
+                    if (_playbackTotalEstimateMs > 0)
+                    {
+                        double leftMs = _playbackTotalEstimateMs -
+                            (DateTime.UtcNow - _playbackStartUtc).TotalMilliseconds;
+                        if (leftMs < 0) leftMs = 0;
+                        remainText = "  •  ~" + FormatDuration(TimeSpan.FromMilliseconds(leftMs)) + " left";
+                    }
+
+                    _macroProgressLabel.Text = $"{loopText}  •  {step} {index + 1} / {_playbackTotalSteps}{remainText}";
+                    UpdateMacroIndicator($"{loopText}  ·  {step} {index + 1}/{_playbackTotalSteps}");
                 }
 
                 HighlightLiveStep(index);
@@ -302,11 +419,23 @@ namespace AutoClicker.UI
             _player.PlaybackFinished += (s, e) => UiInvoke(() =>
             {
                 _playMacroBtn.Enabled = true;
+                if (_playOnceBtn != null) _playOnceBtn.Enabled = true;
                 _stopPlayBtn.Enabled = false;
-                _statusState.Text = "Idle";
+                _statusState.Text = Utils.Localization.T("Idle");
                 _macroProgressBar.Value = 0;
-                _macroProgressLabel.Text = "Ready.";
+                _macroProgressLabel.Text = Utils.Localization.T("Ready.");
                 ClearLiveHighlight();
+                HideMacroIndicator();
+                _liveHeaderLabel.ForeColor = _theme.TextMuted;
+                _liveHeaderLabel.Text = "Finished \u2014 select a macro to view its steps.";
+                UpdateMacroEstTime();
+                RefreshBusyLock();
+
+                // Bring the window back if we auto-minimised it for playback.
+                if (WindowState == FormWindowState.Minimized)
+                {
+                    try { WindowState = FormWindowState.Normal; Activate(); } catch { }
+                }
             });
         }
 
@@ -318,6 +447,7 @@ namespace AutoClicker.UI
             _liveMonitorMacro = macro;
             _liveStepList.BeginUpdate();
             _liveStepList.Items.Clear();
+            _liveHighlightIndex = -1;
 
             long cumulative = 0;
             if (macro != null)
@@ -343,10 +473,20 @@ namespace AutoClicker.UI
             if (macro != null)
             {
                 _liveHeaderLabel.Text =
-                    $"{macro.Name}  —  {macro.StepCount} steps, ≈{macro.EstimatedDurationMs} ms" +
+                    $"{macro.Name}  —  {macro.StepCount} steps, ≈{FormatLiveTime(macro.EstimatedDurationMs)}" +
                     (macro.TimesPlayed > 0 ? $"  •  played {macro.TimesPlayed}×" : "") +
+                    LastPlayedText(macro) +
                     (!string.IsNullOrWhiteSpace(macro.Notes) ? $"   “{macro.Notes}”" : "");
             }
+        }
+
+        private static string LastPlayedText(Macro m)
+        {
+            if (m == null || m.LastPlayedUtc == null)
+            {
+                return "";
+            }
+            return "  •  last " + m.LastPlayedUtc.Value.ToLocalTime().ToString("d MMM HH:mm");
         }
 
         /// <summary>Appends one captured step to the live monitor and scrolls to it.</summary>
@@ -376,21 +516,42 @@ namespace AutoClicker.UI
                 return;
             }
 
+            // Clear the colour from the previously highlighted row.
+            if (_liveHighlightIndex >= 0 && _liveHighlightIndex < _liveStepList.Items.Count)
+            {
+                ListViewItem prev = _liveStepList.Items[_liveHighlightIndex];
+                prev.BackColor = _liveStepList.BackColor;
+                prev.ForeColor = _liveStepList.ForeColor;
+            }
+
             _liveStepList.SelectedItems.Clear();
             ListViewItem item = _liveStepList.Items[index];
-            item.Selected = true;
+            // Paint the active step with the accent so it stands out clearly during
+            // playback, regardless of which control currently has focus.
+            item.BackColor = _theme.Accent;
+            item.ForeColor = Color.White;
+            item.Selected = false;
             item.EnsureVisible();
+            _liveHighlightIndex = index;
         }
 
         private void ClearLiveHighlight()
         {
+            if (_liveHighlightIndex >= 0 && _liveHighlightIndex < _liveStepList.Items.Count)
+            {
+                ListViewItem prev = _liveStepList.Items[_liveHighlightIndex];
+                prev.BackColor = _liveStepList.BackColor;
+                prev.ForeColor = _liveStepList.ForeColor;
+            }
+            _liveHighlightIndex = -1;
             _liveStepList.SelectedItems.Clear();
             if (_liveMonitorMacro != null)
             {
                 _liveHeaderLabel.Text =
                     $"{_liveMonitorMacro.Name}  —  {_liveMonitorMacro.StepCount} steps, " +
-                    $"≈{_liveMonitorMacro.EstimatedDurationMs} ms" +
-                    (_liveMonitorMacro.TimesPlayed > 0 ? $"  •  played {_liveMonitorMacro.TimesPlayed}×" : "");
+                    $"≈{FormatLiveTime(_liveMonitorMacro.EstimatedDurationMs)}" +
+                    (_liveMonitorMacro.TimesPlayed > 0 ? $"  •  played {_liveMonitorMacro.TimesPlayed}×" : "") +
+                    LastPlayedText(_liveMonitorMacro);
             }
         }
 
@@ -442,6 +603,8 @@ namespace AutoClicker.UI
                 _macroSpeedNum.Value = Clamp(macro.DefaultSpeed, (int)_macroSpeedNum.Minimum, (int)_macroSpeedNum.Maximum);
                 _macroCountdownNum.Value = Clamp(macro.PreplayCountdownSeconds, (int)_macroCountdownNum.Minimum, (int)_macroCountdownNum.Maximum);
                 _macroLoopDelayNum.Value = Clamp(macro.LoopDelayMs, (int)_macroLoopDelayNum.Minimum, (int)_macroLoopDelayNum.Maximum);
+                if (_macroSmoothCheck != null) _macroSmoothCheck.Checked = macro.SmoothMovement;
+                if (_pinMacroBtn != null) _pinMacroBtn.Text = macro.IsFavorite ? "★ Unpin" : "★ Pin";
             }
             finally
             {
@@ -454,6 +617,8 @@ namespace AutoClicker.UI
             {
                 PopulateLiveMonitor(macro);
             }
+
+            UpdateMacroEstTime();
         }
 
         /// <summary>
@@ -478,6 +643,43 @@ namespace AutoClicker.UI
             macro.PreplayCountdownSeconds = (int)_macroCountdownNum.Value;
             macro.LoopDelayMs = (int)_macroLoopDelayNum.Value;
             _macros.Save();
+            UpdateMacroEstTime();
+        }
+
+        /// <summary>
+        /// Shows the estimated total playback time for the selected macro (with the
+        /// current loop/speed/delay settings) in the progress label while idle.
+        /// </summary>
+        private void UpdateMacroEstTime()
+        {
+            if (_macroProgressLabel == null || _player == null || _player.IsPlaying)
+            {
+                return;
+            }
+
+            Macro macro = SelectedMacro();
+            if (macro == null || macro.StepCount == 0)
+            {
+                _macroProgressLabel.Text = Utils.Localization.T("Ready.");
+                return;
+            }
+
+            int loops = (int)_macroLoopNum.Value;
+            double speed = (double)_macroSpeedNum.Value / 10.0;
+            if (speed <= 0) speed = 1.0;
+
+            string steps = $"  \u2022  {macro.StepCount} step(s)";
+
+            if (loops <= 0)
+            {
+                _macroProgressLabel.Text = Utils.Localization.T("Est. total: ∞ (looping)") + steps;
+                return;
+            }
+
+            double oneLoopMs = macro.EstimatedDurationMs / speed;
+            double totalMs = oneLoopMs * loops + (double)_macroLoopDelayNum.Value * (loops - 1);
+            _macroProgressLabel.Text = Utils.Localization.T("Est. total: ~")
+                + FormatDuration(TimeSpan.FromMilliseconds(totalMs)) + steps;
         }
 
         private void RefreshMacroList()
@@ -490,7 +692,13 @@ namespace AutoClicker.UI
             _macroListBox.BeginUpdate();
             _macroListBox.Items.Clear();
             string filter = _macroFilter?.Trim() ?? string.Empty;
-            foreach (var m in _macros.Macros)
+
+            // Favourites first, otherwise preserve the current order.
+            var ordered = new System.Collections.Generic.List<Macro>();
+            foreach (var m in _macros.Macros) if (m.IsFavorite) ordered.Add(m);
+            foreach (var m in _macros.Macros) if (!m.IsFavorite) ordered.Add(m);
+
+            foreach (var m in ordered)
             {
                 if (filter.Length == 0 ||
                     (m.Name != null && m.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0))
@@ -499,6 +707,16 @@ namespace AutoClicker.UI
                 }
             }
             _macroListBox.EndUpdate();
+
+            if (_macroSummaryLabel != null)
+            {
+                int count = _macros.Macros.Count;
+                long steps = 0;
+                foreach (var m in _macros.Macros) steps += m.StepCount;
+                _macroSummaryLabel.Text = count == 0
+                    ? "No macros saved yet."
+                    : $"{count} macro{(count == 1 ? "" : "s")}  •  {steps:N0} steps total";
+            }
         }
 
         private Macro SelectedMacro()
@@ -554,6 +772,7 @@ namespace AutoClicker.UI
             _liveRecording = true;
             _liveCumulativeMs = 0;
             _liveStepList.Items.Clear();
+            _liveHighlightIndex = -1;
             _liveHeaderLabel.Text = "● Recording…";
 
             string name = "Macro " + DateTime.Now.ToString("HH-mm-ss");
@@ -565,13 +784,25 @@ namespace AutoClicker.UI
             }
 
             _recordBtn.Enabled = false;
+            RefreshBusyLock();
             _stopRecordBtn.Enabled = true;
-            _recordStatusLabel.Text = "Recording… bind/press the Record or Emergency-stop hotkey to finish.";
-            _statusState.Text = "Recording macro";
+            _recordStatusLabel.Text = Utils.Localization.T("Recording… bind/press the Record or Emergency-stop hotkey to finish.");
+            _statusState.Text = Utils.Localization.T("Recording macro");
 
             // Show a small always-on-top REC badge so the user knows recording is
             // live even when this window is not focused.
             ShowRecordingIndicator();
+
+            // Get the window out of the way so it isn't captured in the recording —
+            // but only if there's a hotkey to stop with, so the user is never stuck
+            // with no visible way to finish.
+            bool canStopByHotkey =
+                (_settings?.HotkeyFor(HotkeyAction.ToggleRecordMacro)?.IsValid ?? false) ||
+                (_settings?.HotkeyFor(HotkeyAction.EmergencyStop)?.IsValid ?? false);
+            if (_settings != null && _settings.MinimizeWhileRecording && canStopByHotkey)
+            {
+                try { WindowState = FormWindowState.Minimized; } catch { }
+            }
         }
 
         private void ShowRecordingIndicator()
@@ -579,7 +810,24 @@ namespace AutoClicker.UI
             HideRecordingIndicator();
             try
             {
-                _recordIndicator = new RecordingIndicatorForm(_theme);
+                // Tell the user which key stops recording — prefer the dedicated
+                // record toggle, otherwise the emergency-stop key.
+                string hint = null;
+                var rec = _settings?.HotkeyFor(HotkeyAction.ToggleRecordMacro);
+                if (rec != null && rec.IsValid)
+                {
+                    hint = rec.ToDisplayString();
+                }
+                else
+                {
+                    var stop = _settings?.HotkeyFor(HotkeyAction.EmergencyStop);
+                    if (stop != null && stop.IsValid)
+                    {
+                        hint = stop.ToDisplayString();
+                    }
+                }
+
+                _recordIndicator = new RecordingIndicatorForm(_theme, hint);
                 _recordIndicator.Show();
             }
             catch
@@ -612,9 +860,16 @@ namespace AutoClicker.UI
             _lastRecorded = _recorder.Stop();
             _recordBtn.Enabled = true;
             _stopRecordBtn.Enabled = false;
-            _statusState.Text = "Idle";
+            _statusState.Text = Utils.Localization.T("Idle");
             _liveRecording = false;
             HideRecordingIndicator();
+            RefreshBusyLock();
+
+            // Bring the window back if we auto-minimised it for recording.
+            if (WindowState == FormWindowState.Minimized)
+            {
+                try { WindowState = FormWindowState.Normal; Activate(); } catch { }
+            }
 
             if (_lastRecorded != null && _lastRecorded.StepCount > 0)
             {
@@ -639,6 +894,23 @@ namespace AutoClicker.UI
                 }
                 else
                 {
+                    // Let the user name the recording (and add a note / pin it)
+                    // while it's fresh. "Keep default" or closing still saves under
+                    // the automatic name — a recording is never thrown away.
+                    using (var dlg = new SaveMacroForm(_theme, _lastRecorded))
+                    {
+                        if (dlg.ShowDialog(this) == DialogResult.OK)
+                        {
+                            string chosen = dlg.MacroName?.Trim();
+                            if (!string.IsNullOrEmpty(chosen))
+                            {
+                                _lastRecorded.Name = chosen;
+                            }
+                            _lastRecorded.Notes = dlg.Notes ?? "";
+                            _lastRecorded.IsFavorite = dlg.Pin;
+                        }
+                    }
+
                     _macros.Add(_lastRecorded);
                     _macros.Save();
                     RefreshMacroList();
@@ -649,7 +921,7 @@ namespace AutoClicker.UI
             }
             else
             {
-                _recordStatusLabel.Text = "Nothing was recorded.";
+                _recordStatusLabel.Text = Utils.Localization.T("Nothing was recorded.");
             }
 
             _appendTarget = null;
@@ -667,6 +939,40 @@ namespace AutoClicker.UI
 
         // ── Playback ───────────────────────────────────────────────────────────
 
+        private void OnMacroListKeyDown(object sender, KeyEventArgs e)
+        {
+            if (SelectedMacro() == null)
+            {
+                return;
+            }
+
+            // Ctrl+D duplicates, matching the Multi-Point list.
+            if (e.Control && e.KeyCode == Keys.D)
+            {
+                OnDuplicateMacro(sender, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
+
+            switch (e.KeyCode)
+            {
+                case Keys.Enter:
+                    OnPlayMacroClicked(sender, EventArgs.Empty);
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    break;
+                case Keys.Delete:
+                    OnDeleteMacroClicked(sender, EventArgs.Empty);
+                    e.Handled = true;
+                    break;
+                case Keys.F2:
+                    OnRenameMacro(sender, EventArgs.Empty);
+                    e.Handled = true;
+                    break;
+            }
+        }
+
         private void OnPlayMacroClicked(object sender, EventArgs e)
         {
             Macro macro = SelectedMacro();
@@ -679,6 +985,19 @@ namespace AutoClicker.UI
             PlayMacro(macro);
         }
 
+        private void OnPlayMacroOnceClicked(object sender, EventArgs e)
+        {
+            Macro macro = SelectedMacro();
+            if (macro == null)
+            {
+                ShowWarning("Select a macro to play first.");
+                return;
+            }
+
+            // Play a single pass regardless of the configured loop count.
+            PlayMacro(macro, 1);
+        }
+
         /// <summary>Plays the selected macro; bound to the Play hotkey.</summary>
         private void PlaySelectedMacroViaHotkey()
         {
@@ -689,10 +1008,16 @@ namespace AutoClicker.UI
             }
         }
 
-        private void PlayMacro(Macro macro)
+        private void PlayMacro(Macro macro, int? loopsOverride = null)
         {
             if (macro == null || _player.IsPlaying)
             {
+                return;
+            }
+
+            if (macro.StepCount == 0)
+            {
+                ShowInfo("This macro has no steps yet — record or edit it first.");
                 return;
             }
 
@@ -706,19 +1031,33 @@ namespace AutoClicker.UI
                     // display.
                     if (overlay.ShowDialog() != DialogResult.OK)
                     {
-                        _macroProgressLabel.Text = "Playback cancelled.";
+                        _macroProgressLabel.Text = Utils.Localization.T("Playback cancelled.");
                         return;
                     }
                 }
             }
 
-            int loops = (int)_macroLoopNum.Value;
+            int loops = loopsOverride ?? (int)_macroLoopNum.Value;
             double speed = (double)_macroSpeedNum.Value / 10.0;
 
             // Remember how many steps so the progress bar can show a percentage.
             _playbackTotalSteps = macro.StepCount;
             _playbackTotalLoops = loops;
             _playbackCurrentLoop = 0;
+
+            // For the "time left" readout: when the run is finite, estimate its
+            // total length from the macro's recorded delays, the speed multiplier
+            // and the delay between loops.
+            _playbackStartUtc = DateTime.UtcNow;
+            if (loops > 0 && speed > 0)
+            {
+                double oneLoopMs = macro.EstimatedDurationMs / speed;
+                _playbackTotalEstimateMs = oneLoopMs * loops + (double)_macroLoopDelayNum.Value * (loops - 1);
+            }
+            else
+            {
+                _playbackTotalEstimateMs = 0; // infinite loop — no estimate
+            }
 
             // Show the macro in the live monitor so playback can highlight steps.
             PopulateLiveMonitor(macro);
@@ -728,7 +1067,19 @@ namespace AutoClicker.UI
             macro.LastPlayedUtc = DateTime.UtcNow;
             _macros.Save();
 
-            _statusState.Text = "Playing macro";
+            _statusState.Text = Utils.Localization.T("Playing macro");
+            ShowMacroIndicator(macro.Name);
+
+            // Get out of the way during playback (same option as recording), but only
+            // if a stop hotkey is bound so the user can always finish while minimised.
+            bool canStopByHotkey =
+                (_settings?.HotkeyFor(HotkeyAction.StopMacro)?.IsValid ?? false) ||
+                (_settings?.HotkeyFor(HotkeyAction.EmergencyStop)?.IsValid ?? false);
+            if (_settings != null && _settings.MinimizeWhileRecording && canStopByHotkey)
+            {
+                try { WindowState = FormWindowState.Minimized; } catch { }
+            }
+
             _player.Play(macro, loops, speed, macro.LoopDelayMs);
         }
 
@@ -835,7 +1186,7 @@ namespace AutoClicker.UI
                 {
                     if (MacroStore.ExportToFile(macro, dialog.FileName))
                     {
-                        ShowInfo("Macro exported.");
+                        ShowInfo("Macro exported to:\n" + dialog.FileName);
                     }
                     else
                     {
@@ -893,6 +1244,179 @@ namespace AutoClicker.UI
                 {
                     PopulateLiveMonitor(macro);
                 }
+            }
+        }
+
+        private void OnCursorTrailChanged(object sender, EventArgs e)
+        {
+            if (_settings == null)
+            {
+                return;
+            }
+            _settings.CursorTrailEnabled = _cursorTrailCheck.Checked;
+            SettingsManager.Save(_settings);
+            ApplyCursorTrail(_settings.CursorTrailEnabled);
+        }
+
+        private void OnMacroSmoothChanged(object sender, EventArgs e)
+        {
+            if (_suppressMacroDefaults)
+            {
+                return;
+            }
+
+            Macro macro = SelectedMacro();
+            if (macro == null)
+            {
+                return;
+            }
+
+            macro.SmoothMovement = _macroSmoothCheck.Checked;
+            _macros.Save();
+        }
+
+        private void OnPinMacroClicked(object sender, EventArgs e)
+        {
+            Macro macro = SelectedMacro();
+            if (macro == null)
+            {
+                ShowWarning("Select a macro to pin first.");
+                return;
+            }
+
+            macro.IsFavorite = !macro.IsFavorite;
+            _macros.Save();
+            _pinMacroBtn.Text = macro.IsFavorite ? "★ Unpin" : "★ Pin";
+            RefreshMacroList();
+            SelectMacro(macro);
+        }
+
+        private void OnResetMacroStats(object sender, EventArgs e)
+        {
+            Macro macro = SelectedMacro();
+            if (macro == null)
+            {
+                ShowWarning("Select a macro first.");
+                return;
+            }
+
+            if (macro.TimesPlayed == 0 && macro.LastPlayedUtc == null)
+            {
+                ShowInfo("This macro has no play stats to reset.");
+                return;
+            }
+
+            macro.TimesPlayed = 0;
+            macro.LastPlayedUtc = null;
+            _macros.Save();
+            RefreshMacroList();
+            SelectMacro(macro);
+            if (_liveMonitorMacro == macro || !_player.IsPlaying)
+            {
+                PopulateLiveMonitor(macro);
+            }
+        }
+
+        private void OnMergeMacroClicked(object sender, EventArgs e)
+        {
+            Macro target = SelectedMacro();
+            if (target == null)
+            {
+                ShowWarning("Select the macro to merge into first.");
+                return;
+            }
+
+            var others = new System.Collections.Generic.List<Macro>();
+            foreach (Macro m in _macros.Macros)
+            {
+                if (!ReferenceEquals(m, target))
+                {
+                    others.Add(m);
+                }
+            }
+
+            if (others.Count == 0)
+            {
+                ShowInfo("There are no other macros to merge in.");
+                return;
+            }
+
+            Macro source = ChooseMacro("Merge into '" + target.Name + "'",
+                "Append the steps of which macro?", others);
+            if (source == null)
+            {
+                return;
+            }
+
+            foreach (MacroAction a in source.Actions)
+            {
+                target.Actions.Add(a.Clone());
+            }
+
+            _macros.Save();
+            SelectMacro(target);
+            if (_liveMonitorMacro == target || !_player.IsPlaying)
+            {
+                PopulateLiveMonitor(target);
+            }
+            UpdateMacroEstTime();
+            ShowInfo($"Merged {source.Actions.Count} step(s) from '{source.Name}' into '{target.Name}'.");
+        }
+
+        /// <summary>Small modal list picker; returns the chosen macro or null.</summary>
+        private Macro ChooseMacro(string title, string prompt, System.Collections.Generic.List<Macro> options)
+        {
+            using (var dlg = new Form())
+            using (var list = new ListBox())
+            {
+                dlg.Text = title;
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.MinimizeBox = false;
+                dlg.MaximizeBox = false;
+                dlg.ClientSize = new System.Drawing.Size(360, 320);
+                dlg.BackColor = _theme.Background;
+                dlg.ForeColor = _theme.Text;
+                dlg.Font = UiFactory.BodyFont;
+
+                var label = UiFactory.Label(prompt, 16, 14);
+                label.AutoSize = false;
+                label.Width = 328;
+                label.Height = 20;
+                dlg.Controls.Add(label);
+
+                list.Left = 16;
+                list.Top = 42;
+                list.Width = 328;
+                list.Height = 220;
+                list.BackColor = _theme.InputBackground;
+                list.ForeColor = _theme.Text;
+                list.BorderStyle = BorderStyle.FixedSingle;
+                foreach (Macro m in options)
+                {
+                    list.Items.Add(m.Name + "  (" + m.StepCount + " steps)");
+                }
+                list.SelectedIndex = 0;
+                dlg.Controls.Add(list);
+
+                var ok = UiFactory.PrimaryButton("Merge", 168, 274, 84, 32, _theme);
+                ok.DialogResult = DialogResult.OK;
+                dlg.Controls.Add(ok);
+
+                var cancel = UiFactory.Button("Cancel", 260, 274, 84, 32);
+                cancel.DialogResult = DialogResult.Cancel;
+                dlg.Controls.Add(cancel);
+
+                dlg.AcceptButton = ok;
+                dlg.CancelButton = cancel;
+
+                if (dlg.ShowDialog(this) != DialogResult.OK)
+                {
+                    return null;
+                }
+
+                int idx = list.SelectedIndex;
+                return idx >= 0 && idx < options.Count ? options[idx] : null;
             }
         }
 
@@ -1029,9 +1553,14 @@ namespace AutoClicker.UI
                 return;
             }
 
-            foreach (int vk in hk.ExcludedVirtualKeys())
+            // Exclude only the hotkey's MAIN key from the recording — never its
+            // modifiers. Excluding Ctrl/Shift/Alt would stop the recorder from
+            // capturing everyday shortcuts (Ctrl+C, Ctrl+D, Ctrl+V …) — they'd record
+            // as just "C"/"D"/"V". The main key alone keeps the stop-hotkey itself out
+            // of the macro, which is all the exclusion needs to do.
+            if (hk.Key != System.Windows.Forms.Keys.None)
             {
-                _recorder.ExcludedVirtualKeys.Add(vk);
+                _recorder.ExcludedVirtualKeys.Add((int)hk.Key);
             }
         }
 

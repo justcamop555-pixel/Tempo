@@ -25,6 +25,7 @@ namespace AutoClicker.UI
 
         public ClickPointEditorForm(Theme theme, ClickPoint existing)
         {
+            AutoScaleMode = AutoScaleMode.Font;
             _theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = existing == null ? "Add Click Point" : "Edit Click Point";

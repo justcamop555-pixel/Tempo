@@ -34,6 +34,7 @@ namespace AutoClicker.UI
             TopMost = true;
             Size = new Size(220, 160);
             BackColor = _theme.Surface;
+            Region = RoundedRegion(220, 160, 16);
             ForeColor = _theme.Text;
             DoubleBuffered = true;
 
@@ -89,6 +90,8 @@ namespace AutoClicker.UI
         {
             _tick.Stop();
             _tick.Dispose();
+            _bigNumber.Font?.Dispose();
+            _caption.Font?.Dispose();
             base.OnFormClosed(e);
         }
 
@@ -120,10 +123,32 @@ namespace AutoClicker.UI
 
         private void DrawAccentBorder(object sender, PaintEventArgs e)
         {
-            // 2-pixel accent border around the overlay.
+            // Rounded accent border around the overlay.
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var path = RoundedPath(Width, Height, 16))
             using (var pen = new Pen(_theme.Accent, 2))
             {
-                e.Graphics.DrawRectangle(pen, 1, 1, Width - 2, Height - 2);
+                e.Graphics.DrawPath(pen, path);
+            }
+        }
+
+        private static GraphicsPath RoundedPath(int w, int h, int r)
+        {
+            var path = new GraphicsPath();
+            int d = r * 2;
+            path.AddArc(0, 0, d, d, 180, 90);
+            path.AddArc(w - d - 1, 0, d, d, 270, 90);
+            path.AddArc(w - d - 1, h - d - 1, d, d, 0, 90);
+            path.AddArc(0, h - d - 1, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        private static Region RoundedRegion(int w, int h, int r)
+        {
+            using (var path = RoundedPath(w, h, r))
+            {
+                return new Region(path);
             }
         }
     }

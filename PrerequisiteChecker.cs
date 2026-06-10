@@ -45,8 +45,10 @@ namespace AutoClicker.Utils
                 else if (os.Version.Major < MinWindowsMajor)
                 {
                     result.Problems.Add(
-                        $"Windows {MinWindowsMajor} or newer is required " +
-                        $"(this PC reports Windows version {os.Version}).");
+                        "Tempo requires Windows 10 or Windows 11. Older versions such as " +
+                        "Windows 7 and Windows 8.1 are not supported, because Tempo runs on " +
+                        ".NET 8, which itself requires Windows 10 (version 1607) or newer. " +
+                        $"(This PC reports Windows version {os.Version}.)");
                 }
             }
             catch (Exception ex)

@@ -18,7 +18,8 @@ namespace AutoClicker.UI
 
         private void BuildStatisticsTab()
         {
-            var page = new TabPage("Statistics") { AutoScroll = true };
+            var page = new BackdropTabPage(Utils.Localization.T("Statistics")) { AutoScroll = true };
+            _statsPage = page;
 
             var title = UiFactory.Label("Live Dashboard", 16, 14, FontStyle.Bold, 13f);
             page.Controls.Add(title);
@@ -51,8 +52,45 @@ namespace AutoClicker.UI
             };
             page.Controls.Add(_cpsSparkline);
 
+            // ── Session goal ──────────────────────────────────────────────────
+            int fullW = (CardW * 4) + (CardGap * 3);
+            int rightEdge = c0 + fullW;
+            int goalY = graphTop + _cpsSparkline.Height + CardGap;
+
+            page.Controls.Add(UiFactory.Label("Session goal (clicks, 0 = off):", 16, goalY + 2, FontStyle.Bold, 9.5f));
+            _sessionGoalNum = UiFactory.Numeric(220, goalY, 110, 0, 1000000000, 0);
+            _suppressGoalEvent = true;
+            try
+            {
+                long g = _settings != null ? _settings.SessionGoalClicks : 0;
+                if (g < 0) g = 0;
+                if (g > 1000000000) g = 1000000000;
+                _sessionGoalNum.Value = g;
+            }
+            finally { _suppressGoalEvent = false; }
+            _sessionGoalNum.ValueChanged += OnSessionGoalChanged;
+            page.Controls.Add(_sessionGoalNum);
+
+            _goalProgressBar = new ThemedProgressBar
+            {
+                Left = 348,
+                Top = goalY + 2,
+                Width = rightEdge - 348 - 172,
+                Height = 18,
+                Maximum = 100,
+                Value = 0
+            };
+            page.Controls.Add(_goalProgressBar);
+
+            _goalProgressLabel = UiFactory.Label("—", rightEdge - 166, goalY + 2, FontStyle.Bold, 9.5f);
+            _goalProgressLabel.AutoSize = false;
+            _goalProgressLabel.Width = 166;
+            _goalProgressLabel.Height = 18;
+            _goalProgressLabel.TextAlign = ContentAlignment.MiddleRight;
+            page.Controls.Add(_goalProgressLabel);
+
             // ── Row 2: rate + timing ──────────────────────────────────────────
-            int row2 = graphTop + _cpsSparkline.Height + CardGap;
+            int row2 = goalY + 34;
             _cardAvgCps = MakeCard("Average CPS", c0, row2, false);
             _cardClicksPerMin = MakeCard("Clicks / Min", c1, row2, false);
             _cardElapsed = MakeCard("Elapsed", c2, row2, false);
@@ -115,12 +153,46 @@ namespace AutoClicker.UI
             page.Controls.Add(_cardAvgPerSession);
             page.Controls.Add(_cardAvgRunLength);
 
+            // ── Insights (derived from session history) ───────────────────────
+            int insTitleY = row5 + CardH + 16;
+            page.Controls.Add(UiFactory.Label("Insights", 16, insTitleY, FontStyle.Bold, 12f));
+
+            int rowI1 = insTitleY + 30;
+            _cardThisWeek = MakeCard("This Week", c0, rowI1, true);
+            _cardThisMonth = MakeCard("This Month", c1, rowI1, true);
+            _cardLifeAvgCps = MakeCard("Lifetime Avg CPS", c2, rowI1, false);
+            _cardActiveDays = MakeCard("Active Days", c3, rowI1, false);
+            page.Controls.Add(_cardThisWeek);
+            page.Controls.Add(_cardThisMonth);
+            page.Controls.Add(_cardLifeAvgCps);
+            page.Controls.Add(_cardActiveDays);
+
+            int rowI2 = rowI1 + CardH + CardGap;
+            _cardBestDay = MakeCard("Best Day", c0, rowI2, false);
+            _cardBusiestWeekday = MakeCard("Busiest Weekday", c1, rowI2, false);
+            _cardBusiestHour = MakeCard("Busiest Hour", c2, rowI2, false);
+            _cardTopProfile = MakeCard("Top Profile", c3, rowI2, false);
+            page.Controls.Add(_cardBestDay);
+            page.Controls.Add(_cardBusiestWeekday);
+            page.Controls.Add(_cardBusiestHour);
+            page.Controls.Add(_cardTopProfile);
+
+            int rowI3 = rowI2 + CardH + CardGap;
+            _cardStreak = MakeCard("Current Streak", c0, rowI3, true);
+            _cardLongestStreak = MakeCard("Longest Streak", c1, rowI3, false);
+            _cardDailyAvg = MakeCard("Daily Average", c2, rowI3, false);
+            _cardThisYear = MakeCard("This Year", c3, rowI3, false);
+            page.Controls.Add(_cardStreak);
+            page.Controls.Add(_cardLongestStreak);
+            page.Controls.Add(_cardDailyAvg);
+            page.Controls.Add(_cardThisYear);
+
             // ── Charts: per-session (left) and last-7-days (right) ────────────
-            int chartY = row5 + CardH + 14;
+            int chartY = rowI3 + CardH + 14;
             int halfW = (CardW * 2) + CardGap;
             _sessionBarChart = new MiniBarChart
             {
-                Title = "Clicks per recent session",
+                Title = Utils.Localization.T("Clicks per recent session"),
                 Left = c0,
                 Top = chartY,
                 Width = halfW,
@@ -130,7 +202,7 @@ namespace AutoClicker.UI
 
             _dailyBarChart = new MiniBarChart
             {
-                Title = "Clicks — last 7 days",
+                Title = Utils.Localization.T("Clicks — last 7 days"),
                 Left = c2,
                 Top = chartY,
                 Width = halfW,
@@ -138,9 +210,45 @@ namespace AutoClicker.UI
             };
             page.Controls.Add(_dailyBarChart);
 
+            // ── Clicks by hour of day (full width) ────────────────────────────
+            int hourChartY = chartY + _sessionBarChart.Height + 14;
+            _hourChart = new MiniBarChart
+            {
+                Title = Utils.Localization.T("Clicks by hour of day"),
+                Left = c0,
+                Top = hourChartY,
+                Width = (CardW * 4) + (CardGap * 3),
+                Height = 132
+            };
+            page.Controls.Add(_hourChart);
+
+            // ── Clicks by day of week (full width) ────────────────────────────
+            int weekdayChartY = hourChartY + _hourChart.Height + 14;
+            _weekdayChart = new MiniBarChart
+            {
+                Title = Utils.Localization.T("Clicks by day of week"),
+                Left = c0,
+                Top = weekdayChartY,
+                Width = (CardW * 4) + (CardGap * 3),
+                Height = 132
+            };
+            page.Controls.Add(_weekdayChart);
+
             // ── Recent sessions ───────────────────────────────────────────────
-            int histTitleY = chartY + _sessionBarChart.Height + 14;
+            int histTitleY = weekdayChartY + _weekdayChart.Height + 14;
             page.Controls.Add(UiFactory.Label("Recent sessions (double-click for details, right-click for options)", 16, histTitleY, FontStyle.Bold, 12f));
+
+            // Search + filter by profile.
+            page.Controls.Add(UiFactory.Caption("Find:", rightEdge - 448, histTitleY + 2));
+            _historySearchBox = UiFactory.Text(rightEdge - 410, histTitleY - 2, 170);
+            _historySearchBox.TextChanged += (s, e) => { _historySearchText = _historySearchBox.Text; RefreshSessionHistory(); };
+            page.Controls.Add(_historySearchBox);
+
+            _historyProfileFilter = UiFactory.Combo(rightEdge - 230, histTitleY - 2, 170, "All profiles");
+            _historyProfileFilter.DropDownStyle = ComboBoxStyle.DropDownList;
+            _historyProfileFilter.SelectedIndex = 0;
+            _historyProfileFilter.SelectedIndexChanged += OnHistoryFilterChanged;
+            page.Controls.Add(_historyProfileFilter);
 
             int histY = histTitleY + 28;
             _sessionHistoryList = new ListView
@@ -172,8 +280,15 @@ namespace AutoClicker.UI
             _sessionHistoryList.ContextMenuStrip = histMenu;
             page.Controls.Add(_sessionHistoryList);
 
+            _historySummaryLabel = UiFactory.Label("", 16, histY + _sessionHistoryList.Height + 4, FontStyle.Italic, 9f);
+            _historySummaryLabel.AutoSize = false;
+            _historySummaryLabel.Width = fullW;
+            _historySummaryLabel.Height = 16;
+            _historySummaryLabel.ForeColor = _theme.TextMuted;
+            page.Controls.Add(_historySummaryLabel);
+
             // ── Action buttons ────────────────────────────────────────────────
-            int btnY = histY + _sessionHistoryList.Height + 14;
+            int btnY = histY + _sessionHistoryList.Height + 26;
             _resetStatsBtn = UiFactory.Button("Reset session", c0, btnY, 150, 32);
             _resetStatsBtn.Click += OnResetStats;
             page.Controls.Add(_resetStatsBtn);
@@ -190,15 +305,157 @@ namespace AutoClicker.UI
             clearHistBtn.Click += OnClearHistory;
             page.Controls.Add(clearHistBtn);
 
+            var copySummaryBtn = UiFactory.Button("Copy summary", c0, btnY + 40, 150, 32);
+            copySummaryBtn.Click += OnCopyStatsSummary;
+            page.Controls.Add(copySummaryBtn);
+
+            // ── Milestones ────────────────────────────────────────────────────
+            int fw = (CardW * 4) + (CardGap * 3);
+            int msTitleY = btnY + 96;
+            page.Controls.Add(UiFactory.Label("Milestones", 16, msTitleY, FontStyle.Bold, 12f));
+
+            _milestoneLabel = UiFactory.Label("", 16, msTitleY + 26, FontStyle.Regular, 9.5f);
+            _milestoneLabel.AutoSize = false;
+            _milestoneLabel.Width = fw;
+            _milestoneLabel.Height = 18;
+            page.Controls.Add(_milestoneLabel);
+
+            _milestoneBar = new ThemedProgressBar
+            {
+                Left = c0,
+                Top = msTitleY + 48,
+                Width = fw,
+                Height = 18,
+                Maximum = 100,
+                Value = 0
+            };
+            _milestoneBar.ApplyTheme(_theme);
+            page.Controls.Add(_milestoneBar);
+
+            _milestoneBadges = UiFactory.Label("", 16, msTitleY + 74, FontStyle.Regular, 9.5f);
+            _milestoneBadges.AutoSize = false;
+            _milestoneBadges.Width = fw;
+            _milestoneBadges.Height = 20;
+            _milestoneBadges.ForeColor = _theme.TextMuted;
+            page.Controls.Add(_milestoneBadges);
+
             _tabs.TabPages.Add(page);
             RefreshSessionHistory();
+        }
+
+        /// <summary>
+        /// Detects when lifetime clicks cross a milestone tier (regardless of which
+        /// tab is open) and shows a one-off celebratory tray notification. Runs from
+        /// the main UI tick. The first call only records the current level so already
+        /// reached milestones don't fire a toast on launch.
+        /// </summary>
+        private void CheckMilestoneCrossing()
+        {
+            long lifetime = _lifetimeBaseline + _statistics.TotalClicks;
+
+            long highest = 0;
+            foreach (long tier in MilestoneTiers)
+            {
+                if (lifetime >= tier) highest = tier;
+            }
+
+            if (_lastMilestoneClicks < 0)
+            {
+                _lastMilestoneClicks = highest; // initialise silently
+                return;
+            }
+
+            if (highest > _lastMilestoneClicks)
+            {
+                _lastMilestoneClicks = highest;
+                ShowMilestoneToast(highest);
+            }
+        }
+
+        private void ShowMilestoneToast(long tier)
+        {
+            try
+            {
+                if (_trayIcon != null && _settings != null && _settings.ShowTrayNotifications)
+                {
+                    _trayIcon.ShowBalloonTip(
+                        3000,
+                        "Tempo milestone reached!",
+                        "You've passed " + FormatMilestone(tier) + " lifetime clicks. Nice work!",
+                        ToolTipIcon.Info);
+                }
+            }
+            catch { /* notifications are best-effort */ }
+        }
+
+        // Lifetime click milestones (gamified achievements).
+        private static readonly long[] MilestoneTiers =
+            { 1000, 5000, 10000, 50000, 100000, 250000, 500000, 1000000, 5000000, 10000000 };
+
+        private static string FormatMilestone(long n)
+        {
+            if (n >= 1000000) return (n / 1000000.0).ToString("0.#") + "M";
+            if (n >= 1000) return (n / 1000.0).ToString("0.#") + "K";
+            return n.ToString("N0");
+        }
+
+        /// <summary>Updates the Milestones progress bar and badges from lifetime clicks.</summary>
+        private void UpdateMilestones(long lifetimeClicks)
+        {
+            if (_milestoneBar == null || _milestoneLabel == null || _milestoneBadges == null)
+            {
+                return;
+            }
+
+            // Find the next tier not yet reached, and the one just below it.
+            long next = 0;
+            long prev = 0;
+            foreach (long tier in MilestoneTiers)
+            {
+                if (lifetimeClicks < tier) { next = tier; break; }
+                prev = tier;
+            }
+
+            if (next == 0)
+            {
+                // Every milestone reached.
+                _milestoneBar.Value = 100;
+                _milestoneLabel.Text =
+                    $"All milestones reached — {lifetimeClicks:N0} lifetime clicks. Incredible!";
+            }
+            else
+            {
+                long span = next - prev;
+                int pct = span > 0
+                    ? (int)Math.Round((lifetimeClicks - prev) / (double)span * 100.0)
+                    : 0;
+                if (pct < 0) pct = 0;
+                if (pct > 100) pct = 100;
+                _milestoneBar.Value = pct;
+
+                long remaining = next - lifetimeClicks;
+                _milestoneLabel.Text =
+                    $"{lifetimeClicks:N0} / {next:N0} lifetime clicks  —  " +
+                    $"{remaining:N0} to go until the {FormatMilestone(next)} milestone ({pct}%)";
+            }
+
+            // Badge row: filled for reached, hollow for locked.
+            var sb = new System.Text.StringBuilder();
+            foreach (long tier in MilestoneTiers)
+            {
+                bool reached = lifetimeClicks >= tier;
+                sb.Append(reached ? "\u2605 " : "\u2606 ");
+                sb.Append(FormatMilestone(tier));
+                sb.Append("    ");
+            }
+            _milestoneBadges.Text = sb.ToString().TrimEnd();
         }
 
         private StatCard MakeCard(string caption, int x, int y, bool accent)
         {
             return new StatCard
             {
-                Caption = caption,
+                Caption = Utils.Localization.T(caption),
                 Value = "0",
                 Left = x,
                 Top = y,
@@ -222,7 +479,10 @@ namespace AutoClicker.UI
                 _cardLeft, _cardRight, _cardMiddle,
                 _cardLifeClicks, _cardLifeSessions, _cardLifePeak, _cardLifeRuntime,
                 _cardMostClicks, _cardLongestRun, _cardToday,
-                _cardAvgPerSession, _cardAvgRunLength
+                _cardAvgPerSession, _cardAvgRunLength,
+                _cardThisWeek, _cardThisMonth, _cardLifeAvgCps, _cardActiveDays,
+                _cardBestDay, _cardBusiestWeekday, _cardBusiestHour, _cardTopProfile,
+                _cardStreak, _cardLongestStreak, _cardDailyAvg, _cardThisYear
             })
             {
                 if (card == null) continue;
@@ -237,8 +497,10 @@ namespace AutoClicker.UI
             if (_cardCurrentCps != null) _cardCurrentCps.ValueColor = _theme.Accent;
             if (_cardPeakCps != null) _cardPeakCps.ValueColor = _theme.Success;
             if (_cardToday != null) _cardToday.ValueColor = _theme.Accent;
+            if (_cardThisWeek != null) _cardThisWeek.ValueColor = _theme.Accent;
+            if (_cardThisMonth != null) _cardThisMonth.ValueColor = _theme.Accent;
 
-            foreach (var chart in new[] { _sessionBarChart, _dailyBarChart })
+            foreach (var chart in new[] { _sessionBarChart, _dailyBarChart, _hourChart, _weekdayChart })
             {
                 if (chart == null) continue;
                 chart.CardColor = _theme.Surface;
@@ -247,6 +509,12 @@ namespace AutoClicker.UI
                 chart.MutedColor = _theme.TextMuted;
                 chart.Invalidate();
             }
+
+            if (_historySummaryLabel != null) _historySummaryLabel.ForeColor = _theme.TextMuted;
+            _goalProgressBar?.ApplyTheme(_theme);
+            _milestoneBar?.ApplyTheme(_theme);
+            if (_milestoneBadges != null) _milestoneBadges.ForeColor = _theme.TextMuted;
+            UpdateGoalProgress();
 
             if (_distBar != null)
             {
@@ -279,9 +547,15 @@ namespace AutoClicker.UI
 
             double cps = _statistics.GetCurrentCps();
 
+            // Smooth the displayed rate so the number eases to its target instead
+            // of jittering frame to frame (exponential moving average).
+            double targetCps = _engine.IsRunning ? cps : 0;
+            _displayCps += (targetCps - _displayCps) * 0.35;
+            if (_displayCps < 0.05) _displayCps = targetCps <= 0 ? 0 : _displayCps;
+
             _cardSessionClicks.Value = _statistics.SessionClicks.ToString("N0");
             _cardTotalClicks.Value = _statistics.TotalClicks.ToString("N0");
-            _cardCurrentCps.Value = cps.ToString("0.0");
+            _cardCurrentCps.Value = _displayCps.ToString("0.0");
             _cardPeakCps.Value = _statistics.PeakClicksPerSecond.ToString("0.0");
 
             TimeSpan elapsed = _statistics.GetElapsed();
@@ -292,6 +566,17 @@ namespace AutoClicker.UI
             _cardLeft.Value = _statistics.LeftClicks.ToString("N0");
             _cardRight.Value = _statistics.RightClicks.ToString("N0");
             _cardMiddle.Value = _statistics.MiddleClicks.ToString("N0");
+            long btnTotal = _statistics.LeftClicks + _statistics.RightClicks + _statistics.MiddleClicks;
+            if (btnTotal > 0)
+            {
+                _cardLeft.Sub = (_statistics.LeftClicks * 100.0 / btnTotal).ToString("0") + "%";
+                _cardRight.Sub = (_statistics.RightClicks * 100.0 / btnTotal).ToString("0") + "%";
+                _cardMiddle.Sub = (_statistics.MiddleClicks * 100.0 / btnTotal).ToString("0") + "%";
+            }
+            else
+            {
+                _cardLeft.Sub = _cardRight.Sub = _cardMiddle.Sub = string.Empty;
+            }
 
             long lifetimeClicks = _lifetimeBaseline + _statistics.TotalClicks;
             double lifetimePeak = Math.Max(_settings.LifetimePeakCps, _statistics.PeakClicksPerSecond);
@@ -335,9 +620,14 @@ namespace AutoClicker.UI
                 _cardToday.Value = ComputeTodayClicks().ToString("N0");
             }
 
+            ComputeInsights(lifetimeClicks, lifetimeRuntime);
+
+            UpdateGoalProgress();
+            UpdateMilestones(lifetimeClicks);
+
             // Feed the live graph. Only sample while running so the line returns to
             // zero and flattens when idle rather than freezing on the last value.
-            _cpsSparkline.Push(_engine.IsRunning ? cps : 0);
+            _cpsSparkline.Push(_engine.IsRunning ? _displayCps : 0);
         }
 
         private static string FormatDuration(TimeSpan t)
@@ -351,10 +641,103 @@ namespace AutoClicker.UI
 
         private void OnResetStats(object sender, EventArgs e)
         {
+            // Resetting clears the whole session (clicks, peak CPS, the live charts) and
+            // can't be undone, so confirm first. Lifetime totals and history are kept.
+            if (_statistics.SessionClicks > 0 || _statistics.TotalClicks > 0)
+            {
+                var confirm = MessageBox.Show(this,
+                    "Reset the current session's statistics?\n\n" +
+                    "This clears the session counters, peak CPS and the live charts. " +
+                    "Your lifetime totals and saved history are not affected.",
+                    "Reset session",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2);
+
+                if (confirm != DialogResult.Yes)
+                {
+                    return;
+                }
+            }
+
             _statistics.ResetAll();
             _cpsSparkline?.Clear();
             _distBar?.SetValues(0, 0, 0);
+            _goalReachedNotified = false;
             UpdateStatisticsTab();
+        }
+
+        private void OnSessionGoalChanged(object sender, EventArgs e)
+        {
+            if (_suppressGoalEvent)
+            {
+                return;
+            }
+
+            _settings.SessionGoalClicks = (long)_sessionGoalNum.Value;
+            _goalReachedNotified = false;
+            SettingsManager.Save(_settings);
+            UpdateGoalProgress();
+        }
+
+        /// <summary>Updates the session-goal progress bar and notifies once on reach.</summary>
+        private void UpdateGoalProgress()
+        {
+            if (_goalProgressBar == null || _goalProgressLabel == null)
+            {
+                return;
+            }
+
+            long goal = _settings.SessionGoalClicks;
+            long done = _statistics.SessionClicks;
+
+            if (goal <= 0)
+            {
+                _goalProgressBar.Value = 0;
+                _goalProgressLabel.Text = "off";
+                _goalProgressLabel.ForeColor = _theme.TextMuted;
+                return;
+            }
+
+            double frac = done / (double)goal;
+            int pct = (int)Math.Round(frac * 100);
+            if (pct < 0) pct = 0;
+            if (pct > 100) pct = 100;
+
+            _goalProgressBar.Value = pct;
+
+            bool reached = done >= goal;
+            _goalProgressLabel.ForeColor = reached ? _theme.Success : _theme.Text;
+
+            if (reached)
+            {
+                _goalProgressLabel.Text = pct + "%  ✓";
+            }
+            else
+            {
+                // Show an ETA at the current click rate while running.
+                double cps = _statistics.GetCurrentCps();
+                if (_engine.IsRunning && cps > 0.01)
+                {
+                    double etaSec = (goal - done) / cps;
+                    _goalProgressLabel.Text = $"{pct}%  •  ~{FormatDuration(TimeSpan.FromSeconds(etaSec))} left";
+                }
+                else
+                {
+                    _goalProgressLabel.Text = pct + "%";
+                }
+            }
+
+            if (reached && !_goalReachedNotified)
+            {
+                _goalReachedNotified = true;
+                _statusState.Text = Utils.Localization.T("Session goal reached");
+                if (_settings.ShowTrayNotifications && _trayIcon != null)
+                {
+                    _trayIcon.ShowBalloonTip(2500, "Tempo",
+                        $"Session goal reached: {goal:N0} clicks.", ToolTipIcon.Info);
+                }
+            }
         }
 
         /// <summary>Rebuilds the recent-sessions list from the history store.</summary>
@@ -365,24 +748,61 @@ namespace AutoClicker.UI
                 return;
             }
 
+            SyncProfileFilterItems();
+            string filter = _historyProfileFilter != null && _historyProfileFilter.SelectedIndex > 0
+                ? _historyProfileFilter.SelectedItem as string
+                : null;
+
             _sessionHistoryList.BeginUpdate();
             _sessionHistoryList.Items.Clear();
 
+            long shownCount = 0;
+            long shownClicks = 0;
+
+            string search = (_historySearchText ?? "").Trim();
+
             foreach (SessionRecord r in _history.Records)
             {
+                string profile = string.IsNullOrEmpty(r.Profile) ? "—" : r.Profile;
+                if (filter != null && !string.Equals(profile, filter, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 DateTime local = r.WhenUtc.ToLocalTime();
+
+                // Free-text search over date and profile.
+                if (search.Length > 0)
+                {
+                    string haystack = local.ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture) + " " + profile;
+                    if (haystack.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        continue;
+                    }
+                }
+
                 var item = new ListViewItem(local.ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture));
-                item.SubItems.Add(string.IsNullOrEmpty(r.Profile) ? "—" : r.Profile);
+                item.SubItems.Add(profile);
                 item.SubItems.Add(r.Clicks.ToString("N0"));
                 item.SubItems.Add(FormatDuration(TimeSpan.FromSeconds(r.DurationSeconds)));
                 item.SubItems.Add(r.AverageCps.ToString("0.0"));
                 item.SubItems.Add(r.PeakCps.ToString("0.0"));
                 item.Tag = r;
                 _sessionHistoryList.Items.Add(item);
+
+                shownCount++;
+                shownClicks += r.Clicks;
             }
 
             _sessionHistoryList.EndUpdate();
             ApplyThemeToSessionList();
+
+            if (_historySummaryLabel != null)
+            {
+                _historySummaryLabel.Text = shownCount == 0
+                    ? "No sessions to show."
+                    : $"{shownCount:N0} session(s) shown  •  {shownClicks:N0} clicks total";
+            }
 
             // Feed the recent-session bar chart (last 24, oldest → newest).
             if (_sessionBarChart != null)
@@ -398,6 +818,69 @@ namespace AutoClicker.UI
 
             // Feed the last-7-days chart.
             RefreshDailyChart();
+        }
+
+        /// <summary>Keeps the profile-filter dropdown in sync with the profiles in history.</summary>
+        private void SyncProfileFilterItems()
+        {
+            if (_historyProfileFilter == null)
+            {
+                return;
+            }
+
+            var profiles = new System.Collections.Generic.List<string>();
+            foreach (SessionRecord r in _history.Records)
+            {
+                string profile = string.IsNullOrEmpty(r.Profile) ? "—" : r.Profile;
+                if (!profiles.Contains(profile))
+                {
+                    profiles.Add(profile);
+                }
+            }
+            profiles.Sort(StringComparer.OrdinalIgnoreCase);
+
+            // Only rebuild if the set changed, to preserve the current selection.
+            bool changed = _historyProfileFilter.Items.Count != profiles.Count + 1;
+            if (!changed)
+            {
+                for (int i = 0; i < profiles.Count; i++)
+                {
+                    if (!string.Equals(_historyProfileFilter.Items[i + 1] as string, profiles[i], StringComparison.Ordinal))
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            string current = _historyProfileFilter.SelectedItem as string;
+            _suppressHistoryFilterEvent = true;
+            _historyProfileFilter.BeginUpdate();
+            _historyProfileFilter.Items.Clear();
+            _historyProfileFilter.Items.Add("All profiles");
+            foreach (string p in profiles)
+            {
+                _historyProfileFilter.Items.Add(p);
+            }
+
+            int idx = current != null ? _historyProfileFilter.Items.IndexOf(current) : 0;
+            _historyProfileFilter.SelectedIndex = idx >= 0 ? idx : 0;
+            _historyProfileFilter.EndUpdate();
+            _suppressHistoryFilterEvent = false;
+        }
+
+        private void OnHistoryFilterChanged(object sender, EventArgs e)
+        {
+            if (_suppressHistoryFilterEvent)
+            {
+                return;
+            }
+            RefreshSessionHistory();
         }
 
         /// <summary>Aggregates the history into clicks-per-day for the last 7 days.</summary>
@@ -430,16 +913,208 @@ namespace AutoClicker.UI
 
             var vals = new System.Collections.Generic.List<long>();
             var labels = new System.Collections.Generic.List<string>();
+            long weekTotal = 0;
+            long peakDay = 0;
             for (int i = 0; i < 7; i++)
             {
                 vals.Add(totals[i]);
+                weekTotal += totals[i];
+                if (totals[i] > peakDay) peakDay = totals[i];
                 DateTime d = today.AddDays(-(6 - i));
                 labels.Add(d.ToString("ddd", CultureInfo.CurrentCulture));
             }
             _dailyBarChart.SetValues(vals, labels);
+            _dailyBarChart.Title = weekTotal > 0
+                ? string.Format(Utils.Localization.T("Last 7 days · {0} clicks · peak {1}"), weekTotal.ToString("N0"), peakDay.ToString("N0"))
+                : "Clicks — last 7 days";
+            _dailyBarChart.Invalidate();
         }
 
         /// <summary>Sum of clicks from completed runs dated today, plus the live run.</summary>
+        /// <summary>Populates the Insights cards and the hour-of-day chart from history.</summary>
+        private void ComputeInsights(long lifetimeClicks, long lifetimeRuntimeSeconds)
+        {
+            DateTime now = DateTime.Now;
+            DateTime today = now.Date;
+            DateTime weekAgo = today.AddDays(-6); // rolling 7-day window incl. today
+
+            long weekClicks = 0, monthClicks = 0, yearClicks = 0;
+            var byDay = new System.Collections.Generic.Dictionary<DateTime, long>();
+            var byWeekday = new long[7];
+            var byHour = new long[24];
+            var byProfile = new System.Collections.Generic.Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (SessionRecord r in _history.Records)
+            {
+                DateTime local = r.WhenUtc.ToLocalTime();
+                DateTime day = local.Date;
+
+                if (day >= weekAgo) weekClicks += r.Clicks;
+                if (day.Year == now.Year && day.Month == now.Month) monthClicks += r.Clicks;
+                if (day.Year == now.Year) yearClicks += r.Clicks;
+
+                byDay.TryGetValue(day, out long dc);
+                byDay[day] = dc + r.Clicks;
+                byWeekday[(int)local.DayOfWeek] += r.Clicks;
+                byHour[local.Hour] += r.Clicks;
+
+                string prof = string.IsNullOrWhiteSpace(r.Profile) ? "(unnamed)" : r.Profile;
+                byProfile.TryGetValue(prof, out long pc);
+                byProfile[prof] = pc + r.Clicks;
+            }
+
+            if (_cardThisWeek != null) _cardThisWeek.Value = weekClicks.ToString("N0");
+            if (_cardThisMonth != null) _cardThisMonth.Value = monthClicks.ToString("N0");
+
+            // Lifetime average CPS = total clicks / total active seconds.
+            if (_cardLifeAvgCps != null)
+            {
+                _cardLifeAvgCps.Value = lifetimeRuntimeSeconds > 0
+                    ? ((double)lifetimeClicks / lifetimeRuntimeSeconds).ToString("0.0")
+                    : "0.0";
+            }
+
+            if (_cardActiveDays != null) _cardActiveDays.Value = byDay.Count.ToString("N0");
+
+            // Best single day.
+            if (_cardBestDay != null)
+            {
+                DateTime bestDay = default;
+                long bestDayClicks = -1;
+                foreach (var kv in byDay)
+                {
+                    if (kv.Value > bestDayClicks) { bestDayClicks = kv.Value; bestDay = kv.Key; }
+                }
+                _cardBestDay.Value = bestDayClicks <= 0
+                    ? "—"
+                    : $"{bestDayClicks:N0}";
+                _cardBestDay.Caption = bestDayClicks <= 0
+                    ? Utils.Localization.T("Best Day")
+                    : Utils.Localization.T("Best Day") + " · " + bestDay.ToString("d MMM", Utils.Localization.DateCulture);
+            }
+
+            // Busiest weekday.
+            if (_cardBusiestWeekday != null)
+            {
+                int bestWd = -1; long bestWdClicks = -1;
+                for (int i = 0; i < 7; i++)
+                    if (byWeekday[i] > bestWdClicks) { bestWdClicks = byWeekday[i]; bestWd = i; }
+                _cardBusiestWeekday.Value = bestWdClicks <= 0
+                    ? "—"
+                    : Utils.Localization.DateCulture.DateTimeFormat
+                        .GetAbbreviatedDayName((DayOfWeek)bestWd);
+            }
+
+            // Busiest hour.
+            if (_cardBusiestHour != null)
+            {
+                int bestHr = -1; long bestHrClicks = -1;
+                for (int i = 0; i < 24; i++)
+                    if (byHour[i] > bestHrClicks) { bestHrClicks = byHour[i]; bestHr = i; }
+                _cardBusiestHour.Value = bestHrClicks <= 0
+                    ? "—"
+                    : FormatHour(bestHr);
+            }
+
+            // Top profile by clicks.
+            if (_cardTopProfile != null)
+            {
+                string topProfile = "—"; long topClicks = -1;
+                foreach (var kv in byProfile)
+                    if (kv.Value > topClicks) { topClicks = kv.Value; topProfile = kv.Key; }
+                _cardTopProfile.Value = topClicks <= 0 ? "—" : topProfile;
+            }
+
+            // Hour-of-day chart (00..23).
+            if (_hourChart != null)
+            {
+                var vals = new System.Collections.Generic.List<long>(24);
+                var labels = new System.Collections.Generic.List<string>(24);
+                for (int i = 0; i < 24; i++)
+                {
+                    vals.Add(byHour[i]);
+                    labels.Add(i % 6 == 0 ? i.ToString("00") : "");
+                }
+                _hourChart.SetValues(vals, labels);
+            }
+
+            // Day-of-week chart (Sun..Sat), reusing the weekday tally.
+            if (_weekdayChart != null)
+            {
+                var vals = new System.Collections.Generic.List<long>(7);
+                var labels = new System.Collections.Generic.List<string>(7);
+                var dtf = Utils.Localization.DateCulture.DateTimeFormat;
+                for (int i = 0; i < 7; i++)
+                {
+                    vals.Add(byWeekday[i]);
+                    labels.Add(dtf.GetAbbreviatedDayName((DayOfWeek)i));
+                }
+                _weekdayChart.SetValues(vals, labels);
+            }
+
+            // This year.
+            if (_cardThisYear != null) _cardThisYear.Value = yearClicks.ToString("N0");
+
+            // Daily average across days that had any activity.
+            if (_cardDailyAvg != null)
+            {
+                long totalRecorded = 0;
+                foreach (var kv in byDay) totalRecorded += kv.Value;
+                _cardDailyAvg.Value = byDay.Count > 0
+                    ? (totalRecorded / (double)byDay.Count).ToString("N0")
+                    : "0";
+            }
+
+            // Streaks: current run of consecutive active days ending today or
+            // yesterday, plus the longest such run ever recorded.
+            if (_cardStreak != null || _cardLongestStreak != null)
+            {
+                int current = 0, longest = 0;
+                if (byDay.Count > 0)
+                {
+                    // Current streak.
+                    DateTime cursor = today;
+                    if (!byDay.ContainsKey(cursor)) cursor = today.AddDays(-1);
+                    while (byDay.ContainsKey(cursor))
+                    {
+                        current++;
+                        cursor = cursor.AddDays(-1);
+                    }
+
+                    // Longest streak over the full set of active days.
+                    var days = new System.Collections.Generic.List<DateTime>(byDay.Keys);
+                    days.Sort();
+                    int run = 1;
+                    longest = 1;
+                    for (int i = 1; i < days.Count; i++)
+                    {
+                        run = (days[i] - days[i - 1]).Days == 1 ? run + 1 : 1;
+                        if (run > longest) longest = run;
+                    }
+                }
+
+                if (_cardStreak != null)
+                {
+                    _cardStreak.Value = current.ToString("N0");
+                    _cardStreak.Caption = Utils.Localization.T("Current Streak") + " · " + current + " " +
+                        Utils.Localization.T(current == 1 ? "day" : "days");
+                }
+                if (_cardLongestStreak != null)
+                {
+                    _cardLongestStreak.Value = longest.ToString("N0");
+                    _cardLongestStreak.Caption = Utils.Localization.T("Longest Streak") + " · " + longest + " " +
+                        Utils.Localization.T(longest == 1 ? "day" : "days");
+                }
+            }
+        }
+
+        private static string FormatHour(int hour24)
+        {
+            if (hour24 == 0) return "12 AM";
+            if (hour24 == 12) return "12 PM";
+            return hour24 < 12 ? hour24 + " AM" : (hour24 - 12) + " PM";
+        }
+
         private long ComputeTodayClicks()
         {
             DateTime today = DateTime.Now.Date;
@@ -564,6 +1239,39 @@ namespace AutoClicker.UI
             _sessionHistoryList.ForeColor = _theme.Text;
         }
 
+        private void OnCopyStatsSummary(object sender, EventArgs e)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("Tempo — statistics summary");
+            sb.AppendLine("Session clicks : " + _statistics.SessionClicks.ToString("N0"));
+            sb.AppendLine("Total clicks   : " + _statistics.TotalClicks.ToString("N0"));
+            sb.AppendLine("Current CPS    : " + _displayCps.ToString("0.0"));
+            sb.AppendLine("Peak CPS       : " + _statistics.PeakClicksPerSecond.ToString("0.0"));
+            sb.AppendLine("Average CPS    : " + _statistics.GetAverageCps().ToString("0.0"));
+            sb.AppendLine("Elapsed        : " + FormatDuration(_statistics.GetElapsed()));
+            sb.AppendLine("Sessions logged: " + _history.Records.Count.ToString("N0"));
+            if (_cardThisWeek != null) sb.AppendLine("This week      : " + _cardThisWeek.Value);
+            if (_cardThisMonth != null) sb.AppendLine("This month     : " + _cardThisMonth.Value);
+            if (_cardThisYear != null) sb.AppendLine("This year      : " + _cardThisYear.Value);
+            if (_cardDailyAvg != null) sb.AppendLine("Daily average  : " + _cardDailyAvg.Value);
+            if (_cardStreak != null) sb.AppendLine("Current streak : " + _cardStreak.Value + " day(s)");
+            if (_cardLongestStreak != null) sb.AppendLine("Longest streak : " + _cardLongestStreak.Value + " day(s)");
+            if (_cardBusiestHour != null) sb.AppendLine("Busiest hour   : " + _cardBusiestHour.Value);
+            if (_cardTopProfile != null) sb.AppendLine("Top profile    : " + _cardTopProfile.Value);
+            if (_milestoneLabel != null && !string.IsNullOrEmpty(_milestoneLabel.Text))
+                sb.AppendLine("Milestone      : " + _milestoneLabel.Text);
+
+            try
+            {
+                Clipboard.SetText(sb.ToString());
+                ShowInfo("Statistics summary copied to the clipboard.");
+            }
+            catch
+            {
+                ShowWarning("Couldn't copy to the clipboard — it may be in use by another app.");
+            }
+        }
+
         private void OnClearHistory(object sender, EventArgs e)
         {
             if (_history.Records.Count == 0)
@@ -616,6 +1324,18 @@ namespace AutoClicker.UI
                     sb.AppendLine($"Total runtime (s),{_settings.LifetimeRuntimeSeconds}");
                     sb.AppendLine($"Most clicks per run,{_settings.LifetimeMostClicksRun}");
                     sb.AppendLine($"Longest run (s),{_settings.LifetimeLongestRunSeconds}");
+
+                    // Insights (mirrors the cards on the dashboard).
+                    if (_cardThisWeek != null) sb.AppendLine($"This week,{_cardThisWeek.Value}");
+                    if (_cardThisMonth != null) sb.AppendLine($"This month,{_cardThisMonth.Value}");
+                    if (_cardThisYear != null) sb.AppendLine($"This year,{_cardThisYear.Value}");
+                    if (_cardActiveDays != null) sb.AppendLine($"Active days,{_cardActiveDays.Value}");
+                    if (_cardDailyAvg != null) sb.AppendLine($"Daily average,{_cardDailyAvg.Value}");
+                    if (_cardStreak != null) sb.AppendLine($"Current streak (days),{_cardStreak.Value}");
+                    if (_cardLongestStreak != null) sb.AppendLine($"Longest streak (days),{_cardLongestStreak.Value}");
+                    if (_cardBusiestWeekday != null) sb.AppendLine($"Busiest weekday,{_cardBusiestWeekday.Value}");
+                    if (_cardBusiestHour != null) sb.AppendLine($"Busiest hour,{_cardBusiestHour.Value}");
+                    if (_cardTopProfile != null) sb.AppendLine($"Top profile,{(_cardTopProfile.Value ?? "").Replace(",", " ")}");
                     sb.AppendLine();
 
                     // Session history block.

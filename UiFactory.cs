@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using AutoClicker.Utils;
 
 namespace AutoClicker.UI
 {
@@ -18,6 +19,7 @@ namespace AutoClicker.UI
 
         public static Label Label(string text, int x, int y, FontStyle style = FontStyle.Regular, float size = 9f)
         {
+            text = Localization.T(text);
             return new Label
             {
                 Text = text,
@@ -78,6 +80,7 @@ namespace AutoClicker.UI
 
         public static CheckBox Check(string text, int x, int y, bool isChecked = false)
         {
+            text = Localization.T(text);
             return new CheckBox
             {
                 Text = text,
@@ -92,6 +95,7 @@ namespace AutoClicker.UI
 
         public static RadioButton Radio(string text, int x, int y, bool isChecked = false)
         {
+            text = Localization.T(text);
             return new RadioButton
             {
                 Text = text,
@@ -106,7 +110,8 @@ namespace AutoClicker.UI
 
         public static Button Button(string text, int x, int y, int width, int height)
         {
-            var b = new Button
+            text = Localization.T(text);
+            var b = new RoundedButton
             {
                 Text = text,
                 Left = x,
@@ -134,15 +139,18 @@ namespace AutoClicker.UI
 
         public static GroupBox Group(string title, int x, int y, int width, int height)
         {
-            return new GroupBox
+            // Escape ampersands so they don't render as a mnemonic (which would
+            // hide the '&' and underline/eat the next character in the caption).
+            // CardGroupBox undoes this when it custom-draws the title.
+            title = Localization.T(title).Replace("&", "&&");
+            return new CardGroupBox
             {
                 Text = title,
                 Left = x,
                 Top = y,
                 Width = width,
                 Height = height,
-                Font = BoldFont,
-                BackColor = Color.Transparent
+                Font = BoldFont
             };
         }
 

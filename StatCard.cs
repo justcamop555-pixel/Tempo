@@ -60,19 +60,47 @@ namespace AutoClicker.UI
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-            var rect = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (var path = Rounded(rect, 10))
-            using (var fill = new SolidBrush(CardColor))
+            if (Width < 8 || Height < 10)
             {
-                g.FillPath(fill, path);
+                return;
             }
 
+            // Reserve a few pixels at the bottom/right for a soft drop shadow.
+            var card = new Rectangle(1, 1, Width - 4, Height - 6);
+            const int radius = 12;
+
+            // 1) Soft drop shadow for depth.
+            using (var shadowPath = Rounded(new Rectangle(card.Left + 1, card.Top + 4, card.Width, card.Height), radius))
+            using (var sh = new SolidBrush(Color.FromArgb(38, 0, 0, 0)))
+            {
+                g.FillPath(sh, shadowPath);
+            }
+
+            // 2) Card surface with a gentle top-to-bottom gradient.
+            using (var path = Rounded(card, radius))
+            {
+                using (var fill = new LinearGradientBrush(
+                           new Rectangle(card.Left, card.Top, card.Width, card.Height),
+                           Lighten(CardColor, 0.06), CardColor, LinearGradientMode.Vertical))
+                {
+                    g.FillPath(fill, path);
+                }
+
+                // Hairline edge highlight (subtle on dark themes, invisible on light).
+                using (var border = new Pen(Lighten(CardColor, 0.10)))
+                {
+                    g.DrawPath(border, path);
+                }
+            }
+
+            // 3) Rounded accent pill, with a little horizontal gradient.
             if (ShowAccent)
             {
-                // A short accent bar in the top-left corner.
-                using (var accent = new SolidBrush(AccentBar))
+                var accentRect = new Rectangle(card.Left + 13, card.Top + 14, 26, 4);
+                using (var ap = Rounded(accentRect, 2))
+                using (var ag = new LinearGradientBrush(accentRect, AccentBar, Lighten(AccentBar, 0.22), LinearGradientMode.Horizontal))
                 {
-                    g.FillRectangle(accent, 14, 14, 26, 3);
+                    g.FillPath(ag, ap);
                 }
             }
 
@@ -86,21 +114,28 @@ namespace AutoClicker.UI
             using (var valFont = new Font("Segoe UI", 18f, FontStyle.Bold))
             {
                 g.DrawString(_value, valFont, valBrush, 12, 40);
-            }
 
-            if (!string.IsNullOrEmpty(_sub))
-            {
-                using (var subBrush = new SolidBrush(CaptionColor))
-                using (var subFont = new Font("Segoe UI", 8f, FontStyle.Regular))
+                if (!string.IsNullOrEmpty(_sub))
                 {
-                    SizeF valSize;
-                    using (var valFont = new Font("Segoe UI", 18f, FontStyle.Bold))
+                    SizeF valSize = g.MeasureString(_value, valFont);
+                    using (var subBrush = new SolidBrush(CaptionColor))
+                    using (var subFont = new Font("Segoe UI", 8f, FontStyle.Regular))
                     {
-                        valSize = g.MeasureString(_value, valFont);
+                        g.DrawString(_sub, subFont, subBrush, 14 + valSize.Width, 54);
                     }
-                    g.DrawString(_sub, subFont, subBrush, 14 + valSize.Width, 54);
                 }
             }
+        }
+
+        private static Color Lighten(Color c, double f)
+        {
+            int r = (int)Math.Round(c.R + (255 - c.R) * f);
+            int g = (int)Math.Round(c.G + (255 - c.G) * f);
+            int b = (int)Math.Round(c.B + (255 - c.B) * f);
+            return Color.FromArgb(c.A,
+                Math.Min(255, Math.Max(0, r)),
+                Math.Min(255, Math.Max(0, g)),
+                Math.Min(255, Math.Max(0, b)));
         }
 
         private static GraphicsPath Rounded(Rectangle r, int radius)

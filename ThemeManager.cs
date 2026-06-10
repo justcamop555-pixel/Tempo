@@ -85,6 +85,10 @@ namespace AutoClicker.UI
                     label.BackColor = Color.Transparent;
                     break;
 
+                case CardGroupBox card:
+                    card.ApplyTheme(theme);
+                    break;
+
                 case GroupBox group:
                     group.ForeColor = theme.TextMuted;
                     group.BackColor = Color.Transparent;
@@ -93,6 +97,10 @@ namespace AutoClicker.UI
                 case TabControl tab:
                     tab.BackColor = theme.Background;
                     tab.ForeColor = theme.Text;
+                    break;
+
+                case BackdropTabPage backdrop:
+                    backdrop.ApplyTheme(theme);
                     break;
 
                 case TabPage page:
