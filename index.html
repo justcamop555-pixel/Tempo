@@ -235,6 +235,53 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
 .status-strip .right{border:none;padding-right:0}
 @media(max-width:600px){.status-strip .hide-s{display:none}}
 
+/* Clicker demo panel (mimics the app's status area) */
+.demo .word{
+  font-family:var(--disp);font-weight:800;font-size:44px;letter-spacing:.02em;
+  color:var(--muted);padding-left:14px;line-height:1;
+}
+.demo .word.run{color:var(--teal)}
+.demo .hint{
+  font-family:var(--mono);font-size:12.5px;color:var(--muted);
+  padding:10px 14px;margin:16px 0 18px;border:1px solid var(--line);
+  border-radius:9px;background:#10131e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.demo .row{display:flex;gap:12px;padding-left:14px}
+.demo .dbtn{
+  font-family:var(--disp);font-weight:600;font-size:15px;border:none;border-radius:10px;
+  padding:12px 26px;cursor:pointer;transition:transform .08s ease;
+}
+.demo .dbtn:active{transform:scale(.97)}
+.demo .dbtn.start{background:var(--teal);color:#08251b}
+.demo .dbtn.start.pause{background:var(--amber);color:#3a2a08}
+.demo .dbtn.stop{background:var(--panel-2);color:var(--text);border:1px solid var(--line)}
+.demo .foot{padding:14px 14px 0;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+
+/* Latest-release card (filled live from the GitHub API) */
+.rel{margin-top:26px;display:none}
+.rel.show{display:block}
+.rel .rel-head{
+  display:flex;justify-content:space-between;align-items:baseline;
+  padding-left:14px;margin-bottom:10px;flex-wrap:wrap;gap:8px;
+}
+.rel .rel-head b{font-family:var(--mono);font-size:18px;color:var(--violet)}
+.rel .rel-head span{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.rel table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px}
+.rel td{padding:9px 12px;border-top:1px solid rgba(38,44,66,.5)}
+.rel td:last-child,.rel td:nth-child(2){text-align:right;color:var(--muted);white-space:nowrap}
+.rel a{color:var(--text)}
+.rel a:hover{color:var(--violet)}
+
+/* "New version since your last visit" toast */
+.upd{
+  position:fixed;left:50%;transform:translateX(-50%);bottom:46px;z-index:70;
+  background:var(--panel-2);border:1px solid var(--violet);border-radius:99px;
+  padding:9px 18px;font-family:var(--mono);font-size:12.5px;color:var(--text);
+  display:none;box-shadow:0 8px 28px rgba(0,0,0,.45);
+}
+.upd.show{display:block}
+.upd b{color:var(--teal)}
+
 /* Reveal on scroll */
 .rv{opacity:0;transform:translateY(14px);transition:opacity .5s ease,transform .5s ease}
 .rv.in{opacity:1;transform:none}
@@ -255,6 +302,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
     </a>
     <nav class="nav-links">
       <a href="#features">Features</a>
+      <a href="#clicker">Clicker</a>
       <a href="#macros">Macros</a>
       <a href="#trust">Privacy</a>
       <a href="#install">Install</a>
@@ -276,7 +324,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
         <a class="btn btn-ghost" href="https://github.com/justcamop555-pixel/Tempo/releases" target="_blank" rel="noopener">All releases</a>
       </div>
       <div class="meta-row">
-        <span>Windows 10 / 11</span><span>free &amp; open releases</span><span>portable or installed</span><span id="ver">v1.0.121</span>
+        <span>Windows 10 / 11</span><span>free &amp; open releases</span><span>portable or installed</span><span id="ver">v1.0.122</span><span id="relDate" style="display:none"></span>
       </div>
     </div>
 
@@ -315,6 +363,35 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
           <p>Bind start/stop, pause, emergency stop, record, play and more to any key or mouse button — they work even while Tempo sits in the tray. Conflicts are flagged live.</p></div>
         <div class="card feature t-amber rv"><h3>Yours to theme</h3><div class="stat">38 themes</div>
           <p>Thirty-eight color themes, six languages, custom accent colors and optional animated GIF backdrops — plus a just-for-fun rainbow cursor trail.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Clicker band ─────────────────────────────────────────────────── -->
+  <section id="clicker">
+    <div class="wrap split">
+      <div class="card demo rv">
+        <h3>Clicker</h3>
+        <div class="word" id="dWord">IDLE</div>
+        <div class="hint" id="dHint">Interval &middot; 100 CPS &middot; Left &middot; &times;500 &middot; <b style="color:var(--text)">F6</b> to start</div>
+        <div class="row">
+          <button class="dbtn start" id="dStart" type="button">&#9654;&nbsp; Start</button>
+          <button class="dbtn stop" id="dStop" type="button">&#9632;&nbsp; Stop</button>
+        </div>
+        <div class="foot">Live demo of the app's status panel &mdash; the real one shows clicks, CPS and time too.</div>
+      </div>
+      <div>
+        <div class="eyebrow rv">The clicker itself</div>
+        <h2 class="rv">Every control, already built in.</h2>
+        <p class="section-lede rv" style="margin-bottom:0">This is the shipping feature set of the Clicker tab &mdash; nothing here is planned, it all exists today.</p>
+        <ul>
+          <li class="rv"><b>Three modes</b> &mdash; interval, hold&#8209;to&#8209;click (clicks only while you hold the key) and burst, with single / double / triple clicks and a per&#8209;click hold time.</li>
+          <li class="rv"><b>Repeat your way</b> &mdash; until stopped, a fixed count, or for a duration with a live "s left" countdown &mdash; plus an optional chime + tray notice when a fixed run finishes by itself.</li>
+          <li class="rv"><b>Anywhere on screen</b> &mdash; click at the cursor, a fixed point, or a multi&#8209;point list; restore the cursor when stopped.</li>
+          <li class="rv"><b>Human, if you want</b> &mdash; position jitter, interval randomization and a one&#8209;click Humanize preset.</li>
+          <li class="rv"><b>2,000 CPS ceiling</b> &mdash; sub&#8209;millisecond intervals above 1,000, a clicks&#8209;per&#8209;minute readout, and Anti&#8209;Freeze protection that throttles before your PC chokes.</li>
+          <li class="rv"><b>Profiles &amp; safety</b> &mdash; save and duplicate full setups, start&#8209;delay countdown, pause/resume, and a global emergency stop.</li>
+        </ul>
       </div>
     </div>
   </section>
@@ -386,8 +463,13 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
         </div>
       </div>
       <p class="note rv"><b>Windows may show "Unknown publisher."</b> That's because the app isn't code-signed — click <i>More info → Run anyway</i>. It's safe, and the SHA-256 checksum on each release lets you verify the file yourself.</p>
+      <div class="card rel rv" id="relCard">
+        <h3>Latest release</h3>
+        <div class="rel-head"><b id="relTag">&mdash;</b><span id="relMeta"></span></div>
+        <table><tbody id="relAssets"></tbody></table>
+      </div>
       <div class="cta-row rv" style="margin-top:26px">
-        <a class="btn btn-primary" href="https://github.com/justcamop555-pixel/Tempo/releases/latest" target="_blank" rel="noopener">Download the latest release</a>
+        <a class="btn btn-primary" id="dlBtn" href="https://github.com/justcamop555-pixel/Tempo/releases/latest" target="_blank" rel="noopener">Download the latest release</a>
       </div>
     </div>
   </section>
@@ -422,6 +504,8 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
     </div>
   </div>
 </footer>
+
+<div class="upd" id="updToast"></div>
 
 <!-- ── The app's status bar, repurposed as scroll feedback ───────────── -->
 <div class="status-strip" aria-hidden="true">
@@ -494,6 +578,95 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
     mid.innerHTML=label;
   }
   window.addEventListener('scroll',update,{passive:true});update();
+})();
+
+/* ── Clicker demo panel ───────────────────────────────────────────────── */
+(function(){
+  var w=document.getElementById('dWord'),h=document.getElementById('dHint'),
+      st=document.getElementById('dStart'),sp=document.getElementById('dStop');
+  if(!w)return;
+  var state='idle';
+  function render(){
+    if(state==='run'){
+      w.textContent='RUNNING';w.classList.add('run');
+      h.innerHTML='Clicking &middot; 100 CPS &middot; 412 s left &mdash; <b style="color:var(--text)">F6</b> to stop';
+      st.innerHTML='&#10073;&#10073;&nbsp; Pause';st.classList.add('pause');
+    }else if(state==='pause'){
+      w.textContent='PAUSED';w.classList.remove('run');
+      h.innerHTML='Paused &mdash; <b style="color:var(--text)">F6</b> to resume';
+      st.innerHTML='&#9654;&nbsp; Resume';st.classList.remove('pause');
+    }else{
+      w.textContent='IDLE';w.classList.remove('run');
+      h.innerHTML='Interval &middot; 100 CPS &middot; Left &middot; &times;500 &middot; <b style="color:var(--text)">F6</b> to start';
+      st.innerHTML='&#9654;&nbsp; Start';st.classList.remove('pause');
+    }
+  }
+  st.addEventListener('click',function(){state=state==='run'?'pause':'run';render();});
+  sp.addEventListener('click',function(){state='idle';render();});
+  render();
+})();
+
+/* ── Live release detection (GitHub API) ──────────────────────────────── */
+(function(){
+  var API='https://api.github.com/repos/justcamop555-pixel/Tempo/releases/latest';
+  function fmtMB(b){return (b/1048576).toFixed(1)+' MB';}
+  function fmtDate(iso){
+    try{return new Date(iso).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'});}
+    catch(e){return '';}
+  }
+  function apply(r){
+    if(!r||!r.tag_name)return;
+    var tag=r.tag_name.charAt(0)==='v'?r.tag_name:'v'+r.tag_name;
+    var ver=document.getElementById('ver');
+    if(ver)ver.textContent=tag+(r.published_at?' \u00b7 '+fmtDate(r.published_at):'');
+    /* release card */
+    var card=document.getElementById('relCard'),tagEl=document.getElementById('relTag'),
+        meta=document.getElementById('relMeta'),tb=document.getElementById('relAssets');
+    var assets=(r.assets||[]).filter(function(a){return a&&a.browser_download_url;});
+    if(card&&tagEl&&tb){
+      tagEl.textContent='Tempo '+tag;
+      var dls=0;assets.forEach(function(a){dls+=(a.download_count||0);});
+      if(meta)meta.textContent=(r.published_at?fmtDate(r.published_at):'')+(dls?' \u00b7 '+dls.toLocaleString()+' downloads':'');
+      var rows='';
+      assets.forEach(function(a){
+        rows+='<tr><td><a href="'+a.browser_download_url+'">'+a.name+'</a></td>'+
+              '<td>'+fmtMB(a.size||0)+'</td><td>'+(a.download_count||0).toLocaleString()+' dl</td></tr>';
+      });
+      if(rows){tb.innerHTML=rows;card.classList.add('show');}
+    }
+    /* point the big buttons straight at the setup zip when present */
+    var setup=null;
+    assets.forEach(function(a){if(!setup&&/setup.*\.zip$/i.test(a.name))setup=a;});
+    if(setup){
+      var dl=document.getElementById('dlBtn');
+      if(dl)dl.href=setup.browser_download_url;
+    }
+    /* returning visitors: tell them it changed since last time */
+    try{
+      var seen=localStorage.getItem('tempoSeenVer');
+      if(seen&&seen!==tag){
+        var t=document.getElementById('updToast');
+        if(t){
+          t.innerHTML='Updated since your last visit: <b>'+tag+
+            '</b> &nbsp;<a href="'+(r.html_url||'#')+'" target="_blank" rel="noopener">see what\u2019s new \u2197</a>';
+          t.classList.add('show');
+          setTimeout(function(){t.classList.remove('show');},9000);
+        }
+      }
+      localStorage.setItem('tempoSeenVer',tag);
+    }catch(e){}
+  }
+  try{
+    var cached=sessionStorage.getItem('tempoRel');
+    if(cached){apply(JSON.parse(cached));return;}
+  }catch(e){}
+  fetch(API,{headers:{'Accept':'application/vnd.github+json'}})
+    .then(function(res){if(!res.ok)throw 0;return res.json();})
+    .then(function(r){
+      try{sessionStorage.setItem('tempoRel',JSON.stringify(r));}catch(e){}
+      apply(r);
+    })
+    .catch(function(){/* offline or rate-limited: static fallbacks stand */});
 })();
 </script>
 </body>
