@@ -1,434 +1,98 @@
-<p align="center">
-  <img width="200" height="200" alt="Tempo logo" src="https://github.com/user-attachments/assets/471bd647-9993-40fc-8930-8beb925518d6" />
-</p>
+# ⚡ Tempo
 
-# Tempo
+**A fast, precise auto-clicker for Windows — up to 2,000 clicks per second, multi-point patterns, a full macro recorder and statistics that remember every click. Free, no account, runs entirely on your PC.**
 
-[Changelog](CHANGELOG.md) · [Releases](https://github.com/justcamop555-pixel/Tempo/releases)
+[![Latest release](https://img.shields.io/github/v/release/justcamop555-pixel/Tempo?label=latest&color=8b6cf2)](https://github.com/justcamop555-pixel/Tempo/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/justcamop555-pixel/Tempo/total?color=3fd9a4)](https://github.com/justcamop555-pixel/Tempo/releases)
+![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078d4)
 
-A fast, modern, **free** Windows mouse auto-clicker built with C# and Windows
-Forms (**.NET 8**). It goes well beyond a basic clicker, while staying lightweight
-and easy to use.
-
-**Highlights**
-
-- **Clicker** — interval, hold-to-click, and burst modes; left/right/middle button;
-  single/double/triple clicks; fixed point or follow-cursor; per-click hold time;
-  repeat by count or duration with live estimates; randomization to vary timing.
-- **Multi-Point** — click a sequence of points (sequential, reverse, random, or
-  ping-pong) with per-point button, click style, dwell, and repeat.
-- **Macros** — record and replay mouse/keyboard actions; loop, speed control,
-  favorites, notes, search, and per-macro export/import.
-- **Statistics** — a live dashboard with lifetime totals, records, insights
-  (streaks, busiest day/hour, top profile), charts, a session goal, searchable
-  history, and CSV export.
-- **Hotkeys** — fully rebindable global shortcuts using keyboard **and** mouse
-  buttons, with live conflict detection.
-- **Make it yours** — **38 built-in themes**, a custom accent colour, optional
-  animated GIF backdrops (header and footer), **four languages** (English, Spanish,
-  French, German), system-tray presence, and launch-at-startup.
-- **Dependable** — anti-freeze protection, crash-safe saves, in-app update checking
-  with a one-click installer, and built-in bug/crash reporting.
-
-> **Use responsibly.** Auto-clicking may violate the terms of service of some
-> games and applications. You are responsible for how you use this tool.
+🌐 **Website:** https://justcamop555-pixel.github.io/Tempo/ — it always shows the newest version, file sizes and download links automatically.
 
 ---
 
-## ⚠️ Only download Tempo from the official source
+## ✨ What's inside
 
-**The only official place to get Tempo is this GitHub repository:**
-
-### → <https://github.com/justcamop555-pixel/Tempo/releases>
-
-Always download `Tempo.exe` from the **Releases** page above. That is the single
-official source. **Do not download Tempo from anywhere else.**
-
-Copies offered on other websites — "free download" portals, software mirrors,
-ad links, search-result downloads, file-sharing sites, YouTube descriptions,
-Discord messages, or anyone claiming to share "Tempo" — are **not official** and
-**may be modified to contain malware, spyware, or miners.** If you didn't get it
-from the link above, don't trust it.
-
-**How to stay safe:**
-
-- Get every release **only** from the official Releases page (or via the app's
-  built-in updater, which only ever connects to this same GitHub repository).
-- Tempo is **free**. Nobody should ever charge you for it, ask for your password,
-  payment details, or personal information, or tell you to disable your
-  antivirus. If something does, it isn't the real Tempo.
-- Tempo only connects to the internet for **one** thing: checking GitHub for a
-  newer version. It does not collect or send your data anywhere.
-- A **"Windows protected your PC" / "Unknown publisher"** prompt on the official
-  build is normal (it isn't code-signed) — click **More info → Run anyway**. This
-  is *not* the same as downloading from an untrusted source; it appears even on
-  the genuine file. When in doubt, re-download from the official link above.
-- If you find Tempo being distributed somewhere else, treat it as untrusted and
-  don't run it.
+| | |
+|---|---|
+| **Clicker** | Interval, hold-to-click and burst modes · single/double/triple clicks · repeat until stopped, a fixed count, or for a duration (with a live countdown and an optional finish chime) · up to **2,000 CPS** with sub-millisecond timing above 1,000 |
+| **Positions** | Click at the cursor, a fixed point, or a **multi-point list** (sequence, reverse, ping-pong or random) · restore the cursor when stopped |
+| **Human touch** | Position jitter, interval randomization and a one-click **Humanize** preset |
+| **Macros** | Record mouse + keyboard, edit steps, play at 0.1–10× with loops and drift-free timing · Live Monitor highlights each step · export / import / merge |
+| **Statistics** | Live dashboard, lifetime records, busiest hours/weekdays, sortable session history, milestones, CSV export — all stored locally |
+| **Hotkeys** | Global keybinds for everything, working even from the tray · live conflict highlighting |
+| **Safety** | Anti-Freeze protection · emergency stop · start-delay countdown · **tray sleep** (a hidden, idle Tempo pauses its hotkeys so it can't surprise you later) |
+| **Yours** | 38 themes · 6 languages · custom accent colors · optional GIF backdrops · profiles for full setups |
 
 ---
 
-## Requirements
+## 📥 Download & install
 
-- **Windows 10 (version 1607 or later) or Windows 11**, 64-bit.
-  **Windows 7 and Windows 8.1 are not supported** — Tempo runs on .NET 8, which
-  itself requires Windows 10 or newer, so it will not run on those older versions.
-- **.NET 8 Desktop Runtime** to run a published build, or the **.NET 8 SDK** to
-  build from source — <https://dotnet.microsoft.com/download/dotnet/8.0>
-- Visual Studio 2022 (any edition) is recommended, but not required.
+Grab the **[latest release](https://github.com/justcamop555-pixel/Tempo/releases/latest)**. Two ways in:
 
-This is a Windows-only application because it relies on the Win32 input APIs
-(`SendInput`, `RegisterHotKey`, low-level mouse/keyboard hooks). It will not
-build or run on macOS or Linux.
+**Installer (recommended)**
+1. Download `Tempo-Setup-<version>.zip` and unzip it.
+2. Run `install.cmd` — no administrator rights needed.
+3. Launch Tempo from the Start Menu. Uninstall any time from *Settings → Apps* (or `uninstall.cmd`).
 
-> **First run:** Tempo checks the host on startup. If a requirement is missing
-> (for example the .NET 8 Desktop Runtime, or an unsupported Windows version) it
-> shows a clear message telling you what to install **manually** and offers to
-> open the download page, instead of failing with a cryptic error. A
-> **self-contained** build (see below) bundles the runtime, so nothing extra
-> needs installing at all.
+**Portable**
+1. Download the single `Tempo.exe`, put it anywhere, run it. That's the whole install.
 
----
+> **"Unknown publisher" warning?** That's because the app isn't code-signed — click **More info → Run anyway**. It's safe, and you can verify the download yourself:
+> ```
+> certutil -hashfile Tempo.exe SHA256
+> ```
+> Compare the output with the `Tempo.exe.sha256` file attached to the release.
 
-## Building & running
-
-### Option A — Visual Studio 2022
-
-1. Open `AutoClicker.csproj` (or the folder) in Visual Studio 2022.
-2. Build configuration `Debug` or `Release`, platform `Any CPU` (or x64/x86).
-3. Press **F5** to build and run.
-
-### Option B — Command line
-
-From the project folder:
-
-```bash
-dotnet run -c Release
-```
-
-To produce a **self-contained single executable** (recommended for sharing —
-end users do **not** need to install .NET):
-
-```bash
-dotnet publish -c Release -r win-x64 -p:SelfContained=true ^
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-```
-
-Or simply run the bundled helper script from the project folder:
-
-```bat
-publish.cmd            REM win-x64 (default)
-publish.cmd win-x86    REM 32-bit
-publish.cmd win-arm64  REM ARM64
-```
-
-The script checks that the .NET SDK is installed, builds a compressed,
-**ReadyToRun** single file (faster startup) with debug symbols stripped, prints
-the final size, and offers to open the output folder when it finishes.
-
-In Visual Studio you can instead right-click the project → **Publish** and pick
-the included **win-x64-selfcontained** profile.
-
-The resulting single `Tempo.exe` is placed under `bin\publish\win-x64\`. It
-bundles the .NET 8 runtime, so it runs on a clean Windows machine with nothing
-else installed. (The publish-time settings only apply when a runtime identifier
-is given, so ordinary Debug/Release builds are unaffected and stay
-framework-dependent.)
-
-A framework-dependent build (no `-r`/`SelfContained`) is smaller but requires
-the .NET 8 Desktop Runtime on the target machine; if it's missing, Tempo's
-startup check explains how to install it manually.
+**Requirements:** Windows 10 (1607+) or Windows 11, 64-bit. .NET is bundled — nothing else to install.
 
 ---
 
-## Feature overview
+## ⌨️ Default hotkeys
 
-### Clicker tab
-- **Profiles** — create, save, duplicate, rename and delete named
-  configurations. The last used profile is restored on launch.
-- **Interval** — set the delay between clicks in hours / minutes / seconds /
-  milliseconds (minimum 1 ms). A live hint shows the resulting click rate, and
-  editing the interval while running applies it immediately.
-- **Manual speed slider** — drag (or use ±) to set 1–100 clicks/sec; stays in
-  sync with the interval fields.
-- **Button & type** — left / right / middle button, single / double / triple
-  click.
-- **Modes**
-  - *Interval* — repeats on a drift-compensated timer.
-  - *Hold* — clicks only while the start/stop key is physically held down.
-  - *Burst* — fires N clicks, pauses, repeats.
-- **Position**
-  - *Current cursor position* — clicks wherever the pointer is.
-  - *Fixed position* — clicks a single captured coordinate.
-  - *Multi-point* — cycles through a list of points (see the Multi-Point tab).
-  - *Restore cursor when stopped* — for Fixed / Multi-Point modes, return the
-    pointer to where it was before the run started.
-- **Repeat** — run until stopped, stop after a fixed number of clicks, or run
-  for a set duration (seconds), after which clicking stops automatically.
-- **Randomization** — add ± jitter to the interval (ms) and/or the click
-  position (px) to avoid a perfectly regular pattern.
-- **Anti-freeze protection** — caps the maximum clicks/second and adaptively
-  throttles when CPU load is high, so the machine stays responsive. The live
-  measured CPU% and effective rate are shown.
+| Key | Action |
+|---|---|
+| `F6` | Start / Stop clicking |
+| `F9` | Pause / Resume |
+| `F7` | Pick a position on screen |
+| `F8` | Emergency stop (stops clicking, playback and recording) |
 
-### Multi-Point tab
-Build an ordered list of click points. Each point has its own label, X/Y,
-button, click type, dwell time, per-point repeat count and enabled flag.
-- **Quick Capture** grabs coordinates from a full-screen overlay — and keeps
-  capturing point after point until you press **Esc**.
-- **Tick a row** to enable/disable that point; **Delete** removes the selected
-  point and **Ctrl+D** duplicates it.
-- **Traversal order**: Sequential, Reverse, Random or Ping-Pong.
-- **Show on screen** flashes numbered markers at every point.
-- The currently-clicked point is highlighted live during a run.
-
-### Macros tab
-- **Record** real mouse movements, clicks and key presses, preserving the
-  original timing. Append new recordings onto an existing macro.
-- **Play back** with per-macro defaults: loop count (0 = infinite), speed
-  multiplier (0.1×–10×), pre-play countdown, and a delay between loops.
-- **Live monitor** shows each step as it plays, with a loop counter and the
-  macro's notes.
-- **Step editor** — reorder, delete, edit delays/positions/keys, strip mouse
-  moves, and insert click/key/position steps.
-- **Organise** — rename, duplicate, search/filter, add notes, and **sort** by
-  name, most-played or newest.
-- **Backup** — export/import a single macro or the whole collection at once.
-- **Merge** — append another macro's steps onto the selected one.
-- **Pin favourites** — star a macro to keep it at the top of the list.
-- **Reset stats** — clear a macro's play count and last-played time.
-- **Smooth movement** — optionally interpolate mouse motion during playback for
-  natural, human-like movement (per macro).
-- **Quick-play hotkeys** — bind keys to instantly play macros #1/#2/#3.
-
-### Statistics tab
-A live dashboard of cards: session & launch clicks, current/peak/average CPS,
-clicks-per-minute, elapsed time and a "today" total, plus a live CPS graph.
-- **Session goal** — set a target click count for the session and watch a live
-  progress bar with an ETA at the current rate; Tempo notifies you when the goal
-  is reached.
-- **Per-button breakdown** with a stacked distribution bar.
-- **Lifetime totals** and **records** (most clicks per run, longest run,
-  averages per session) that persist across runs.
-- **Charts** — clicks per recent session and clicks over the last 7 days, both
-  with hover tooltips.
-- **Session history** — every completed run is logged; double-click for
-  details, right-click to copy or delete, click a column header to sort, and
-  **filter by profile** with a running totals summary.
-- **Export CSV** of the full summary and history; reset session/lifetime or
-  clear history.
-
-### Settings tab
-- **Theme** — 38 built-in themes (Dark, Light, Midnight, Ocean, Forest, Crimson,
-  Solarized, AMOLED, Nord, Dracula, Monokai, Gruvbox, Synthwave, Coffee, Cosmos,
-  Rose, Slate, Sunset, Mint, Sand, Lavender, Sakura, Emerald, Steel, Grape, Arctic,
-  Indigo, Teal, Tangerine, Bubblegum, Carbon, Honey, Sapphire, Olive, Cyan, Peach, Wine and Magenta), applied instantly, with a
-  **live preview** and an optional **custom accent colour** that recolours the whole
-  app.
-- **Background GIF** *(experimental)* — set an animated GIF behind the header and/or
-  a second one in a band along the bottom; each plays behind a readability scrim and
-  loads from a local file only.
-- **Startup & window** — launch Tempo when you sign in to Windows, and hide the
-  window to the tray when clicking starts.
-- **Behaviour** — minimise to tray, start in tray, tray notifications, confirm
-  on exit while running, Escape as an emergency stop, and a start delay.
-- **Updates** — check for updates on demand, and optionally on launch.
-- **Language** — English, Spanish, French and German (applied on restart).
-- **Data & backup** — open the data folder, open the log file, export/import all
-  settings, and **uninstall Tempo** (removes the start-up entry and all saved
-  data, and can optionally delete the program file).
-
-### Keybinds tab
-Every action is rebindable to a keyboard shortcut **or a mouse button**, with
-live conflict highlighting. Bindable actions include Start/Stop, Pause/Resume,
-Pick position, Emergency stop, profile switching, macro play/stop, quick-play
-macros #1–#3, show points overlay, toggle anti-freeze, add point at cursor and
-show/hide window.
-
-### Global hotkeys (defaults)
-| Action          | Default key |
-|-----------------|-------------|
-| Start / Stop    | **F6**      |
-| Pick position   | **F7**      |
-| Emergency stop  | **F8**      |
-
-The emergency stop immediately halts clicking, macro playback and recording.
-
-You can also switch tabs from the keyboard: **Ctrl+1…9** jump to a tab, and
-**Ctrl+Tab** / **Ctrl+Shift+Tab** cycle through them.
+Everything is rebindable on the **Keybinds** tab — including macro record/play and per-macro hotkeys.
 
 ---
 
-## Updates
+## 🛠 Build from source
 
-Tempo can check whether a newer version is available, using the **GitHub
-Releases** for its own repository.
+The complete source lives in the **`Open-Source Build_Tempo.zip`** file at the top of this repository (the name carries the version it matches).
 
-- **In the app:** Settings → **Check for updates** runs a check on demand. With
-  *"Check for updates when Tempo starts"* enabled (the default), Tempo also does
-  a quiet background check shortly after launch (at most about once a day) and
-  notifies you **only if** an update exists. When a newer version is found it shows
-  the installed and latest versions plus scrollable release notes, and offers to
-  **install it in place**, **open the download page**, or **skip that version** so
-  the automatic check won't mention it again.
+1. Unzip it anywhere.
+2. Install the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) if you don't have it.
+3. Run `publish.cmd` — it builds a self-contained `Tempo.exe` and the `Tempo-Setup-<version>.zip` installer bundle, prints a SHA-256 checksum, and tells you exactly what to attach to a release.
 
-### How updates are distributed (for maintainers)
-
-Tempo reads the **GitHub Releases API** for its repository — no manifest file or
-server to maintain, and no authentication for a public repo:
-
-```
-https://api.github.com/repos/justcamop555-pixel/Tempo/releases/latest
-```
-
-To ship an update:
-
-1. Build the self-contained executable (`publish.cmd`).
-2. On the repo, go to **Releases → Draft a new release**.
-3. Set a tag like `v1.0.42` (a leading `v` is fine), write the release notes in
-   the description, and **attach `Tempo.exe`** as a release asset.
-4. **Publish release.**
-
-The app compares the latest release's tag to its own version. When the tag is
-higher it shows the release notes and links to the attached `.exe` (falling back
-to the release page if no `.exe` asset is attached). The repository is set in
-`UpdateChecker.Repository` in `Utils/UpdateChecker.cs`.
-
-> Make sure the `Tempo.exe` you attach was built **after** bumping the version,
-> or it will still report the old version when it checks for updates.
-
-### How users get the update
-
-When an update is found, Tempo offers to install it **in place**:
-
-1. The user chooses **Yes** to update now.
-2. Tempo downloads the new `Tempo.exe` (with a progress dialog).
-3. A small helper waits for Tempo to close, overwrites the old executable with
-   the new one, and relaunches it automatically.
-
-Settings, profiles, macros and history live in `%LocalAppData%\AutoClicker\`, so
-they are always preserved across an update.
-
-If in-place update isn't possible — for example Tempo is installed somewhere the
-user can't write to (such as `Program Files` without admin rights), or the
-release has no attached `.exe` — Tempo instead offers to open the download page
-so the user can replace the file manually. Running Tempo from a normal, writable
-location (Downloads, Desktop, a folder in your user profile) keeps one-click
-updating working without needing administrator rights.
+Prefer plain commands? `dotnet publish -c Release` works too.
 
 ---
 
-## Where data is stored
+## 🔒 Privacy
 
-Configuration lives under your local app-data folder:
+Tempo runs entirely on your PC. Your clicks, macros, profiles and statistics **never leave your computer**. The only network use is the optional update check against GitHub — and you can turn that off in *Settings → Behaviour*. No accounts, no telemetry, no ads.
 
-```
-%LocalAppData%\AutoClicker\
-├── settings.json     global settings & hotkeys
-├── profiles.json     saved click profiles
-├── macros.json       recorded macros
-├── sessions.json     session history for the statistics tab
-└── logs\autoclicker.log
-```
-
-Deleting these files resets the app to defaults. You can also remove everything
-from **Settings → Uninstall Tempo**, which deletes this folder, removes the
-Windows start-up entry, and (optionally) deletes `Tempo.exe` itself.
+Your data lives in a plain local folder (`%LocalAppData%\AutoClicker`) that you can open, back up or delete from inside the app.
 
 ---
 
-## Project structure
+## 🎮 A note on games
 
-```
-AutoClicker/
-├── Program.cs                 entry point, single-instance guard, crash handlers
-├── app.manifest               DPI awareness / OS compatibility
-├── publish.cmd                helper to build a self-contained Tempo.exe
-├── Assets/tempo.ico           application icon
-├── Native/                    P/Invoke, hotkeys, low-level hooks
-├── Models/                    data types (profiles, points, macros, settings)
-├── Engine/                    input simulation, click engine, macro record/play
-├── Persistence/               JSON load/save for settings, profiles, macros, history
-├── Utils/                     logging, screen-geometry, CPU monitor, startup,
-│                              updates, localization, crash/bug reporting, app icon
-└── UI/                        forms, theming, controls, tab implementations
-    ├── MainForm.cs            shell, tray, hotkeys, engine wiring
-    ├── MainForm.Clicker.cs    clicker tab
-    ├── MainForm.MultiPoint.cs multi-point tab
-    ├── MainForm.Macros.cs     macros tab
-    ├── MainForm.Statistics.cs statistics tab
-    ├── MainForm.Settings.cs   settings tab
-    ├── MainForm.Keybinds.cs   keybinds tab
-    └── CrashReportForm.cs     error/bug report dialog
-```
-
-(Other dialogs, custom controls and the theme engine also live under `UI/`; the
-tree above lists the main pieces rather than every file.)
-
-The `MainForm` is implemented as a C# `partial class` split across several
-files — one per tab — so each section stays focused and readable.
+Many online games ban auto-clickers, and at high speeds the input is obviously automated — Tempo even warns you in-app before unlocking advanced speeds. Check the rules of whatever you play; single-player and idle games are the usual home for tools like this.
 
 ---
 
-## Notes & tips
+## 🐞 Found a bug?
 
-- **"Unknown publisher" warning:** Windows may warn the first time you run
-  `Tempo.exe` because it isn't code-signed. Click **More info → Run anyway** —
-  this is expected for an unsigned app and is safe.
-- If a global hotkey fails to register, another application is probably already
-  using that combination. Pick a different one on the Keybinds tab.
-- To click inside an elevated (administrator) window, run Tempo as
-  administrator too. You can change the requested privilege level in
-  `app.manifest` (`asInvoker` → `requireAdministrator`).
-- Hold mode polls the key state directly, so the Start/Stop global hotkey is
-  temporarily not registered while Hold mode is selected.
-- If the window ends up off-screen, it is automatically nudged back into view on
-  launch.
+- **In the app:** *Settings → Report a bug…* (opens a pre-filled GitHub issue) or *Email a bug…* (your email app, Gmail, Outlook, Yahoo, or copy to clipboard). Both include your system details and the log-file path automatically.
+- **Here:** [open an issue](https://github.com/justcamop555-pixel/Tempo/issues/new).
+
+Screenshots and the log file (`%LocalAppData%\AutoClicker\autoclicker.log`) make fixes much faster.
 
 ---
 
-## Reporting bugs
-
-Found a problem? There are three easy ways to report it — pick whichever suits you:
-
-- **In the app:** if Tempo hits an unexpected error it shows a report window with
-  one-click **Report on GitHub** and **Email report** buttons. You can also report
-  proactively any time from **Settings → Data & Backup** (**Report a bug…** or
-  **Email a bug…**).
-- **On GitHub:** open an issue at
-  <https://github.com/justcamop555-pixel/Tempo/issues>.
-- **By email:** <jompikoo@gmail.com>.
-
-Reports are pre-filled with the version, your Windows version and the error
-details — and nothing is sent until you submit. See **Privacy** below for exactly
-what a report contains.
-
-## Privacy
-
-Tempo is built to respect your privacy:
-
-- **Nothing is sent anywhere automatically.** Bug reports only leave your PC when
-  *you* press send/submit in your own browser or email app.
-- **Reports contain only** Tempo's version, your Windows version, and the technical
-  error details — **never** your clicks, recorded macros, settings, or files.
-- **Your Windows account name is removed** from report text automatically (paths
-  like `C:\Users\YourName\…` become `C:\Users\<user>\…`).
-- **You can review and edit** the report before sending — the crash window shows
-  the full text in an editable box so you can delete anything you don't want to share.
-- Tempo has no servers and collects no analytics or telemetry.
-- **Local-only controls for your own data:**
-  - **Record session history and statistics** (Settings → Behaviour) — turn off and
-    finished runs leave no trace: nothing is written to the session history and your
-    lifetime totals stop changing. Clicks made while it's off never count later.
-  - **Write a log file to disk** — turn off and Tempo writes nothing to its log file.
-  - Everything Tempo stores lives only on your PC, and you can wipe it any time from
-    Statistics (Reset session / Reset lifetime / Clear history) or by deleting the
-    data folder (Settings → Data & Backup → open data folder).
-
----
-
-## Changelog
-
-The full version history lives in **[CHANGELOG.md](CHANGELOG.md)**. Per-release
-notes are also in the [`release-notes/`](release-notes/) folder and on the
-[Releases page](https://github.com/justcamop555-pixel/Tempo/releases).
+<p align="center">Made by one developer, improved release by release. ⚡</p>
