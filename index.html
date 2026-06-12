@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tempo — fast, precise auto-clicker for Windows</title>
 <meta name="description" content="Tempo is a free Windows auto-clicker: up to 2,000 CPS, multi-point clicking, a macro recorder, deep statistics and global hotkeys. Runs entirely on your PC.">
+<meta name="theme-color" content="#0d0f16">
+<meta property="og:title" content="Tempo — fast, precise auto-clicker for Windows">
+<meta property="og:description" content="Up to 2,000 CPS, multi-point clicking, a macro recorder and deep statistics. Free, no account, runs entirely on your PC.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://justcamop555-pixel.github.io/Tempo/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%238b6cf2'/%3E%3Cpath d='M18.5 4 9 18h5.5L13 28l9.5-14h-5.5z' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -282,6 +287,52 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
 .upd.show{display:block}
 .upd b{color:var(--teal)}
 
+/* Cool pass: gradient digits, hover glow, ripples, rings, pulse, trail */
+.hero h1 .n{
+  background:linear-gradient(92deg,var(--violet) 20%,var(--teal) 90%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+main{position:relative;z-index:1}
+#fx{position:fixed;inset:0 0 auto 0;height:560px;pointer-events:none;z-index:0;overflow:hidden}
+.hring{
+  position:absolute;border:2px solid var(--violet);border-radius:50%;
+  opacity:0;animation:hring 2.6s ease-out forwards;
+}
+@keyframes hring{0%{transform:scale(.15);opacity:.26}100%{transform:scale(1);opacity:0}}
+.card{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+.card:hover{transform:translateY(-3px);border-color:rgba(139,108,242,.55);box-shadow:0 10px 32px rgba(0,0,0,.35)}
+.btn-primary{box-shadow:0 0 0 rgba(139,108,242,0);transition:transform .12s ease,background .15s ease,box-shadow .25s ease}
+.btn-primary:hover{box-shadow:0 6px 26px rgba(139,108,242,.45)}
+.btn-primary.pulse{animation:pulse 1s ease-in-out 2}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(139,108,242,.0)}50%{box-shadow:0 0 0 12px rgba(139,108,242,.22)}}
+.pad{position:relative;overflow:hidden}
+.pad .rp{
+  position:absolute;border-radius:50%;background:rgba(255,255,255,.35);
+  transform:scale(0);animation:rp .5s ease-out forwards;pointer-events:none;
+}
+@keyframes rp{to{transform:scale(3.2);opacity:0}}
+.relnotes{margin:8px 14px 0;border:none;background:transparent;padding:0}
+.relnotes summary{font-family:var(--mono);font-size:12px;color:var(--violet);cursor:pointer;list-style:none}
+.relnotes summary::after{content:" \25BE"}
+.relnotes[open] summary::after{content:" \25B4"}
+.relnotes pre{
+  white-space:pre-wrap;font-family:var(--mono);font-size:12px;color:var(--muted);
+  margin-top:8px;max-height:220px;overflow:auto;line-height:1.55;
+}
+.trail-chip{
+  font-family:var(--mono);font-size:12px;color:var(--muted);background:transparent;
+  border:1px solid var(--line);border-radius:99px;padding:6px 14px;cursor:pointer;
+}
+.trail-chip.on{color:var(--teal);border-color:var(--teal)}
+.tdot{
+  position:fixed;width:8px;height:8px;border-radius:50%;pointer-events:none;z-index:80;
+  opacity:.85;transition:opacity .55s ease,transform .55s ease;transform:scale(1);
+}
+@media(prefers-reduced-motion:reduce){
+  #fx,.tdot{display:none}
+  .card,.card:hover{transform:none}
+}
+
 /* Reveal on scroll */
 .rv{opacity:0;transform:translateY(14px);transition:opacity .5s ease,transform .5s ease}
 .rv.in{opacity:1;transform:none}
@@ -293,6 +344,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
 </style>
 </head>
 <body>
+<div id="fx" aria-hidden="true"></div>
 
 <header>
   <div class="wrap nav">
@@ -317,7 +369,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
   <!-- ── Hero: the product's core loop, live ─────────────────────────── -->
   <div class="wrap hero">
     <div>
-      <h1>Click at <span class="n">2,000</span> per&nbsp;second.<br>Or record it once and&nbsp;replay&nbsp;it.</h1>
+      <h1>Click at <span class="n" id="big2000">2,000</span> per&nbsp;second.<br>Or record it once and&nbsp;replay&nbsp;it.</h1>
       <p class="lede">Tempo is a free auto-clicker for Windows — sub-millisecond click intervals, multi-point patterns, a full macro recorder and statistics that remember every click. No account, no internet required.</p>
       <div class="cta-row">
         <a class="btn btn-primary" href="https://github.com/justcamop555-pixel/Tempo/releases/latest" target="_blank" rel="noopener">Download Tempo</a>
@@ -467,6 +519,10 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
         <h3>Latest release</h3>
         <div class="rel-head"><b id="relTag">&mdash;</b><span id="relMeta"></span></div>
         <table><tbody id="relAssets"></tbody></table>
+        <details class="relnotes" id="relNotesWrap" style="display:none">
+          <summary>Release notes</summary>
+          <pre id="relNotesBody"></pre>
+        </details>
       </div>
       <div class="cta-row rv" style="margin-top:26px">
         <a class="btn btn-primary" id="dlBtn" href="https://github.com/justcamop555-pixel/Tempo/releases/latest" target="_blank" rel="noopener">Download the latest release</a>
@@ -497,10 +553,13 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
 <footer>
   <div class="wrap">
     <div>⚡ <b style="color:var(--text)">Tempo</b> — made by one developer, improved release by release.</div>
-    <div>
-      <a href="https://github.com/justcamop555-pixel/Tempo" target="_blank" rel="noopener">Source</a> ·
-      <a href="https://github.com/justcamop555-pixel/Tempo/releases" target="_blank" rel="noopener">Releases</a> ·
-      <a href="https://github.com/justcamop555-pixel/Tempo/issues/new" target="_blank" rel="noopener">Report a bug</a>
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <button class="trail-chip" id="trailBtn" type="button" title="The app's just-for-fun rainbow cursor trail — try it here">&#10022; cursor trail</button>
+      <span>
+        <a href="https://github.com/justcamop555-pixel/Tempo" target="_blank" rel="noopener">Source</a> ·
+        <a href="https://github.com/justcamop555-pixel/Tempo/releases" target="_blank" rel="noopener">Releases</a> ·
+        <a href="https://github.com/justcamop555-pixel/Tempo/issues/new" target="_blank" rel="noopener">Report a bug</a>
+      </span>
     </div>
   </div>
 </footer>
@@ -633,6 +692,14 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
               '<td>'+fmtMB(a.size||0)+'</td><td>'+(a.download_count||0).toLocaleString()+' dl</td></tr>';
       });
       if(rows){tb.innerHTML=rows;card.classList.add('show');}
+      var body=(r.body||'').trim();
+      if(body){
+        var wrap=document.getElementById('relNotesWrap'),pre=document.getElementById('relNotesBody');
+        if(wrap&&pre){
+          pre.textContent=body.length>900?body.slice(0,900)+'\u2026':body;
+          wrap.style.display='block';
+        }
+      }
     }
     /* point the big buttons straight at the setup zip when present */
     var setup=null;
@@ -667,6 +734,89 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
       apply(r);
     })
     .catch(function(){/* offline or rate-limited: static fallbacks stand */});
+})();
+
+/* ── Cool pass: count-up, hero rings, pad ripples, F6, rainbow trail ──── */
+(function(){
+  var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* 0 → 2,000 count-up on load */
+  var big=document.getElementById('big2000');
+  if(big&&!reduce){
+    var t0=performance.now(),DUR=1100;
+    (function step(t){
+      var k=Math.min(1,(t-t0)/DUR);k=1-Math.pow(1-k,3);
+      big.textContent=Math.round(2000*k).toLocaleString();
+      if(k<1)requestAnimationFrame(step);else big.textContent='2,000';
+    })(t0);
+  }
+
+  /* ambient click-ripple rings behind the hero */
+  var fx=document.getElementById('fx');
+  if(fx&&!reduce){
+    function ring(){
+      if(document.hidden||fx.childElementCount>6)return;
+      var d=document.createElement('div');d.className='hring';
+      var sz=80+Math.random()*150;
+      d.style.width=d.style.height=sz+'px';
+      d.style.left=(5+Math.random()*90)+'%';
+      d.style.top=(40+Math.random()*420)+'px';
+      d.addEventListener('animationend',function(){d.remove();});
+      fx.appendChild(d);
+    }
+    setInterval(ring,1500);ring();
+  }
+
+  /* ripple where you hit the CPS pad */
+  var pad=document.getElementById('pad');
+  if(pad&&!reduce){
+    pad.addEventListener('click',function(ev){
+      var r=pad.getBoundingClientRect();
+      var d=document.createElement('span');d.className='rp';
+      var sz=Math.max(r.width,r.height)/2;
+      d.style.width=d.style.height=sz+'px';
+      d.style.left=(ev.clientX-r.left-sz/2)+'px';
+      d.style.top=(ev.clientY-r.top-sz/2)+'px';
+      d.addEventListener('animationend',function(){d.remove();});
+      pad.appendChild(d);
+    });
+  }
+
+  /* the status strip says "F6 to download" — make F6 real */
+  document.addEventListener('keydown',function(e){
+    if(e.key==='F6'){
+      e.preventDefault();
+      var inst=document.getElementById('install');
+      if(inst)inst.scrollIntoView({behavior:reduce?'auto':'smooth'});
+      var dl=document.getElementById('dlBtn');
+      if(dl){dl.classList.remove('pulse');void dl.offsetWidth;dl.classList.add('pulse');}
+    }
+  });
+
+  /* the app's rainbow cursor trail, as an opt-in toggle */
+  var chip=document.getElementById('trailBtn');
+  if(chip){
+    var on=false,hue=0,touch=('ontouchstart' in window);
+    try{on=localStorage.getItem('tempoTrail')==='1';}catch(e){}
+    if(reduce||touch){chip.style.display='none';on=false;}
+    function paint(){chip.classList.toggle('on',on);}
+    function move(ev){
+      if(!on)return;
+      var d=document.createElement('div');d.className='tdot';
+      hue=(hue+14)%360;
+      d.style.background='hsl('+hue+',90%,62%)';
+      d.style.left=(ev.clientX-4)+'px';d.style.top=(ev.clientY-4)+'px';
+      document.body.appendChild(d);
+      requestAnimationFrame(function(){d.style.opacity='0';d.style.transform='scale(.3)';});
+      setTimeout(function(){d.remove();},600);
+    }
+    document.addEventListener('pointermove',move,{passive:true});
+    chip.addEventListener('click',function(){
+      on=!on;paint();
+      try{localStorage.setItem('tempoTrail',on?'1':'0');}catch(e){}
+    });
+    paint();
+  }
 })();
 </script>
 </body>
