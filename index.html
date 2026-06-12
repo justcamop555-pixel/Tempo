@@ -76,7 +76,74 @@ header{
   border:1px solid var(--line);border-radius:9px;padding:8px 14px;color:var(--text);
 }
 .nav .gh:hover{border-color:var(--violet);text-decoration:none}
-@media(max-width:760px){.nav-links{display:none}}
+.burger{
+  display:none;margin-left:auto;background:transparent;border:1px solid var(--line);
+  border-radius:9px;width:42px;height:38px;cursor:pointer;padding:9px 10px;
+}
+.burger span{display:block;height:2px;background:var(--text);border-radius:2px;margin:4px 0;transition:transform .2s ease,opacity .2s ease}
+.burger.open span:nth-child(1){transform:translateY(6px) rotate(45deg)}
+.burger.open span:nth-child(2){opacity:0}
+.burger.open span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}
+.mmenu{
+  display:none;position:fixed;top:62px;left:0;right:0;z-index:49;
+  background:rgba(13,15,22,.97);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);padding:10px 24px 18px;
+}
+.mmenu.open{display:block}
+.mmenu a{
+  display:block;padding:13px 6px;color:var(--text);font-family:var(--disp);
+  font-weight:600;font-size:17px;border-bottom:1px solid rgba(38,44,66,.5);
+}
+.mmenu a:last-child{border-bottom:none}
+.mmenu a:hover{color:var(--violet);text-decoration:none}
+@media(max-width:760px){
+  .nav-links{display:none}
+  .burger{display:block}
+  .nav .gh{display:none}
+}
+
+/* "Inside the app" — the app's sidebar tabs, on the web */
+.tour{display:grid;grid-template-columns:210px 1fr;gap:22px;align-items:start}
+.tabrail{display:flex;flex-direction:column;gap:6px}
+.tabbtn{
+  position:relative;text-align:left;font-family:var(--disp);font-weight:600;font-size:15px;
+  color:var(--muted);background:transparent;border:1px solid transparent;border-radius:10px;
+  padding:12px 14px 12px 22px;cursor:pointer;transition:color .15s ease,background .15s ease;
+}
+.tabbtn::before{
+  content:"";position:absolute;left:10px;top:50%;transform:translateY(-50%);
+  width:4px;height:0;border-radius:3px;background:var(--violet);transition:height .18s ease;
+}
+.tabbtn:hover{color:var(--text)}
+.tabbtn[aria-selected="true"]{color:var(--text);background:var(--panel);border-color:var(--line)}
+.tabbtn[aria-selected="true"]::before{height:18px}
+.tabpanel{display:none}
+.tabpanel.on{display:block}
+.tabpanel .card{padding-bottom:18px}
+.tabpanel p.tlede{padding-left:14px;color:var(--muted);font-size:15.5px;margin-bottom:14px}
+.tabpanel ul{list-style:none;padding-left:14px}
+.tabpanel li{position:relative;padding-left:20px;margin-bottom:9px;color:var(--muted);font-size:15px}
+.tabpanel li::before{content:"";position:absolute;left:0;top:8px;width:9px;height:9px;border-radius:3px;background:var(--violet-soft);border:1.5px solid var(--violet)}
+.mock{
+  margin:14px 14px 4px;border:1px solid var(--line);border-radius:10px;background:#10131e;
+  padding:14px;font-family:var(--mono);font-size:12.5px;color:var(--muted);
+}
+.mock .mword{font-family:var(--disp);font-weight:800;font-size:30px;color:var(--muted);letter-spacing:.02em}
+.mock .mrow{display:flex;justify-content:space-between;padding:7px 2px;border-bottom:1px solid rgba(38,44,66,.5)}
+.mock .mrow:last-child{border-bottom:none}
+.mock .mcards{display:flex;gap:10px;flex-wrap:wrap}
+.mock .mcard{flex:1;min-width:90px;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.mock .mcard b{display:block;font-size:18px;color:var(--text);font-weight:700}
+.mock .mcard span{font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+.mock .dots{position:relative;height:96px}
+.mock .dot{position:absolute;width:26px;height:26px;border-radius:50%;background:var(--violet);color:#fff;display:grid;place-items:center;font-weight:700;font-size:12px}
+.mock .swatches{display:flex;gap:8px;align-items:center}
+.mock .sw{width:26px;height:26px;border-radius:8px;border:1px solid var(--line)}
+@media(max-width:760px){
+  .tour{grid-template-columns:1fr}
+  .tabrail{flex-direction:row;overflow-x:auto;padding-bottom:6px}
+  .tabbtn{white-space:nowrap}
+}
 
 /* ── Hero ────────────────────────────────────────────────────────────── */
 .hero{padding:72px 0 64px;display:grid;grid-template-columns:1fr 400px;gap:56px;align-items:center}
@@ -354,6 +421,7 @@ main{position:relative;z-index:1}
     </a>
     <nav class="nav-links">
       <a href="#features">Features</a>
+      <a href="#tour">Inside the app</a>
       <a href="#clicker">Clicker</a>
       <a href="#macros">Macros</a>
       <a href="#trust">Privacy</a>
@@ -361,8 +429,22 @@ main{position:relative;z-index:1}
       <a href="#faq">FAQ</a>
     </nav>
     <a class="gh" href="https://github.com/justcamop555-pixel/Tempo" target="_blank" rel="noopener">GitHub ↗</a>
+    <button class="burger" id="burger" type="button" aria-label="Menu" aria-expanded="false" aria-controls="mmenu">
+      <span></span><span></span><span></span>
+    </button>
   </div>
 </header>
+
+<nav class="mmenu" id="mmenu" aria-label="Site menu">
+  <a href="#features">Features</a>
+  <a href="#tour">Inside the app</a>
+  <a href="#clicker">Clicker</a>
+  <a href="#macros">Macros</a>
+  <a href="#trust">Privacy</a>
+  <a href="#install">Install</a>
+  <a href="#faq">FAQ</a>
+  <a href="https://github.com/justcamop555-pixel/Tempo" target="_blank" rel="noopener">GitHub ↗</a>
+</nav>
 
 <main id="top">
 
@@ -415,6 +497,110 @@ main{position:relative;z-index:1}
           <p>Bind start/stop, pause, emergency stop, record, play and more to any key or mouse button — they work even while Tempo sits in the tray. Conflicts are flagged live.</p></div>
         <div class="card feature t-amber rv"><h3>Yours to theme</h3><div class="stat">38 themes</div>
           <p>Thirty-eight color themes, six languages, custom accent colors and optional animated GIF backdrops — plus a just-for-fun rainbow cursor trail.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Inside the app: the sidebar tabs, on the web ─────────────────── -->
+  <section id="tour">
+    <div class="wrap">
+      <div class="eyebrow rv">Inside the app</div>
+      <h2 class="rv">Six tabs. Flip through them here.</h2>
+      <p class="section-lede rv">This mirrors Tempo's own sidebar — same tabs, same features, condensed.</p>
+      <div class="tour rv">
+        <div class="tabrail" role="tablist" aria-label="App tabs" aria-orientation="vertical">
+          <button class="tabbtn" role="tab" id="tb-clicker" aria-controls="tp-clicker" aria-selected="true" type="button">Clicker</button>
+          <button class="tabbtn" role="tab" id="tb-macros" aria-controls="tp-macros" aria-selected="false" tabindex="-1" type="button">Macros</button>
+          <button class="tabbtn" role="tab" id="tb-multi" aria-controls="tp-multi" aria-selected="false" tabindex="-1" type="button">Multi-Point</button>
+          <button class="tabbtn" role="tab" id="tb-stats" aria-controls="tp-stats" aria-selected="false" tabindex="-1" type="button">Statistics</button>
+          <button class="tabbtn" role="tab" id="tb-keys" aria-controls="tp-keys" aria-selected="false" tabindex="-1" type="button">Keybinds</button>
+          <button class="tabbtn" role="tab" id="tb-set" aria-controls="tp-set" aria-selected="false" tabindex="-1" type="button">Settings</button>
+        </div>
+        <div>
+          <div class="tabpanel on card" id="tp-clicker" role="tabpanel" aria-labelledby="tb-clicker">
+            <h3>Clicker</h3>
+            <p class="tlede">The heart of the app — from a gentle 1 CPS to a 2,000 CPS sub-millisecond engine.</p>
+            <ul>
+              <li>Interval, hold-to-click and burst modes with single/double/triple clicks</li>
+              <li>Repeat until stopped, ×count, or for a duration — with a finish chime</li>
+              <li>Jitter, randomization and Humanize to stay un-robotic</li>
+            </ul>
+            <div class="mock"><div class="mword">IDLE</div><div style="margin-top:8px">Interval &middot; 100 CPS &middot; Left &middot; &times;500 &middot; <b style="color:var(--text)">F6</b> to start</div></div>
+          </div>
+          <div class="tabpanel card" id="tp-macros" role="tabpanel" aria-labelledby="tb-macros">
+            <h3>Macros</h3>
+            <p class="tlede">Record once, replay forever — with timing that stays exact at any speed.</p>
+            <ul>
+              <li>Mouse + keyboard capture, step editor, 0.1–10× playback with loops</li>
+              <li>Live Monitor highlights each step; long recordings stay smooth</li>
+              <li>Export, import, merge — and pin your favourites</li>
+            </ul>
+            <div class="mock">
+              <div class="mrow"><span>12 &nbsp; Click</span><span class="dim">Left down</span></div>
+              <div class="mrow" style="background:var(--violet-soft)"><span style="color:var(--text)">13 &nbsp; Click</span><span style="color:var(--text)">Left up</span></div>
+              <div class="mrow"><span>14 &nbsp; Key</span><span>Key down E</span></div>
+            </div>
+          </div>
+          <div class="tabpanel card" id="tp-multi" role="tabpanel" aria-labelledby="tb-multi">
+            <h3>Multi-Point</h3>
+            <p class="tlede">A list of screen targets, clicked your way.</p>
+            <ul>
+              <li>Sequence, reverse, ping-pong or random order</li>
+              <li>Per-point clicks and dwell time; add points at the cursor by hotkey</li>
+              <li>Flash numbered markers on screen to check the route</li>
+            </ul>
+            <div class="mock"><div class="dots">
+              <span class="dot" style="left:8%;top:10px">1</span>
+              <span class="dot" style="left:46%;top:48px">2</span>
+              <span class="dot" style="left:78%;top:6px">3</span>
+            </div></div>
+          </div>
+          <div class="tabpanel card" id="tp-stats" role="tabpanel" aria-labelledby="tb-stats">
+            <h3>Statistics</h3>
+            <p class="tlede">Every click remembered — locally.</p>
+            <ul>
+              <li>Live dashboard, lifetime records, busiest hours and weekdays</li>
+              <li>Sortable session history, milestones, CSV export</li>
+              <li>Reset session or lifetime any time; nothing leaves your PC</li>
+            </ul>
+            <div class="mock"><div class="mcards">
+              <div class="mcard"><span>Session</span><b>12,408</b></div>
+              <div class="mcard"><span>Peak CPS</span><b>1,919</b></div>
+              <div class="mcard"><span>Best day</span><b>29,268</b></div>
+            </div></div>
+          </div>
+          <div class="tabpanel card" id="tp-keys" role="tabpanel" aria-labelledby="tb-keys">
+            <h3>Keybinds</h3>
+            <p class="tlede">Everything on a global hotkey — even from the tray.</p>
+            <ul>
+              <li>Start/stop, pause, emergency stop, record, play, profiles, points…</li>
+              <li>Conflicts highlighted live; unsaved edits clearly flagged</li>
+              <li>Tray sleep pauses hotkeys when hidden and idle, so nothing fires by surprise</li>
+            </ul>
+            <div class="mock">
+              <div class="mrow"><span>Start / Stop</span><span><kbd>F6</kbd></span></div>
+              <div class="mrow"><span>Pause / Resume</span><span><kbd>F9</kbd></span></div>
+              <div class="mrow"><span>Emergency stop</span><span><kbd>F8</kbd></span></div>
+            </div>
+          </div>
+          <div class="tabpanel card" id="tp-set" role="tabpanel" aria-labelledby="tb-set">
+            <h3>Settings</h3>
+            <p class="tlede">Make it yours — and keep it private.</p>
+            <ul>
+              <li>38 themes, 6 languages, custom accent colours, GIF backdrops</li>
+              <li>Tray behaviour, startup options, update checks you can turn off</li>
+              <li>Open data folder, export/import settings, one-click backups</li>
+            </ul>
+            <div class="mock"><div class="swatches">
+              <span class="sw" style="background:#8b6cf2"></span>
+              <span class="sw" style="background:#3fd9a4"></span>
+              <span class="sw" style="background:#f4b35d"></span>
+              <span class="sw" style="background:#ef6a6a"></span>
+              <span class="sw" style="background:#141826"></span>
+              <span style="margin-left:6px">38 themes &middot; 6 languages</span>
+            </div></div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -627,7 +813,8 @@ main{position:relative;z-index:1}
 (function(){
   var mid=document.getElementById('ssMid');
   var map=[['faq','Viewing: FAQ'],['install','Viewing: Install'],['trust','Viewing: Privacy'],
-           ['macros','Viewing: Macros'],['features','Viewing: Features']];
+           ['macros','Viewing: Macros'],['clicker','Viewing: Clicker'],
+           ['tour','Viewing: Inside the app'],['features','Viewing: Features']];
   function update(){
     var label='Interval · reading · <b style="color:var(--text)">F6</b> to download';
     for(var i=0;i<map.length;i++){
@@ -817,6 +1004,53 @@ main{position:relative;z-index:1}
     });
     paint();
   }
+})();
+
+/* ── Mobile menu ──────────────────────────────────────────────────────── */
+(function(){
+  var btn=document.getElementById('burger'),menu=document.getElementById('mmenu');
+  if(!btn||!menu)return;
+  function set(open){
+    menu.classList.toggle('open',open);
+    btn.classList.toggle('open',open);
+    btn.setAttribute('aria-expanded',open?'true':'false');
+  }
+  btn.addEventListener('click',function(e){e.stopPropagation();set(!menu.classList.contains('open'));});
+  menu.addEventListener('click',function(e){if(e.target.tagName==='A')set(false);});
+  document.addEventListener('click',function(e){
+    if(menu.classList.contains('open')&&!menu.contains(e.target)&&e.target!==btn)set(false);
+  });
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')set(false);});
+})();
+
+/* ── "Inside the app" tabs (accessible: click + arrow keys) ───────────── */
+(function(){
+  var rail=document.querySelector('.tabrail');
+  if(!rail)return;
+  var tabs=Array.prototype.slice.call(rail.querySelectorAll('.tabbtn'));
+  function select(tab,focus){
+    tabs.forEach(function(t){
+      var on=t===tab;
+      t.setAttribute('aria-selected',on?'true':'false');
+      t.tabIndex=on?0:-1;
+      var panel=document.getElementById(t.getAttribute('aria-controls'));
+      if(panel)panel.classList.toggle('on',on);
+    });
+    if(focus)tab.focus();
+  }
+  tabs.forEach(function(t){
+    t.addEventListener('click',function(){select(t,false);});
+  });
+  rail.addEventListener('keydown',function(e){
+    var i=tabs.indexOf(document.activeElement);
+    if(i<0)return;
+    var n=null;
+    if(e.key==='ArrowDown'||e.key==='ArrowRight')n=tabs[(i+1)%tabs.length];
+    else if(e.key==='ArrowUp'||e.key==='ArrowLeft')n=tabs[(i-1+tabs.length)%tabs.length];
+    else if(e.key==='Home')n=tabs[0];
+    else if(e.key==='End')n=tabs[tabs.length-1];
+    if(n){e.preventDefault();select(n,true);}
+  });
 })();
 </script>
 </body>
