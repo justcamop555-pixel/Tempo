@@ -20,6 +20,7 @@
 | **Macros** | Record mouse + keyboard, edit steps, play at 0.1–10× with loops and drift-free timing · Live Monitor highlights each step · export / import / merge |
 | **Statistics** | Live dashboard, lifetime records, busiest hours/weekdays, sortable session history, milestones, CSV export — all stored locally |
 | **Hotkeys** | Global keybinds for everything, working even from the tray · live conflict highlighting |
+| **Accessibility** | A bindable **Live Captions** toggle — one key flips on Windows Live Captions (real-time captions for game voice chat, Discord and streams) without leaving your game |
 | **Safety** | Anti-Freeze protection · emergency stop · start-delay countdown · **tray sleep** (a hidden, idle Tempo pauses its hotkeys so it can't surprise you later) |
 | **Yours** | 38 themes · 6 languages · custom accent colors · optional GIF backdrops · profiles for full setups |
 
@@ -56,7 +57,7 @@ Grab the **[latest release](https://github.com/justcamop555-pixel/Tempo/releases
 | `F7` | Pick a position on screen |
 | `F8` | Emergency stop (stops clicking, playback and recording) |
 
-Everything is rebindable on the **Keybinds** tab — including macro record/play and per-macro hotkeys.
+Everything is rebindable on the **Keybinds** tab — including macro record/play, per-macro hotkeys, and a **Toggle Live Captions** action for deaf and hard-of-hearing players (it flips on Windows Live Captions; unbound by default — set it to any key you like).
 
 ---
 
@@ -69,6 +70,18 @@ The complete source lives in the **`Open-Source Build_Tempo.zip`** file at the t
 3. Run `publish.cmd` — it builds a self-contained `Tempo.exe` and the `Tempo-Setup-<version>.zip` installer bundle, prints a SHA-256 checksum, and tells you exactly what to attach to a release.
 
 Prefer plain commands? `dotnet publish -c Release` works too.
+
+---
+
+## ♿ Accessibility
+
+If you're deaf or hard of hearing, Tempo includes a bindable **Toggle Live Captions** hotkey. It flips on **Windows Live Captions**, which transcribes all audio on your PC in real time and shows a caption bar over any app — including fullscreen games — so you can follow game voice chat, Discord and livestream audio.
+
+- Bind it on the **Keybinds** tab, then press it in-game (it sends `Win + Ctrl + L`).
+- Windows Live Captions is built into **Windows 11 (22H2+)**, free, and runs offline after a one-time language-pack download.
+- Tempo doesn't transcribe speech itself — real-time speech-to-text needs the operating system's GPU-backed speech engine, which does it far better than a bundled tool could (and can't separate voices from a game's mixed audio anyway). Tempo simply puts that system on your hotkey.
+
+On Windows 10, Live Captions isn't built in; a browser tab's live-caption feature or Discord's caption support are the closest options.
 
 ---
 
