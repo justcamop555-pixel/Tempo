@@ -424,6 +424,7 @@ main{position:relative;z-index:1}
       <a href="#tour">Inside the app</a>
       <a href="#clicker">Clicker</a>
       <a href="#macros">Macros</a>
+      <a href="#access">Accessibility</a>
       <a href="#trust">Privacy</a>
       <a href="#install">Install</a>
       <a href="#faq">FAQ</a>
@@ -440,6 +441,7 @@ main{position:relative;z-index:1}
   <a href="#tour">Inside the app</a>
   <a href="#clicker">Clicker</a>
   <a href="#macros">Macros</a>
+  <a href="#access">Accessibility</a>
   <a href="#trust">Privacy</a>
   <a href="#install">Install</a>
   <a href="#faq">FAQ</a>
@@ -452,13 +454,13 @@ main{position:relative;z-index:1}
   <div class="wrap hero">
     <div>
       <h1>Click at <span class="n" id="big2000">2,000</span> per&nbsp;second.<br>Or record it once and&nbsp;replay&nbsp;it.</h1>
-      <p class="lede">Tempo is a free auto-clicker for Windows — sub-millisecond click intervals, multi-point patterns, a full macro recorder and statistics that remember every click. No account, no internet required.</p>
+      <p class="lede">Tempo is a free auto-clicker for Windows — sub-millisecond click intervals, multi-point patterns, a full macro recorder and statistics that remember every click. Global hotkeys for every action, including a Live Captions toggle for deaf and hard-of-hearing players. No account, no internet required.</p>
       <div class="cta-row">
         <a class="btn btn-primary" href="https://github.com/justcamop555-pixel/Tempo/releases/latest" target="_blank" rel="noopener">Download Tempo</a>
         <a class="btn btn-ghost" href="https://github.com/justcamop555-pixel/Tempo/releases" target="_blank" rel="noopener">All releases</a>
       </div>
       <div class="meta-row">
-        <span>Windows 10 / 11</span><span>free &amp; open releases</span><span>portable or installed</span><span id="ver">v1.0.122</span><span id="relDate" style="display:none"></span>
+        <span>Windows 10 / 11</span><span>free &amp; open releases</span><span>portable or installed</span><span id="ver">v1.0.128</span><span id="relDate" style="display:none"></span>
       </div>
     </div>
 
@@ -494,7 +496,7 @@ main{position:relative;z-index:1}
         <div class="card feature rv"><h3>Statistics</h3><div class="stat">every click</div>
           <p>Live dashboard, lifetime records, busiest hours and weekdays, per-session history with sortable columns, milestones and CSV export. All stored locally.</p></div>
         <div class="card feature t-teal rv"><h3>Hotkeys</h3><div class="stat">global</div>
-          <p>Bind start/stop, pause, emergency stop, record, play and more to any key or mouse button — they work even while Tempo sits in the tray. Conflicts are flagged live.</p></div>
+          <p>Bind start/stop, pause, emergency stop, record, play, a Live Captions toggle and more to any key or mouse button — they work even while Tempo sits in the tray. Conflicts are flagged live.</p></div>
         <div class="card feature t-amber rv"><h3>Yours to theme</h3><div class="stat">38 themes</div>
           <p>Thirty-eight color themes, six languages, custom accent colors and optional animated GIF backdrops — plus a just-for-fun rainbow cursor trail.</p></div>
       </div>
@@ -574,6 +576,7 @@ main{position:relative;z-index:1}
             <p class="tlede">Everything on a global hotkey — even from the tray.</p>
             <ul>
               <li>Start/stop, pause, emergency stop, record, play, profiles, points…</li>
+              <li>A Live Captions toggle (accessibility) — one key flips Windows Live Captions on/off, even in-game</li>
               <li>Conflicts highlighted live; unsaved edits clearly flagged</li>
               <li>Tray sleep pauses hotkeys when hidden and idle, so nothing fires by surprise</li>
             </ul>
@@ -581,6 +584,7 @@ main{position:relative;z-index:1}
               <div class="mrow"><span>Start / Stop</span><span><kbd>F6</kbd></span></div>
               <div class="mrow"><span>Pause / Resume</span><span><kbd>F9</kbd></span></div>
               <div class="mrow"><span>Emergency stop</span><span><kbd>F8</kbd></span></div>
+              <div class="mrow"><span>Toggle Live Captions</span><span><kbd>your key</kbd></span></div>
             </div>
           </div>
           <div class="tabpanel card" id="tp-set" role="tabpanel" aria-labelledby="tb-set">
@@ -679,6 +683,35 @@ main{position:relative;z-index:1}
     </div>
   </section>
 
+  <!-- ── Accessibility ────────────────────────────────────────────────── -->
+  <section id="access">
+    <div class="wrap split">
+      <div>
+        <div class="eyebrow rv">Accessibility</div>
+        <h2 class="rv">A Live Captions key for voice chat.</h2>
+        <p class="section-lede rv" style="margin-bottom:0">If you're deaf or hard of hearing, voice chat and team callouts can be hard to follow. Tempo gives you a single hotkey to flip on <b>Windows Live Captions</b> — which transcribes all PC audio in real time, over any app, including fullscreen games.</p>
+        <ul>
+          <li class="rv">Bind <b>Toggle Live Captions</b> to any key on the Keybinds tab — turn captions on and off without leaving your game.</li>
+          <li class="rv">Windows Live Captions captions <b>everything you hear</b>: game voice chat, Discord, livestream audio.</li>
+          <li class="rv">It's built into Windows 11 (22H2+), free, and runs <b>offline</b> after a one-time language download.</li>
+        </ul>
+        <p class="section-lede rv" style="margin-top:18px;font-size:15px">Honest note: Tempo doesn't transcribe speech itself — accurate, real-time captioning needs the operating system's built-in speech engine, which already does this far better than a bundled tool could. Tempo simply puts that system on your hotkey.</p>
+      </div>
+      <div class="card rv" style="align-self:start">
+        <h3>Live caption</h3>
+        <div class="mock" style="margin-top:6px;min-height:150px">
+          <div style="color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">Say:</div>
+          <div style="color:var(--text);font-size:14px;line-height:1.7">
+            "Two defenders left on site B —<br>
+            <span style="color:var(--muted)">rotating through tunnel, watch the flank."</span>
+          </div>
+          <div style="margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--teal)">● Windows Live Captions · live</div>
+        </div>
+        <p style="padding:12px 14px 0;font-family:var(--mono);font-size:11.5px;color:var(--muted)">Captions appear in a bar you can move and resize, on top of any game.</p>
+      </div>
+    </div>
+  </section>
+
   <!-- ── Install ──────────────────────────────────────────────────────── -->
   <section id="install">
     <div class="wrap">
@@ -728,6 +761,8 @@ main{position:relative;z-index:1}
           <p>Tempo schedules clicks at up to 2,000 per second using sub-millisecond intervals. Whether every one registers depends on Windows and the target app — much above ~1,000/s the OS may coalesce input. The app tells you this too; no magic claimed.</p></details>
         <details class="rv"><summary>Which Windows versions work?</summary>
           <p>Windows 10 (1607+) and Windows 11, 64-bit. The app is built on .NET 8 with everything bundled into the download, so there's nothing else to install.</p></details>
+        <details class="rv"><summary>I'm deaf — can Tempo caption game voice chat?</summary>
+          <p>Tempo adds a hotkey that toggles <b>Windows Live Captions</b>, which transcribes all audio on your PC in real time and floats a caption bar over any app, including fullscreen games — so it covers game voice chat, Discord and livestream audio. Bind "Toggle Live Captions" on the Keybinds tab, then press it in-game. Live Captions is built into Windows 11 (22H2+), free, and works offline after a one-time language-pack download. Tempo doesn't do the transcription itself: real-time speech-to-text needs the OS-level speech engine, which does it far better than a bundled tool could, and can't cleanly separate voices from a game's mixed audio anyway.</p></details>
         <details class="rv"><summary>How do I uninstall it?</summary>
           <p>If you used the installer: Settings → Apps → Tempo → Uninstall (or run <kbd>uninstall.cmd</kbd>). It removes the shortcuts, the Apps entry and the program files, and asks whether to keep your saved settings. Portable users just delete the exe.</p></details>
       </div>
@@ -813,7 +848,7 @@ main{position:relative;z-index:1}
 (function(){
   var mid=document.getElementById('ssMid');
   var map=[['faq','Viewing: FAQ'],['install','Viewing: Install'],['trust','Viewing: Privacy'],
-           ['macros','Viewing: Macros'],['clicker','Viewing: Clicker'],
+           ['access','Viewing: Accessibility'],['macros','Viewing: Macros'],['clicker','Viewing: Clicker'],
            ['tour','Viewing: Inside the app'],['features','Viewing: Features']];
   function update(){
     var label='Interval · reading · <b style="color:var(--text)">F6</b> to download';
