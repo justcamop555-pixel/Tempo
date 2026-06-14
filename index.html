@@ -233,37 +233,39 @@
 <section class="block" id="install">
   <div class="wrap">
     <div class="sec-eyebrow">Install</div>
-    <h2 class="sec-title">Up and running in about a minute</h2>
-    <p class="sec-intro">Two ways to install. Most people want the installer — it adds a Start Menu shortcut and a clean uninstall. Prefer something you can drop on a USB stick? Use portable.</p>
+    <h2 class="sec-title">Build it, then pick how you run it</h2>
+    <p class="sec-intro">First build Tempo with <code>publish.cmd</code>. Then choose what suits you: run the app straight from the build folder, or run <code>install.cmd</code> to add it properly. Both are fine — it's your call.</p>
+
+    <div class="note" style="margin-top:0;margin-bottom:30px">
+      <b>Step 1 — build it (both paths start here).</b> Open the project folder and run <code>publish.cmd</code>. It builds Tempo into <code>bin\publish\&lt;rid&gt;\</code> (for example <code>bin\publish\win-x64\</code>). When it finishes, pick one of the two options below.
+    </div>
 
     <div class="install-grid">
-      <div class="card featured">
-        <span class="tag">Recommended</span>
-        <h3>Installer</h3>
-        <p class="hint">Start Menu shortcut · clean uninstall · no admin needed</p>
+      <div class="card plain">
+        <span class="tag">Option A · Quick</span>
+        <h3>Run it from the build folder</h3>
+        <p class="hint">Nothing to install · run it right where it built</p>
         <ol class="steps">
-          <li>Download <code>Tempo-Setup-&lt;version&gt;.zip</code> from the latest release.</li>
-          <li>Right-click the .zip → <b>Extract All</b>, keeping the files together.</li>
-          <li>Double-click <code>install.cmd</code>.</li>
-          <li>Launch <b>Tempo</b> from the Start Menu. Done.</li>
+          <li>Run <code>publish.cmd</code>.</li>
+          <li>Open <code>bin\publish\&lt;rid&gt;\</code>.</li>
+          <li>Double-click <code>Tempo.exe</code>. That's it.</li>
         </ol>
       </div>
 
-      <div class="card plain">
-        <span class="tag">Portable</span>
-        <h3>Just run it</h3>
-        <p class="hint">No install · great for a USB stick or a quick try</p>
+      <div class="card featured">
+        <span class="tag">Option B · Installed</span>
+        <h3>Run install.cmd</h3>
+        <p class="hint">Start Menu shortcut · clean uninstall · no admin needed</p>
         <ol class="steps">
-          <li>Download <code>Tempo.exe</code> from the latest release.</li>
-          <li>Put it in any folder you like.</li>
-          <li>Double-click it. That's it.</li>
-          <li>Keep the .exe where it is for "Start with Windows" and updates.</li>
+          <li>Run <code>publish.cmd</code>.</li>
+          <li>Double-click <code>install.cmd</code>.</li>
+          <li>Launch <b>Tempo</b> from the Start Menu. Done.</li>
         </ol>
       </div>
     </div>
 
     <div class="note">
-      <b>First-run note.</b> Because Tempo isn't code-signed, Windows may show <b>"Windows protected your PC"</b> or <b>"Unknown publisher."</b> This is normal for small indie apps — click <b>More info → Run anyway</b>. Want to be sure your download is genuine? Run <code>certutil -hashfile Tempo.exe SHA256</code> and compare it to the <code>Tempo.exe.sha256</code> file on the release.
+      <b>First-run note.</b> Because Tempo isn't code-signed, Windows may show <b>"Windows protected your PC"</b> or <b>"Unknown publisher."</b> This is normal for small indie apps — click <b>More info → Run anyway</b>. Want to be sure your build is genuine? Run <code>certutil -hashfile Tempo.exe SHA256</code> and compare it to the <code>Tempo.exe.sha256</code> file next to it.
     </div>
   </div>
 </section>
