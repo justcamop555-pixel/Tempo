@@ -19,43 +19,44 @@
 
 ---
 
-## Install Tempo (about 60 seconds)
+## Install Tempo
 
-> **Only ever download Tempo from the official Releases page below.** Copies from
-> other sites, "free download" portals, ad links, or Discord messages may be
-> tampered with. The one official source is:
->
-> ### https://github.com/justcamop555-pixel/Tempo/releases
+First **build Tempo** with `publish.cmd`, then pick how you want to run it. Both
+options are fine — it's your call.
 
-You have **two easy ways** to install. Most people should pick Option 1.
+> **Only build Tempo from the official source.** Get the code from this repository:
+> <https://github.com/justcamop555-pixel/Tempo>
 
-### Option 1 — Recommended: the installer (Start Menu + easy uninstall)
+### Step 1 — build it (both options start here)
 
-1. On the [Releases page](https://github.com/justcamop555-pixel/Tempo/releases),
-   download **`Tempo-Setup-<version>.zip`** from the latest release.
-2. **Right-click the .zip and choose Extract All**, then keep all the files together
-   in one folder.
-3. Double-click **`install.cmd`**. No administrator rights are needed.
-4. Launch **Tempo** from the Start Menu. Done!
+Open the project folder and run **`publish.cmd`**. It builds Tempo into
+`bin\publish\<rid>\` (for example `bin\publish\win-x64\`). When it finishes,
+choose one of the two options below.
+
+### Option A — Quick: run it from the build folder
+
+1. Run **`publish.cmd`**.
+2. Open **`bin\publish\<rid>\`**.
+3. Double-click **`Tempo.exe`**. That's it.
+
+Great for a quick run or a USB stick. Note: "**Start with Windows**" and in-app
+updates point at wherever the .exe sits, so if you move or delete it, just re-enable
+those.
+
+### Option B — Installed: run install.cmd
+
+1. Run **`publish.cmd`**.
+2. Double-click **`install.cmd`** (no administrator rights needed).
+3. Launch **Tempo** from the Start Menu. Done!
 
 This puts Tempo in your account, adds a Start Menu shortcut, and registers it under
 **Settings > Apps** so you can uninstall it cleanly later (or run `uninstall.cmd`).
 
-### Option 2 — Portable: just run the app
-
-1. Download **`Tempo.exe`** (and `Tempo.exe.sha256`) from the latest release.
-2. Put it in any folder you like and double-click it. That's it.
-
-Portable mode is great for a USB stick or a quick try. Two small things to know:
-"**Start with Windows**" and **in-app updates** point at wherever the .exe currently
-sits, so if you move or delete it, just re-enable those. Tempo tells you in Settings
-when it's running portably.
-
 > **First-run note:** Because Tempo isn't code-signed, Windows SmartScreen may say
 > *"Windows protected your PC"* or *"Unknown publisher."* This is normal for small
-> indie apps. Click **More info > Run anyway** — it's safe. You can verify your
-> download with `certutil -hashfile Tempo.exe SHA256` and compare it to the
-> `Tempo.exe.sha256` file on the release.
+> indie apps. Click **More info > Run anyway** — it's safe. You can verify the build
+> with `certutil -hashfile Tempo.exe SHA256` and compare it to the
+> `Tempo.exe.sha256` file next to it.
 
 **Requirements:** 64-bit Windows 10 or 11. Nothing else — the .NET runtime is built
 in, so you don't need to install anything.
