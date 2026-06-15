@@ -177,6 +177,13 @@
   /* ── trust strip ─────────────────────────────────── */
   .trust{display:flex;flex-wrap:wrap;gap:14px;justify-content:center}
   .pill{display:flex;align-items:center;gap:9px;background:var(--panel);border:1px solid var(--line);border-radius:30px;padding:11px 20px;font-size:.9rem;font-weight:500}
+
+  /* ── faq ─────────────────────────────────────────── */
+  .faq-list{display:flex;flex-direction:column;gap:14px;max-width:760px}
+  .faq-item{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:20px 24px}
+  .faq-item h4{font-size:1.02rem;font-weight:700;margin-bottom:8px;color:var(--text)}
+  .faq-item p{font-size:.93rem;color:var(--muted);margin:0}
+  .faq-item code{font-family:var(--mono);font-size:.85em;background:var(--panel-2);padding:2px 7px;border-radius:6px;color:#c4b5fd}
   .pill svg{width:16px;height:16px;color:var(--green)}
 
   /* ── final cta ───────────────────────────────────── */
@@ -202,6 +209,7 @@
     <nav class="nav-links">
       <a href="#install">Install</a>
       <a href="#features">Features</a>
+      <a href="#faq">FAQ</a>
       <a href="#start">Get started</a>
       <a class="btn-sm" href="https://github.com/justcamop555-pixel/Tempo/releases">Download</a>
     </nav>
@@ -347,6 +355,43 @@
       <span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg> No telemetry, no account</span>
       <span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg> Checksums on every release</span>
       <span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg> Built-in updates</span>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="faq">
+  <div class="wrap">
+    <div class="sec-eyebrow">FAQ</div>
+    <h2 class="sec-title">Common questions</h2>
+    <div class="faq-list">
+      <div class="faq-item">
+        <h4>Is Tempo really free?</h4>
+        <p>Yes — completely free, no account, no ads, no telemetry. It runs entirely on your PC.</p>
+      </div>
+      <div class="faq-item">
+        <h4>Why does Windows say "Unknown publisher"?</h4>
+        <p>Tempo isn't code-signed (signing certificates are costly for a free app), so Windows SmartScreen shows a caution the first time. Click <b>More info → Run anyway</b>. You can verify your build with <code>certutil -hashfile Tempo.exe SHA256</code> against the <code>Tempo.exe.sha256</code> file next to it.</p>
+      </div>
+      <div class="faq-item">
+        <h4>Will it get me banned from a game?</h4>
+        <p>Possibly. Auto-clicking can violate a game's or app's terms of service, and some anti-cheat systems detect it. Use it responsibly — you're responsible for how you use it. Keeping speeds reasonable and using the randomization options reduces the obvious-robot pattern, but nothing makes it undetectable.</p>
+      </div>
+      <div class="faq-item">
+        <h4>What's a safe clicking speed?</h4>
+        <p>For most uses the low hundreds of CPS is plenty. Very high speeds can trip anti-cheat and stress your PC. Tempo's anti-freeze protection is on by default — leave it on.</p>
+      </div>
+      <div class="faq-item">
+        <h4>Where are my settings and macros stored?</h4>
+        <p>In <code>%LOCALAPPDATA%\AutoClicker</code>. That folder has a README explaining each file, survives updates, and can be backed up or deleted. There's no cloud copy.</p>
+      </div>
+      <div class="faq-item">
+        <h4>Do the live captions match Windows 11's?</h4>
+        <p>No. Tempo's optional offline captions use a small on-device model — handy, but a short delay and the occasional misheard word are inherent. For the most accurate, lowest-delay captions, Windows 11 Live Captions is the better choice, and Tempo can launch it for you.</p>
+      </div>
+      <div class="faq-item">
+        <h4>Does it work on Mac or Linux?</h4>
+        <p>No — Tempo is a Windows app (64-bit Windows 10 or 11). The .NET runtime is built in, so there's nothing else to install.</p>
+      </div>
     </div>
   </div>
 </section>
