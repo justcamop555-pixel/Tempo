@@ -21,20 +21,40 @@
 
 ## Install Tempo
 
-Tempo installs into your own user account — no administrator rights, nothing scattered
-across your system, and a clean uninstall whenever you want.
+First **build Tempo** with `publish.cmd`, then choose how you want to run it — both
+work, it's your call.
 
 > **Only build Tempo from the official source.** Get the code from this repository:
 > <https://github.com/justcamop555-pixel/Tempo>
 
-1. Open the project folder and run **`publish.cmd`**. It builds Tempo into
-   `bin\publish\<rid>\` (for example `bin\publish\win-x64\`).
+### Step 1 — build it (both options start here)
+
+Open the project folder and run **`publish.cmd`**. It builds Tempo into
+`bin\publish\<rid>\` (for example `bin\publish\win-x64\`). Then pick one of the two
+options below.
+
+### Option A — Portable (no install)
+
+1. Run **`publish.cmd`**.
+2. Open **`bin\publish\<rid>\`**, or unzip `Tempo-Setup-<version>.zip` anywhere (a USB
+   stick is fine).
+3. Double-click **`Tempo.exe`**. That's it.
+
+A portable copy runs in place and keeps its settings, profiles, and macros in a
+**`Data`** folder right next to `Tempo.exe`, so the whole folder travels together — copy
+it to a USB stick or another PC and it just works. Keep the `.dll` files beside the exe;
+they're the offline speech-caption engine. Note: "**Start with Windows**" and in-app
+updates point at wherever the exe currently sits, so re-enable those if you move it.
+
+### Option B — Installed
+
+1. Run **`publish.cmd`**.
 2. Double-click **`install.cmd`** (no administrator rights needed).
 3. Launch **Tempo** from the Start Menu. Done!
 
 This puts Tempo in your account, adds a Start Menu shortcut, and registers it under
 **Settings › Apps** so you can remove it cleanly later (from there, or by running
-`uninstall.cmd`).
+`uninstall.cmd`). An installed copy keeps its data in `%LOCALAPPDATA%\AutoClicker`.
 
 > **First-run note:** Because Tempo isn't code-signed, Windows SmartScreen may say
 > *"Windows protected your PC"* or *"Unknown publisher."* This is normal for small
@@ -139,16 +159,17 @@ you expected, and what happened, and mention your Windows version and Tempo vers
 
 ## Where your data is stored
 
-Everything Tempo saves lives in your user profile, so it survives updates and never
-needs admin rights:
+An **installed** copy stores everything in your user profile, so it survives updates
+and never needs admin rights:
 
 ```
 %LOCALAPPDATA%\AutoClicker\
 ```
 
-That folder holds your settings, profiles, macros, and statistics (and, if you use
-Tempo's offline captions, the downloaded speech model). Uninstalling can optionally
-remove it.
+A **portable** copy stores the same things in a `Data` folder next to `Tempo.exe`, so
+they travel with the app. Either folder holds your settings, profiles, macros, and
+statistics (and, if you use Tempo's offline captions, the downloaded speech model).
+Uninstalling an installed copy can optionally remove its data.
 
 ---
 
@@ -195,8 +216,10 @@ It builds a self-contained Tempo and produces, under `bin\publish\<rid>\`:
   offline speech engine; keep them together)
 - `Tempo.exe.sha256` — checksum
 - `install.cmd` / `uninstall.cmd` — the per-user installer and uninstaller
-- `INSTALL-README.txt` — the tiny how-to that ships in the zip
-- `bin\publish\Tempo-Setup-<version>.zip` — the bundle users download
+- `INSTALL-README.txt` — the tiny how-to that ships in the zip (covers both portable
+  and installed)
+- `bin\publish\Tempo-Setup-<version>.zip` — the bundle users download; the same zip
+  serves both ways (run `Tempo.exe` for portable, or `install.cmd` to install)
 - `bin\publish\CHECKSUMS.txt` — checksums for the exe and the setup zip
 
 The builder verifies each step (the exe was produced, its size is sane, its checksum
@@ -209,7 +232,9 @@ animated progress display with green check marks. A full log is written to
 1. Bump the version in `AutoClicker.csproj`, `Program.cs`, `UI/AboutForm.cs`, and add
    an entry to `CHANGELOG.md`.
 2. Run `publish.cmd`.
-3. Create a GitHub release tagged `v<version>` and attach **`Tempo-Setup-<version>.zip`**.
+3. Create a GitHub release tagged `v<version>` and attach **`Tempo-Setup-<version>.zip`**
+   (it works for both portable and installed users). Optionally also attach the
+   standalone `Tempo.exe` (+ `.sha256`) to power the in-app updater.
 4. Paste the release notes from the generated notes file as the description.
 
 ## Project structure
