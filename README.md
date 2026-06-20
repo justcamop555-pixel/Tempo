@@ -21,42 +21,26 @@
 
 ## Install Tempo
 
-First **build Tempo** with `publish.cmd`, then pick how you want to run it. Both
-options are fine — it's your call.
+Tempo installs into your own user account — no administrator rights, nothing scattered
+across your system, and a clean uninstall whenever you want.
 
 > **Only build Tempo from the official source.** Get the code from this repository:
 > <https://github.com/justcamop555-pixel/Tempo>
 
-### Step 1 — build it (both options start here)
-
-Open the project folder and run **`publish.cmd`**. It builds Tempo into
-`bin\publish\<rid>\` (for example `bin\publish\win-x64\`). When it finishes,
-choose one of the two options below.
-
-### Option A — Quick: run it from the build folder
-
-1. Run **`publish.cmd`**.
-2. Open **`bin\publish\<rid>\`**.
-3. Double-click **`Tempo.exe`**. That's it.
-
-Great for a quick run or a USB stick. Note: "**Start with Windows**" and in-app
-updates point at wherever the .exe sits, so if you move or delete it, just re-enable
-those.
-
-### Option B — Installed: run install.cmd
-
-1. Run **`publish.cmd`**.
+1. Open the project folder and run **`publish.cmd`**. It builds Tempo into
+   `bin\publish\<rid>\` (for example `bin\publish\win-x64\`).
 2. Double-click **`install.cmd`** (no administrator rights needed).
 3. Launch **Tempo** from the Start Menu. Done!
 
 This puts Tempo in your account, adds a Start Menu shortcut, and registers it under
-**Settings > Apps** so you can uninstall it cleanly later (or run `uninstall.cmd`).
+**Settings › Apps** so you can remove it cleanly later (from there, or by running
+`uninstall.cmd`).
 
 > **First-run note:** Because Tempo isn't code-signed, Windows SmartScreen may say
 > *"Windows protected your PC"* or *"Unknown publisher."* This is normal for small
-> indie apps. Click **More info > Run anyway** — it's safe. You can verify the build
-> with `certutil -hashfile Tempo.exe SHA256` and compare it to the
-> `Tempo.exe.sha256` file next to it.
+> indie apps. Click **More info › Run anyway** — it's safe. You can verify the build
+> with `certutil -hashfile Tempo.exe SHA256` and compare it to the `Tempo.exe.sha256`
+> file next to it.
 
 **Requirements:** 64-bit Windows 10 or 11. Nothing else — the .NET runtime is built
 in, so you don't need to install anything.
@@ -79,7 +63,7 @@ New to Tempo? Here's the quickest path to something useful:
   preset and a "slow form-filling" preset in one click.
 - **Record repetitive tasks** on the **Macros** tab instead of clicking manually —
   record once, replay with looping and speed control.
-- **Make it yours.** Settings has 38 themes, a custom accent colour, four languages,
+- **Make it yours.** Settings has 38 themes, a custom accent colour, six languages,
   and optional animated backdrops.
 
 > **Use responsibly.** Auto-clicking may violate the terms of service of some games
@@ -90,21 +74,23 @@ New to Tempo? Here's the quickest path to something useful:
 ## What Tempo can do
 
 - **Clicker** — interval, hold-to-click, and burst modes; left/right/middle button;
-  single/double/triple clicks; click a fixed point or follow the cursor; per-click
-  hold time; repeat by count or duration with live time estimates; optional
-  randomization to vary the timing.
+  single, double, triple, or quadruple clicks; click a fixed point or follow the
+  cursor; per-click hold time; repeat by count or duration with live time estimates;
+  optional randomization to vary the timing.
 - **Multi-Point** — click a sequence of points in order, reverse, random, or
   ping-pong, each with its own button, click style, dwell time, and repeat.
 - **Macros** — record and replay mouse and keyboard actions, with looping, speed
-  control, pinning, notes, search, and per-macro export/import.
+  control, pinning, notes, search, merge, and per-macro export/import.
 - **Statistics** — a live dashboard with lifetime totals, personal records, insights
   (streaks, busiest day and hour, top profile), charts, a session goal, searchable
   history, and CSV export.
 - **Hotkeys** — fully rebindable global shortcuts using keyboard **and** mouse
   buttons, with live conflict detection so two actions never clash.
 - **Make it yours** — 38 built-in themes, a custom accent colour, optional animated
-  GIF backdrops, four languages (English, Spanish, French, German), a system-tray
-  presence, and launch-at-startup.
+  GIF backdrops, six languages (English, Spanish, French, German, Italian,
+  Portuguese), a system-tray presence, and launch-at-startup.
+- **Accessibility** — optional live captions for on-screen audio, on by your choice;
+  Tempo can also open Windows 11's own Live Captions, which are more accurate.
 - **Dependable** — anti-freeze protection, crash-safe saving, in-app update checks
   with a one-click installer, and built-in bug/crash reporting.
 
@@ -112,7 +98,7 @@ New to Tempo? Here's the quickest path to something useful:
 
 ## Updates
 
-Tempo can check for updates for you: **Settings > Check for updates** (and,
+Tempo can check for updates for you: **Settings › Check for updates** (and,
 optionally, automatically at launch). When a new version exists, Tempo can download
 and install it for you. You can turn the automatic check off under **Behaviour** —
 Tempo never sends anything but that one version check.
@@ -130,7 +116,7 @@ against GitHub, which you can disable. There is no telemetry and no account.
 ## Troubleshooting
 
 - **"Windows protected your PC" / Unknown publisher** — expected for unsigned indie
-  apps. Click **More info > Run anyway**. Verify the download hash if you want to be
+  apps. Click **More info › Run anyway**. Verify the download hash if you want to be
   sure (see the install note above).
 - **A hotkey doesn't work** — another app may already use that combo. Pick a
   different one on the Keybinds tab; Tempo warns you about conflicts.
@@ -143,7 +129,7 @@ against GitHub, which you can disable. There is no telemetry and no account.
 
 ## Reporting bugs
 
-Use **Settings > Report a bug** inside the app, or open an issue on GitHub:
+Use **Settings › Report a bug** inside the app, or open an issue on GitHub:
 <https://github.com/justcamop555-pixel/Tempo/issues>. If Tempo ever crashes, it
 saves a crash report — including it helps a lot. Please describe what you did, what
 you expected, and what happened, and mention your Windows version and Tempo version
@@ -223,8 +209,7 @@ animated progress display with green check marks. A full log is written to
 1. Bump the version in `AutoClicker.csproj`, `Program.cs`, `UI/AboutForm.cs`, and add
    an entry to `CHANGELOG.md`.
 2. Run `publish.cmd`.
-3. Create a GitHub release tagged `v<version>` and attach **`Tempo-Setup-<version>.zip`**
-   (and, optionally, `Tempo.exe` + `Tempo.exe.sha256` for portable users).
+3. Create a GitHub release tagged `v<version>` and attach **`Tempo-Setup-<version>.zip`**.
 4. Paste the release notes from the generated notes file as the description.
 
 ## Project structure
