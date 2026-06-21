@@ -40,11 +40,12 @@ options below.
    stick is fine).
 3. Double-click **`Tempo.exe`**. That's it.
 
-A portable copy runs in place and keeps its settings, profiles, and macros in a
-**`Data`** folder right next to `Tempo.exe`, so the whole folder travels together — copy
-it to a USB stick or another PC and it just works. Keep the `.dll` files beside the exe;
-they're the offline speech-caption engine. Note: "**Start with Windows**" and in-app
-updates point at wherever the exe currently sits, so re-enable those if you move it.
+A portable copy runs in place — no install needed. Your settings, profiles, macros and
+stats are saved in your user **AppData** folder (`%LOCALAPPDATA%\AutoClicker`), the same
+place an installed copy uses, so saving always works even from a USB stick or a read-only
+folder. Keep the `runtimes` folder next to `Tempo.exe`; it holds the offline
+speech-caption engine. Note: "**Start with Windows**" and in-app updates point at wherever
+the exe currently sits, so re-enable those if you move it.
 
 ### Option B — Installed
 
@@ -166,10 +167,13 @@ and never needs admin rights:
 %LOCALAPPDATA%\AutoClicker\
 ```
 
-A **portable** copy stores the same things in a `Data` folder next to `Tempo.exe`, so
-they travel with the app. Either folder holds your settings, profiles, macros, and
-statistics (and, if you use Tempo's offline captions, the downloaded speech model).
-Uninstalling an installed copy can optionally remove its data.
+A **portable** copy saves to the *same* AppData folder — Tempo always stores its data
+there, whether installed or portable, so saving can't fail under Program Files or a
+read-only/USB path. That folder holds your settings, profiles, macros, and statistics
+(and, if you use Tempo's offline captions, the downloaded speech model). Uninstalling an
+installed copy can optionally remove its data. (Upgrading from an older portable build
+that used a `Data` folder beside the exe? Tempo copies it into AppData automatically on
+first run.)
 
 ---
 
@@ -212,8 +216,8 @@ publish.cmd /help           :: all options
 
 It builds a self-contained Tempo and produces, under `bin\publish\<rid>\`:
 
-- `Tempo.exe` — the app (plus a few native files beside it for the optional
-  offline speech engine; keep them together)
+- `Tempo.exe` — the app, plus a `runtimes\<rid>\native\` folder holding the native
+  files for the optional offline speech engine (keep the folder with the exe)
 - `Tempo.exe.sha256` — checksum
 - `install.cmd` / `uninstall.cmd` — the per-user installer and uninstaller
 - `INSTALL-README.txt` — the tiny how-to that ships in the zip (covers both portable
