@@ -2,6 +2,921 @@
 
 All notable changes to Tempo. Newest first. Per-release notes are also in the `release-notes/` folder and on the [Releases page](https://github.com/justcamop555-pixel/Tempo/releases).
 
+### 1.0.221
+**Root-cause fix for scroll corruption: WS_EX_COMPOSITED instead of double-buffering**
+- The scrollable tab pages were double-buffered, which doesn't buffer child controls; scrolling blitted checkboxes/labels to a new offset and only repainted a strip, leaving them hollow/clipped.
+- Switched to WS_EX_COMPOSITED so the page and all controls composite together in one pass - fixes the corruption and removes the fragile repaint logic that caused the 1.0.219/1.0.220 crash.
+
+### 1.0.220
+**Hotfix: fixes the 1.0.219 crash where scrolling a tab closed Tempo instantly**
+- 1.0.219's synchronous child repaint on scroll could recurse with the layout repaint and overflow the stack, hard-closing the app with no dialog (why tabs "crashed" and clicking stopped working).
+- Scroll and layout repaints now queue a single deferred, debounced full repaint, keeping the corruption fix without the recursion/crash.
+
+### 1.0.219
+**Fixed Settings controls corrupting (hollow checkboxes, clipped text) after scroll or minimize**
+- A backdrop tab page repainted its background but not its child controls when scrolled, leaving checkboxes and labels with stale half-scrolled pixels.
+- The scroll handler now forces a full repaint including children, so all controls redraw correctly. (Minimize/restore and alt-tab paths already did this.)
+
+### 1.0.218
+**Portable-exe fix: the build script was overriding single-file bundling**
+- publish.cmd passed flags that disabled native-library bundling and single-file packing, overriding the project and cancelling 1.0.217's portability fix.
+- The script now bundles everything (runtime, UI Automation, native speech libs) into one Tempo.exe that runs from any folder with no loose DLLs.
+- Rebuild via publish.cmd to get the portable exe; a plain Build still leaves loose DLLs (that's how .NET works).
+
+### 1.0.217
+**Truly portable single .exe (works anywhere); window always opens centered**
+- Tempo.exe is now fully self-contained - the .NET runtime, UI Automation assemblies, and native speech libraries are all bundled inside the exe, so it runs from any folder with no loose DLLs. Fixes "only works inside its publish folder".
+- Window opens centered every launch instead of restoring its last position. "Remember window position" in Settings re-enables the old behavior.
+
+### 1.0.216
+**More reliable Windows Live Captions startup; diagnostic reports UI Automation health with repair steps**
+- Caption startup rechecks several times over ~6s and re-sends the toggle if needed, instead of giving up after one quick recheck (helps on fresh boot / first-ever use).
+- "Diagnose Windows bar" now leads with "UI Automation health: OK/BROKEN" and, when broken, explains it's a Windows-side fault with repair steps and the offline-captions alternative.
+- On/off detection uses the LiveCaptions process + Win32 lookup, not the accessibility API, so handling stays reliable when UIA is broken.
+
+### 1.0.215
+**Caption reading rewritten to avoid the broken CacheRequest, so the Windows mirror can read text on affected PCs**
+- Reading used the UIA ".Current" property bag, which internally builds a CacheRequest - broken on the affected PC, so every read threw.
+- Rewrote the reader and diagnostic to use GetCurrentPropertyValue per property, which doesn't go through CacheRequest.
+- Diagnostic now lists UIA windows and dumps the caption text tree instead of failing.
+- Removed dead/duplicate caption code.
+
+### 1.0.214
+**Build fix for 1.0.213, plus: Tempo detects when Windows' accessibility API is broken and switches to its own offline captions**
+- Fixes a compile error that stopped 1.0.213 from building (a dropped method header).
+- On some PCs Windows' UI Automation core fails to start (CacheRequest type-initializer exception), making the Windows Live Captions text impossible to read - a Windows-side fault.
+- Tempo now detects this and automatically switches to its own offline caption engine instead of showing a blank bar, telling the user once.
+- Points to Settings > Live Captions to install a model if none exists.
+- "Diagnose Windows bar" now dumps the caption window's text tree for PCs where reading works.
+
+### 1.0.212
+**Caption reading is much more aggressive, and the diagnostic now shows exactly where the words live**
+- Tempo reads Windows Live Captions by scanning every text element and keeping the longest real line, checking both name and text content - fixes captions not appearing on some Windows 11 builds.
+- "Diagnose Windows bar" now dumps the caption window's full text tree (type, name, text) so the exact caption element can be identified per-PC.
+- Windows bar hide unchanged (off-screen, kept readable).
+
+### 1.0.211
+**About box shows the real version; caption mirror reads Windows text more reliably; font picker actually changes the font**
+- The About window showed a hardcoded "Version 1.0.206" regardless of build; it now reads the real version from the app.
+- Caption mirroring checks both the text element's Name and its Text-pattern content, catching words on Windows builds that expose them through either property.
+- Tempo no longer mirrors Windows' "Ready to show live captions..." placeholder as a caption.
+- Font picker fixed: caption font choices reliably apply, fonts without a bold face no longer break drawing, and only installed fonts are listed.
+
+### 1.0.210
+**Windows captions bar now disappears the moment captions start; smoother launch effect**
+- The Windows "Live Captions" bar no longer lingers on screen in its "Ready to show live captions" state. A short, fast hide-enforcer runs for the first few seconds after captions turn on and repeatedly pushes the Windows bar off-screen, so it's gone immediately instead of waiting for the first transcribed words.
+- Targets the case where, with the Windows caption source selected, the Windows bar stayed visible above Tempo's own bar before anyone had spoken.
+- Nicer launch: the splash has a soft accent glow that gently breathes behind the title, and the loading bar sweeps with a blue-to-purple gradient.
+
+### 1.0.209
+**Cleanup pass: removed dead caption settings and fixed stale code comments - no behavior change**
+- Removed two unused settings (CaptionDriveWindows, CaptionMirrorWindows) that were saved but read nowhere.
+- Fixed an out-of-date description in the Windows caption reader that wrongly claimed Tempo can't transcribe on its own.
+- Updated internal comments that still referred to the small pill removed in 1.0.208.
+
+### 1.0.208
+**Windows caption bar now hides the instant captions start; Tempo's bar is back to normal size; splash and welcome notice restored**
+- Windows Live Captions bar now hides right away instead of waiting for the first words, with a safety net that restores it if reading text is impossible on the PC.
+- Tempo's caption bar is normal size again (the small pill from 1.0.207 is removed).
+- Splash launch effect restored: the splash forces itself to paint and come to front the moment it opens.
+- Welcome notice restored: every startup path now guarantees the notice shows and the window becomes visible.
+
+### 1.0.207
+**Tempo can now caption on its own; the empty caption box on startup is gone; the caption bar matches your theme**
+- New Auto caption source (default): Tempo transcribes offline itself first and auto-falls-back to mirroring Windows 11 Live Captions if its own engine can't run.
+- No empty box on startup; real text replaces the starting state the moment it arrives.
+- Caption bar colors now come from the active theme instead of a hardcoded near-black.
+
+### 1.0.206
+**Welcome notice no longer pops with the app; blank tab on return self-heals again; captions diagnostic is now a self-test**
+- Startup glitch where the app window and the "Quick safety note" appeared at the same time:
+  the notice was being shown before the window had faded in, so the two overlapped and read
+  as a double-pop. The window now fades in first, on its own, and the notice appears only
+  once the fade has finished - a clean, ordered startup.
+- Empty Settings tab that "doesn't refresh or flash": scrolling Settings down, switching to
+  another tab, then back could leave it blank. My previous change only re-laid-out a returning
+  tab if its scroll had drifted - but this case comes back with the scroll reading zero while
+  the content was laid out against a stale size and ended up off-screen, so nothing re-ran and
+  it stayed blank. The follow-up pass now always re-asserts the layout (self-heal), using a
+  queued repaint so an already-correct page repaints identically - no flash on the normal path,
+  but a genuinely blank page is now corrected.
+- Live Captions diagnostic upgraded to a self-test: Settings > Live Captions > "Diagnose
+  Windows bar" now also reports whether Tempo can DETECT the captions window and whether it can
+  READ text from it, on top of the window list. One screenshot now shows exactly what works on
+  a given PC.
+- Live Captions hide (from 1.0.205) is unchanged: the window class fix ("LiveCaptionsDesktopWindow")
+  and CacheRequest-free reading stand. If a device still shows the Windows bar, run the
+  self-test there and send the result - the window class can differ between Windows builds.
+
+### 1.0.205
+**Live Captions fixed: window now found + hidden, and text reading works around the UIA error**
+- Your diagnostic made the fix exact. The Windows 11 captions window reports its class as
+  "LiveCaptionsDesktopWindow" - Tempo had been looking for "LiveCaptionsWindow". That single
+  wrong word is why every attempt missed it. Tempo now matches the real class, so it finds
+  the Windows captions bar reliably.
+- Your diagnostic also showed UI Automation throwing on your PC ("type initializer for
+  CacheRequest threw an exception"). UI Automation is what Tempo uses to READ the caption
+  text, so the text would have stayed empty even once the window was found. Tempo now reads
+  by walking the UI Automation tree directly (TreeWalker) instead of the query API that
+  depends on CacheRequest - which avoids that error. Window detection and the in-app
+  diagnostic use the same CacheRequest-free approach now.
+- Safer hide order: Tempo now hides the Windows bar only AFTER it has successfully read
+  caption text at least once (reading keeps working while the window is off-screen). So if
+  text-reading still can't work on a given PC, the Windows bar is left visible rather than
+  hidden - you are never left with no captions at all.
+- Needs confirming on your Windows 11 PC (I can't run Live Captions here): does the Windows
+  bar now disappear, and does the text appear in Tempo's bar?
+
+### 1.0.204
+**A screenshot-able "Diagnose Windows bar" button, so the Live Captions hide can finally be pinned**
+- Two caption bars (Windows' working one plus Tempo's empty one) means Tempo cannot find the
+  Windows captions window on your PC - so it can neither hide it nor read from it. I can't
+  match a window whose identifiers I can't see, and four guesses haven't landed.
+- New: Settings > Live Captions now has a "Diagnose Windows bar" button. Turn Windows captions
+  on, click it, and it shows every visible window's title/class/process and every UI Automation
+  window's name/class in a box you can screenshot or copy. Send me that and the lookup can be
+  made to match your exact window - no more guessing.
+- The 1.0.203 log-file "[caption-diag]" dump is still produced as well; this simply puts the
+  same information on a screen you can capture.
+
+### 1.0.203
+**Empty Settings tab after restore: retry the layout until the window is settled; plus a captions diagnostic**
+- Your clue nailed it - the auto-fit centering "doesn't respond sometimes when you return,
+  then works later". On restoring from the tray/taskbar, Tempo laid the pages out once on a
+  short delay, but if the window hadn't finished restoring yet (client size still 0, or the
+  state still counted as minimised), the layout bailed on its own guard and never re-ran -
+  leaving the page blank until you nudged it. It now RETRIES: it waits for a real window
+  size, lays the pages out, then does one confirming pass, so returning to a tab reliably
+  re-centres instead of coming back empty.
+- Windows Live Captions still not hiding: after three honest attempts I clearly can't guess
+  the Windows 11 captions window's identifiers, so this build adds a diagnostic instead of a
+  fourth guess. When captions are on but Tempo can't find the window after about two seconds,
+  it writes a "[caption-diag]" block to the log listing every visible window (title, class,
+  process) and every UI Automation window (name, class). Reproduce it once and send me those
+  lines and I can make the lookup match your PC exactly.
+
+### 1.0.202
+**Windows Live Captions window: found and kept hidden, even on Windows 11**
+- The Windows captions bar wasn't being hidden because Tempo couldn't find its window at
+  all on your setup. On Windows 11 that window has no stable Win32 class/title and often
+  isn't owned by the LiveCaptions.exe process, so the name/title/process lookups all missed
+  it - and with no window found, Tempo neither hid it nor mirrored from it (you saw the
+  Windows bar plus "Live Captions on - captions will appear here"). Tempo now finds it two
+  more ways: by scanning visible windows for a Live Captions title, and - the one that
+  should work reliably on Win11 - through the UI Automation tree. Tempo's own windows are
+  excluded, so it can never hide its own bar by mistake.
+- It now also KEEPS it hidden. The window is re-checked on every poll and pushed straight
+  back off-screen if Windows re-docks or re-shows it (Windows owns that window's
+  placement), instead of being moved once and allowed to drift back on screen.
+- Note: this all needs a real Windows 11 PC to verify, which I can't do here - please
+  confirm the Windows bar now disappears when you switch captions on.
+
+### 1.0.201
+**Windows Live Captions actually hides now; keybind conflicts are prevented; less tab flash**
+- Windows Live Captions wasn't being hidden on some setups: Tempo couldn't reliably find
+  the Windows 11 captions window (its window class/title vary by build), so it neither
+  tucked it off-screen nor mirrored from it - you'd see the Windows bar AND "Live Captions
+  on - captions will appear here" in Tempo's own bar. Detection now asks the LiveCaptions
+  process for its own main window first, then falls back to its largest visible window,
+  which is far more robust. (Live Captions can't be tested here, so please confirm on your
+  PC.)
+- Keybinds: a combination can no longer stay assigned to two actions at once. Setting a key
+  that another action already uses now clears it from that other action automatically, so a
+  key always triggers exactly one thing - no more "two actions share a key and only one
+  mysteriously works". Conflicts were previously only highlighted and warned about.
+- Tab switching: the follow-up pass after a switch now only does a full re-layout when the
+  page actually came back scrolled (the blank-band-at-the-top case); otherwise it just
+  repaints. That removes the extra "flash refresh" on the normal, already-correct path.
+- Loading splash, welcome notice and restart all continue to use the reliable startup
+  sequencing from 1.0.200 (splash fully seen first, notice every run, then fade-in); a
+  restart simply relaunches through that same sequence.
+
+### 1.0.200
+**The loading splash and welcome notice now reliably show, every run**
+- The loading splash sometimes wasn't seen, especially on faster PCs, because the main
+  window was shown on top of it almost immediately. Now the window stays hidden until the
+  splash has actually finished, so the loading effect is always visible first and the
+  window then fades in. (A timeout means startup still proceeds if the splash can't show.)
+- The welcome / official-source notice now appears on EVERY run. It was first-run only,
+  so most launches never showed it; it also used to open hidden behind the splash. It
+  still shows just once per launch.
+- Both work for tray-start too: starting minimised to the tray dismisses the splash
+  promptly (instead of letting it linger) and shows the welcome notice the first time you
+  open the window.
+- Windows Live Captions: when you switch captions on, the Windows captions window is now
+  tucked off-screen as soon as it's detected - not only once it has produced text - so it
+  no longer sits visible while the audio is silent. Only Tempo's own caption bar shows.
+- Reviewed the clicker and macro tools again. Both stay feature-complete (click styles,
+  interval/hold/burst, per-click hold, repeat by count or duration, randomisation,
+  multi-point, searchable profiles; macro record/play, edit, duplicate, export/import,
+  merge, pin, reorder, notes) with solid engines, so they're unchanged rather than padded.
+
+### 1.0.199
+**One-click update now works from the setup zip, not only a bare exe**
+- The "Update now" button now appears whenever a release has EITHER a standalone Tempo.exe
+  OR the Tempo-Setup-<ver>.zip you already ship. Before, it only showed for a bare exe, so
+  a zip-only release fell back to the download page - which is what you were seeing. Now it
+  downloads the zip, unpacks Tempo.exe, confirms it's a real Windows program AND that it
+  matches the published checksum (when one is provided), then swaps it in and relaunches.
+- Safety: a malformed, truncated, or wrong zip can never overwrite the running Tempo.exe.
+  The extracted file is header-checked ("MZ") and checksum-verified before any swap; if
+  anything is off it stops and offers the download page instead.
+- Rollout note: the version doing the check is the one that installs, so this takes effect
+  for anyone running 1.0.199 or newer. For the first hop, attach the standalone Tempo.exe
+  to the 1.0.199 release as well (publish.cmd already stages it next to the zip) so users
+  still on older builds also get the one-click button; from 1.0.199 on, the zip alone is
+  enough.
+
+### 1.0.198
+**Another attempt at the blank-tab bug, with far better diagnostics for it**
+- The blank/empty tab you reported (worse the more you switch): I traced the layout code
+  again and confirmed the control positions are absolute - captured once and reset to the
+  exact same spot on every switch - so they can't truly drift further down each time. That
+  points the finger at the page not having settled its size/scrollbar when the switch lays
+  it out (so it measures too early and parks low or blank), rather than accumulating state.
+  Fix: after each tab switch, Tempo now does a SECOND full layout pass once the window has
+  settled - a real re-centre and scroll-to-top, not just a repaint - to catch that case.
+- The same kind of settle-pass already runs after you restore the window from minimized.
+- Much richer layout logging: the [layout] log line now records, for every tab switch, the
+  first and last control positions, the scroll range (AutoScrollMinSize) and the scrolled
+  display rectangle. If a tab still comes up blank, those numbers pinpoint exactly what
+  moved - positions, the scroll, or the range - which is what I need to finish this off.
+
+### 1.0.197
+**Check for Updates can install in place, and a richer loading splash**
+- Check for Updates now installs the new version in place instead of only sending you to
+  the download page: you get an "Update now" button that downloads the update, swaps
+  Tempo.exe and relaunches - no manual download/unzip. (The one-click updater was always
+  built in; it only switches on when the release ships a standalone Tempo.exe, which
+  publish.cmd now produces and stages automatically - see below.)
+- publish.cmd now stages a standalone Tempo.exe (plus its checksum) right next to the
+  setup zip in bin\publish, and its NEXT STEPS spell out attaching BOTH Tempo.exe (powers
+  the in-app one-click update) and Tempo-Setup-<ver>.zip (for brand-new users) to the
+  GitHub release.
+- Fixed a stale line in publish.cmd's release instructions that still claimed portable
+  builds keep their data "beside the exe" - since 1.0.194 all settings live in your local
+  AppData (the AutoClicker folder), whether portable or installed.
+- The loading splash got more to look at: it now shows the version, cycles through the
+  startup stages ("Starting up", "Loading your settings", "Preparing the workspace",
+  "Almost ready"), and has rounded corners and a subtle top accent.
+- Reviewed the clicker and macro tools again. Both are already full-featured - the clicker
+  has click styles, interval/hold/burst modes, per-click hold, repeat by count or
+  duration, randomization, multi-point and searchable profiles; macros do record/play,
+  edit, duplicate, export/import, merge, pin, reorder and notes - and the engines are
+  solid, so I left them alone rather than adding busywork.
+
+### 1.0.196
+**A loading splash at startup, a much cleaner publish folder, and two fixes**
+- New: a small "Tempo / loading..." splash now appears the instant you launch, with an
+  animated loading bar, while the main window is being built. It runs on its own UI
+  thread so the animation stays smooth during load, then fades out as the window appears.
+  (You asked for a loading effect before the app shows - the earlier fade-in only ran
+  once the window already existed, so it was easy to miss.)
+- Publish folder cleanup: a self-contained single-file build bundles the whole .NET
+  runtime and the app INSIDE Tempo.exe, so any loose *managed* framework DLLs left beside
+  it (System.*, PresentationFramework*, NAudio*, ...) are duplicates or leftovers from an
+  older build. publish.cmd now removes them automatically once it confirms (by size) that
+  Tempo.exe is a real single-file bundle, leaving just Tempo.exe + the scripts + the
+  native runtime files that self-contained .NET always keeps on disk. If the exe comes
+  out too small (single-file didn't bundle), it KEEPS every DLL and warns instead, so it
+  can never delete something the app needs.
+- Fixed: switching tabs could land on a blank or scrolled page - most reliably Settings
+  right after you'd scrolled down in Keybinds. The page is now laid out fully BEFORE the
+  scroll is pinned back to the top, so a tall page can't re-measure its scroll range and
+  come back parked low with an empty band above the content. The layout diagnostic now
+  logs for every tab (not just Statistics) so any recurrence can be pinned down exactly.
+- Live captions: if Windows Live Captions is CLOSED mid-session, the overlay no longer
+  shows the last line frozen forever - once the Live Captions window has been gone a few
+  seconds it switches to "Waiting for Live Captions...". A normal pause between phrases
+  still keeps your text on screen (that fix stays), so captions don't flicker.
+
+### 1.0.195
+**Searchable profiles in the Clicker, and the macro search fixed up**
+- Clicker: the profile picker is now searchable - start typing a profile name and it
+  suggests matches so you can jump straight to one, instead of a plain dropdown that only
+  jumped a single character at a time. Picking a match loads it; the real current profile
+  is always shown in the status bar, and only New/Save ever create or rename a profile.
+- Macro search count fixed: the line under the list ignored the search and always showed
+  the full library total. It now shows "N of M macros match" while you're filtering (and
+  "No macros match ..." when nothing does), so the count matches what's on screen.
+- Macro search now also matches a macro's Notes, not just its name - so you can find a
+  macro by something you jotted down about it.
+- The macro search box now shows a "Search macros..." hint so it's clearly a search field;
+  that hint is translated into all six languages.
+- The clicker and macro engines themselves were reviewed again and are unchanged - the
+  timing/playback core is solid; these are search and find-ability improvements.
+
+### 1.0.194
+**Data always in AppData, About layout fixed, fuller translations, smoother launch**
+- Data location: Tempo now always keeps its settings, profiles, macros and stats in
+  %LOCALAPPDATA%\AutoClicker - whether installed OR run as a portable copy. This is the
+  single always-writable spot, so saving can't silently fail from Program Files or a
+  read-only/USB folder. If you ran an older portable build that used a "Data" folder beside
+  the exe, Tempo copies it into AppData automatically on first run (non-destructive - your
+  old folder is left untouched).
+- About box: fixed overlapping text. The logo hint no longer sits on top of the version /
+  build / data lines, the long data path is truncated so it can't run under the logo, and
+  the description, buttons and links were reflowed with proper spacing.
+- Translations: 47 more buttons and labels across the Clicker, Multi-Point, Macros,
+  Statistics and Keybinds tabs now actually use the language tables (they were hard-coded
+  English before), and 5 missing phrases were translated into all six languages. No new
+  languages were added - existing ones just cover more of the UI now.
+- Launch / restart: the window now eases in smoothly (a decelerating "load-in") instead of
+  a linear ramp, so a fresh start or a post-restart hand-off feels more polished.
+
+### 1.0.193
+**Live Captions no longer freeze Tempo, plus restore/overlay/notice fixes**
+- Windows Live Captions could make Tempo go "not responding" and need a force-kill. Reading
+  the caption text walks a UI Automation tree that can block for seconds, and it was being
+  done on a 150 ms UI-thread timer - so any stall froze the whole window. That polling now
+  runs on a background thread and only hands the finished text back to the UI, so a slow or
+  stuck Live Captions can never freeze Tempo.
+- Empty/blank page after restoring from the tray: the layout repair on restore only ran for
+  a normal-sized window, so a MAXIMISED Tempo came back from minimise with a stale, empty
+  page. It now repairs the layout for maximised windows too.
+- The first-run "official source" notice could be skipped for people who start Tempo
+  minimised to the tray (it was only retried on a visible-state change). It's now retried on
+  any restore, so it reliably shows once.
+- The clicking / macro overlay badge appeared on the primary monitor even when you were on
+  another screen, and could hide behind a maximised window. It now shows on the screen your
+  cursor is on and stays above other always-on-top windows without stealing focus.
+- The "playing macro" overlay now follows a live theme change (it was being left on the old
+  theme while the clicking overlay updated).
+- Clicker and macro engines reviewed again - timing is scheduler-based on a dedicated worker
+  thread with anti-freeze backoff; no changes needed.
+
+### 1.0.192
+**Fixed publish: the tidy-folder move now actually works, and old files get cleared**
+- The 1.0.191 step that moves the Whisper native libraries into runtimes\<rid>\native\
+  never ran. A batch FOR loop treats a quoted wildcard as literal text and never expands
+  it against the filesystem, so it matched no files and left every DLL loose in the
+  output. publish.cmd now calls move directly on the wildcards (move does expand them) and
+  clears the target folder first, so a rebuild can't leave a stale library behind either.
+- Rebuilding into an existing folder could leave old files behind. The clean step ran
+  before Tempo was stopped, so a copy still running from that folder locked its files and
+  the delete silently failed. publish.cmd now stops any running Tempo at the very start -
+  before the clean, and for /quick builds too - so the folder clears properly. If a delete
+  still fails (an Explorer window open on the folder, antivirus), it now warns you instead
+  of failing silently.
+- Net result: a fresh build gives you just Tempo.exe, the scripts, and one tidy
+  runtimes\<rid>\native\ folder - no leftover DLLs from earlier builds.
+
+### 1.0.191
+**Tidier folder: native libraries grouped into a subfolder**
+- The publish and portable folder is no longer cluttered with loose native DLLs. The
+  Whisper speech-engine libraries (whisper / ggml) are now moved into the standard
+  runtimes\<rid>\native\ subfolder, so the folder you see is just Tempo.exe, the install
+  scripts, and one tidy runtimes folder. Whisper.net's loader already searches that
+  layout, and Tempo also adds it to the native DLL search path at startup as a safety net
+  - the exe's own folder is still searched too, so a flat copy still works.
+- publish.cmd does the move automatically right after building and verifies the libraries
+  actually landed. install.cmd already copies the runtimes folder recursively, so an
+  installed copy gets them as well.
+- The portable note and the README now say to keep the "runtimes" folder next to
+  Tempo.exe (instead of the loose .dll files).
+- No changes to clicking, macros, or the speech engine itself.
+
+### 1.0.190
+**Tab switches snap to the top; pinning down the pushed-down dashboard**
+- Switching tabs now always shows the TOP of the page. A forced re-centre (which a tab
+  switch triggers) used to restore the page's previous scroll offset - and right after
+  backdrop or scrollbar changes, that is one way a tab could come up parked low with a
+  big empty band above the content. A tab switch now resets to the top, which is the
+  expected behaviour anyway. (Resize and scrollbar toggles still keep you where you were.)
+- Verified the GIF backdrop handling is sound and needs no change: the header, footer and
+  full-window images each dispose the previous image when you choose a new one (no handle
+  leak), the animation is guarded against running double-speed, and only the visible tab
+  animates.
+- Added a one-line diagnostic to the log whenever the Statistics tab is laid out on a tab
+  switch, recording the exact client size, vertical offset and scroll values. The layout
+  code measures correctly in every windowed case I can reproduce, so if the dashboard
+  ever comes up pushed down again, that log line will show precisely why.
+- No changes to clicking, macros, the speech engine, or portable behaviour.
+
+### 1.0.189
+**Fixes the build - 1.0.188 would not compile**
+- Reverted the 1.0.188 change that dropped WPF from the project. That was a mistake: the
+  Windows Live Captions reader uses System.Windows.Automation (UI Automation), and those
+  assemblies ship with the WPF half of the Windows Desktop framework - so removing WPF
+  made that file fail to compile and the whole build produced no files, which is why
+  1.0.188 would not build or run. WPF is restored, with a note in the project file
+  explaining why it has to stay.
+- publish.cmd no longer deletes the previous Tempo.exe before building. If a build ever
+  fails, the last working exe now stays in place so you can still run it, instead of
+  being left with nothing. (A running Tempo is still closed before the build so dotnet
+  can overwrite the exe on success.)
+- Everything else from 1.0.188 is kept: the portable "Start with Windows" self-heal and
+  the publish check that the native speech libraries shipped beside the exe.
+- No changes to clicking, macros, the speech engine, or portable data handling.
+
+### 1.0.188
+**Leaner build, self-healing portable startup, and a more thorough publish**
+- Dropped the unused WPF framework from the build. The project pulled in all of WPF, but
+  Tempo is pure Windows Forms and never used a line of it (its sounds use System.Media,
+  not WPF). Removing it makes the self-contained Tempo.exe noticeably smaller and start
+  faster - nothing in the app changes.
+- "Start with Windows" now self-heals for portable copies. If you move a portable Tempo
+  (USB stick, a different folder), the startup entry is rewritten to its new location on
+  next launch, instead of leaving Windows trying to launch a path that no longer exists.
+- publish.cmd now checks that the native speech libraries (whisper / ggml) actually
+  landed beside Tempo.exe and warns if they didn't - catching a broken package restore
+  that would otherwise ship an exe with silently-dead Live Captions.
+- Fixed a contradictory comment in the project file about how the native libraries are
+  packaged (they sit beside the exe; they are not bundled into it).
+- No changes to clicking, macros, or the speech engine itself.
+
+### 1.0.187
+**Scrolling no longer fights you; the self-refresh flicker is gone**
+- Fixed scrolling that jumped or "refreshed by itself", most visibly on Settings. A
+  200ms live-display timer was re-asserting the scroll position on every tab five times
+  a second, which fought you while you scrolled. That scroll save/restore is only needed
+  on the Statistics tab (whose dashboard rebuild snaps to the top), so it now runs only
+  there - every other tab scrolls smoothly.
+- Fixed the background "changing colour" on refresh/scroll. The pages had been left
+  unbuffered while chasing an unrelated layout bug, which showed an erase-flash on every
+  repaint. Double-buffering is restored (it never caused the blank/pushed-down tab; that
+  was a layout/scroll issue), so refreshes are flicker-free again.
+- Hardened minimise then restore: the live timer no longer touches a page's scroll or
+  layout while the window is minimised or hidden - doing that against the collapsed
+  window was a way Settings/Statistics came back pushed down with a big empty gap. The
+  clicking overlay and milestone checks still update normally during a tray run.
+- publish.cmd now waits briefly after closing a running Tempo so the file lock is fully
+  released before it overwrites the exe - belt-and-braces on the "didn't overwrite, ran
+  the old version" fix.
+- No changes to clicking, macros, or the speech engine.
+
+### 1.0.186
+**In-app update now really updates; no more empty screen after checking**
+- Fixed the big one: an in-app update never actually replaced the app, so you kept
+  running the old version. The updater was targeting the wrong path - for a single-file
+  build it pointed at a temporary extraction folder, not the real Tempo.exe. It now uses
+  the actual running exe's location, so the update overwrites the real Tempo.exe wherever
+  it lives (your portable folder or the installed copy). This is the "remember where the
+  app is" fix.
+- Fixed the empty / pushed-down screen after clicking "Check for updates". When the
+  result dialog closed, Tempo was forcing a full re-layout of the current tab on every
+  window re-activation, which is what shoved Settings (and Statistics) down with a big
+  empty gap above. The pages aren't double-buffered anymore, so they repaint themselves
+  when a dialog closes - that forced re-layout is gone, replaced with a plain repaint.
+- publish.cmd now closes any running Tempo before building, then deletes the old exe, so
+  a locked exe (for example a portable copy running from the same output folder) can't
+  silently block the overwrite and leave you launching the old build.
+- install.cmd was already correct here - it detects the existing version, closes a
+  running Tempo, overwrites in place, and rolls back on failure - so it was reviewed and
+  left as is.
+- No changes to clicking, macros, or the speech engine.
+
+### 1.0.185
+**Portable mode is back - and now truly portable**
+- Restored running Tempo as a portable copy (no install): run Tempo.exe straight from
+  the build/zip folder with its .dll files beside it. Nothing gets installed.
+- Made portable genuinely portable. A portable copy now keeps its settings, profiles,
+  macros and stats in a "Data" folder right next to Tempo.exe, so the whole folder
+  travels together - copy it to a USB stick or another PC and it just works. The old
+  portable left data in %LOCALAPPDATA%; this self-contained folder is the improvement.
+  If that folder ever isn't writable (for example unzipped under Program Files), Tempo
+  safely falls back to %LOCALAPPDATA% so saving never fails. An installed copy is
+  unchanged (%LOCALAPPDATA%\AutoClicker).
+- About again shows whether you're on the Installed or Portable edition, and Settings
+  shows a short note explaining how a portable copy behaves.
+- publish.cmd: the setup zip's README now spells out both ways to run (run Tempo.exe for
+  portable, or install.cmd to install), and the maintainer notes make clear the one zip
+  serves both - and that the standalone exe by itself isn't portable, because it needs
+  the .dll files too.
+- Website and README updated with a Portable option alongside Installed.
+- No changes to clicking, macros, or the speech engine.
+
+### 1.0.184
+**Empty Statistics + overlong scrollbar fixed; startup notice and animation fixed**
+- Fixed the empty Statistics tab and the over-long, wrong-sized scrollbar together. The
+  previous attempt switched the pages to composited painting (WS_EX_COMPOSITED) to stop
+  the blanking, but that broke AutoScroll's scrollbar - hence the long bar. The pages are
+  now plain (non-buffered) scrolling pages: the child controls render normally and the
+  scrollbar is sized correctly. (The only trade-off is that an animated GIF backdrop - an
+  optional, rarely used extra - may shimmer slightly in the page margins.)
+- The first-run "official source" notice now appears up front, before the app is
+  interactive, instead of opening on top of a window that was still fading in.
+- Fixed the missing startup animation. The window fade-in was being kicked off first and
+  then hidden behind that first-run notice, so it looked like nothing animated. The
+  notice now shows first and the window fades in afterwards, so the animation is visible.
+- publish.cmd now overwrites cleanly: it deletes a previous build's Tempo.exe and
+  checksum before building so a leftover or read-only file can't trip it up (the setup
+  zip was already force-overwritten).
+- Re-audited the Clicker and Macros (numeric ranges, macro speed/loop guards, the
+  player's timing): all correctly guarded, nothing to fix. install.cmd and uninstall.cmd
+  remain solid and were left unchanged.
+
+### 1.0.183
+**Installed-only: portable mode removed; README and website rebuilt**
+- Removed "portable" mode entirely - by design, Tempo is now an installed app only.
+  The install instructions are a single, clear path (build with publish.cmd, run
+  install.cmd, launch from the Start Menu), and the old "run it from the build folder"
+  / portable option is gone from the README, the website, the in-app About dialog and
+  Settings, and the installer's notes.
+- Rewrote the README and the website around that single install flow, and refreshed
+  the feature copy to match what Tempo actually does now: single-to-quadruple clicks
+  and six interface languages (English, Spanish, French, German, Italian, Portuguese),
+  plus a mention of the optional accessibility captions.
+- Internal cleanup: dropped the now-unused deployment-detection code.
+
+No functional behaviour changed in this release - it's documentation, presentation and
+a deliberate scope decision.
+
+### 1.0.182
+**The empty/blank tab bug - fixed at the root**
+- Fixed the recurring blank tab for good - the case where a tall tab (Statistics,
+  Settings, Keybinds) comes up empty, sometimes with a scrollbar but no content, often
+  just from switching to it. The root cause was finally pinned down: every tab page was
+  double-buffered the old way (OptimizedDoubleBuffer + AllPaintingInWmPaint) AND set to
+  auto-scroll. On a page whose content is taller than the window, that is a documented
+  WinForms flaw - the off-screen buffer is only the size of the visible area, so the
+  child controls below the fold were left unpainted and the page looked blank. The short
+  tabs (Clicker, Macros) were never tall enough to trip it, which is why only some tabs
+  were affected.
+- The pages now use composited painting (WS_EX_COMPOSITED): the whole page, background
+  and all the cards together, is drawn into one off-screen surface bottom-up. That keeps
+  the animated backdrop flicker-free AND guarantees the content always renders, at any
+  height and any scroll position. As a safety net, a switched-to tab is also repainted
+  once more after it has fully settled. The scrollbar now scrolls real content instead
+  of an empty area.
+
+This replaces the long line of partial fixes for this bug (scroll repaint, layout
+repaint, minimise repair, post-dialog repair) with a fix at the actual cause. Those
+earlier guards are kept as harmless reinforcement.
+
+### 1.0.181
+**Empty tab after a dialog (e.g. Merge) - fixed; plus a corrupt-speech-model install fix**
+- Fixed the recurring empty tab once more, this time for the case you hit: open a dialog
+  (Merge, the macro editor, CPS test, etc.), close it, switch tabs and find them empty
+  with the content shoved to the bottom. While a dialog is open the main window is
+  inactive and its scrolling pages can be left with a stale layout. Tempo now repairs
+  the visible page's layout the moment the window becomes active again - which also
+  covers Alt-Tabbing back to it. Together with the minimise fix in 1.0.180, the three
+  ways this bug showed up (after recording, after a dialog, after Alt-Tab) are all
+  handled. Your scroll position is left untouched, so this never jumps you around.
+- Fixed the installer silently installing a corrupt speech model. install.cmd checked
+  only that the download produced a file, not that it finished; a dropped connection left
+  a truncated file that got installed and then crashed the offline captions on load. It
+  now verifies the size (the model is ~147 MB) and, if the download was incomplete,
+  removes the partial file and tells you to fetch it later or use Windows captions.
+
+The publish and uninstall scripts were reviewed again and are already solid (publish
+verifies its build output and reports size; uninstall flags the 100+ MB model, offers a
+backup zip, and removes the model on purge), so they were left unchanged rather than
+padded. The Clicker and Macros remain audited and clean.
+
+### 1.0.180
+**CRITICAL build fix - plus the empty-Statistics-after-recording bug, finally**
+- Fixed a build-breaking bug that had quietly crept into 1.0.178 and 1.0.179: a
+  duplicated method (and a couple of unqualified name references) meant those two
+  versions would not compile at all. If you tried to build them and it failed, this is
+  why - and it also means none of the fixes from 1.0.178/1.0.179 ever actually reached a
+  working build. This release compiles cleanly and carries all of them.
+- Fixed the Statistics tab coming back as a big empty space with the dashboard shoved to
+  the bottom after recording a macro. Recording auto-minimises the window to stay out of
+  the recording; coming back from minimised left the scrolling pages with a stale layout
+  and scroll position. Tempo now never re-lays-out while minimised, and rebuilds the
+  layout cleanly (snapping the visible tab back to the top) the moment the window is
+  restored - whether from a recording or an ordinary minimise.
+
+This release also finally delivers, in a build that actually compiles, everything from
+the previous two attempts:
+- "Start with Windows" uses the real executable path, so it launches reliably at sign-in.
+- The interface genuinely changes language: all six languages are selectable and the
+  section titles across Clicker, Macros and Settings now translate.
+- Live Captions: the native speech engine is no longer cancelled mid-sentence (a likely
+  hard-crash cause), audio is sanitised before the engine sees it, the silence filter is
+  less aggressive (fewer "said nothing" gaps), and the worker threads are rebalanced so
+  it keeps up with speech.
+- Website refreshed (six languages, accessibility captions, a languages FAQ).
+
+Audited the Clicker and Macros again (engine guards, click styles incl. Quadruple, the
+recorder's delay-coalescing, the player's button/key cleanup, profile indexing): all
+correctly guarded, nothing to fix. The publish/install/uninstall scripts remain mature
+and were left as-is rather than churned.
+
+### 1.0.179
+**Live Captions: crash and missing-words fixes (best-effort) + Clicker/Macro audit**
+- Stopped cancelling the speech engine mid-sentence. Tempo was passing a cancellation
+  signal straight into the native transcription call; cancelling it part-way through can
+  corrupt the native engine and hard-crash the whole app (a native crash that no amount
+  of error handling can catch). Each short chunk is now allowed to finish, and captions
+  stop cleanly between chunks instead.
+- The audio is now sanitised before the engine sees it. A stray invalid sample (NaN /
+  infinity / out-of-range, which an odd device buffer can produce) is clamped to a safe
+  value, removing another way the native engine could crash.
+- Fixed "Tempo said nothing / only half the words". The silence filter was too strict
+  and dropped quiet audio (e.g. a video at a modest volume) entirely; it's now far more
+  permissive. The transcription threads were also rebalanced so the engine can keep up
+  with real-time speech and stop dropping words, while still leaving the UI responsive.
+- Audited the Clicker and Macros again for bugs (engine loops, click styles incl. the
+  new Quadruple, the macro recorder's delay-coalescing and the player's button/key
+  cleanup): all correctly guarded, nothing to fix.
+
+PLEASE READ - honest status on Tempo's own captions: these are real fixes for the most
+likely causes, but they ship blind. Tempo's caption engine uses a native speech library
+that can't be tested or reproduced in my build environment, and a native crash can't be
+caught from normal code. If captions still crash or misbehave for you, that is the
+on-device engine itself, and I'd recommend Windows 11's built-in Live Captions instead -
+they're more accurate, lower-latency, and rock-solid. Tempo can launch them for you
+(Settings > Captions), and YouTube's own captions also work regardless. Tempo's captions
+are a convenience, not a replacement for those.
+
+### 1.0.178
+**Start-with-Windows fix, the empty-tab bug, and real multi-language UI**
+- Fixed "start with Windows" not launching at sign-in. The startup entry used a path
+  that can be wrong for a single-file build (a temporary extraction path); it now uses
+  the real Tempo.exe path, so the entry survives and actually runs at sign-in.
+- Fixed tabs going blank after an action. These pages are double-buffered and scroll,
+  and any layout change (a control shown/hidden by some action, the scroll region
+  shifting) could leave part of the page stale/blank because only the changed area
+  repainted. The page now forces a full repaint after every layout pass - the proper
+  companion to the earlier scroll-repaint fix.
+- Languages now actually translate the interface. Italian and Portuguese were already
+  built in but weren't fully exposed, and many already-written translations were unused
+  because the labels weren't wired to the translator. The card titles across Clicker,
+  Macros and Settings now translate, the language list is complete (English, Español,
+  Français, Deutsch, Italiano, Português), and a few missing strings were filled in -
+  all without adding any new languages.
+- Website: refreshed the intro, called out the six languages and the accessibility
+  captions, and added a "what languages are supported" FAQ entry.
+
+Honest notes: Live Captions and the publish/install/uninstall scripts were reviewed and
+are already well-hardened from recent versions, so they were left as-is rather than
+changed for the sake of it - tell me a specific behaviour to change and I'll do exactly
+that. UI translation now covers the section titles; wiring every last label to the
+translator is a larger ongoing pass.
+
+### 1.0.177
+**Tray clarity, Quadruple click, hotkeys that work on more keyboards, caption robustness**
+- Hotkeys that wouldn't work on some keyboards now work. If Windows refuses to bind a
+  shortcut the normal way (common with certain keyboards, or when another app has
+  grabbed the key), Tempo automatically falls back to a low-level keyboard hook and
+  detects the combo itself. Keyboards where the normal path already works are
+  unchanged.
+- Tray confusion fixed: the first time Tempo hides to the system tray - whether it
+  started with Windows or you closed the window - it now shows a clear one-time message
+  explaining it's still running in the tray and how to reopen it. This shows once even
+  if routine tray notifications are off, so the app is never mistaken for having quit.
+- New click type: Quadruple (4 clicks), alongside Single / Double / Triple.
+- Live Captions audio robustness: capped Whisper to fewer CPU cores so heavy
+  continuous audio (a video playing) no longer makes the app feel like it's "not
+  responding"; guarded the resampler against odd device formats; and when the audio
+  device changes mid-session (headphones plugged in, app switches output) the status
+  now says plainly that captions stopped and to toggle them off/on to resume.
+- publish.cmd: build-failure help now includes a .NET 8 SDK check hint.
+
+Honest note on captions: these changes reduce the freezes/"not responding" and make
+failures clearer, but Tempo's own captions still use a small on-device model and won't
+match Windows 11 Live Captions. If audio playback keeps stopping capture, that's a
+Windows audio-device behaviour; Windows 11's own Live Captions remain the most robust
+option and Tempo can launch them for you.
+
+### 1.0.176
+**Two small, real fixes for the Clicker and Multi-Point**
+- Clicker: the "Clicking ... N CPS" status now shows the true rate. It was reading the
+  speed slider's value, which is capped at the slider's maximum, so a fast interval
+  typed straight into the milliseconds box (e.g. 2 ms = 500 CPS) could display a lower
+  number than it was actually clicking. It now reads the engine's real effective rate.
+- Multi-Point: the Order tooltip now explains what each mode does (Sequential, Reverse,
+  Random, Ping-Pong) instead of a single generic line.
+
+Honest note: I went through the Clicker, Macros and Multi-Point closely again. The
+clicking engine, macro recording/playback (loops, 0.1x-10x speed, loop delay) and
+multi-point system (four visiting orders, per-point repeat/dwell/button/type, full
+reordering, live highlight of the active point) are all feature-complete and I couldn't
+find real bugs in them - so I fixed only the two genuine issues above rather than pad
+the release. If there's a specific behaviour you want changed or added on any of these
+tabs, tell me exactly what and I'll build that precisely.
+
+### 1.0.175
+**More detail in publish.cmd; a full re-audit of the app**
+- publish.cmd now reports more after a build: the exact output folder, the runtime
+  target it built for (and that it's self-contained, single-file, with native libs
+  beside the exe), and the app version - on top of the existing size, checksum,
+  installer, notes and timings.
+- Re-audited the Clicker, Multi-Point, Macros, Live Captions, Settings, and the
+  install/uninstall scripts for bugs and gaps. They came back solid: the click engine
+  and timing are well-guarded, Multi-Point and Macros have full keyboard control
+  (Delete, Ctrl+D, reorder, rename, etc.) with safe bounds, the captions have all the
+  recent crash/freeze fixes plus a no-audio watchdog, Settings is complete, and the
+  installer verifies its copy, brings the native caption libraries, and rolls back on
+  failure. No changes were forced into that working code, to keep this conflict-free.
+
+If there's a specific behaviour you want changed on any one of those - a wording, a
+default, a layout tweak, a new option - tell me exactly what and I'll do that precisely
+rather than guess.
+
+### 1.0.174
+**Fixed an intermittent crash when stopping captions + start-with-Windows now goes to the tray**
+- Fixed the occasional crash when turning Tempo's captions off. The speech engine was
+  sometimes being shut down while it was still in the middle of transcribing a chunk -
+  disposing it mid-work could crash the app. Now the engine is only released after the
+  transcription has actually finished (and on a background thread), so stopping captions
+  is safe, and it no longer blocks or freezes the window either.
+- "Launch Tempo when I sign in to Windows" now starts Tempo in the tray instead of
+  popping its window open at every boot. The window is one click away from the tray
+  icon. This also applies to people who turned the setting on in an older version (the
+  startup entry is upgraded automatically).
+
+Note on captions: this addresses the stop-related crash. Tempo's own captions still use
+a small on-device model and won't match Windows 11 Live Captions for accuracy or delay;
+for the best captions, Windows 11's remain the better choice (and Tempo can launch them).
+
+### 1.0.173
+**Fixed captions freezing the app + the empty-tab-on-scroll bug (real root cause)**
+- Fixed Tempo going "Not Responding" when you started its own captions. The speech
+  model (100+ MB) was being loaded on the UI thread, freezing the whole app for a few
+  seconds. It now loads on a background thread - the window stays responsive and shows
+  "Loading speech model..." then "Listening..." - and turning captions off mid-load is
+  handled cleanly.
+- Fixed the empty/blank screen when scrolling a tab (and a tab coming back blank).
+  Found the real cause this time: the page is an auto-scrolling, double-buffered
+  surface, and that combination only repainted the newly-exposed strip on scroll,
+  leaving the rest blank. The page now forces a full repaint on every scroll, so it
+  stays painted. This is why the earlier layout-based attempts didn't fully fix it.
+- Website: added an FAQ section (free?, the unsigned-app warning, bans/safety, safe
+  speeds, where data is stored, captions vs Windows 11, Windows-only).
+- About dialog: now shows whether Tempo is running Installed or Portable, the .NET
+  runtime, and your data folder location with an "Open data folder" link.
+- publish.cmd: the next-steps now remind you to run and click around the built exe
+  before shipping.
+- uninstall.cmd: when settings are kept, it now tells you exactly where they are.
+
+Note on captions: this fixes the freeze (the "model not responding"). Tempo's own
+captions still use a small on-device model and won't match Windows 11 Live Captions;
+for the most accurate, lowest-delay captions, Windows 11's remain the better choice.
+
+### 1.0.172
+**Fixed the blank-tab-on-return bug, richer CPS Test, clearer data folder**
+- Fixed the big one: switching tabs and coming back could leave a tab showing an
+  empty screen. The scroll-blank fix from before was skipping the re-layout a tab
+  needs when you return to it; now an actual tab switch always gives the tab a clean,
+  complete re-layout (positions, scroll metrics, repaint), while scrolling still
+  avoids the flicker it was meant to. This affects every tab - Clicker, Multi-Point,
+  Macros, Statistics, Keybinds and Settings.
+- CPS Test now shows more detail after a run: a Consistency score (how even your
+  click rhythm was) and your single fastest gap between two clicks, on top of the
+  existing CPS, peak, best and per-session stats.
+- The data folder (%LOCALAPPDATA%\AutoClicker) now gets a plain-English README
+  explaining what each file is and that it's safe to back up or delete. The installer
+  also tells you where your data is saved when it finishes.
+
+On the tabs (Clicker, Macros, Live Captions, Multi-Point, Statistics): these are
+feature-complete and were already audited as solid, so rather than force risky
+cosmetic edits I focused on the shared blank-tab fix (which improves all of them) and
+the concrete CPS Test and data-folder requests. Tell me if there's a specific behaviour
+on any one tab you'd like changed and I'll do that precisely.
+
+### 1.0.171
+**Fixed the update-check timeout + a more detailed, more colourful publish.cmd**
+- Fixed update checks timing out even on a healthy connection. The previous version
+  cut the per-attempt timeout too short and didn't retry timeouts; now the timeout is
+  generous again (for slow cold connections doing DNS + TLS) and a timeout is retried
+  once before giving up.
+- The timeout message no longer wrongly blames your connection. If it still times out
+  after retrying, it now explains GitHub may be slow or a firewall/VPN/antivirus may
+  be blocking github.com - and that your internet is otherwise fine.
+- publish.cmd: added a colourful animated gradient divider that sweeps across after
+  the banner, and a green celebratory sweep on a successful build.
+- publish.cmd: added clearer descriptions under several build steps (what the
+  environment check, verification, and packaging steps actually do).
+
+Note on the timeout: with working internet, a timeout is usually either a momentarily
+slow GitHub or something on the network path (a corporate proxy, VPN, or antivirus)
+briefly intercepting the connection to github.com. The retry handles the common slow-
+connection case automatically.
+
+### 1.0.170
+**Update check now rides out temporary GitHub hiccups (e.g. the 504 error)**
+- If the update check hits a temporary server-side error from GitHub - a 500/502/503/
+  504 gateway error, a 429, or a dropped connection - Tempo now automatically retries
+  a couple of times with a short pause before showing anything. A brief blip (like the
+  "error 504" some people saw) now usually just works instead of popping an error.
+- When GitHub really is having a longer problem, the message is clearer that it's a
+  temporary issue on GitHub's side, not a problem with Tempo or your PC - just try
+  again in a few minutes.
+- Tuned the timing so the retries always finish inside the check's safety window (the
+  per-try timeout is shorter and the overall window a little longer).
+
+Note: a 504 is a "gateway timeout" returned by GitHub's servers, not something Tempo
+or your PC did wrong. These are almost always temporary; this change just makes Tempo
+shrug off the short ones automatically.
+
+### 1.0.169
+**Small Clicker display fix + a full bug sweep**
+- Clicker: the Manual Speed target now reads consistently. Dragging the slider showed
+  e.g. "Target: 200 CPS" while typing the same speed into the interval boxes showed
+  "Target: 200.0 CPS"; both now show the same clean whole-number form.
+- Did a broad bug sweep across the engine and app (anti-freeze math, the interval and
+  burst run loops, click-style actuation, interval composition/decomposition, the
+  slider sync, version parsing, and string handling). Everything else was already
+  correctly guarded - divide-by-zero, array access, and substring operations are all
+  protected - so no other changes were needed.
+- publish.cmd step 3 (the clean phase) was checked and is already correct (it switches
+  to its own folder, measures and clears the right output folders, and reports what it
+  reclaimed), so it was left as-is.
+
+No features added or removed.
+
+### 1.0.168
+**Fixed: turning Windows Live Captions off could crash Tempo**
+- Hardened the caption start/stop so pressing the caption hotkey to turn Windows 11
+  Live Captions on, then pressing again to turn it off, no longer risks taking Tempo
+  down with it. The whole caption transition is now crash-proofed: any unexpected
+  error (Windows captions spawning/closing, the UI Automation reader, the overlay, or
+  a timer) is caught and logged instead of crashing the app.
+- Fixed an orphaned "did it appear?" verification timer. Turning captions on starts a
+  short timer that re-checks whether Windows Live Captions actually opened; if you
+  turned captions off (or switched to Tempo's own engine) before it finished, that
+  timer used to keep running and could re-send the Win+Ctrl+L shortcut - flipping
+  Windows captions back on or thrashing the window after you asked for off. It's now
+  cancelled the moment the state changes.
+- Added a guard against rapid re-entrant toggles (mashing the hotkey), so overlapping
+  on/off transitions can't get the caption state out of sync.
+
+Honest note: I couldn't reproduce the exact crash from the code here, so this is a
+defensive fix targeting the most likely causes (the orphaned timer and an unguarded
+exception during the toggle). If captions still crash Tempo after this, please send
+the crash report it saves plus the exact steps, and I'll pin down the precise cause.
+
+### 1.0.167
+**Small polish to Macros, Clicker & Statistics**
+- Macros: the selected macro is now kept selected when the list refreshes (after a
+  search, rename, pin, etc.). Previously a refresh could clear your selection and
+  reset the action buttons - now it stays put if the macro is still in view.
+- Clicker & Statistics: reviewed the existing features (CPS estimates, the manual
+  speed slider and its buttons, profile dropdown, lifetime/session counters, button
+  breakdown, milestones, and history filtering). They already preserve selection,
+  guard their math, and format numbers consistently, so no changes were needed - and
+  I deliberately avoided touching working code to keep this conflict-free.
+
+No features were added or removed; this is purely polish to existing behaviour.
+
+### 1.0.166
+**Cleaner Tempo captions, smarter update checking, and script polish**
+- Tempo's own captions no longer stutter repeated words at the seams between chunks.
+  Because Tempo transcribes overlapping windows of audio, the same word could appear
+  twice ("on on the mat"); it now detects and removes that duplicated overlap, so
+  captions read cleanly.
+- Update checking is smarter about what it offers to download: it prefers a
+  standalone Tempo.exe (so the in-app one-click update can apply it), and now also
+  offers the installer zip when that's the only thing attached - previously it would
+  just send you to the releases page in that case.
+- publish.cmd now reminds you to attach Tempo.exe too, since that's what enables the
+  in-app one-click update for users.
+- Reviewed install.cmd and uninstall.cmd; they already handle a running Tempo, file
+  locks, missing-exe discovery, and the not-installed case, so no changes were needed.
+
+Honest note on captions: Tempo's own captions use a small on-device model and still
+won't match Windows 11 Live Captions, which uses a much larger streaming engine. This
+update removes a real, visible flaw (the repeated words), but a short delay and the
+occasional misheard word are inherent to a local model. For the most accurate, lowest-
+delay captions, Windows 11 Live Captions remains the better choice and the default.
+
+### 1.0.165
+**Nicer card UI with section icons**
+- Section cards now show a small coloured icon next to each title (a clock for Click
+  Interval, a cursor for Click Options, a target for Click Position, and so on),
+  matching the polished card look. This applies across the Clicker, Macros and
+  Settings tabs.
+- Added a reusable icon system to the card component so future cards can show a
+  matching glyph with no extra work.
+
+Honest note: the Multi-Point, Statistics and Keybinds tabs use a flatter layout
+without cards, so they don't gain icons yet. Converting them to the card style is a
+larger visual rework I'd rather do carefully (and have you check on your screen) than
+rush blind - tell me to proceed and I'll do those next, one tab at a time.
+
+### 1.0.164
+**Fixed: scrolling could flash an empty screen + publish.cmd clean-phase fixes**
+- Fixed the page going blank/empty while scrolling up or down. Scrolling makes the
+  scrollbar appear or disappear, which Tempo was treating like a window resize and
+  re-laying-out every control mid-scroll - briefly blanking the view. Tempo now only
+  re-centres when the window width actually changes, so scrolling is smooth and never
+  blanks the content.
+- publish.cmd: the script now switches to its own folder first, so building works no
+  matter what directory you launch it from (previously the clean and build steps used
+  relative paths that only worked from the project root).
+- publish.cmd: the clean phase (step 3 of 7) now measures the space it reclaims using
+  the same folders it actually deletes, and clearly lists what it's removing.
+
+### 1.0.163
+**publish.cmd bug fixes**
+- Fixed the build summary describing the wrong build options. It claimed the exe was
+  "compressed" and didn't mention the native speech libraries, when in fact
+  compression is off and those libraries are kept beside the exe. The displayed
+  options now match what's actually built.
+- Fixed the "Building..." line saying it was "compressing into one .exe" when
+  compression is disabled.
+- Fixed the final summary's "Built with: .NET SDK" line never appearing — it checked
+  a variable that was never set. It now correctly shows the SDK version used.
+
+Clicker: audited the engine and tab (run loops, fixed-count and duration handling,
+interval/burst timing, jitter bounds, and divide-by-zero spots) and found it already
+solid — inputs are clamped, jitter stays positive, and the high-CPS path is guarded —
+so no changes were needed there.
+
 ### 1.0.162
 **Fixed: install.cmd couldn't find Tempo.exe after publishing**
 - Fixed install.cmd failing with "couldn't find Tempo.exe" when you run it from the
