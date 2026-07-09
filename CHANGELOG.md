@@ -2,6 +2,197 @@
 
 All notable changes to Tempo. Newest first. Per-release notes are also in the `release-notes/` folder and on the [Releases page](https://github.com/justcamop555-pixel/Tempo/releases).
 
+### 1.0.252
+**Fixed: light-mode flashes in dark themes**
+- Drop-down boxes no longer flash light in dark themes. The combo let Windows paint its native LIGHT button/border first and drew the dark look over it a frame later — visible on every repaint (tab switch, hover, closing the list). The combo now paints itself entirely, so the light native art never renders. Rows in the open list are unchanged.
+- List column headers (Live Monitor, session history, Multi-Point points) now use Windows' dark header theme instead of staying light in dark themes — removing both the permanent light strip and its flash on every list refresh. List and combo-dropdown scroll bars are dark-themed too.
+- Together with the earlier fixes (tab body erase, number-spinner arrows, startup fade), this clears the remaining "buttons and labels flash light in dark mode" report. Light themes are unaffected (the same native paints simply matched the theme there).
+
+### 1.0.251
+**Sidebar & loading rework, CPS-test keyboard mode, layout tidy-up**
+- Sidebar: added a subtle version footer ("Tempo v1.0.251") so the nav rail reads as finished instead of trailing off into empty space.
+- Loading: the startup splash now has a soft accent-tinted radial glow behind the logo for a more premium look.
+- CPS Test: new **keyboard mode** — pick "⌨ Space" from the Input row to measure how fast you can spam the spacebar (OS auto-repeat from holding the key is ignored, so only real presses count). Pairs with the Clicker's new keyboard auto-presser.
+- Multi-Point: fixed the last "Rep" column being clipped at the right edge of the points table once it had a scrollbar.
+- Reviewed every tab and the CPS-test dialog for overlapping text/labels — none found; the app's layout is clean.
+
+### 1.0.250
+**Macro pre-record countdown + Statistics summary polish**
+- Macros: added an optional "Countdown (s)" in the Record card — a 3, 2, 1 countdown before capture starts so you can switch to the app you want to record first (its own alt-tab isn't recorded). Symmetric with the playback countdown. 0 = start immediately (default).
+- Statistics: the "Copy summary" now includes Active days, Best day and Busiest weekday; CSV export also includes Best day.
+
+### 1.0.249
+**Statistics accuracy + Clicker progress polish (existing features)**
+- Statistics: the "all-time" insight cards (Active days, Best day, Busiest weekday/hour, Top profile, Longest/Current streak, This year, Daily average) are now driven by persisted rolling aggregates instead of the recent-history window — so they no longer silently under-count once you pass 200 recorded runs. Existing users are seeded once from their current history (nothing resets). The by-session / last-7-days / by-hour charts still show recent history.
+- Clicker: a fixed-count run now shows a live time estimate — "▸ 340 / 1000 (34%) · ~8s left" — and the fixed-duration run shows its percentage alongside the remaining time.
+
+### 1.0.248
+**Fix: keyboard-key mode with no key set clicked the mouse**
+- Fixed a bug in 1.0.247's new keyboard auto-presser: choosing "Keyboard key" but not picking a key, then pressing Start, would silently **left-click the mouse** instead. Key mode now never falls back to a mouse click, and Start shows "Choose a key to auto-press first" if no key is set.
+
+### 1.0.247
+**Clicker, Statistics & Macros improvements**
+- Clicker: auto-press a **keyboard key** (not just a mouse button) — pick a key and repeat it with the same interval/repeat/hold/Humanize settings.
+- Clicker: the Manual Speed Target now warns when Anti-Freeze's Max CPS will cap it (was silently slower); the exact-CPS box ceiling follows the slider.
+- Clicker: fixed/added tooltips (real 2000 CPS unlock ceiling, the Hold + Quadruple options, and the exact-CPS/preset/Anti-Freeze fields).
+- Statistics: fixed CSV export splitting big numbers/decimals across columns (correct for spreadsheets and non-US locales); added **JSON export**; added a "+N vs yesterday" trend on the Today card.
+- Macros: new per-macro **"Keep key/button holds at speed"** so 2×/4× no longer shrink a held WASD movement into a tap; fixed Merge (refreshes the list + separates segments); readable step names (Left ↓ / Key ↑ / Move / Scroll) in the monitor & editor; duplicating a macro no longer inherits the original's play count / last-played time.
+
+### 1.0.246
+**Macro timing accuracy (WASD holds), bug fixes, lighter Live Captions**
+- Playback now schedules against one absolute monotonic timeline instead of sleeping each delay "from now", so per-step overhead (SendInput, the step highlight, loop cost) no longer accumulates — recorded key-holds and overall pace stay true even over long/looping macros (with a catch-up cap to avoid an input burst after a system hitch). This is the main fix for "WASD movement isn't the right length in-game".
+- Recording now timestamps each key/click from the OS hardware event time rather than when the hook callback runs, so UI-thread jitter is no longer baked into recorded hold durations.
+- Fixed the Windows Live Captions bar being left stuck off-screen: exit now waits for the in-flight caption read before restoring the bar, Tempo no longer memorises an off-screen position as the restore target, and it clamps the restore to a visible spot.
+- The recorder no longer captures Tempo's own synthesised input (a running clicker/macro during recording was being recorded into the new macro).
+- Live Captions mirroring is much cheaper: it re-reads only the located caption element each poll (re-walking the UI-Automation tree only occasionally or when text stops), and polls a little less often.
+
+### 1.0.245
+**Macros now drive WASD / arrow keys in games + Tempo opens on the Clicker tab**
+- Recorded movement macros (WASD / arrows) now work in games. Tempo sends keys as hardware **scan codes** (with the extended-key marker for arrows) instead of virtual keys — DirectInput / Raw Input games read scan codes, so they were ignoring the old input entirely.
+- Fixed focus loss on playback: minimising Tempo (and its countdown overlay) could pull keyboard focus off the game so the first keystrokes were dropped. When a macro is started via hotkey from inside a game, Tempo now re-aims focus at that game right before sending input.
+- Tempo now opens on the **Clicker** tab every launch instead of reopening on the last tab used (e.g. Macros).
+- The keyboard path now logs when Windows blocks its input (elevated / anti-cheat game vs non-elevated Tempo), so that case is diagnosable. Guidance: run the game borderless-windowed, run Tempo as administrator for anti-cheat games, and keep playback speed at 1x for movement holds.
+- Minor: stopped writing the settings file on every tab switch (the last-tab value is no longer used).
+
+### 1.0.244
+**Fixed: wrong page (Clicker) showing after a long minimised macro run + more light-flash cleanup**
+- Fixed the Clicker page appearing on top of whatever tab you were on after the window sat minimised for a long time (e.g. an 8-hour AFK macro grind with monitors sleeping/waking). Root cause: the monitor-wake re-centre froze/un-froze painting on hidden pages too, and the un-freeze re-showed a hidden page (Clicker, first in order) over the real one. The paint freeze is now only applied to the on-screen page; re-centring is skipped while minimised; and a restore-time check re-hides any stray page.
+- Number spinners (▲▼) no longer flash their native light-grey Windows arrows before the dark ones — Tempo now paints them itself.
+- The tab area no longer flashes its light Windows tab-body while switching tabs or restoring from minimised (cleared to the dark theme colour).
+- Tooltips are now dark to match the app instead of the bright system popup.
+- A finishing macro only restores the window if Tempo minimised it for the run — it no longer pops the window open (stealing focus) when you minimised it yourself.
+
+### 1.0.243
+**Fixed: light "flash" on labels & buttons at launch**
+- The window faded in by ramping its opacity, which made it a *layered* window; combined with the backdrop compositing, the labels and buttons briefly flashed their light default background before the dark theme showed — a quick white blink most users saw every launch.
+- The window now reveals straight at its final opacity (no layered fade), so it appears already dark with no flash. The startup splash still provides the smooth load-in.
+- The form is also painted its theme background before any control is built, so it can never show a white default behind the controls as it comes up (theme-correct for light themes too).
+
+### 1.0.242
+**GIF / image backdrop & scrolling fixes**
+- Fixed control "overlap"/ghosting over a full-window wallpaper while scrolling — the page now repaints immediately on scroll instead of flashing a shifted/stale backdrop frame.
+- The animated GIF backdrop no longer appears to "restart" while you scroll (same root cause — it now stays put and keeps animating).
+- Switching tabs no longer flashes to the top before restoring your scroll position; the re-centre + restore commits in a single repaint.
+
+### 1.0.241
+**Clicker & Macros — quality improvements**
+- Clicker: roll the mouse wheel over the Manual Speed slider to set the rate in useful steps (live while running), without the page scrolling underneath.
+- Macros: new one-tap playback speed presets (0.5× / 1× / 2× / 4×) in the Playback card, translated into all 6 languages.
+- Both purely additive — existing clicker/macro behaviour is unchanged.
+
+### 1.0.240
+**Clicker polish + a refreshed website**
+- Fixed the clipped "CPS Test" button (was showing "CPS Tes") — now sized for the gauge icon + full label.
+- The CPS preset matching your current rate (10/50/100/200) is highlighted in the accent colour, correct on startup and as you change speed.
+- Rewrote the project website (index.html): live theme switcher, interactive CPS meter, click-modes explainer, why-Tempo comparison, scroll-progress bar and hero spotlight.
+
+### 1.0.239
+**Tabs remember their scroll position**
+- Each tab keeps its own up/down scroll spot: scroll down, switch tabs, switch back, and you're where you left off instead of snapped to the top.
+- Fixed the root cause (the content re-centring repositioned controls in scrolled coordinates and reset the scroll); it now repositions in unscrolled space and re-applies your exact scroll.
+
+### 1.0.238
+**Fixed: window coming back to a blank/empty screen**
+- Restoring from the tray/taskbar (or after macro recording auto-minimised the window) could show an empty page that only filled in after a delay. The layout is now re-centred and repainted **immediately** on restore — no blank frame, no waiting.
+- Showing the window from the tray now repaints right away (a hidden-then-shown window previously skipped the repair).
+- Re-centring on resize/maximise is now a single batched pass, so it no longer flickers or momentarily blanks.
+
+### 1.0.237
+**The full visual redesign — every tab restyled to the new look**
+- Rounded inputs, dropdowns and text boxes with clean stacked chevrons.
+- Icon buttons (＋New, Save, Duplicate, Delete, Start, Stop, CPS Test, Humanize).
+- Colour-coded actions: accent New/Set, red Delete, violet Humanize.
+- Pill toggle switches for on/off options.
+- Uppercase letter-spaced card headers with rounded icon badges on rounder cards.
+- Accent-coloured live value (Target: **200 CPS**), uppercase PROFILE/NAME labels, footer tip bar.
+- New strings translated into all 6 languages; everything recolours to your theme instantly.
+
+### 1.0.236
+**A fresh, more polished look — across every tab**
+- New card headers everywhere: UPPERCASE, letter-spaced titles next to a rounded, accent-tinted icon badge.
+- All buttons gained a subtle gradient and rounder corners for more depth.
+- Key primary actions (New, Humanize, Set) are now filled in the theme accent colour, alongside the green Start / red Stop.
+- Everything recolours to your chosen theme (30+) instantly on switch.
+
+### 1.0.235
+**Clicker, Macros & Statistics — polished old features and a few new ones**
+- **Clicker:** new "Set exact CPS" box — type an exact target rate and apply it instantly; stays in sync with the slider, ± buttons and presets.
+- **Macros:** the playback progress bar is now the app's themed rounded bar (accent-coloured) instead of the grey Windows one.
+- **Statistics:** new 1K / 10K / 100K quick-goal buttons (like the Clicker presets), and "Copy summary" now also includes Today, Lifetime clicks and Best CPS ever.
+- New labels translated into all 6 languages (and the existing "Presets (CPS):" caption is now translated). Themed progress bars re-colour instantly on a theme switch.
+
+### 1.0.234
+**One-tap CPS presets on the Clicker tab**
+- The Manual Speed card now has quick **CPS preset buttons (10 / 50 / 100 / 200)** — tap one to set the click speed (and the interval fields) instantly, instead of typing values or dragging the slider.
+- (The data-loss confirmations you asked about already existed — Clear points, Delete macro and Reset stats all prompt first — and newly recorded macros are already auto-selected.)
+
+### 1.0.233
+**Fixed the cramped CPS Test dialog**
+- The CPS Test window's "Test length:" and "Button:" rows overlapped the results line above them and sat tight against the bottom edge. The dialog is a little taller now and the bottom selectors are spaced clearly, with each label vertically centred against its button row.
+- The CPS Test window also gets a dark title bar on dark themes, matching the main window.
+
+### 1.0.232
+**Much more complete translations — far fewer strings stay English**
+- Added translations (Spanish, French, German, Italian, Portuguese) for ~65 UI strings that previously stayed English in every non-English language: many Settings checkboxes (record history, on-screen overlay, write log, sleep in tray, remember window size, launch at sign-in, notify on finish, cursor trail…), labels (Header/Footer/Window, Font/Colour/Text size, Hold each click, Dwell, Opacity, Listen to, Caption source/model…), buttons (Start/Stop/Pause/Resume, OK/Cancel/Close/Clear, Got it, Download model, Reset stats/window, Back up all data, Open models/log folder…), the privacy note, and the Multi-Point / Keybinds / Macros tab help paragraphs.
+- No new languages were added — this fills the gaps in the six languages Tempo already supports. Verified by switching to Español: the whole UI now reads in the chosen language (proper names like theme/font names and "Live Captions" stay as-is by design).
+
+### 1.0.231
+**Modern themed scroll bars + title bar, and fixed the cramped Behaviour checkboxes**
+- The scroll bars are now thin and theme-matched — dark on dark themes, light on light — instead of the chunky light-grey native ones, and the window title bar matches (dark in dark themes).
+- Fixed the overlapping checkboxes in Settings → Behaviour: the modern checkboxes were a hair taller than the native ones the layout was spaced for, so the bottom rows collided and ran past the card edge. The checkbox height now matches native, the rows are evenly spaced, and "Sleep in tray" moved to the right column so everything fits cleanly.
+
+### 1.0.230
+**Fixes the ghost text when scrolling a tab over a background image**
+- 1.0.229 made page labels/checkboxes transparent over a wallpaper, but scrolling could leave faint ghost/overlapping text (most visible around the Clicker tab's IDLE/Notify area).
+- Owner-drawn checkboxes and radios now blit the wallpaper slice behind them into their buffer instead of leaving it uncleared, so they can't leave stale pixels; and a scroll now repaints the child controls (not just the background), so transparent labels redraw cleanly. Verified ghost-free scrolling up and down.
+
+### 1.0.229
+**Background image shows through cleanly + tray and multi-point touch-ups**
+- Page-level labels, section headers and checkboxes no longer sit in opaque boxes over a background image — they're transparent when a wallpaper is set, so the image shows through the text. (Controls inside cards and input fields stay solid for readability; verified ghost-free while scrolling.)
+- The system-tray tooltip now reflects what Tempo is doing — Running / Paused / Playing a macro / Recording / Idle — plus the active profile, so a hover tells you whether it's clicking without opening the window.
+- Multi-point: points captured with Quick Capture are now enabled by default (matching points added via the editor), so a freshly captured sequence is ready to run instead of silently doing nothing until each row is ticked.
+
+### 1.0.228
+**Redesigned navigation, buttons and launch screen**
+- The sidebar's active tab is now marked with a clean accent indicator bar, a soft accent-tinted background and accent-coloured text/icon — instead of the old heavy solid-accent fill — so the navigation reads lighter and more modern.
+- Buttons get slightly softer rounded corners across the app.
+- The launch/loading splash now shows the Tempo bolt logo and is theme-aware: it reads the saved theme and accent (including a custom accent) so the splash matches the app you're about to see, instead of a fixed violet.
+
+### 1.0.227
+**Background image no longer lags or stutters while you scroll a tab**
+- The full-window background image was being cover-scaled with high-quality interpolation on every single repaint, so every scroll tick re-scaled the whole (often huge) image — causing lag, and disturbing an animated GIF's frame timing so it appeared to restart.
+- The scaled frame + readability scrim are now composed into a cached bitmap once per GIF frame (or on resize); scrolling and repainting just blit that bitmap, so the wallpaper stays smooth and an animated backdrop keeps its place while you scroll.
+
+### 1.0.226
+**Robustness polish for the new UI + corrupt session-history protection**
+- The flat combo-box drop-downs now scale their row height with the display-scaling/font, so list text is no longer vertically clipped at 125%/150%/200% DPI; the drop-arrow area scales too.
+- The flat numeric steppers now re-hook their custom drawing if the control's spin buttons aren't ready at first paint, so they can't occasionally fall back to the native Windows arrows.
+- A corrupt `sessions.json` is now backed up before it can be overwritten (matching how settings are handled), so unreadable history isn't silently lost.
+
+### 1.0.225
+**UI modernization: flat themed controls everywhere + fixed overlapping labels**
+- Replaced the dated native Windows checkboxes, radio buttons, combo-box drop arrows and numeric spin arrows with flat, theme-aware controls drawn by Tempo. They follow every theme (and the custom accent), so the whole UI now looks consistent instead of mixing flat cards with grey 3-D widgets.
+- Fixed the Burst Settings card on the Clicker tab, where the "Clicks per burst" and "Pause (ms)" labels were clipped underneath their spinners; labels and fields now sit on one aligned row.
+- The new controls are sized to match the originals so no labels collide with their neighbours.
+
+### 1.0.224
+**Fixes settings/checkboxes that didn't stick and two features that conflicted**
+- Settings-tab checkboxes are captured on close, so toggles persist even without pressing "Save Settings" (previously the shutdown save wrote the old values back and the change was lost).
+- The Macros tab "Capture mouse movement" / "Capture keyboard" checkboxes now have backing settings and save on toggle — they no longer reset to ON every launch.
+- "Unlock max speed (advanced)" now lifts the Anti-Freeze hard cap automatically (and restores the 200 CPS default on re-lock), so the slider actually reaches high rates; the adaptive CPU back-off still applies.
+- "Colorful cursor trail" and the macro capture checkboxes refresh correctly after Reset to defaults / Import settings.
+
+### 1.0.223
+**Form-level WS_EX_COMPOSITED + full solid-background fix for labels and radios**
+- WS_EX_COMPOSITED moved from individual tab pages (where the TabControl drops it on tab switch) to the main window, where it sticks and composites the whole UI.
+- Solid (non-transparent) backgrounds now applied to all labels and radio buttons too, not just checkboxes (1.0.222 missed those, so labels still clipped).
+- Guarded the background-colour resolver so controls can't resolve to white (blank-box report).
+
+### 1.0.222
+**Real cause of checkbox/label corruption found: transparent backgrounds**
+- Checkboxes, radios and labels used Color.Transparent, which over a custom-painted scrolling panel leaves ghosting and stale text on repaint (the "overlap=on, text=off" artifacts).
+- They now use a solid background matching their container (card surface or page), which erases cleanly. With 1.0.221's WS_EX_COMPOSITED, the Settings tab stays correct through scroll/toggle/minimize/tab-switch.
+
 ### 1.0.221
 **Root-cause fix for scroll corruption: WS_EX_COMPOSITED instead of double-buffering**
 - The scrollable tab pages were double-buffered, which doesn't buffer child controls; scrolling blitted checkboxes/labels to a new offset and only repainted a strip, leaving them hollow/clipped.
