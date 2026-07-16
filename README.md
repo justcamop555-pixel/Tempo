@@ -7,7 +7,8 @@
 <p align="center">
   A fast, modern, <strong>free &amp; open</strong> Windows auto-clicker — and a lot more.<br>
   Precise clicking, multi-point routes, full macro record &amp; replay, live statistics,<br>
-  rebindable hotkeys, and 38 themes. Runs <strong>100% on your PC</strong> — no account, no telemetry.
+  rebindable hotkeys, 38 themes — and <strong>offline AI Live Captions</strong> with speaker labels,<br>
+  90+ languages and optional GPU speed. Runs <strong>100% on your PC</strong> — no account, no telemetry.
 </p>
 
 <p align="center">
@@ -35,8 +36,10 @@
 
 Most free auto-clickers stop at *"click here, this fast."* Tempo goes further — multi-point
 routes, recordable macros, a live statistics dashboard, fully rebindable keyboard **and**
-mouse hotkeys — wrapped in a clean, fast, fully themeable interface that was rebuilt from
-the ground up. It's free, open, and it never phones home: everything stays on your machine.
+mouse hotkeys, and a complete **offline Live Captions system** (subtitles for anything your
+PC plays, with coloured speaker labels, in 90+ languages) — wrapped in a clean, fast, fully
+themeable interface that was rebuilt from the ground up. It's free, open, and it never phones
+home: everything stays on your machine.
 
 > [!NOTE]
 > **Use responsibly.** Auto-clicking may violate the terms of service of some games and
@@ -91,8 +94,11 @@ New to Tempo? The quickest path to something useful:
    preset in one click.
 5. **Record repetitive tasks** on the **Macros** tab — record once, replay with looping and a
    one-tap speed preset.
-6. **Make it yours** — 38 themes, a custom accent colour, six languages, and optional animated
-   backdrops in **Settings**.
+6. **Turn on Live Captions** — Settings › Live Captions, download a speech model with one
+   click, and anything your PC plays gets subtitles. Try the GPU engine if you have a
+   graphics card.
+7. **Make it yours** — 38 themes (or Match Windows light/dark), a custom accent colour, six
+   languages, and optional animated backdrops in **Settings**.
 
 ---
 
@@ -125,18 +131,43 @@ detection so two actions never clash — and they work even when Tempo is hidden
 
 ### 🎨 Make it yours
 A modern, redesigned UI — rounded inputs, icon buttons, toggle switches and accent-tinted
-section badges. **38 built-in themes** + a custom accent colour, optional animated GIF
-backdrops, six languages (English, Spanish, French, German, Italian, Portuguese), a system-tray
-presence, launch-at-startup, and per-tab scroll memory.
+section badges. **38 built-in themes** (or **Match Windows** to follow the system light/dark
+setting live) + a custom accent colour, optional animated GIF backdrops, six languages
+(English, Spanish, French, German, Italian, Portuguese), a themed system-tray menu,
+launch-at-startup, and per-tab scroll memory.
 
 ### 🛡 Dependable
 Anti-freeze protection (a CPS cap **plus** a CPU-adaptive throttle that backs off if your PC
-gets busy), crash-safe saving, in-app update checks with a one-click installer, and built-in
-bug/crash reporting.
+gets busy), crash-safe saving, in-app update checks with a one-click installer, built-in
+bug/crash reporting, error notifications so problems never hide in a log, and a **Live debug**
+window (health check + live stats + colour-coded event stream) for when you want to see
+exactly what Tempo is doing.
 
-### ♿ Accessibility
-Optional on-screen **Live Captions** for system audio (your choice), or Tempo can open
-Windows 11's own — more accurate — Live Captions.
+### 💬 Live Captions (accessibility)
+Real-time subtitles for **anything your PC plays** — videos, games, calls, any app or site —
+generated **fully offline** by a built-in AI speech engine (Whisper). Nothing ever leaves
+your machine.
+
+- **Five speech models**, from Tiny (75 MB, instant) to **Large Turbo** (best accuracy,
+  auto-detects **90+ languages**) and a compact Large for mid-range PCs — one-click download.
+- **Optional GPU engine** (Vulkan — works on NVIDIA, AMD and Intel) for real-time captions on
+  the biggest models, with an automatic CPU fallback and a self-healing guard.
+- **Speaker labels in colour** — "Speaker 1 / Speaker 2" detected by voice (pitch/brightness
+  fingerprints) plus optional on-device **AI face &amp; mouth analysis**, so you can follow who
+  says what at a glance.
+- **Knows where the sound comes from** — an optional "♪ YouTube ·" tag names the app or site
+  playing; pick exactly **which speaker or microphone** to listen through when you have
+  several (listed by model name).
+- **Game-friendly** — a fullscreen game automatically switches captions into a low-impact
+  mode that protects your frame rate, and restores full quality when you're done.
+- Mishear auto-correction, a music/sound note when nothing is spoken, caption history,
+  optional timestamped transcripts, movable and fully styleable caption bar — or mirror
+  **Windows 11's own Live Captions** through Tempo's bar instead.
+
+### 🕹 Camera-relative movement (advanced)
+An experimental input mode for games: Tempo intercepts W/A/S/D and re-aims them relative to
+the in-game camera, with a calibration wizard, smoothing, anti-jitter and a deadzone. Many
+online games forbid input automation — use with care.
 
 ---
 
@@ -163,6 +194,11 @@ can disable. **No telemetry, no account, ever.**
   the Keybinds tab; Tempo warns you about conflicts.
 - **Clicks feel laggy or the PC struggles at high speed** — lower the CPS and keep anti-freeze
   on. Extremely high rates are rarely necessary.
+- **Captions lag or fall behind** — pick a smaller model, or turn on the GPU engine
+  (Settings › Live Captions). Tempo also steps down automatically if a model can't keep up.
+- **Want to see what Tempo is doing right now?** — **Settings › Data &amp; Backup › Live
+  debug** shows a health check, live engine stats and a colour-coded event stream; **Copy**
+  gives you the perfect text to paste into a bug report.
 - **Something looks wrong or it crashed** — Tempo writes a report you can send in (see below).
 
 ## Reporting bugs
