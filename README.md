@@ -164,6 +164,21 @@ your machine.
   optional timestamped transcripts, movable and fully styleable caption bar — or mirror
   **Windows 11's own Live Captions** through Tempo's bar instead.
 
+### 🖱🖱 Second Cursor (experimental)
+A second, real-looking Windows pointer that Tempo draws and controls — place it anywhere across
+**both monitors** and spam-click there, so you can AFK-grind a windowed game on monitor 2 while
+your real mouse stays free on monitor 1. Optionally **drive it with a second real mouse**: pick
+the mouse from a list (by product name), and left/right-click, middle-click (spam toggle), wheel,
+and press-and-hold/drag all work at the second cursor while your main pointer stays pinned in
+place. A per-mouse Live-debug readout shows both mice being read independently.
+
+> [!NOTE]
+> **This is genuinely limited by Windows.** There is only ONE hardware cursor, so a fully
+> independent second pointer is a kernel-driver feature no user-space app can do. It works best
+> on **windowed / visible-cursor apps and games**; games that lock or hide the cursor for
+> mouse-look (most first-person shooters) can't be split, and a raw-input game reads your main
+> mouse too. Off by default — treat it as experimental.
+
 ### 🕹 Camera-relative movement (advanced)
 An experimental input mode for games: Tempo intercepts W/A/S/D and re-aims them relative to
 the in-game camera, with a calibration wizard, smoothing, anti-jitter and a deadzone. Many
@@ -252,8 +267,9 @@ publish.cmd /help           :: all options
 
 It builds a self-contained Tempo and produces, under `bin\publish\<rid>\`:
 
-- `Tempo.exe` — the app, plus a `runtimes\<rid>\native\` folder for the optional offline
-  speech engine (keep the folder with the exe)
+- `Tempo.exe` — one fully self-contained file (the .NET runtime, UI-Automation assemblies and
+  the native offline-speech libraries are all bundled and self-extract at run time, so the exe
+  works anywhere on its own)
 - `Tempo.exe.sha256` — checksum
 - `install.cmd` / `uninstall.cmd` — the per-user installer and uninstaller
 - `INSTALL-README.txt` — the short how-to that ships in the zip
