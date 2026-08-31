@@ -5,10 +5,11 @@
 <h1 align="center">Tempo</h1>
 
 <p align="center">
-  A fast, modern, <strong>free &amp; open</strong> Windows auto-clicker — and a lot more.<br>
-  Precise clicking, multi-point routes, full macro record &amp; replay, live statistics,<br>
-  rebindable hotkeys, 38 themes — and <strong>offline AI Live Captions</strong> with speaker labels,<br>
-  90+ languages and optional GPU speed. Runs <strong>100% on your PC</strong> — no account, no telemetry.
+  A fast, modern, <strong>free &amp; open-source</strong> Windows auto-clicker — and a lot more.<br>
+  Precise clicking, multi-point routes, full macro record &amp; replay with <strong>Python steps</strong>,<br>
+  live statistics, rebindable hotkeys, 38 themes — and <strong>offline AI Live Captions</strong> with<br>
+  speaker labels, 90+ languages and optional GPU speed. Every build <strong>verifies itself</strong><br>
+  against its published release. Runs <strong>100% on your PC</strong> — no account, no telemetry.
 </p>
 
 <p align="center">
@@ -54,7 +55,7 @@ home: everything stays on your machine.
 equally good ways to run it; pick whichever you like.
 
 ### ⚡ Portable — no install
-1. Download **`Tempo.exe`** (or unzip `Tempo-Setup-<version>.zip` anywhere — a USB stick is fine).
+1. Download **`Tempo.exe`** (or unzip `<version>.zip` anywhere — a USB stick is fine).
 2. Double-click **`Tempo.exe`**. That's it.
 
 Runs in place, nothing to install. Settings, profiles, macros and stats are saved in your
@@ -62,7 +63,7 @@ user **AppData** (`%LOCALAPPDATA%\AutoClicker`), so saving always works — even
 stick or a read-only folder.
 
 ### 🧩 Installed — Start Menu &amp; clean uninstall
-1. Download and unzip **`Tempo-Setup-<version>.zip`** (keep the files together).
+1. Download and unzip **`<version>.zip`** (keep the files together).
 2. Double-click **`install.cmd`** — no administrator rights needed.
 3. Launch **Tempo** from the Start Menu.
 
@@ -72,9 +73,14 @@ removal later (or run `uninstall.cmd`).
 > [!IMPORTANT]
 > **First-run note.** Because Tempo isn't code-signed, Windows SmartScreen may say
 > *"Windows protected your PC"* / *"Unknown publisher."* That's normal for small indie
-> apps — click **More info › Run anyway**. Want to be certain? Verify the download with
-> `certutil -hashfile Tempo.exe SHA256` and compare it to the `Tempo.exe.sha256` published
-> with every release.
+> apps — click **More info › Run anyway**.
+>
+> **Want to be certain it's the real thing?** You don't have to take our word for it, and
+> you don't have to check by hand: Tempo verifies its own program file against the release
+> published on GitHub every time it starts, and says so in **Settings › Data &amp; Backup**.
+> To check yourself, run `certutil -hashfile Tempo.exe SHA256` and compare it with the
+> SHA-256 GitHub shows for the asset on the
+> [release](https://github.com/justcamop555-pixel/Tempo/releases).
 
 **Requirements:** 64-bit Windows 10 or 11. Nothing else — the .NET runtime is built in.
 
@@ -119,6 +125,15 @@ own button, click style, dwell time and repeat count. On-screen numbered markers
 Record and replay mouse **and** keyboard actions, with looping, a countdown, loop delay, and
 **one-tap speed presets** (0.5× / 1× / 2× / 4×). Edit steps, pin favourites, add notes, search,
 merge, and export / import individual macros — plus a live step monitor and play history.
+A **Fix…** button finds and repairs the things that quietly break a recording: inputs that are
+never released, clicks that land off-screen, duplicate moves, empty waits, machine-perfect
+timing and aim, and marathon pauses.
+
+**Run a Python script as a macro step.** Point a step at a `.py` file and Tempo runs it
+mid-macro — with a timeout you set, a choice of what happens if it fails, and the interpreter
+it found shown up front. Held keys and buttons are released before the script starts, so a
+script can never inherit a stuck input, and the whole process tree is cleaned up when the macro
+stops.
 
 ### 📊 Statistics
 A live dashboard with session &amp; lifetime totals, personal records, and insights (streaks,
@@ -138,10 +153,23 @@ launch-at-startup, and per-tab scroll memory.
 
 ### 🛡 Dependable
 Anti-freeze protection (a CPS cap **plus** a CPU-adaptive throttle that backs off if your PC
-gets busy), crash-safe saving, in-app update checks with a one-click installer, built-in
-bug/crash reporting, error notifications so problems never hide in a log, and a **Live debug**
-window (health check + live stats + colour-coded event stream) for when you want to see
+gets busy), crash-safe saving that keeps the previous copy so an interrupted write costs one
+save rather than everything, in-app update checks with a one-click installer, error
+notifications so problems never hide in a log, and a **Live debug** window (health check +
+live stats + colour-coded event stream, one colour per subsystem) for when you want to see
 exactly what Tempo is doing.
+
+### 🔐 Tamper check
+Tempo hashes its own program file at every launch and compares it with the SHA-256 GitHub
+publishes for that release — so it can tell you, in **Settings › Data &amp; Backup**, whether the
+copy you are running is the one that was published. It catches a patched or repackaged build,
+a copy that came from somewhere other than the releases page, and a file damaged by a crash or
+a failed update. Being offline is never treated as evidence of anything, and a build you made
+yourself can be marked trusted in one click.
+
+Honest about its limits: this is tamper-**evident**, not tamper-proof. Someone who can rewrite
+Tempo.exe can rewrite the check out of it too. What it reliably catches is everything that
+doesn't bother to.
 
 ### 💬 Live Captions (accessibility)
 Real-time subtitles for **anything your PC plays** — videos, games, calls, any app or site —
@@ -190,14 +218,33 @@ online games forbid input automation — use with care.
 
 Tempo can check for updates: **Settings › Check for updates** (and, optionally, automatically
 at launch). When a newer version exists, Tempo can download and install it for you. Turn the
-automatic check off under **Behaviour** any time — that one version check is the *only* network
-request Tempo ever makes.
+automatic check off under **Behaviour** any time.
 
 ## Privacy
 
-Tempo runs **entirely on your PC**. Your clicks, macros, profiles and statistics never leave
-your computer. The only network access is the optional update check against GitHub, which you
-can disable. **No telemetry, no account, ever.**
+Tempo runs **entirely on your PC**. Your clicks, macros, profiles, statistics and captions
+never leave your computer. **No telemetry, no account, ever** — nothing is uploaded, and
+nothing is collected.
+
+Tempo does reach the network in a few places, all of them optional and all of them things you
+started. The complete list:
+
+| When | What it contacts | Sends |
+| --- | --- | --- |
+| Update check | GitHub releases API | nothing but the request itself |
+| Downloading an update | GitHub release asset | — |
+| Tamper check, once per version | GitHub releases API | nothing but the request itself |
+| Downloading a speech model | Hugging Face | — |
+| A custom logo from a URL | whatever URL you enter | — |
+
+None of them carry your data, and every one can be avoided: turn off the update check and the
+tamper check in **Settings**, and simply don't download a model or set a logo URL.
+
+**Bug reports are yours to review.** Nothing is sent until you pick how to send it, and Tempo
+shows you the entire report first so you can edit or delete any of it. Your Windows account
+name, PC name and personal folder paths are stripped automatically — from the subject line as
+well as the body. The recent activity log is offered as a tick-box, never attached silently,
+because it can mention files you have opened.
 
 ---
 
@@ -214,14 +261,23 @@ can disable. **No telemetry, no account, ever.**
 - **Want to see what Tempo is doing right now?** — **Settings › Data &amp; Backup › Live
   debug** shows a health check, live engine stats and a colour-coded event stream; **Copy**
   gives you the perfect text to paste into a bug report.
+- **"Tempo has been modified" / "This version was never published"** — the tamper check found
+  that `Tempo.exe` isn't the file published for its version number. If you built it yourself,
+  click **Trust this copy** in Settings › Data &amp; Backup. If you downloaded it, get it again
+  from the [releases page](https://github.com/justcamop555-pixel/Tempo/releases).
 - **Something looks wrong or it crashed** — Tempo writes a report you can send in (see below).
 
 ## Reporting bugs
 
-Use **Settings › Report a bug** in the app, or open an issue on
-[GitHub](https://github.com/justcamop555-pixel/Tempo/issues). If Tempo crashes it saves a
-crash report — attaching it helps a lot. Please describe what you did, what you expected, and
-what happened, plus your Windows and Tempo versions (shown in Settings).
+Use **Settings › Report a bug…** or **Email a bug…** in the app, or open an issue on
+[GitHub](https://github.com/justcamop555-pixel/Tempo/issues). Either button opens a composer
+that shows you the whole report — pre-filled with your Windows version, hardware, GPU, install
+type and this session's warnings — which you can edit before choosing GitHub, your email app,
+Gmail, Outlook, Yahoo, or the clipboard. Identifying details are removed for you.
+
+Please describe what you did, what you expected, and what happened. If Tempo crashed it also
+saves a crash report; attaching it helps a lot. **Settings › Data &amp; Backup › Live debug**
+→ **Copy** gives you an even fuller picture to paste in.
 
 ## Where your data is stored
 
@@ -241,6 +297,8 @@ remove its data.
 # For developers
 
 The rest is for building from source or cutting releases — regular users don't need any of it.
+
+The full source lives on this branch — clone it and it builds with one command.
 
 ## Build &amp; run
 
@@ -273,36 +331,53 @@ It builds a self-contained Tempo and produces, under `bin\publish\<rid>\`:
 - `Tempo.exe.sha256` — checksum
 - `install.cmd` / `uninstall.cmd` — the per-user installer and uninstaller
 - `INSTALL-README.txt` — the short how-to that ships in the zip
-- `bin\publish\Tempo-Setup-<version>.zip` — the bundle users download (run `Tempo.exe` for
-  portable, or `install.cmd` to install)
-- `bin\publish\CHECKSUMS.txt` — checksums for the exe and the setup zip
+- `bin\publish\<version>.zip` — the bundle users download (run `Tempo.exe` for portable, or
+  `install.cmd` to install)
+- `bin\publish\CHECKSUMS.txt` — checksums for the exe and the zip
 
 Each step is verified (exe produced, size sane, checksum written, embedded version matches the
 project) with a progress display and green check marks; a full log goes to `publish-log.txt`.
 
 ### Cutting a release
-1. Bump the version in `AutoClicker.csproj`, `Program.cs`, `UI/AboutForm.cs`, and add an entry
-   to `CHANGELOG.md`.
+1. Bump `<Version>`, `<AssemblyVersion>` and `<FileVersion>` in `AutoClicker.csproj`, and the
+   startup log line in `Program.cs`. (About reads the version from the assembly, so it needs no
+   edit.) Add an entry to `CHANGELOG.md` and a `release-notes/<version>.md`.
 2. Run `publish.cmd`.
-3. Create a GitHub release tagged `v<version>` and attach **`Tempo-Setup-<version>.zip`** (works
-   for both portable and installed users). Optionally also attach the standalone `Tempo.exe`
-   (+ `.sha256`) to power the in-app updater.
-4. Paste the notes from the generated `release-notes/<version>.md` file as the description.
+3. Create a GitHub release tagged **`v<version>`** and attach both **`<version>.zip`** (for new
+   users, portable or installed) and the standalone **`Tempo.exe`** (what the in-app updater
+   downloads).
+4. Paste `release-notes/<version>.md` as the description.
+
+> [!IMPORTANT]
+> Attach the **exact** `Tempo.exe` that `publish.cmd` produced. Tempo's tamper check compares
+> the running file against the SHA-256 GitHub publishes for the release, so an exe rebuilt
+> after the fact would make every user's copy report as modified. The build is deterministic —
+> the same source rebuilds to a byte-identical exe — so re-running `publish.cmd` is safe;
+> building from *different* source is not.
 
 ## Project structure
 
 ```
 AutoClicker/
-  Program.cs        App entry point, global exception handling
-  Engine/           Click engine, precise timing, schedulers
-  Models/           Settings, profiles, statistics, enums
-  Persistence/      Saving/loading settings, profiles, macros
-  UI/               MainForm (split into per-tab partials) + dialogs + theming
-  Utils/            Hotkeys, logging, updates, localization, helpers
-  publish.cmd       Release builder
+  Program.cs        App entry point, single-instance, global exception handling
+  Engine/           Click engine, precise timing, schedulers, macro player/recorder
+  Models/           Settings, profiles, statistics, hotkeys, enums
+  Native/           Low-level keyboard/mouse hooks, raw input, second-mouse listener
+  Persistence/      Crash-safe saving of settings, profiles, macros, history
+  UI/               MainForm (per-tab partials) + dialogs + theming + notifications
+  Utils/            Logging, updates, integrity, localization, speech engine, helpers
+  Assets/           Icon and About artwork (embedded at build time)
+  release-notes/    One file per version, pasted into the GitHub release
+  publish.cmd       Release builder (see above)
   install.cmd       Per-user installer
   uninstall.cmd     Matching uninstaller
 ```
+
+> [!NOTE]
+> `.gitattributes` sets `* -text` on purpose. `publish.cmd` requires CRLF endings and is
+> mis-parsed by `cmd.exe` without them, while `install.cmd`, `uninstall.cmd` and
+> `INSTALL-README.txt` ship inside the release zip and must stay byte-identical to what was
+> published. Git's Windows default would rewrite all of it on checkout.
 
 ## Changelog
 
