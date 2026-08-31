@@ -1,0 +1,15 @@
+# Byte-for-byte. No end-of-line conversion, in either direction.
+#
+# This project has already lost real time to line endings. publish.cmd had 839
+# bare LFs and zero CRLFs, and cmd.exe mis-parsed it — executing fragments of
+# REM and echo lines as commands, which is what produced "App version: unknown",
+# a zip named for that unknown version, and a build that silently packaged a
+# stale exe. It only works as CRLF.
+#
+# Meanwhile install.cmd and uninstall.cmd are LF, work correctly that way, and
+# ship inside the release zip — so rewriting them would make the repo disagree
+# with an artifact already published. INSTALL-README.txt carries a UTF-8 BOM for
+# the same "matches what shipped" reason.
+#
+# Git's default on Windows would convert all of this on checkout. It must not.
+* -text

@@ -1,0 +1,258 @@
+using System;
+using System.Drawing;
+using System.Reflection;
+using System.Windows.Forms;
+
+namespace AutoClicker.Utils
+{
+    /// <summary>
+    /// Loads Tempo's application icon (embedded as Assets\tempo.ico). Falls back to
+    /// the executable's own icon, then the system default, so the UI always has one.
+    /// </summary>
+    public static class AppIcon
+    {
+        private static Icon _cached;
+
+        public static Icon Get()
+        {
+            if (_cached != null)
+            {
+                return _cached;
+            }
+
+            // Preferred: the icon embedded in the assembly.
+            try
+            {
+                Assembly asm = typeof(AppIcon).Assembly;
+                foreach (string name in asm.GetManifestResourceNames())
+                {
+                    if (name.EndsWith("tempo.ico", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using (var stream = asm.GetManifestResourceStream(name))
+                        {
+                            if (stream != null)
+                            {
+                                _cached = new Icon(stream);
+                                return _cached;
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Fall through to the alternatives below.
+            }
+
+            // Next best: the icon baked into the .exe via <ApplicationIcon>.
+            try
+            {
+                _cached = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                if (_cached != null)
+                {
+                    return _cached;
+                }
+            }
+            catch
+            {
+                // Ignore and use the system default.
+            }
+
+            _cached = SystemIcons.Application;
+            return _cached;
+        }
+
+        /// <summary>
+        /// Tempo's logo as a bitmap at (or above) <paramref name="size"/> pixels — the
+        /// caller owns and must dispose the result.
+        ///
+        /// This exists because the Icon class does not reliably give you the size you ask
+        /// for. <see cref="Icon.ToBitmap"/> rasterises at the Icon object's OWN size — 32px
+        /// for an icon loaded from a stream — regardless of what the caller wants, and
+        /// <c>new Icon(ico, 256, 256)</c> hands back tempo.ico's 128px frame even though
+        /// the file genuinely contains a 256px one. Both cases end in an upscale of a
+        /// smaller frame, which is exactly the soft, mushy logo we were shipping.
+        /// Measured on tempo.ico at a requested 256px: the Icon route yields 128x128
+        /// (mean neighbour delta 24/765), this route yields a true 256x256 (17/765 — more
+        /// real detail, not interpolation).
+        ///
+        /// So the wanted frame is located in the .ico directory and decoded directly.
+        /// </summary>
+        public static Image GetBitmap(int size)
+        {
+            try
+            {
+                byte[] raw = RawIconBytes();
+                if (raw != null)
+                {
+                    Image img = DecodeBestFrame(raw, size);
+                    if (img != null) { return img; }
+                }
+            }
+            catch { /* fall through to the handle-based route below */ }
+
+            // Fallback: let Windows rasterise the icon and copy the pixels back out.
+            // GDI+ handles an HICON correctly — it's only the file-frame path that breaks.
+            try
+            {
+                Icon ico = Get();
+                if (ico != null)
+                {
+                    using (var sized = new Icon(ico, size, size))
+                    {
+                        return Bitmap.FromHicon(sized.Handle);
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>The bytes of the embedded tempo.ico, or null. Cached (read once).</summary>
+        private static byte[] RawIconBytes()
+        {
+            if (_rawTried) { return _raw; }
+            _rawTried = true;
+            try
+            {
+                Assembly asm = typeof(AppIcon).Assembly;
+                foreach (string name in asm.GetManifestResourceNames())
+                {
+                    if (name.EndsWith("tempo.ico", StringComparison.OrdinalIgnoreCase))
+                    {
+                        using (var s = asm.GetManifestResourceStream(name))
+                        {
+                            if (s == null) { continue; }
+                            using (var ms = new System.IO.MemoryStream())
+                            {
+                                s.CopyTo(ms);
+                                _raw = ms.ToArray();
+                                return _raw;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            return _raw;
+        }
+
+        private static byte[] _raw;
+        private static bool _rawTried;
+
+        /// <summary>
+        /// Picks the smallest frame at least <paramref name="want"/> px (else the largest
+        /// available) out of an .ico and decodes it. Handles both PNG-compressed and
+        /// classic DIB frames. Returns null if the bytes aren't a usable icon.
+        /// </summary>
+        private static Image DecodeBestFrame(byte[] b, int want)
+        {
+            // ICONDIR: reserved(2) type(2) count(2), then count × ICONDIRENTRY(16).
+            if (b == null || b.Length < 6) { return null; }
+            if (BitConverter.ToUInt16(b, 0) != 0 || BitConverter.ToUInt16(b, 2) != 1) { return null; }
+            int count = BitConverter.ToUInt16(b, 4);
+            if (count <= 0 || b.Length < 6 + count * 16) { return null; }
+
+            int bestOff = -1, bestLen = 0, bestDim = 0;
+            for (int i = 0; i < count; i++)
+            {
+                int e = 6 + i * 16;
+                int w = b[e] == 0 ? 256 : b[e];              // 0 means 256 in the ICO format
+                int len = (int)BitConverter.ToUInt32(b, e + 8);
+                int off = (int)BitConverter.ToUInt32(b, e + 12);
+                if (len <= 0 || off < 0 || off + len > b.Length) { continue; }
+
+                // Prefer the smallest frame that still meets the requested size; if none
+                // does, take the biggest one there is and let the caller downscale.
+                bool better = bestOff < 0
+                    || (bestDim < want ? w > bestDim : (w >= want && w < bestDim));
+                if (better) { bestOff = off; bestLen = len; bestDim = w; }
+            }
+            if (bestOff < 0) { return null; }
+
+            using (var ms = new System.IO.MemoryStream(b, bestOff, bestLen))
+            {
+                bool isPng = bestLen > 8 && b[bestOff] == 0x89 && b[bestOff + 1] == 0x50
+                             && b[bestOff + 2] == 0x4E && b[bestOff + 3] == 0x47;
+                if (isPng)
+                {
+                    // Copy into a standalone bitmap so nothing keeps the stream alive.
+                    using (var decoded = Image.FromStream(ms))
+                    {
+                        return new Bitmap(decoded);
+                    }
+                }
+
+                // Classic DIB frame: rebuild a one-frame .ico around it and let GDI+ read
+                // it, which is the path ToBitmap() is actually correct for.
+                var single = new byte[6 + 16 + bestLen];
+                Buffer.BlockCopy(b, 0, single, 0, 6);
+                single[4] = 1; single[5] = 0;                             // count = 1
+                Buffer.BlockCopy(b, 6 + IndexOfEntry(b, count, bestOff) * 16, single, 6, 16);
+                BitConverter.GetBytes(6 + 16).CopyTo(single, 6 + 12);     // new offset
+                Buffer.BlockCopy(b, bestOff, single, 6 + 16, bestLen);
+                using (var ims = new System.IO.MemoryStream(single))
+                using (var ico = new Icon(ims))
+                {
+                    return Bitmap.FromHicon(ico.Handle);
+                }
+            }
+        }
+
+        /// <summary>Index of the directory entry whose image lives at <paramref name="off"/>.</summary>
+        private static int IndexOfEntry(byte[] b, int count, int off)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                if ((int)BitConverter.ToUInt32(b, 6 + i * 16 + 12) == off) { return i; }
+            }
+            return 0;
+        }
+
+        /// <summary>
+        /// Makes Tempo's icon the DEFAULT for every WinForms window in this process, so
+        /// all the dialogs (Live debug, About, Calibrate, Overlay customise, update
+        /// prompts, …) show it in their title bar and in Alt-Tab — without each form
+        /// having to set it, and without missing any future one.
+        ///
+        /// WinForms hands any form that doesn't set its own icon a private static
+        /// default (Form.DefaultIcon, backed by a static field). Pre-seeding that field
+        /// before the first window is created replaces the generic default everywhere.
+        /// The field name is version-specific, so this is wrapped and simply no-ops if
+        /// it ever changes — the app still runs, dialogs just keep the stock icon.
+        ///
+        /// Call once at startup, after EnableVisualStyles and before any form is shown.
+        /// </summary>
+        public static void SetAsWindowDefault()
+        {
+            try
+            {
+                Icon ico = Get();
+                if (ico == null)
+                {
+                    return;
+                }
+
+                const System.Reflection.BindingFlags Flags =
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+
+                // .NET Core/8 uses "s_defaultIcon"; older/full framework used "defaultIcon".
+                foreach (string name in new[] { "s_defaultIcon", "defaultIcon" })
+                {
+                    var field = typeof(Form).GetField(name, Flags);
+                    if (field != null && field.FieldType == typeof(Icon))
+                    {
+                        field.SetValue(null, ico);
+                        Logger.Info("[Icon] Tempo icon set as the default for all windows.");
+                        return;
+                    }
+                }
+                Logger.Warn("[Icon] couldn't find Form.DefaultIcon backing field; dialogs use the stock icon.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Icon] setting the default window icon failed: " + ex.Message);
+            }
+        }
+    }
+}

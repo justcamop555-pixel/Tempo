@@ -1,0 +1,18 @@
+# Build output. These are 772 MB together and every one of them is reproducible
+# from source — the build is deterministic, so a given commit rebuilds to a
+# byte-identical Tempo.exe (verified 2026-08-31 against the published v1.0.319).
+bin/
+obj/
+
+# Written fresh by every publish.cmd run.
+publish-log.txt
+
+# Visual Studio / Rider local state, never shared.
+.vs/
+.idea/
+*.user
+*.suo
+
+# Windows / OneDrive litter.
+Thumbs.db
+desktop.ini

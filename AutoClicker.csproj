@@ -1,0 +1,182 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!--
+      Windows-SDK-versioned TFM (not plain net8.0-windows): the caption feature's
+      face-and-mouth speaker analysis uses the OS's built-in on-device face
+      detector (Windows.Media.FaceAnalysis.FaceDetector), which is only reachable
+      through the WinRT projections this TFM brings in. Runs on Win10 1809+.
+    -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <!--
+      UseWPF is required even though Tempo's UI is pure Windows Forms: the Windows Live
+      Captions reader (Utils/LiveCaptionReader.cs) uses System.Windows.Automation (UI
+      Automation), whose assemblies (UIAutomationClient / UIAutomationTypes) ship as part
+      of the WPF half of the Windows Desktop framework. Removing UseWPF makes that file
+      fail to compile and the whole build produces nothing. Do not remove it.
+    -->
+    <UseWPF>true</UseWPF>
+    <AssemblyName>Tempo</AssemblyName>
+    <RootNamespace>AutoClicker</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\tempo.ico</ApplicationIcon>
+    <Version>1.0.319</Version>
+    <AssemblyVersion>1.0.319.0</AssemblyVersion>
+    <FileVersion>1.0.319.0</FileVersion>
+    <Company>Tempo Project</Company>
+    <Product>Tempo</Product>
+    <AssemblyTitle>Tempo</AssemblyTitle>
+    <Platforms>AnyCPU;x64;x86</Platforms>
+    <Description>A full-featured mouse auto-clicker with profiles, multi-point clicking, macro recording, randomization and statistics.</Description>
+
+    <!-- Keep only English resources so a published build stays a single clean file. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+    <!-- Supported runtime identifiers for `dotnet publish -r ...`. -->
+    <RuntimeIdentifiers>win-x64;win-x86;win-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <!--
+    Publish defaults (only active during `dotnet publish` for a specific runtime).
+    Tempo publishes as ONE fully self-contained Tempo.exe that works ANYWHERE - moved
+    or copied on its own, with no loose DLLs required next to it. Everything is bundled:
+    the managed app, its config, the .NET runtime, the WPF/UI-Automation assemblies
+    (UIAutomationClient etc. - needed by the Windows Live Captions reader), AND the
+    native speech-engine libraries (whisper / ggml / NAudio). At startup the single-file
+    host self-extracts native libs to a temp dir and adds it to the native search path,
+    so they load correctly even though the .exe is by itself.
+  -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <!--
+      Bundle the native libraries (whisper.dll / ggml / NAudio natives) INTO the
+      single-file exe and let the host self-extract them at run time. This is what makes
+      Tempo.exe portable: previously these sat loose next to the exe, so moving the exe
+      alone broke the app (and broke UI Automation loading, which looked like the
+      CacheRequest failure). Bundling them removes that whole class of "only works inside
+      its folder" problems.
+    -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <PublishTrimmed>false</PublishTrimmed>
+
+    <!--
+      ReadyToRun: precompile IL to native so start-up doesn't JIT the world.
+
+      THIS LIVES HERE, NOT ON THE COMMAND LINE. It used to be the one publish flag
+      that wasn't in this file, so it had to be remembered every time — and it was
+      forgotten for three releases running (1.0.314, .315 and .316 all shipped
+      without it). Nothing fails when it is missing: you get a working exe that is
+      ~17 MB smaller and slower to start, and the only visible symptom is the file
+      size, which nobody checks on a good day.
+
+      It also costs REAL time to forget. Measured on this machine:
+
+        clean publish, R2R on ........ 65.1 s   (105,934,765 bytes)
+        clean publish, R2R off ....... 15.4 s   ( 88,018,545 bytes)
+        repeat publish, same flags .... 2.6 s   (fully cached)
+        repeat publish, flags CHANGED  76.6 s   (cache thrown away)
+
+      That last row is the point. Crossgen caches on the exact property set, so a
+      publish that varies its flags re-runs the whole 65 s compile. Forgetting the
+      flag once therefore cost a wasted 15 s run PLUS a 76 s redo — where keeping
+      every invocation identical costs 2.6 s. Declaring it here is what makes the
+      invocations identical, so it is both the correctness fix and the speed fix.
+    -->
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+
+  <!--
+    A publish that quietly lost ReadyToRun is the failure this project has actually
+    shipped, three times. The symptom is only ever the file size, so that is what
+    gets checked — automatically, at the end of every publish, instead of by
+    remembering to look.
+
+    The floor is deliberately well below the real figure (~101 MB) so ordinary
+    growth and shrinkage never trip it; only losing the ~17 MB of precompiled
+    native code can. If a deliberate change ever takes the exe legitimately below
+    this, move the floor in the same commit — that keeps the number meaningful
+    instead of something to be silenced.
+  -->
+  <Target Name="VerifyReadyToRun" AfterTargets="Publish"
+          Condition="'$(RuntimeIdentifier)' != '' And '$(PublishSingleFile)' == 'true'">
+    <PropertyGroup>
+      <_TempoExe>$(PublishDir)$(AssemblyName).exe</_TempoExe>
+      <_R2RFloorBytes>95000000</_R2RFloorBytes>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_TempoExe)')"
+           Text="Publish finished but $(_TempoExe) is not there." />
+    <!--
+      The size is read by PowerShell rather than MSBuild item metadata: MSBuild has
+      no well-known FileSize metadata (FullPath, ModifiedTime and friends, but not
+      length), and asking for %(FileSize) silently yields an empty string, which
+      then fails the numeric COMPARISON rather than the build — a check that errors
+      for the wrong reason is no better than one that never fires.
+
+      PowerShell only prints the number; the verdict is an MSBuild <Error> below.
+      Letting Exec fail on its own exit code worked, but MSBuild then reports the
+      whole command line as the error, and the sentence explaining what went wrong
+      is lost in the middle of it. This way the message IS the error.
+    -->
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;(Get-Item -LiteralPath '$(_TempoExe)').Length&quot;"
+          ConsoleToMSBuild="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_TempoExeBytes" />
+    </Exec>
+    <Error Condition="'$(_TempoExeBytes)' == ''"
+           Text="Could not read the size of $(_TempoExe) to verify ReadyToRun." />
+    <Error Condition="'$(_TempoExeBytes)' &lt; '$(_R2RFloorBytes)'"
+           Text="ReadyToRun did NOT apply. $(AssemblyName).exe is $(_TempoExeBytes) bytes, under the $(_R2RFloorBytes) floor — a correct build is ~101 MB, and ~84 MB means the precompiled native code is missing and start-up will be slower. PublishReadyToRun is set in AutoClicker.csproj; check nothing on the command line overrode it to false." />
+    <Message Importance="high"
+             Text="  ReadyToRun verified: $(AssemblyName).exe is $(_TempoExeBytes) bytes." />
+  </Target>
+
+  <!-- Embed the app icon so the window and tray can load it at runtime. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\tempo.ico" />
+    <EmbeddedResource Include="Assets\tempo-about.gif" />
+  </ItemGroup>
+
+  <!--
+    Tempo's own Live Captions engine (optional alternative to Windows Live
+    Captions). NAudio provides WASAPI loopback capture of the system audio;
+    Whisper.net runs the speech-to-text locally and offline. The Whisper *model*
+    file is not a package - it's installed beside the app (the installer ships a
+    small model, and larger ones can be added later). These restore from NuGet on
+    a normal Windows build; they are not available in the offline build sandbox.
+  -->
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <!--
+      Whisper.net is PINNED at 1.8.1 — the 1.9.1 core was tried on 2026-07-13 and
+      showed no benefit (and its Large Turbo run hit the too-slow downgrade, though
+      the box was under load). Re-verify with the timed TTS latency tests on a
+      QUIET machine before ever bumping.
+    -->
+    <PackageReference Include="Whisper.net" Version="1.8.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.8.1" />
+    <!--
+      GPU inference (Vulkan) is OPT-IN via Settings → Live Captions → "Try GPU
+      engine": the default runtime order is forced to CPU-first, and only that
+      checkbox puts Vulkan ahead. Version matters ENORMOUSLY here — measured
+      2026-07-13 on this NVIDIA box: Vulkan 1.9.1 was so slow the audio buffer
+      dropped all but sentence tails, while Vulkan 1.8.1 (this pin) runs LARGE
+      TURBO in sustained real time (GPU spikes confirmed via nvidia-smi). Keep the
+      runtime version LOCKSTEP with Whisper.net above, keep the option opt-in
+      (GPU drivers vary wildly), and keep the automatic switch-back guard in
+      OnTempoModelTooSlow. AMD/Intel GPU users get their only possible GPU path
+      this way; CPU behaviour is untouched when the box is unticked.
+    -->
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.8.1" />
+  </ItemGroup>
+
+</Project>
