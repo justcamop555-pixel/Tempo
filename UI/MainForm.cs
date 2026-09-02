@@ -1551,6 +1551,7 @@ namespace AutoClicker.UI
         private Button _playOnceBtn;
         private Button _stopPlayBtn;
         private Button _deleteMacroBtn;
+        private Button _macroRecycleBtn;
         private NumericUpDown _macroLoopNum;
         private NumericUpDown _macroSpeedNum;
         private CheckBox _recordMovesCheck;

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using AutoClicker.Models;
@@ -69,8 +70,8 @@ namespace AutoClicker.UI
                 "The Live Monitor below fills in real time as you record and highlights " +
                 "each step during playback. Tick \"Append to selected macro\" to add onto " +
                 "an existing recording. In the list: Enter plays, Ctrl+D duplicates, " +
-                "F2 renames, Delete removes. Bind \"Record\" and \"Play\" on the Keybinds tab " +
-                "to control it hands-free.";
+                "F2 renames, Delete moves to the recycle bin. Bind \"Record\" and \"Play\" " +
+                "on the Keybinds tab to control it hands-free.";
             var help = UiFactory.Label(helpText, 12, 12);
             help.MaximumSize = new Size(720, 0);
             help.AutoSize = true;
@@ -118,7 +119,9 @@ namespace AutoClicker.UI
             // rather than a loose column of buttons (which looked dated).
             // 496 tall, not 458: one more row for "Fix…". The Live Monitor below starts
             // at y=634, so there is room for it without moving anything else.
-            var manageGroup = UiFactory.Group(Utils.Localization.T("Manage"), 320, 84, 124, 496, CardIcon.Gear);
+            // 536 rather than 496: the Recycle bin button below Delete needs the room,
+            // and the Live Monitor card does not start until y=634.
+            var manageGroup = UiFactory.Group(Utils.Localization.T("Manage"), 320, 84, 124, 536, CardIcon.Gear);
             int mx = 6;
             int mw = 112;
 
@@ -165,6 +168,12 @@ namespace AutoClicker.UI
             _deleteMacroBtn.ForeColor = _theme.Danger;
             _deleteMacroBtn.Click += OnDeleteMacroClicked;
 
+            // Directly under Delete, because that is the button people press by
+            // accident and this is the way back from it.
+            _macroRecycleBtn = UiFactory.Button(Utils.Localization.T("Recycle bin"), mx, 494, mw, 30);
+            _macroRecycleBtn.Click += OnMacroRecycleBinClicked;
+
+            manageGroup.Controls.Add(_macroRecycleBtn);
             manageGroup.Controls.Add(_fixMacroBtn);
             manageGroup.Controls.Add(_editMacroBtn);
             manageGroup.Controls.Add(_renameMacroBtn);
@@ -895,6 +904,10 @@ namespace AutoClicker.UI
                 }
             }
             _macroListBox.EndUpdate();
+
+            // "The macro library changed" has one choke point, and this is it, so the
+            // bin button's count comes from here rather than from every delete site.
+            UpdateMacroRecycleButton();
 
             if (_macroSummaryLabel != null)
             {
@@ -2084,17 +2097,98 @@ namespace AutoClicker.UI
             }
 
             var confirm = MessageBox.Show(this,
-                Localization.F("Delete macro '{0}'?", macro.Name),
+                Localization.F("Delete macro '{0}'? You can restore it from the recycle bin.", macro.Name),
                 "Tempo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
 
             if (confirm == DialogResult.Yes)
             {
+                int steps = macro.Actions != null ? macro.Actions.Count : 0;
                 _macros.Remove(macro.Name);
                 _macros.Save();
                 RefreshMacroList();
+                UpdateMacroRecycleButton();
+                Logger.Info("[Macros] '" + macro.Name + "' (" + steps +
+                            " step(s)) moved to the recycle bin.");
             }
+        }
+
+        /// <summary>Keeps the bin button's count and enabled state honest.</summary>
+        private void UpdateMacroRecycleButton()
+        {
+            if (_macroRecycleBtn == null) { return; }
+            int binned = _macros?.RecycleBin?.Count ?? 0;
+            _macroRecycleBtn.Text = binned > 0
+                ? Localization.F("Recycle bin ({0})", binned.ToString())
+                : Localization.T("Recycle bin");
+            _macroRecycleBtn.Enabled = binned > 0;
+        }
+
+        /// <summary>
+        /// The window onto deleted macros. Shares its implementation with the profile
+        /// bin — see <see cref="RecycleBinForm"/> — so the two cannot drift apart.
+        /// </summary>
+        private void OnMacroRecycleBinClicked(object sender, EventArgs e)
+        {
+            if (_macros == null) { return; }
+
+            bool changed = RecycleBinForm.Show(this, _theme,
+                Localization.T("Recently deleted macros"),
+                Localization.T("Deleting a macro keeps a copy here so it can be brought back. " +
+                               "Restoring one whose name is in use again gives it a new name."),
+                new[] { Localization.T("Macro"), Localization.T("Steps"), Localization.T("Last played") },
+                new[] { 230, 80, 170 },
+                Localization.T("The bin is empty."),
+                "Permanently delete {0} macro(s)? This cannot be undone.",
+                BuildMacroBinRows,
+                name =>
+                {
+                    var restored = _macros.RestoreFromRecycleBin(name);
+                    if (restored == null) { return false; }
+                    _macros.Save();
+                    Logger.Info("[Macros] restored '" + restored.Name + "' from the recycle bin.");
+                    return true;
+                },
+                () =>
+                {
+                    int n = _macros.RecycleBin.Count;
+                    _macros.EmptyRecycleBin();
+                    _macros.Save();
+                    Logger.Info("[Macros] recycle bin emptied (" + n + " macro(s)).");
+                });
+
+            if (changed)
+            {
+                RefreshMacroList();
+            }
+            UpdateMacroRecycleButton();
+        }
+
+        /// <summary>Rows for the bin window, newest deletion first.</summary>
+        private List<RecycleBinForm.Entry> BuildMacroBinRows()
+        {
+            var rows = new List<RecycleBinForm.Entry>();
+            if (_macros?.RecycleBin == null) { return rows; }
+
+            for (int i = _macros.RecycleBin.Count - 1; i >= 0; i--)
+            {
+                var m = _macros.RecycleBin[i];
+                if (m == null) { continue; }
+                rows.Add(new RecycleBinForm.Entry
+                {
+                    Id = m.Name,
+                    Cells = new[]
+                    {
+                        m.Name,
+                        (m.Actions != null ? m.Actions.Count : 0).ToString(),
+                        m.LastPlayedUtc.HasValue
+                            ? m.LastPlayedUtc.Value.ToLocalTime().ToString("g")
+                            : Localization.T("never")
+                    }
+                });
+            }
+            return rows;
         }
 
         private void AddExclusions(HotkeyDefinition hk)

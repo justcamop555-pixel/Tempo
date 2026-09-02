@@ -285,6 +285,10 @@ namespace AutoClicker.UI
             _sessionHistoryList.Columns.Add("Duration", 100);
             _sessionHistoryList.Columns.Add("Avg CPS", 80);
             _sessionHistoryList.Columns.Add("Peak CPS", 80);
+            // 94px of the control was left unused: the automatic fit in
+            // ThemedListView.OnSizeChanged runs when Width is set above, before any
+            // column exists, so it has nothing to fit.
+            _sessionHistoryList.FitLastColumn();
             _sessionHistoryList.DoubleClick += OnSessionHistoryDetails;
             _sessionHistoryList.ColumnClick += OnSessionHistoryColumnClick;
 

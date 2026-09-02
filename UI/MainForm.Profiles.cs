@@ -832,7 +832,30 @@ namespace AutoClicker.UI
         {
             if (_profiles == null) { return; }
 
-            if (ProfileRecycleBinForm.Show(this, _theme, _profiles))
+            bool changed = RecycleBinForm.Show(this, _theme,
+                Localization.T("Recently deleted profiles"),
+                Localization.T("Deleting a profile keeps a copy here so it can be brought back. " +
+                               "Restoring one that clashes with a current profile gives it a new name."),
+                new[] { Localization.T("Profile"), Localization.T("Category"), Localization.T("Last used") },
+                new[] { 210, 110, 160 },
+                Localization.T("The bin is empty."),
+                "Permanently delete {0} profile(s)? This cannot be undone.",
+                BuildProfileBinRows,
+                name =>
+                {
+                    bool ok = _profiles.RestoreFromRecycleBin(name) != null;
+                    if (ok) { _profiles.Save(); Logger.Info("[profiles] restored '" + name + "' from the recycle bin."); }
+                    return ok;
+                },
+                () =>
+                {
+                    int n = _profiles.RecycleBin.Count;
+                    _profiles.EmptyRecycleBin();
+                    _profiles.Save();
+                    Logger.Info("[profiles] recycle bin emptied (" + n + " profile(s)).");
+                });
+
+            if (changed)
             {
                 RefreshProfileCombo();
             }
@@ -840,6 +863,33 @@ namespace AutoClicker.UI
             {
                 UpdateProfileRecycleButton();
             }
+        }
+
+        /// <summary>Rows for the shared recycle-bin window, newest deletion first.</summary>
+        private List<RecycleBinForm.Entry> BuildProfileBinRows()
+        {
+            var rows = new List<RecycleBinForm.Entry>();
+            if (_profiles?.RecycleBin == null) { return rows; }
+
+            // The bin appends, so walk it backwards.
+            for (int i = _profiles.RecycleBin.Count - 1; i >= 0; i--)
+            {
+                var p = _profiles.RecycleBin[i];
+                if (p == null) { continue; }
+                rows.Add(new RecycleBinForm.Entry
+                {
+                    Id = p.Name,
+                    Cells = new[]
+                    {
+                        p.Name,
+                        ProfileCategoryName(p.Category),
+                        p.LastUsedUtc == DateTime.MinValue
+                            ? Localization.T("never")
+                            : p.LastUsedUtc.ToLocalTime().ToString("g")
+                    }
+                });
+            }
+            return rows;
         }
 
         /// <summary>Strips characters Windows will not accept in a file name.</summary>

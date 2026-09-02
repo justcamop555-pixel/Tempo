@@ -61,6 +61,11 @@ namespace AutoClicker.UI
             _pointsList.Columns.Add("Type", 72);
             _pointsList.Columns.Add("Dwell", 54, HorizontalAlignment.Right);
             _pointsList.Columns.Add("Rep", 52, HorizontalAlignment.Right);
+            // The columns add up to 24px less than the control, leaving dead space at
+            // the right edge. ThemedListView's own OnSizeChanged fires when Width is
+            // set in the initializer above — BEFORE any column exists — so the only
+            // fit that counts is one after the columns are added.
+            _pointsList.FitLastColumn();
             _pointsList.DoubleClick += (s, e) => EditSelectedPoint();
             _pointsList.ItemActivate += (s, e) => EditSelectedPoint();
             _pointsList.ItemChecked += OnPointItemChecked;

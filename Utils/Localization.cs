@@ -1074,6 +1074,14 @@ namespace AutoClicker.Utils
             ["Beep when clicking starts"] = "Pitido al empezar a hacer clic",
             ["Beep when clicking stops"] = "Pitido al dejar de hacer clic",
             ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Un tono ascendente al empezar y otro descendente al parar, para confirmar la pulsación de la tecla rápida incluso con la ventana oculta en la bandeja.",
+            // ── Macros tab: the recycle bin. ───────────────────────────────────
+            ["Macro"] = "Macro",
+            ["Steps"] = "Pasos",
+            ["Last played"] = "Última reproducción",
+            ["Recently deleted macros"] = "Macros eliminadas recientemente",
+            ["Delete macro '{0}'? You can restore it from the recycle bin."] = "¿Eliminar la macro «{0}»? Puedes restaurarla desde la papelera.",
+            ["Deleting a macro keeps a copy here so it can be brought back. Restoring one whose name is in use again gives it a new name."] = "Al eliminar una macro se conserva aquí una copia para poder recuperarla. Si al restaurarla su nombre vuelve a estar en uso, se le dará un nombre nuevo.",
+            ["Permanently delete {0} macro(s)? This cannot be undone."] = "¿Eliminar permanentemente {0} macro(s)? Esto no se puede deshacer.",
         };
 
         private static readonly Dictionary<string, string> FrExtra = new Dictionary<string, string>
@@ -1838,6 +1846,14 @@ namespace AutoClicker.Utils
             ["Beep when clicking starts"] = "Bip au démarrage du clic",
             ["Beep when clicking stops"] = "Bip à l'arrêt du clic",
             ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Un ton montant au démarrage et un ton descendant à l'arrêt, pour confirmer l'appui du raccourci même avec la fenêtre masquée dans la zone de notification.",
+            // ── Macros tab: the recycle bin. ───────────────────────────────────
+            ["Macro"] = "Macro",
+            ["Steps"] = "Étapes",
+            ["Last played"] = "Dernière lecture",
+            ["Recently deleted macros"] = "Macros récemment supprimées",
+            ["Delete macro '{0}'? You can restore it from the recycle bin."] = "Supprimer la macro « {0} » ? Vous pourrez la restaurer depuis la corbeille.",
+            ["Deleting a macro keeps a copy here so it can be brought back. Restoring one whose name is in use again gives it a new name."] = "Supprimer une macro en conserve une copie ici afin de pouvoir la récupérer. Si le nom de la macro restaurée est de nouveau utilisé, elle reçoit un nouveau nom.",
+            ["Permanently delete {0} macro(s)? This cannot be undone."] = "Supprimer définitivement {0} macro(s) ? Cette action est irréversible.",
         };
 
         private static readonly Dictionary<string, string> DeExtra = new Dictionary<string, string>
@@ -2602,6 +2618,14 @@ namespace AutoClicker.Utils
             ["Beep when clicking starts"] = "Signalton beim Start des Klickens",
             ["Beep when clicking stops"] = "Signalton beim Stoppen des Klickens",
             ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Ein steigender Ton beim Start und ein fallender beim Stopp, damit ein Tastendruck auch bei im Infobereich verstecktem Fenster bestätigt wird.",
+            // ── Macros tab: the recycle bin. ───────────────────────────────────
+            ["Macro"] = "Makro",
+            ["Steps"] = "Schritte",
+            ["Last played"] = "Zuletzt abgespielt",
+            ["Recently deleted macros"] = "Kürzlich gelöschte Makros",
+            ["Delete macro '{0}'? You can restore it from the recycle bin."] = "Makro „{0}“ löschen? Du kannst es aus dem Papierkorb wiederherstellen.",
+            ["Deleting a macro keeps a copy here so it can be brought back. Restoring one whose name is in use again gives it a new name."] = "Beim Löschen eines Makros bleibt hier eine Kopie, damit es zurückgeholt werden kann. Ist der Name eines wiederhergestellten Makros wieder vergeben, erhält es einen neuen Namen.",
+            ["Permanently delete {0} macro(s)? This cannot be undone."] = "{0} Makro(s) endgültig löschen? Das kann nicht rückgängig gemacht werden.",
         };
 
         private static readonly Dictionary<string, string> ItExtra = new Dictionary<string, string>
@@ -3366,6 +3390,14 @@ namespace AutoClicker.Utils
             ["Beep when clicking starts"] = "Bip all'avvio dei clic",
             ["Beep when clicking stops"] = "Bip all'arresto dei clic",
             ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Un tono ascendente all'avvio e uno discendente all'arresto, così la pressione del tasto rapido è confermata anche con la finestra nascosta nell'area di notifica.",
+            // ── Macros tab: the recycle bin. ───────────────────────────────────
+            ["Macro"] = "Macro",
+            ["Steps"] = "Passaggi",
+            ["Last played"] = "Ultima riproduzione",
+            ["Recently deleted macros"] = "Macro eliminate di recente",
+            ["Delete macro '{0}'? You can restore it from the recycle bin."] = "Eliminare la macro «{0}»? Puoi ripristinarla dal cestino.",
+            ["Deleting a macro keeps a copy here so it can be brought back. Restoring one whose name is in use again gives it a new name."] = "Eliminando una macro se ne conserva qui una copia per poterla recuperare. Se il nome della macro ripristinata è di nuovo in uso, riceve un nuovo nome.",
+            ["Permanently delete {0} macro(s)? This cannot be undone."] = "Eliminare definitivamente {0} macro? L'operazione non può essere annullata.",
         };
 
         private static readonly Dictionary<string, string> PtExtra = new Dictionary<string, string>
@@ -4130,6 +4162,14 @@ namespace AutoClicker.Utils
             ["Beep when clicking starts"] = "Aviso sonoro ao começar a clicar",
             ["Beep when clicking stops"] = "Aviso sonoro ao parar de clicar",
             ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Um tom ascendente ao iniciar e um descendente ao parar, para confirmar a tecla de atalho mesmo com a janela escondida na área de notificação.",
+            // ── Macros tab: the recycle bin. ───────────────────────────────────
+            ["Macro"] = "Macro",
+            ["Steps"] = "Passos",
+            ["Last played"] = "Última reprodução",
+            ["Recently deleted macros"] = "Macros eliminadas recentemente",
+            ["Delete macro '{0}'? You can restore it from the recycle bin."] = "Eliminar a macro «{0}»? Podes restaurá-la a partir da reciclagem.",
+            ["Deleting a macro keeps a copy here so it can be brought back. Restoring one whose name is in use again gives it a new name."] = "Eliminar uma macro mantém aqui uma cópia para poder ser recuperada. Se o nome da macro restaurada estiver novamente em uso, recebe um nome novo.",
+            ["Permanently delete {0} macro(s)? This cannot be undone."] = "Eliminar permanentemente {0} macro(s)? Isto não pode ser anulado.",
         };
 
         private static readonly Dictionary<string, string> Es = new Dictionary<string, string>

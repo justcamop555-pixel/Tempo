@@ -20,7 +20,19 @@ namespace AutoClicker.Persistence
 
         private readonly List<Macro> _macros = new List<Macro>();
 
+        /// <summary>
+        /// Soft-deleted macros, newest last.
+        ///
+        /// A macro costs more to lose than almost anything else Tempo stores: a profile
+        /// can be retyped from its numbers, but a macro was PERFORMED — the only way
+        /// back is to sit and record the whole thing again in real time. Delete used to
+        /// drop it on the spot behind a single Yes/No.
+        /// </summary>
+        private readonly List<Macro> _recycleBin = new List<Macro>();
+        private const int MaxRecycleBin = 25;
+
         public IReadOnlyList<Macro> Macros => _macros;
+        public IReadOnlyList<Macro> RecycleBin => _recycleBin;
 
         /// <summary>Reorders the macros in place using the given comparison and saves.</summary>
         public void SortBy(Comparison<Macro> comparison)
@@ -39,9 +51,23 @@ namespace AutoClicker.Persistence
             return Path.Combine(SettingsManager.GetSettingsDirectory(), "macros.json");
         }
 
+        /// <summary>
+        /// The bin lives in its OWN file, for the same reason the profile bin does:
+        /// macros.json is a bare JSON array and has been since the first release.
+        /// Turning it into an object to make room would make an older Tempo read it as
+        /// "no macros" and replace it with nothing — which for macros means silently
+        /// discarding recordings. A second file keeps the important one's format
+        /// frozen and makes a missing or damaged bin cost nothing.
+        /// </summary>
+        public static string GetRecycleBinPath()
+        {
+            return Path.Combine(SettingsManager.GetSettingsDirectory(), "macros.recycle.json");
+        }
+
         public void Load()
         {
             _macros.Clear();
+            LoadRecycleBin();
 
             try
             {
@@ -86,12 +112,66 @@ namespace AutoClicker.Persistence
             try
             {
                 string json = JsonSerializer.Serialize(_macros, Options);
-                return PersistenceHelper.WriteAtomic(GetMacrosPath(), json);
+                bool ok = PersistenceHelper.WriteAtomic(GetMacrosPath(), json);
+                SaveRecycleBin();
+                return ok;
             }
             catch (Exception ex)
             {
                 Logger.Error("Failed to save macros.", ex);
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Reads the soft-deleted macros back. Any problem is swallowed to an empty
+        /// bin — losing the undo history is a nuisance, and it must never stop the real
+        /// macros from loading.
+        /// </summary>
+        private void LoadRecycleBin()
+        {
+            _recycleBin.Clear();
+
+            try
+            {
+                string path = GetRecycleBinPath();
+                if (!File.Exists(path)) { return; }
+
+                string json = File.ReadAllText(path);
+                if (string.IsNullOrWhiteSpace(json)) { return; }
+
+                var loaded = JsonSerializer.Deserialize<List<Macro>>(json, Options);
+                if (loaded == null) { return; }
+
+                foreach (var m in loaded)
+                {
+                    if (m == null) { continue; }
+                    if (m.Actions == null) { m.Actions = new List<MacroAction>(); }
+                    _recycleBin.Add(m);
+                }
+
+                while (_recycleBin.Count > MaxRecycleBin)
+                {
+                    _recycleBin.RemoveAt(0);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Failed to load the macro recycle bin; starting empty.", ex);
+                _recycleBin.Clear();
+            }
+        }
+
+        private void SaveRecycleBin()
+        {
+            try
+            {
+                string json = JsonSerializer.Serialize(_recycleBin, Options);
+                PersistenceHelper.WriteAtomic(GetRecycleBinPath(), json);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Failed to save the macro recycle bin.", ex);
             }
         }
 
@@ -122,8 +202,43 @@ namespace AutoClicker.Persistence
             }
 
             _macros.Remove(existing);
+
+            // Soft-delete, so a mis-click costs a trip to the bin rather than a
+            // re-recording session.
+            _recycleBin.Add(existing);
+            while (_recycleBin.Count > MaxRecycleBin)
+            {
+                _recycleBin.RemoveAt(0);
+            }
+
             return true;
         }
+
+        /// <summary>
+        /// Puts a macro back into the library. A name that is in use again gets a
+        /// numeric suffix rather than overwriting whatever holds it now.
+        /// </summary>
+        public Macro RestoreFromRecycleBin(string name)
+        {
+            var found = _recycleBin.FindLast(m =>
+                m != null && string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (found == null)
+            {
+                return null;
+            }
+
+            _recycleBin.Remove(found);
+            found.Name = MakeUniqueName(found.Name);
+            _macros.Add(found);
+            return found;
+        }
+
+        /// <summary>Permanently clears the bin.</summary>
+        public void EmptyRecycleBin()
+        {
+            _recycleBin.Clear();
+        }
+
 
         /// <summary>Renames a macro. Returns false on a name clash or if missing.</summary>
         public bool Rename(string oldName, string newName)
