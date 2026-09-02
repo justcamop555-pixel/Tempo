@@ -230,7 +230,7 @@ namespace AutoClicker.UI
             T(_macroPreserveHoldsCheck, "Keep held keys/buttons at their real recorded length when speeding up — so 2× / 4× only shorten the gaps between actions, not a held movement key (WASD). Off = everything scales with speed.");
             T(_pinMacroBtn, "Pin the selected macro to the top of the list.");
             T(_resetMacroStatsBtn, "Clear the selected macro's play count and last-played time.");
-            T(_macroSearchBox, "Filter the macro list by name.");
+            T(_macroSearchBox, "Filter the macro list by name, notes, or what the macro does — type a key like F5, a button like right, or part of a script filename.");
             T(_exportMacroBtn, "Save the selected macro to a file you can share or back up.");
             T(_importMacroBtn, "Load a macro from a file and add it to your list.");
             T(_exportAllBtn, "Save all your macros to a single file.");

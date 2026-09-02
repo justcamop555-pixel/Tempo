@@ -97,13 +97,16 @@ namespace AutoClicker.UI
             var macroMenu = new ContextMenuStrip();
             macroMenu.Items.Add(Utils.Localization.T("Play"), null, OnPlayMacroClicked);
             macroMenu.Items.Add(Utils.Localization.T("Play once"), null, OnPlayMacroOnceClicked);
-            macroMenu.Items.Add("Edit…", null, (s, e) => EditSelectedMacro());
-            macroMenu.Items.Add("Rename…", null, OnRenameMacro);
-            macroMenu.Items.Add("Duplicate", null, OnDuplicateMacro);
-            macroMenu.Items.Add("Export…", null, OnExportMacro);
+            // Five of these nine were raw literals sitting between translated siblings, so
+            // the right-click menu came up half in English in every other language. All
+            // five were already in the tables and had simply never been reached.
+            macroMenu.Items.Add(Utils.Localization.T("Edit…"), null, (s, e) => EditSelectedMacro());
+            macroMenu.Items.Add(Utils.Localization.T("Rename…"), null, OnRenameMacro);
+            macroMenu.Items.Add(Utils.Localization.T("Duplicate"), null, OnDuplicateMacro);
+            macroMenu.Items.Add(Utils.Localization.T("Export…"), null, OnExportMacro);
             macroMenu.Items.Add(new ToolStripSeparator());
             macroMenu.Items.Add(Utils.Localization.T("Pin / Unpin"), null, OnPinMacroClicked);
-            macroMenu.Items.Add("Delete", null, OnDeleteMacroClicked);
+            macroMenu.Items.Add(Utils.Localization.T("Delete"), null, OnDeleteMacroClicked);
             _macroListBox.ContextMenuStrip = macroMenu;
             _macroListBox.MouseDown += (s, e) =>
             {
@@ -850,7 +853,7 @@ namespace AutoClicker.UI
             double speed = (double)_macroSpeedNum.Value / 10.0;
             if (speed <= 0) speed = 1.0;
 
-            string steps = $"  \u2022  {macro.StepCount} step(s)";
+            string steps = "  \u2022  " + Utils.Localization.F("{0} step(s)", macro.StepCount);
 
             if (loops <= 0)
             {
@@ -886,9 +889,7 @@ namespace AutoClicker.UI
 
             foreach (var m in ordered)
             {
-                if (filter.Length == 0 ||
-                    (m.Name != null && m.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0) ||
-                    (m.Notes != null && m.Notes.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0))
+                if (filter.Length == 0 || MacroMatchesFilter(m, filter))
                 {
                     _macroListBox.Items.Add(m);
                 }
@@ -943,6 +944,53 @@ namespace AutoClicker.UI
             // Selection may have changed (e.g. a delete) — keep the action buttons
             // in step with whether anything is selected.
             RefreshMacroButtons();
+        }
+
+        /// <summary>
+        /// Whether a macro answers the search box — by name, by its notes, or by what it
+        /// actually DOES.
+        ///
+        /// Name and notes alone were not much use against a library of auto-named
+        /// recordings: "Macro 16-11-12" tells you nothing, so finding the one that presses
+        /// F5 meant opening them one at a time. The steps are searched too now, so "F5",
+        /// "right", "wheel" or a script's filename all find it.
+        ///
+        /// Scanned directly rather than cached. A cache would have to be invalidated on
+        /// every record, edit, import, merge and fix, and a stale search index is a bug
+        /// you only notice when it hides the macro you were looking for. The whole
+        /// library here is a few thousand steps and each one is a couple of string
+        /// compares that stop at the first hit.
+        /// </summary>
+        private static bool MacroMatchesFilter(Macro m, string filter)
+        {
+            if (m == null) { return false; }
+            const StringComparison Ci = StringComparison.OrdinalIgnoreCase;
+
+            if (m.Name != null && m.Name.IndexOf(filter, Ci) >= 0) { return true; }
+            if (m.Notes != null && m.Notes.IndexOf(filter, Ci) >= 0) { return true; }
+            if (m.Actions == null) { return false; }
+
+            foreach (MacroAction a in m.Actions)
+            {
+                if (a == null) { continue; }
+
+                // The friendly type name — "Left click", "Key down", "Run script" — which
+                // is the same wording the editor and the Live Monitor show.
+                string type = MacroAction.FriendlyType(a.Type);
+                if (type != null && type.IndexOf(filter, Ci) >= 0) { return true; }
+
+                if (a.VirtualKey != 0)
+                {
+                    string key = MacroAction.KeyName(a.VirtualKey);
+                    if (key != null && key.IndexOf(filter, Ci) >= 0) { return true; }
+                }
+
+                if (!string.IsNullOrEmpty(a.ScriptPath))
+                {
+                    if (a.ScriptPath.IndexOf(filter, Ci) >= 0) { return true; }
+                }
+            }
+            return false;
         }
 
         private Macro SelectedMacro()

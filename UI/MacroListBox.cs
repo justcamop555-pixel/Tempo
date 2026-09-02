@@ -222,16 +222,29 @@ namespace AutoClicker.UI
             // recency — two blank columns, which reads as "this row failed to load" rather
             // than "this one is new". Both halves now always say something: how many times
             // it ran (or that it hasn't), and how long ago that was (or how old it is).
+            // Translated. This whole line is painted straight onto the row, so it touches
+            // no helper that could have caught it — and it is the most-read text on the
+            // tab. Every macro's detail line was English in all five other languages.
             bool everPlayed = macro.TimesPlayed > 0;
-            string meta = macro.StepCount.ToString("N0") + " steps  ·  " + ShortTime(macro.EstimatedDurationMs);
-            meta += everPlayed
-                ? "  ·  played " + macro.TimesPlayed + "×"
-                : "  ·  never played";
+            string meta = Utils.Localization.F("{0} steps", macro.StepCount.ToString("N0"))
+                + "  ·  " + ShortTime(macro.EstimatedDurationMs);
+            // COUNT FIRST — "2× played", not "played 2×". This line is trimmed with an
+            // ellipsis when it runs out of room, and it does run out in the longer
+            // languages: Spanish "reproducido 2×" came back as "reproducid…", throwing
+            // away the only part that carried information. With the number in front, a
+            // trim costs the word and keeps the count.
+            meta += "  ·  " + (everPlayed
+                ? Utils.Localization.F("{0}× played", macro.TimesPlayed)
+                : Utils.Localization.T("never played"));
             using (var metaFont = new Font(Font.FontFamily, 8.25f, FontStyle.Regular))
             using (var metaBrush = new SolidBrush(th.TextMuted))
             {
-                // 62px, not 46: "2mo ago" and "just now" both overflow a narrower column
-                // and came out clipped to "2mo ag"; "2mo old" needs the same room again.
+                // 62px, measured against the longest translations of this column —
+                // "il y a 2mo", "creado 2me", "2Mo alt" — which all sit inside it. Widening
+                // it was tried and was the wrong trade: every pixel here comes straight out
+                // of the meta line to its left, which is the one that was actually running
+                // out of room. The draw below trims with an ellipsis rather than clipping
+                // mid-glyph, so a language that still overruns degrades readably.
                 const int AgoWidth = 62;
                 // Last played when it has been, otherwise how old the recording is — so
                 // the column is never empty. "old" rather than "ago" makes clear which
@@ -251,7 +264,12 @@ namespace AutoClicker.UI
                 // among a pile of auto-named recordings.
                 if (ago.Length > 0)
                 {
-                    var fmt = new StringFormat { Alignment = StringAlignment.Far, FormatFlags = StringFormatFlags.NoWrap };
+                    var fmt = new StringFormat
+                    {
+                        Alignment = StringAlignment.Far,
+                        FormatFlags = StringFormatFlags.NoWrap,
+                        Trimming = StringTrimming.EllipsisCharacter
+                    };
                     g.DrawString(ago, metaFont, metaBrush,
                         new RectangleF(textRight - AgoWidth, row.Y + 20, AgoWidth, 15), fmt);
                 }
@@ -278,11 +296,11 @@ namespace AutoClicker.UI
             try
             {
                 TimeSpan d = DateTime.UtcNow - utc;
-                if (d.TotalSeconds < 0) { return "new"; }        // clock skew, or just saved
-                if (d.TotalMinutes < 60) { return "new"; }
-                if (d.TotalHours < 24) { return (int)d.TotalHours + "h old"; }
-                if (d.TotalDays < 30) { return (int)d.TotalDays + "d old"; }
-                return (int)(d.TotalDays / 30) + "mo old";
+                if (d.TotalSeconds < 0) { return Utils.Localization.T("new"); }  // clock skew, or just saved
+                if (d.TotalMinutes < 60) { return Utils.Localization.T("new"); }
+                if (d.TotalHours < 24) { return Utils.Localization.F("{0}h old", (int)d.TotalHours); }
+                if (d.TotalDays < 30) { return Utils.Localization.F("{0}d old", (int)d.TotalDays); }
+                return Utils.Localization.F("{0}mo old", (int)(d.TotalDays / 30));
             }
             catch { return ""; }
         }
@@ -294,11 +312,11 @@ namespace AutoClicker.UI
             try
             {
                 TimeSpan d = DateTime.UtcNow - utc.Value;
-                if (d.TotalSeconds < 90) { return "just now"; }
-                if (d.TotalMinutes < 60) { return (int)d.TotalMinutes + "m ago"; }
-                if (d.TotalHours < 24) { return (int)d.TotalHours + "h ago"; }
-                if (d.TotalDays < 30) { return (int)d.TotalDays + "d ago"; }
-                return (int)(d.TotalDays / 30) + "mo ago";
+                if (d.TotalSeconds < 90) { return Utils.Localization.T("just now"); }
+                if (d.TotalMinutes < 60) { return Utils.Localization.F("{0}m ago", (int)d.TotalMinutes); }
+                if (d.TotalHours < 24) { return Utils.Localization.F("{0}h ago", (int)d.TotalHours); }
+                if (d.TotalDays < 30) { return Utils.Localization.F("{0}d ago", (int)d.TotalDays); }
+                return Utils.Localization.F("{0}mo ago", (int)(d.TotalDays / 30));
             }
             catch { return ""; }
         }

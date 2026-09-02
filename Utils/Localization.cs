@@ -1093,6 +1093,20 @@ namespace AutoClicker.Utils
             ["Double-click a row for details · right-click for more options · click a column header to sort."] = "Haz doble clic en una fila para ver los detalles · clic derecho para más opciones · haz clic en una cabecera para ordenar.",
             ["Filter by profile"] = "Filtrar por perfil",
             ["Session goal"] = "Objetivo de la sesión",
+            ["{0} steps"] = "{0} pasos",
+            ["{0} step(s)"] = "{0} paso(s)",
+            ["{0}× played"] = "{0}× usada",
+            ["never played"] = "sin usar",
+            ["new"] = "nuevo",
+            ["just now"] = "ahora",
+            ["{0}m ago"] = "hace {0}m",
+            ["{0}h ago"] = "hace {0}h",
+            ["{0}d ago"] = "hace {0}d",
+            ["{0}mo ago"] = "hace {0}me",
+            ["{0}h old"] = "{0}h",
+            ["{0}d old"] = "{0}d",
+            ["{0}mo old"] = "{0}me",
+            ["Filter the macro list by name, notes, or what the macro does — type a key like F5, a button like right, or part of a script filename."] = "Filtra la lista de macros por nombre, notas o por lo que hace la macro: escribe una tecla como F5, un botón como derecho, o parte del nombre de un script.",
             ["{0} active point(s)"] = "{0} punto(s) activo(s)",
             ["{0} of {1} points active"] = "{0} de {1} puntos activos",
             ["{0} click(s) per cycle"] = "{0} clic(s) por ciclo",
@@ -2197,6 +2211,20 @@ namespace AutoClicker.Utils
             ["Double-click a row for details · right-click for more options · click a column header to sort."] = "Double-cliquez sur une ligne pour les détails · clic droit pour plus d'options · cliquez sur un en-tête pour trier.",
             ["Filter by profile"] = "Filtrer par profil",
             ["Session goal"] = "Objectif de session",
+            ["{0} steps"] = "{0} étapes",
+            ["{0} step(s)"] = "{0} étape(s)",
+            ["{0}× played"] = "{0}× jouée",
+            ["never played"] = "jamais jouée",
+            ["new"] = "neuf",
+            ["just now"] = "à l'instant",
+            ["{0}m ago"] = "il y a {0}m",
+            ["{0}h ago"] = "il y a {0}h",
+            ["{0}d ago"] = "il y a {0}j",
+            ["{0}mo ago"] = "il y a {0}mo",
+            ["{0}h old"] = "{0}h",
+            ["{0}d old"] = "{0}j",
+            ["{0}mo old"] = "{0}mo",
+            ["Filter the macro list by name, notes, or what the macro does — type a key like F5, a button like right, or part of a script filename."] = "Filtre la liste des macros par nom, notes ou par ce que fait la macro : tapez une touche comme F5, un bouton comme droit, ou une partie du nom d'un script.",
             ["{0} active point(s)"] = "{0} point(s) actif(s)",
             ["{0} of {1} points active"] = "{0} sur {1} points actifs",
             ["{0} click(s) per cycle"] = "{0} clic(s) par cycle",
@@ -3301,6 +3329,20 @@ namespace AutoClicker.Utils
             ["Double-click a row for details · right-click for more options · click a column header to sort."] = "Doppelklick auf eine Zeile für Details · Rechtsklick für weitere Optionen · Klick auf eine Spaltenüberschrift zum Sortieren.",
             ["Filter by profile"] = "Nach Profil filtern",
             ["Session goal"] = "Sitzungsziel",
+            ["{0} steps"] = "{0} Schritte",
+            ["{0} step(s)"] = "{0} Schritt(e)",
+            ["{0}× played"] = "{0}× gespielt",
+            ["never played"] = "nie gespielt",
+            ["new"] = "neu",
+            ["just now"] = "gerade",
+            ["{0}m ago"] = "vor {0}m",
+            ["{0}h ago"] = "vor {0}h",
+            ["{0}d ago"] = "vor {0}T",
+            ["{0}mo ago"] = "vor {0}Mo",
+            ["{0}h old"] = "{0}h",
+            ["{0}d old"] = "{0}T",
+            ["{0}mo old"] = "{0}Mo",
+            ["Filter the macro list by name, notes, or what the macro does — type a key like F5, a button like right, or part of a script filename."] = "Filtert die Makroliste nach Name, Notizen oder danach, was das Makro tut – tippe eine Taste wie F5, eine Maustaste wie rechts oder einen Teil eines Skriptdateinamens.",
             ["{0} active point(s)"] = "{0} aktive(r) Punkt(e)",
             ["{0} of {1} points active"] = "{0} von {1} Punkten aktiv",
             ["{0} click(s) per cycle"] = "{0} Klick(s) pro Zyklus",
@@ -4405,6 +4447,20 @@ namespace AutoClicker.Utils
             ["Double-click a row for details · right-click for more options · click a column header to sort."] = "Fai doppio clic su una riga per i dettagli · clic destro per altre opzioni · clic su un'intestazione per ordinare.",
             ["Filter by profile"] = "Filtra per profilo",
             ["Session goal"] = "Obiettivo della sessione",
+            ["{0} steps"] = "{0} passi",
+            ["{0} step(s)"] = "{0} passo/i",
+            ["{0}× played"] = "{0}× eseguita",
+            ["never played"] = "mai eseguita",
+            ["new"] = "nuovo",
+            ["just now"] = "adesso",
+            ["{0}m ago"] = "{0}m fa",
+            ["{0}h ago"] = "{0}h fa",
+            ["{0}d ago"] = "{0}g fa",
+            ["{0}mo ago"] = "{0}me fa",
+            ["{0}h old"] = "{0}h",
+            ["{0}d old"] = "{0}g",
+            ["{0}mo old"] = "{0}me",
+            ["Filter the macro list by name, notes, or what the macro does — type a key like F5, a button like right, or part of a script filename."] = "Filtra l'elenco delle macro per nome, note o per ciò che fa la macro: digita un tasto come F5, un pulsante come destro, o parte del nome di uno script.",
             ["{0} active point(s)"] = "{0} punto/i attivo/i",
             ["{0} of {1} points active"] = "{0} di {1} punti attivi",
             ["{0} click(s) per cycle"] = "{0} clic per ciclo",
@@ -5509,6 +5565,20 @@ namespace AutoClicker.Utils
             ["Double-click a row for details · right-click for more options · click a column header to sort."] = "Faz duplo clique numa linha para ver detalhes · clique direito para mais opções · clica num cabeçalho para ordenar.",
             ["Filter by profile"] = "Filtrar por perfil",
             ["Session goal"] = "Objetivo da sessão",
+            ["{0} steps"] = "{0} passos",
+            ["{0} step(s)"] = "{0} passo(s)",
+            ["{0}× played"] = "{0}× usada",
+            ["never played"] = "sem uso",
+            ["new"] = "novo",
+            ["just now"] = "agora",
+            ["{0}m ago"] = "há {0}m",
+            ["{0}h ago"] = "há {0}h",
+            ["{0}d ago"] = "há {0}d",
+            ["{0}mo ago"] = "há {0}m",
+            ["{0}h old"] = "{0}h",
+            ["{0}d old"] = "{0}d",
+            ["{0}mo old"] = "{0}m",
+            ["Filter the macro list by name, notes, or what the macro does — type a key like F5, a button like right, or part of a script filename."] = "Filtra a lista de macros por nome, notas ou pelo que a macro faz: escreve uma tecla como F5, um botão como direito, ou parte do nome de um script.",
             ["{0} active point(s)"] = "{0} ponto(s) ativo(s)",
             ["{0} of {1} points active"] = "{0} de {1} pontos ativos",
             ["{0} click(s) per cycle"] = "{0} clique(s) por ciclo",
@@ -6051,8 +6121,8 @@ namespace AutoClicker.Utils
 
             // --- Added: tab help paragraphs ---
             ["Define a sequence of points. In Multi-Point mode the engine visits the enabled points using the chosen order. Tick a row to enable/disable it; Delete removes the selected point, Ctrl+D duplicates it, Ctrl+↑/↓ reorders, Ctrl+Home/End jumps it to the ends, and Alt+arrows nudge it a pixel at a time (hold Shift for 10)."] = "Define una secuencia de puntos. En el modo Multi-Point, el motor visita los puntos habilitados siguiendo el orden elegido. Marca una fila para habilitarla/deshabilitarla; Delete elimina el punto seleccionado, Ctrl+D lo duplica, Ctrl+↑/↓ lo reordena, Ctrl+Home/End lo mueve a los extremos, y Alt+flechas lo desplazan un píxel cada vez (mantén Shift para 10).",
-            ["Bind any action to a global hotkey. Click a field, then press a key combo (any letter or F-key with Ctrl/Alt/Shift/Win) OR click the middle / side mouse buttons. Bare left & right click are reserved — add a modifier to bind them. Backspace or Delete clears a field. Hotkeys work even when the window is in the tray. Save to apply."] = "Asigna cualquier acción a una tecla de acceso rápido global. Haz clic en un campo y luego pulsa una combinación de teclas (cualquier letra o F-key con Ctrl/Alt/Shift/Win) O haz clic con los botones central / laterales del ratón. El clic izquierdo y derecho solos están reservados — añade un modificador para asignarlos. Backspace o Delete borra un campo. Las teclas de acceso rápido funcionan incluso cuando la ventana está en la bandeja del sistema. Guarda para aplicar.",
-            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete removes. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Graba la entrada del ratón y el teclado, edita los pasos y luego reprodúcelos. El Live Monitor de abajo se llena en tiempo real mientras grabas y resalta cada paso durante la reproducción. Marca \"Append to selected macro\" para añadir a una grabación existente. En la lista: Enter reproduce, Ctrl+D duplica, F2 renombra, Delete elimina. Asigna \"Record\" y \"Play\" en la pestaña Keybinds para controlarlo sin usar las manos.",
+            ["Bind any action to a global hotkey. Click a field, then press a key combo — any key, including Tab, Enter, Space and the arrows, alone or with Ctrl/Alt/Shift/Win — OR click the middle / side mouse buttons. Bare left & right click are reserved: add a modifier to bind them. Backspace or Delete (pressed alone) clears a field; Esc leaves it. Hotkeys work even when the window is in the tray. Save to apply."] = "Asigna cualquier acción a una tecla de acceso rápido global. Haz clic en un campo y luego pulsa una combinación — cualquier tecla, incluidas Tab, Enter, Espacio y las flechas, sola o con Ctrl/Alt/Shift/Win — O haz clic con los botones central / laterales del ratón. El clic izquierdo y derecho solos están reservados: añade un modificador para asignarlos. Backspace o Delete (pulsadas solas) borra un campo; Esc lo deja como estaba. Las teclas de acceso rápido funcionan incluso cuando la ventana está en la bandeja del sistema. Guarda para aplicar.",
+            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete moves to the recycle bin. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Graba la entrada del ratón y el teclado, edita los pasos y luego reprodúcelos. El Live Monitor de abajo se llena en tiempo real mientras grabas y resalta cada paso durante la reproducción. Marca \"Append to selected macro\" para añadir a una grabación existente. En la lista: Enter reproduce, Ctrl+D duplica, F2 renombra, Delete lo mueve a la papelera. Asigna \"Record\" y \"Play\" en la pestaña Keybinds para controlarlo sin usar las manos.",
 
         };
 
@@ -6267,8 +6337,8 @@ namespace AutoClicker.Utils
 
             // --- Added: tab help paragraphs ---
             ["Define a sequence of points. In Multi-Point mode the engine visits the enabled points using the chosen order. Tick a row to enable/disable it; Delete removes the selected point, Ctrl+D duplicates it, Ctrl+↑/↓ reorders, Ctrl+Home/End jumps it to the ends, and Alt+arrows nudge it a pixel at a time (hold Shift for 10)."] = "Définissez une séquence de points. En mode Multi-Point, le moteur visite les points activés dans l'ordre choisi. Cochez une ligne pour l'activer/la désactiver ; Delete supprime le point sélectionné, Ctrl+D le duplique, Ctrl+↑/↓ le réordonne, Ctrl+Home/End le déplace aux extrémités, et Alt+flèches le déplacent d'un pixel à la fois (maintenez Maj pour 10).",
-            ["Bind any action to a global hotkey. Click a field, then press a key combo (any letter or F-key with Ctrl/Alt/Shift/Win) OR click the middle / side mouse buttons. Bare left & right click are reserved — add a modifier to bind them. Backspace or Delete clears a field. Hotkeys work even when the window is in the tray. Save to apply."] = "Associez n'importe quelle action à un raccourci clavier global. Cliquez sur un champ, puis appuyez sur une combinaison de touches (n'importe quelle lettre ou F-key avec Ctrl/Alt/Shift/Win) OU cliquez sur les boutons central / latéraux de la souris. Les clics gauche & droit seuls sont réservés — ajoutez un modificateur pour les associer. Backspace ou Delete efface un champ. Les raccourcis fonctionnent même lorsque la fenêtre est dans la zone de notification. Enregistrez pour appliquer.",
-            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete removes. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Enregistrez les entrées de la souris et du clavier, modifiez les étapes, puis rejouez-les. Le Live Monitor ci-dessous se remplit en temps réel pendant l'enregistrement et met en évidence chaque étape lors de la lecture. Cochez « Append to selected macro » pour ajouter à un enregistrement existant. Dans la liste : Enter lance la lecture, Ctrl+D duplique, F2 renomme, Delete supprime. Associez « Record » et « Play » dans l'onglet Keybinds pour le contrôler sans les mains.",
+            ["Bind any action to a global hotkey. Click a field, then press a key combo — any key, including Tab, Enter, Space and the arrows, alone or with Ctrl/Alt/Shift/Win — OR click the middle / side mouse buttons. Bare left & right click are reserved: add a modifier to bind them. Backspace or Delete (pressed alone) clears a field; Esc leaves it. Hotkeys work even when the window is in the tray. Save to apply."] = "Associez n'importe quelle action à un raccourci clavier global. Cliquez sur un champ, puis appuyez sur une combinaison — n'importe quelle touche, y compris Tab, Entrée, Espace et les flèches, seule ou avec Ctrl/Alt/Shift/Win — OU cliquez sur les boutons central / latéraux de la souris. Les clics gauche & droit seuls sont réservés : ajoutez un modificateur pour les associer. Backspace ou Delete (seules) efface un champ ; Esc le laisse tel quel. Les raccourcis fonctionnent même lorsque la fenêtre est dans la zone de notification. Enregistrez pour appliquer.",
+            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete moves to the recycle bin. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Enregistrez les entrées de la souris et du clavier, modifiez les étapes, puis rejouez-les. Le Live Monitor ci-dessous se remplit en temps réel pendant l'enregistrement et met en évidence chaque étape lors de la lecture. Cochez « Append to selected macro » pour ajouter à un enregistrement existant. Dans la liste : Enter lance la lecture, Ctrl+D duplique, F2 renomme, Delete le met à la corbeille. Associez « Record » et « Play » dans l'onglet Keybinds pour le contrôler sans les mains.",
 
         };
 
@@ -6483,8 +6553,8 @@ namespace AutoClicker.Utils
 
             // --- Added: tab help paragraphs ---
             ["Define a sequence of points. In Multi-Point mode the engine visits the enabled points using the chosen order. Tick a row to enable/disable it; Delete removes the selected point, Ctrl+D duplicates it, Ctrl+↑/↓ reorders, Ctrl+Home/End jumps it to the ends, and Alt+arrows nudge it a pixel at a time (hold Shift for 10)."] = "Definieren Sie eine Abfolge von Punkten. Im Multi-Point-Modus besucht die Engine die aktivierten Punkte in der gewählten Reihenfolge. Markieren Sie eine Zeile, um sie zu aktivieren/deaktivieren; Delete entfernt den ausgewählten Punkt, Ctrl+D dupliziert ihn, Ctrl+↑/↓ ordnet ihn neu an, Ctrl+Home/End springt mit ihm an die Enden, und Alt+Pfeiltasten verschieben ihn pixelweise (Shift gedrückt halten für 10).",
-            ["Bind any action to a global hotkey. Click a field, then press a key combo (any letter or F-key with Ctrl/Alt/Shift/Win) OR click the middle / side mouse buttons. Bare left & right click are reserved — add a modifier to bind them. Backspace or Delete clears a field. Hotkeys work even when the window is in the tray. Save to apply."] = "Belegen Sie jede Aktion mit einem globalen Hotkey. Klicken Sie auf ein Feld und drücken Sie dann eine Tastenkombination (einen beliebigen Buchstaben oder eine F-key zusammen mit Ctrl/Alt/Shift/Win) ODER klicken Sie die mittlere / seitlichen Maustasten. Der reine Links- & Rechtsklick sind reserviert — fügen Sie einen Modifikator hinzu, um sie zu belegen. Backspace oder Delete löscht ein Feld. Hotkeys funktionieren auch, wenn sich das Fenster im Tray befindet. Zum Übernehmen speichern.",
-            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete removes. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Zeichnen Sie Maus- und Tastatureingaben auf, bearbeiten Sie die Schritte und spielen Sie sie anschließend ab. Der Live Monitor darunter füllt sich in Echtzeit, während Sie aufzeichnen, und hebt jeden Schritt während der Wiedergabe hervor. Markieren Sie \"Append to selected macro\", um an eine bestehende Aufzeichnung anzuhängen. In der Liste: Enter spielt ab, Ctrl+D dupliziert, F2 benennt um, Delete entfernt. Belegen Sie \"Record\" und \"Play\" im Keybinds-Tab, um es freihändig zu steuern.",
+            ["Bind any action to a global hotkey. Click a field, then press a key combo — any key, including Tab, Enter, Space and the arrows, alone or with Ctrl/Alt/Shift/Win — OR click the middle / side mouse buttons. Bare left & right click are reserved: add a modifier to bind them. Backspace or Delete (pressed alone) clears a field; Esc leaves it. Hotkeys work even when the window is in the tray. Save to apply."] = "Belegen Sie jede Aktion mit einem globalen Hotkey. Klicken Sie auf ein Feld und drücken Sie dann eine Tastenkombination — jede Taste, auch Tab, Enter, Leertaste und die Pfeiltasten, allein oder mit Ctrl/Alt/Shift/Win — ODER klicken Sie die mittlere / seitlichen Maustasten. Der reine Links- & Rechtsklick sind reserviert: fügen Sie einen Modifikator hinzu, um sie zu belegen. Backspace oder Delete (allein gedrückt) löscht ein Feld; Esc lässt es unverändert. Hotkeys funktionieren auch, wenn sich das Fenster im Tray befindet. Zum Übernehmen speichern.",
+            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete moves to the recycle bin. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Zeichnen Sie Maus- und Tastatureingaben auf, bearbeiten Sie die Schritte und spielen Sie sie anschließend ab. Der Live Monitor darunter füllt sich in Echtzeit, während Sie aufzeichnen, und hebt jeden Schritt während der Wiedergabe hervor. Markieren Sie \"Append to selected macro\", um an eine bestehende Aufzeichnung anzuhängen. In der Liste: Enter spielt ab, Ctrl+D dupliziert, F2 benennt um, Delete verschiebt in den Papierkorb. Belegen Sie \"Record\" und \"Play\" im Keybinds-Tab, um es freihändig zu steuern.",
 
         };
 
@@ -6706,8 +6776,8 @@ namespace AutoClicker.Utils
 
             // --- Added: tab help paragraphs ---
             ["Define a sequence of points. In Multi-Point mode the engine visits the enabled points using the chosen order. Tick a row to enable/disable it; Delete removes the selected point, Ctrl+D duplicates it, Ctrl+↑/↓ reorders, Ctrl+Home/End jumps it to the ends, and Alt+arrows nudge it a pixel at a time (hold Shift for 10)."] = "Definisci una sequenza di punti. In modalità Multi-Point il motore visita i punti abilitati seguendo l'ordine scelto. Spunta una riga per abilitarla/disabilitarla; Delete rimuove il punto selezionato, Ctrl+D lo duplica, Ctrl+↑/↓ riordina, Ctrl+Home/End lo sposta alle estremità, e Alt+frecce lo spostano di un pixel alla volta (tieni premuto Shift per 10).",
-            ["Bind any action to a global hotkey. Click a field, then press a key combo (any letter or F-key with Ctrl/Alt/Shift/Win) OR click the middle / side mouse buttons. Bare left & right click are reserved — add a modifier to bind them. Backspace or Delete clears a field. Hotkeys work even when the window is in the tray. Save to apply."] = "Associa qualsiasi azione a un tasto di scelta rapida globale. Fai clic su un campo, quindi premi una combinazione di tasti (qualsiasi lettera o F-key con Ctrl/Alt/Shift/Win) OPPURE fai clic con il pulsante centrale / laterale del mouse. Il clic sinistro & destro semplice è riservato — aggiungi un modificatore per associarli. Backspace o Delete cancella un campo. I tasti di scelta rapida funzionano anche quando la finestra è nella barra delle applicazioni. Salva per applicare.",
-            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete removes. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Registra gli input del mouse e della tastiera, modifica i passaggi, quindi riproducili. Il Live Monitor qui sotto si compila in tempo reale mentre registri ed evidenzia ogni passaggio durante la riproduzione. Spunta \"Append to selected macro\" per aggiungere a una registrazione esistente. Nell'elenco: Enter riproduce, Ctrl+D duplica, F2 rinomina, Delete rimuove. Associa \"Record\" e \"Play\" nella scheda Keybinds per controllarlo a mani libere.",
+            ["Bind any action to a global hotkey. Click a field, then press a key combo — any key, including Tab, Enter, Space and the arrows, alone or with Ctrl/Alt/Shift/Win — OR click the middle / side mouse buttons. Bare left & right click are reserved: add a modifier to bind them. Backspace or Delete (pressed alone) clears a field; Esc leaves it. Hotkeys work even when the window is in the tray. Save to apply."] = "Associa qualsiasi azione a un tasto di scelta rapida globale. Fai clic su un campo, quindi premi una combinazione — qualsiasi tasto, inclusi Tab, Invio, Spazio e le frecce, da solo o con Ctrl/Alt/Shift/Win — OPPURE fai clic con il pulsante centrale / laterale del mouse. Il clic sinistro & destro semplice è riservato: aggiungi un modificatore per associarli. Backspace o Delete (premuti da soli) cancella un campo; Esc lo lascia com'è. I tasti di scelta rapida funzionano anche quando la finestra è nella barra delle applicazioni. Salva per applicare.",
+            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete moves to the recycle bin. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Registra gli input del mouse e della tastiera, modifica i passaggi, quindi riproducili. Il Live Monitor qui sotto si compila in tempo reale mentre registri ed evidenzia ogni passaggio durante la riproduzione. Spunta \"Append to selected macro\" per aggiungere a una registrazione esistente. Nell'elenco: Enter riproduce, Ctrl+D duplica, F2 rinomina, Delete lo sposta nel cestino. Associa \"Record\" e \"Play\" nella scheda Keybinds per controllarlo a mani libere.",
 
         };
 
@@ -6929,8 +6999,8 @@ namespace AutoClicker.Utils
 
             // --- Added: tab help paragraphs ---
             ["Define a sequence of points. In Multi-Point mode the engine visits the enabled points using the chosen order. Tick a row to enable/disable it; Delete removes the selected point, Ctrl+D duplicates it, Ctrl+↑/↓ reorders, Ctrl+Home/End jumps it to the ends, and Alt+arrows nudge it a pixel at a time (hold Shift for 10)."] = "Define uma sequência de pontos. No modo Multi-Point, o mecanismo visita os pontos ativados usando a ordem escolhida. Marque uma linha para ativá-la/desativá-la; Delete remove o ponto selecionado, Ctrl+D o duplica, Ctrl+↑/↓ reordena, Ctrl+Home/End o move para as extremidades, e Alt+setas movem-no um pixel de cada vez (mantém Shift para 10).",
-            ["Bind any action to a global hotkey. Click a field, then press a key combo (any letter or F-key with Ctrl/Alt/Shift/Win) OR click the middle / side mouse buttons. Bare left & right click are reserved — add a modifier to bind them. Backspace or Delete clears a field. Hotkeys work even when the window is in the tray. Save to apply."] = "Associe qualquer ação a uma tecla de atalho global. Clique num campo e, em seguida, pressione uma combinação de teclas (qualquer letra ou F-key com Ctrl/Alt/Shift/Win) OU clique nos botões central / laterais do rato. O clique esquerdo & direito simples estão reservados — adicione um modificador para os associar. Backspace ou Delete limpa um campo. As teclas de atalho funcionam mesmo quando a janela está na bandeja do sistema. Guarde para aplicar.",
-            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete removes. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Grave a entrada do rato e do teclado, edite os passos e depois reproduza-os. O Live Monitor abaixo preenche-se em tempo real à medida que grava e destaca cada passo durante a reprodução. Marque \"Append to selected macro\" para adicionar a uma gravação existente. Na lista: Enter reproduz, Ctrl+D duplica, F2 renomeia, Delete remove. Associe \"Record\" e \"Play\" no separador Keybinds para o controlar sem usar as mãos.",
+            ["Bind any action to a global hotkey. Click a field, then press a key combo — any key, including Tab, Enter, Space and the arrows, alone or with Ctrl/Alt/Shift/Win — OR click the middle / side mouse buttons. Bare left & right click are reserved: add a modifier to bind them. Backspace or Delete (pressed alone) clears a field; Esc leaves it. Hotkeys work even when the window is in the tray. Save to apply."] = "Associe qualquer ação a uma tecla de atalho global. Clique num campo e, em seguida, pressione uma combinação — qualquer tecla, incluindo Tab, Enter, Espaço e as setas, sozinha ou com Ctrl/Alt/Shift/Win — OU clique nos botões central / laterais do rato. O clique esquerdo & direito simples estão reservados: adicione um modificador para os associar. Backspace ou Delete (premidas sozinhas) limpa um campo; Esc deixa-o como está. As teclas de atalho funcionam mesmo quando a janela está na bandeja do sistema. Guarde para aplicar.",
+            ["Record mouse and keyboard input, edit the steps, then play it back. The Live Monitor below fills in real time as you record and highlights each step during playback. Tick \"Append to selected macro\" to add onto an existing recording. In the list: Enter plays, Ctrl+D duplicates, F2 renames, Delete moves to the recycle bin. Bind \"Record\" and \"Play\" on the Keybinds tab to control it hands-free."] = "Grave a entrada do rato e do teclado, edite os passos e depois reproduza-os. O Live Monitor abaixo preenche-se em tempo real à medida que grava e destaca cada passo durante a reprodução. Marque \"Append to selected macro\" para adicionar a uma gravação existente. Na lista: Enter reproduz, Ctrl+D duplica, F2 renomeia, Delete move-o para a reciclagem. Associe \"Record\" e \"Play\" no separador Keybinds para o controlar sem usar as mãos.",
 
         };
     }
