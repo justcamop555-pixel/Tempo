@@ -318,7 +318,7 @@ namespace AutoClicker.UI
 
             notify.Controls.Add(UiFactory.Label("Corner:", 416, 32));
             _notifyCornerCombo = UiFactory.Combo(472, 28, 206,
-                "Top-right", "Top-left", "Bottom-right", "Bottom-left");
+                Utils.Localization.T("Top-right"), Utils.Localization.T("Top-left"), Utils.Localization.T("Bottom-right"), Utils.Localization.T("Bottom-left"));
             _notifyCornerCombo.SelectedIndexChanged += (s, e) =>
             {
                 if (_suppressSettingsEvents) { return; }
@@ -447,9 +447,9 @@ namespace AutoClicker.UI
             // CaptionSource enum: Windows=0, Tempo=1, Auto=2.
             captions.Controls.Add(UiFactory.Label("1. Caption source:", 16, 64));
             _captionSourceCombo = UiFactory.Combo(150, 61, 250,
-                "Windows 11 Live Captions",
-                "Tempo's Live Captions (offline)",
-                "Auto \u2013 Tempo first, Windows fallback (recommended)");
+                Utils.Localization.T("Windows 11 Live Captions"),
+                Utils.Localization.T("Tempo's Live Captions (offline)"),
+                Utils.Localization.T("Auto \u2013 Tempo first, Windows fallback (recommended)"));
             _captionSourceCombo.SelectedIndexChanged += OnCaptionSourceChanged;
             captions.Controls.Add(_captionSourceCombo);
 
@@ -488,9 +488,9 @@ namespace AutoClicker.UI
             _captionCaptureLabel = UiFactory.Label("Listen to:", 386, 98);
             captions.Controls.Add(_captionCaptureLabel);
             _captionCaptureCombo = UiFactory.Combo(460, 95, 216,
-                "Auto (system audio, or mic if no speaker)",
-                "System audio (needs a speaker)",
-                "Microphone");
+                Utils.Localization.T("Auto (system audio, or mic if no speaker)"),
+                Utils.Localization.T("System audio (needs a speaker)"),
+                Utils.Localization.T("Microphone"));
             captions.Controls.Add(_captionCaptureCombo);
 
             _captionModelStatus = UiFactory.Caption("", 16, 124);

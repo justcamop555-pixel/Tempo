@@ -1055,10 +1055,15 @@ namespace AutoClicker.UI
         /// <summary>The labels only, in table order — what both combos are filled with.</summary>
         internal static string[] CaptionLanguageLabels()
         {
+            // Translated: these are SPOKEN-language names shown to the reader, so a
+            // Spanish UI should offer "Francés", not "French". Unlike the interface
+            // language picker — which lists endonyms (Español, Français) and must keep
+            // them — nothing here depends on the text: the combo is read and set purely
+            // by index, and what gets stored is the code ("auto", "en", "es").
             var labels = new string[CaptionLanguageChoices.Length];
             for (int i = 0; i < CaptionLanguageChoices.Length; i++)
             {
-                labels[i] = CaptionLanguageChoices[i][1];
+                labels[i] = Localization.T(CaptionLanguageChoices[i][1]);
             }
             return labels;
         }

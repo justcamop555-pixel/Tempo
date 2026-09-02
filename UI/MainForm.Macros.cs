@@ -189,7 +189,7 @@ namespace AutoClicker.UI
             manageGroup.Controls.Add(_deleteMacroBtn);
 
             // Sort lives above the list, next to the search box.
-            _macroSortCombo = UiFactory.Combo(320, 61, 124, "Sort: A \u2192 Z", "Sort: Most played", "Sort: Newest");
+            _macroSortCombo = UiFactory.Combo(320, 61, 124, Utils.Localization.T("Sort: A \u2192 Z"), Utils.Localization.T("Sort: Most played"), Utils.Localization.T("Sort: Newest"));
             _macroSortCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             _macroSortCombo.SelectedIndexChanged += OnMacroSortChanged;
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
 using AutoClicker.Models;
@@ -56,7 +56,7 @@ namespace AutoClicker.UI
             _buttonCombo.SelectedIndex = existing == null ? 0 : (int)existing.Button;
 
             Controls.Add(UiFactory.Label("Type", 20, 154));
-            _styleCombo = UiFactory.Combo(120, 151, 120, "Single", "Double", "Triple");
+            _styleCombo = UiFactory.Combo(120, 151, 120, Utils.Localization.T("Single"), Utils.Localization.T("Double"), Utils.Localization.T("Triple"));
             _styleCombo.SelectedIndex = existing == null ? 0 : (int)existing.Style;
 
             Controls.Add(UiFactory.Label("Dwell (ms)", 20, 188));

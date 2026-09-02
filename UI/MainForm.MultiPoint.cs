@@ -33,7 +33,7 @@ namespace AutoClicker.UI
 
             // ── Order + cycle info row ─────────────────────────────────────────
             var orderLabel = UiFactory.Label(Utils.Localization.T("Order:"), 12, 56, FontStyle.Bold);
-            _pointOrderCombo = UiFactory.Combo(66, 53, 150, "Sequential", "Reverse", "Random", "Ping-Pong");
+            _pointOrderCombo = UiFactory.Combo(66, 53, 150, Utils.Localization.T("Sequential"), Utils.Localization.T("Reverse"), Utils.Localization.T("Random"), Utils.Localization.T("Ping-Pong"));
             _pointOrderCombo.SelectedIndex = 0;
 
             _cycleInfoLabel = UiFactory.Label("", 232, 56, FontStyle.Italic, 9f);

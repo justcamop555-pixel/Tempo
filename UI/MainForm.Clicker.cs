@@ -136,17 +136,17 @@ namespace AutoClicker.UI
             var clickGroup = UiFactory.Group(Localization.T("Click Options"), 384, 84, 324, 110, CardIcon.Cursor);
 
             clickGroup.Controls.Add(UiFactory.Caption("Button", 16, 28));
-            _buttonCombo = UiFactory.Combo(16, 46, 90, "Left", "Right", "Middle", "Keyboard key");
+            _buttonCombo = UiFactory.Combo(16, 46, 90, Utils.Localization.T("Left"), Utils.Localization.T("Right"), Utils.Localization.T("Middle"), Utils.Localization.T("Keyboard key"));
             _buttonCombo.SelectedIndexChanged += OnClickTargetChanged;
             clickGroup.Controls.Add(_buttonCombo);
 
             clickGroup.Controls.Add(UiFactory.Caption("Type", 116, 28));
-            _styleCombo = UiFactory.Combo(116, 46, 100, "Single", "Double", "Triple", "Quadruple");
+            _styleCombo = UiFactory.Combo(116, 46, 100, Utils.Localization.T("Single"), Utils.Localization.T("Double"), Utils.Localization.T("Triple"), Utils.Localization.T("Quadruple"));
             _styleCombo.SelectedIndexChanged += (s, e) => UpdateIntervalHint();
             clickGroup.Controls.Add(_styleCombo);
 
             clickGroup.Controls.Add(UiFactory.Caption("Mode", 216, 28));
-            _modeCombo = UiFactory.Combo(216, 46, 100, "Interval", "Hold", "Burst");
+            _modeCombo = UiFactory.Combo(216, 46, 100, Utils.Localization.T("Interval"), Utils.Localization.T("Hold"), Utils.Localization.T("Burst"));
             _modeCombo.SelectedIndexChanged += OnModeChanged;
             clickGroup.Controls.Add(_modeCombo);
 
