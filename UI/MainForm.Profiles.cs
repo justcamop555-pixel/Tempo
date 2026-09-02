@@ -357,8 +357,11 @@ namespace AutoClicker.UI
             int total = _profiles != null ? _profiles.Count : 0;
             if (_profileCountLabel != null)
             {
+                // "1 profiles" is the sort of thing that sits on screen all day. The
+                // singular gets its own key rather than an "(s)" suffix, matching how
+                // ProfileManager.Load already picks between "profile" and "profiles".
                 _profileCountLabel.Text = shown.Count == total
-                    ? Localization.F("{0} profiles", total.ToString())
+                    ? Localization.F(total == 1 ? "{0} profile" : "{0} profiles", total.ToString())
                     : Localization.F("{0} of {1} profiles", shown.Count.ToString(), total.ToString());
             }
 
