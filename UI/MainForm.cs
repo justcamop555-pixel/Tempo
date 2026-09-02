@@ -1765,6 +1765,11 @@ namespace AutoClicker.UI
             // top of each other. Controls that fit are left untouched.
             StartupStep("fit captions", () => LayoutFitter.FitAll(this));
 
+            // After the fitter, because it is allowed to change what a settings card
+            // contains — and so, in principle, how tall it is — and the stack is derived
+            // from the heights the cards actually ended up with.
+            StartupStep("stack settings cards", RestackSettingsCards);
+
             StartupStep("background image", ApplyBackgroundGif);
             RefreshBusyLock();
             StartupStep("initial profile", LoadInitialProfile);
@@ -4546,6 +4551,9 @@ namespace AutoClicker.UI
             Font = UiFactory.BodyFont;
             Icon = Utils.AppIcon.Get();
 
+            // Follow the custom logo. Without this it only ever reached the header.
+            Utils.CustomLogo.Changed += OnCustomLogoChangedRefreshIcon;
+
             _tabs = new ModernTabControl
             {
                 Dock = DockStyle.Fill,
@@ -5083,12 +5091,78 @@ namespace AutoClicker.UI
             catch { return ""; }
         }
 
+        // ── Sidebar tables ────────────────────────────────────────────────────
+        //
+        // THREE PARALLEL TABLES, ONE PER TAB, IN TAB ORDER:
+        //   Clicker, Profiles, Multi-Point, Macros, Statistics, Keybinds, Captions,
+        //   Settings.
+        //
+        // They live together because they did not, and it cost a release. The glyph
+        // table was a local in BuildSidebar and the hue tables were locals in
+        // RefreshSidebarSelection, a hundred lines apart. Adding the Profiles tab at
+        // index 1 updated the glyphs and missed the hues, so every icon from Profiles
+        // down wore the colour of the tab below it and Settings — index 7 against a
+        // 7-long table — fell off the end and rendered with no hue at all.
+        //
+        // Add a tab: add a row to ALL THREE. AssertSidebarTables() shouts if you don't.
+        private static readonly NavIconKind[] NavGlyphs =
+        {
+            NavIconKind.Cursor, NavIconKind.Profile, NavIconKind.Points,
+            NavIconKind.Macro, NavIconKind.Chart, NavIconKind.Keyboard,
+            NavIconKind.Caption, NavIconKind.Gear
+        };
+
+        /// <summary>Icon hues for a light theme — saturated darks, so they don't wash out.</summary>
+        private static readonly Color[] NavHuesLight =
+        {
+            Color.FromArgb(180, 78, 22),    // Clicker — burnt orange
+            Color.FromArgb(86, 130, 24),    // Profiles — deep lime
+            Color.FromArgb(12, 128, 84),    // Multi-Point — deep mint
+            Color.FromArgb(112, 66, 200),   // Macros — violet
+            Color.FromArgb(0, 100, 190),    // Statistics — deep sky blue
+            Color.FromArgb(150, 108, 0),    // Keybinds — dark gold
+            Color.FromArgb(24, 116, 130),   // Captions — deep teal
+            Color.FromArgb(160, 44, 128)    // Settings — orchid
+        };
+
+        /// <summary>Icon hues for a dark theme. Hues match the Live-debug category palette.</summary>
+        private static readonly Color[] NavHuesDark =
+        {
+            Color.FromArgb(255, 170, 120),  // Clicker — soft orange
+            Color.FromArgb(200, 235, 140),  // Profiles — soft lime
+            Color.FromArgb(120, 230, 175),  // Multi-Point — mint
+            Color.FromArgb(190, 165, 255),  // Macros — lavender
+            Color.FromArgb(120, 200, 255),  // Statistics — sky blue
+            Color.FromArgb(240, 205, 120),  // Keybinds — gold
+            Color.FromArgb(125, 220, 225),  // Captions — teal
+            Color.FromArgb(235, 150, 210)   // Settings — orchid
+        };
+
+        /// <summary>
+        /// Warns when a sidebar table has fallen behind the tab list. A short table does
+        /// not throw — it silently gives the last tab no icon colour, which is precisely
+        /// the failure that shipped — so it has to be said out loud.
+        /// </summary>
+        private void AssertSidebarTables()
+        {
+            int tabs = _tabs != null ? _tabs.TabPages.Count : 0;
+            if (NavGlyphs.Length != tabs || NavHuesLight.Length != tabs || NavHuesDark.Length != tabs)
+            {
+                Logger.Warn("[sidebar] table/tab mismatch — " + tabs + " tabs but glyphs=" +
+                            NavGlyphs.Length + " huesLight=" + NavHuesLight.Length +
+                            " huesDark=" + NavHuesDark.Length +
+                            ". Tabs past the shortest table lose their icon colour.");
+            }
+        }
+
         private void BuildSidebar()
         {
             if (_sidebar == null || _tabs == null)
             {
                 return;
             }
+
+            AssertSidebarTables();
 
             _sidebar.Controls.Clear();
             _navButtons.Clear();
@@ -5098,15 +5172,8 @@ namespace AutoClicker.UI
             const int btnHeight = 44;
             const int gap = 8;
 
-            // Tab order is fixed (Clicker, Profiles, Multi-Point, Macros, Statistics,
-            // Keybinds, Captions, Settings), so map a recognisable icon to each by
-            // position. Keep this in step with the StartupStep order that builds them.
-            NavIconKind[] icons =
-            {
-                NavIconKind.Cursor, NavIconKind.Profile, NavIconKind.Points,
-                NavIconKind.Macro, NavIconKind.Chart, NavIconKind.Keyboard,
-                NavIconKind.Caption, NavIconKind.Gear
-            };
+            // Icons are mapped by position from NavGlyphs — see the tables above.
+            NavIconKind[] icons = NavGlyphs;
 
             for (int i = 0; i < _tabs.TabPages.Count; i++)
             {
@@ -5173,31 +5240,10 @@ namespace AutoClicker.UI
             }
             int sel = _tabs.SelectedIndex;
             // Each tab's icon gets its own hue (dimmed a touch until selected) so
-            // the sidebar reads at a glance instead of six identical grey glyphs.
-            // Hues match the Live-debug category palette; a light theme gets the
-            // saturated dark variants so they don't wash out.
+            // the sidebar reads at a glance instead of eight identical grey glyphs.
+            // The tables live beside the glyph table above, one row per tab.
             bool lightTheme = _theme.Background.GetBrightness() > 0.5f;
-            Color[] iconHues = lightTheme
-                ? new[]
-                {
-                    Color.FromArgb(180, 78, 22),    // Clicker — burnt orange
-                    Color.FromArgb(12, 128, 84),    // Multi-Point — deep mint
-                    Color.FromArgb(112, 66, 200),   // Macros — violet
-                    Color.FromArgb(0, 100, 190),    // Statistics — deep sky blue
-                    Color.FromArgb(150, 108, 0),    // Keybinds — dark gold
-                    Color.FromArgb(24, 116, 130),    // Captions — deep teal
-                    Color.FromArgb(160, 44, 128)    // Settings — orchid
-                }
-                : new[]
-                {
-                    Color.FromArgb(255, 170, 120),  // Clicker — soft orange
-                    Color.FromArgb(120, 230, 175),  // Multi-Point — mint
-                    Color.FromArgb(190, 165, 255),  // Macros — lavender
-                    Color.FromArgb(120, 200, 255),  // Statistics — sky blue
-                    Color.FromArgb(240, 205, 120),  // Keybinds — gold
-                    Color.FromArgb(125, 220, 225),  // Captions — teal
-                    Color.FromArgb(235, 150, 210)   // Settings — orchid
-                };
+            Color[] iconHues = lightTheme ? NavHuesLight : NavHuesDark;
             for (int i = 0; i < _navButtons.Count; i++)
             {
                 RoundedButton nav = _navButtons[i];
@@ -6425,6 +6471,46 @@ namespace AutoClicker.UI
                 ContextMenuStrip = _trayMenu
             };
             _trayIcon.DoubleClick += (s, e) => TrayAction("Show/Hide", ToggleWindowVisibility);
+        }
+
+        /// <summary>
+        /// Re-applies the app icon everywhere after the custom logo is set or cleared.
+        ///
+        /// Setting a logo used to change exactly one thing — the header on this window.
+        /// The title bar, the taskbar button, the tray icon and every dialog's title bar
+        /// all kept the built-in mark until Tempo was restarted, because they read
+        /// AppIcon (which knew nothing about the custom logo) and the default-window-icon
+        /// hack in Program.cs runs once at startup.
+        /// </summary>
+        /// <summary>Marshals the logo-changed notification onto the UI thread.</summary>
+        private void OnCustomLogoChangedRefreshIcon()
+        {
+            try { UiInvoke(RefreshAppIconEverywhere); }
+            catch (Exception ex) { Utils.Logger.Swallow("CustomLogo.Changed", ex); }
+        }
+
+        private void RefreshAppIconEverywhere()
+        {
+            try
+            {
+                Utils.AppIcon.Reset();
+                Icon newIcon = Utils.AppIcon.Get();
+
+                // This window, and with it the taskbar button.
+                Icon = newIcon;
+
+                // Every dialog opened from here on. Already-open ones keep the old icon;
+                // they are modal and short-lived, so that is not worth chasing.
+                Utils.AppIcon.SetAsWindowDefault();
+
+                if (_trayIcon != null)
+                {
+                    _trayIcon.Icon = newIcon;
+                }
+
+                Utils.Logger.Info("[Icon] app icon refreshed after a logo change.");
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RefreshAppIconEverywhere", ex); }
         }
 
         /// <summary>
@@ -10946,6 +11032,11 @@ namespace AutoClicker.UI
             // Keep the Settings live preview in sync.
             RefreshThemePreview();
 
+            // ThemeManager.Apply above has just rewritten ForeColor on every control,
+            // which wipes the settings-search highlight and invalidates the colours it
+            // saved to restore. Put it back against the new theme.
+            ReapplySettingsHighlightAfterTheme();
+
             // Dark/light scroll bars + title bar to match the theme.
             ApplyNativeChrome();
 
@@ -12473,6 +12564,8 @@ HookSystemEvents();
             // The profile card menu is not in Controls, so nothing else would ever
             // dispose it — and its ThemedMenuRenderer owns a live animation timer.
             ShutdownStep("profile menu", () => _profileCardMenu?.Dispose());
+            ShutdownStep("logo subscription",
+                () => Utils.CustomLogo.Changed -= OnCustomLogoChangedRefreshIcon);
             ShutdownStep("caption transcriber", () => _captionTranscriber?.Dispose());
             ShutdownStep("self-voice guard", () => _selfVoiceGuard?.Dispose());
             try { if (_captionHistoryForm != null) { _captionHistoryForm.Dispose(); } } catch { }

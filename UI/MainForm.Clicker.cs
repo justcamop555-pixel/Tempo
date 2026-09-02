@@ -1319,12 +1319,30 @@ namespace AutoClicker.UI
             return p;
         }
 
-        /// <summary>Current clicker setup as JSON, for unsaved-change detection.</summary>
+        /// <summary>
+        /// Current clicker setup as JSON, for unsaved-change detection.
+        ///
+        /// The library bookkeeping is zeroed first, and that is not tidiness — it is the
+        /// whole reason this comparison used to be wrong. ClickProfile stamps
+        /// <c>CreatedUtc = DateTime.UtcNow</c> in its initialiser, so every
+        /// BuildProfileFromUi() produced a profile that differed from the one taken
+        /// moments earlier by nothing but the clock. "Unsaved changes" therefore came up
+        /// on the first UI tick after loading ANY profile and never went away — the
+        /// indicator could not report "saved" even immediately after a save.
+        ///
+        /// None of these four come from the clicker controls, so dropping them compares
+        /// exactly what the user can actually edit here.
+        /// </summary>
         private string SerializeProfileSafe()
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Serialize(BuildProfileFromUi());
+                ClickProfile p = BuildProfileFromUi();
+                p.CreatedUtc = DateTime.MinValue;
+                p.LastUsedUtc = DateTime.MinValue;
+                p.TimesUsed = 0;
+                p.TotalRuntimeSeconds = 0;
+                return System.Text.Json.JsonSerializer.Serialize(p);
             }
             catch
             {

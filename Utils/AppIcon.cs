@@ -13,11 +13,162 @@ namespace AutoClicker.Utils
     {
         private static Icon _cached;
 
+        /// <summary>The custom-logo file <see cref="_cached"/> was built from, or null.</summary>
+        private static string _cachedFrom;
+
+        /// <summary>
+        /// Throws away the cached icon so the next Get() rebuilds it.
+        ///
+        /// Needed because a custom logo can be set, replaced or cleared while Tempo is
+        /// running, and everything that shows an icon — the window, the taskbar, the
+        /// tray, every dialog's title bar — pulls from this one cache.
+        ///
+        /// The old Icon is deliberately NOT disposed. Dialogs that are already open still
+        /// hold it (their title bar, Alt-Tab entry and Form.Icon property), and one of
+        /// them may be the very dialog the logo was changed from, so tearing the handle
+        /// out from under it is a crash waiting to happen. Every icon this class caches
+        /// owns its own handle and releases it on finalisation, so letting go of the
+        /// reference is enough — and a logo change is a rare, user-driven event, not a
+        /// loop that could outrun the GC.
+        /// </summary>
+        public static void Reset()
+        {
+            _cached = null;
+            _cachedFrom = null;
+        }
+
+        /// <summary>The sizes baked into a custom logo's icon, smallest first.</summary>
+        private static readonly int[] IconFrameSizes = { 16, 20, 24, 32, 40, 48, 64, 128, 256 };
+
+        /// <summary>
+        /// Draws <paramref name="src"/> centred on a square transparent canvas of
+        /// <paramref name="size"/> px, keeping its aspect ratio so a wide or tall picture
+        /// is letterboxed rather than stretched into the box.
+        /// </summary>
+        private static Bitmap RenderSquare(Image src, int size)
+        {
+            var square = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(square))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+
+                double scale = Math.Min((double)size / src.Width, (double)size / src.Height);
+                int w = Math.Max(1, (int)Math.Round(src.Width * scale));
+                int h = Math.Max(1, (int)Math.Round(src.Height * scale));
+                g.DrawImage(src, (size - w) / 2, (size - h) / 2, w, h);
+            }
+            return square;
+        }
+
+        /// <summary>
+        /// Packs <paramref name="src"/> into a real multi-resolution .ico, one PNG frame
+        /// per entry in <see cref="IconFrameSizes"/>.
+        ///
+        /// A single 256px frame is not good enough. Windows picks the nearest frame and
+        /// scales it in ONE step, so a 256px logo asked for a 16px title bar goes through
+        /// a 16:1 reduction with no filtering worth the name — visibly mushy next to the
+        /// built-in mark, which ships proper small frames. Resampling each size ourselves
+        /// with HighQualityBicubic is what makes a custom logo look native.
+        /// </summary>
+        private static byte[] BuildIcoBytes(Image src)
+        {
+            var frames = new byte[IconFrameSizes.Length][];
+            for (int i = 0; i < IconFrameSizes.Length; i++)
+            {
+                using (var bmp = RenderSquare(src, IconFrameSizes[i]))
+                using (var ms = new System.IO.MemoryStream())
+                {
+                    bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                    frames[i] = ms.ToArray();
+                }
+            }
+
+            // ICONDIR: reserved(2) type(2) count(2), then count × ICONDIRENTRY(16).
+            int offset = 6 + frames.Length * 16;
+            int total = offset;
+            foreach (byte[] f in frames) { total += f.Length; }
+
+            var ico = new byte[total];
+            ico[2] = 1;                                        // type 1 = icon
+            BitConverter.GetBytes((ushort)frames.Length).CopyTo(ico, 4);
+
+            for (int i = 0; i < frames.Length; i++)
+            {
+                int e = 6 + i * 16;
+                int size = IconFrameSizes[i];
+                ico[e] = (byte)(size >= 256 ? 0 : size);       // 0 means 256 in the ICO format
+                ico[e + 1] = (byte)(size >= 256 ? 0 : size);
+                ico[e + 2] = 0;                                // palette entries (0 = truecolour)
+                ico[e + 3] = 0;                                // reserved
+                BitConverter.GetBytes((ushort)1).CopyTo(ico, e + 4);    // colour planes
+                BitConverter.GetBytes((ushort)32).CopyTo(ico, e + 6);   // bits per pixel
+                BitConverter.GetBytes(frames[i].Length).CopyTo(ico, e + 8);
+                BitConverter.GetBytes(offset).CopyTo(ico, e + 12);
+
+                Buffer.BlockCopy(frames[i], 0, ico, offset, frames[i].Length);
+                offset += frames[i].Length;
+            }
+            return ico;
+        }
+
+        /// <summary>
+        /// Builds an Icon from the user's custom logo, or null if there isn't one (or it
+        /// won't decode).
+        /// </summary>
+        private static Icon TryCustomLogo(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { return null; }
+
+                byte[] bytes;
+                using (var src = Image.FromFile(path))
+                {
+                    bytes = BuildIcoBytes(src);
+                }
+
+                // new Icon(stream) copies what it needs and owns the resulting handle, so
+                // unlike Icon.FromHandle there is nothing for us to destroy by hand.
+                using (var ms = new System.IO.MemoryStream(bytes))
+                {
+                    return new Icon(ms);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Icon] the custom logo could not be used as a window icon: " + ex.Message);
+                return null;
+            }
+        }
+
         public static Icon Get()
         {
+            // A custom logo is the app's face everywhere, not just in the header. If the
+            // one on disk is not the one this cache was built from — set, replaced or
+            // cleared — start again.
+            string custom = null;
+            try { custom = CustomLogo.GetPath(); } catch { }
+
+            if (!string.Equals(custom ?? "", _cachedFrom ?? "", StringComparison.OrdinalIgnoreCase))
+            {
+                Reset();
+            }
+
             if (_cached != null)
             {
                 return _cached;
+            }
+
+            if (!string.IsNullOrEmpty(custom))
+            {
+                Icon fromLogo = TryCustomLogo(custom);
+                if (fromLogo != null)
+                {
+                    _cachedFrom = custom;
+                    _cached = fromLogo;
+                    return _cached;
+                }
             }
 
             // Preferred: the icon embedded in the assembly.
@@ -80,6 +231,25 @@ namespace AutoClicker.Utils
         /// </summary>
         public static Image GetBitmap(int size)
         {
+            // A custom logo wins here too — this is what the tray icon, the toast
+            // thumbnails and the header all draw, so honouring it in Get() alone would
+            // have left half the app on the built-in mark.
+            try
+            {
+                string custom = CustomLogo.GetPath();
+                if (!string.IsNullOrEmpty(custom) && System.IO.File.Exists(custom))
+                {
+                    using (var src = Image.FromFile(custom))
+                    {
+                        return RenderSquare(src, size);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Swallow("AppIcon.GetBitmap(custom)", ex);
+            }
+
             try
             {
                 byte[] raw = RawIconBytes();

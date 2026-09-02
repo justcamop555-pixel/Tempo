@@ -46,6 +46,16 @@ namespace AutoClicker.UI
             var page = new BackdropTabPage(Utils.Localization.T("Settings")) { AutoScroll = true };
             page.Name = "settings";   // stable key for LastTabKey
 
+            // Sixty-odd settings over a 2,100px scroll is too many to hunt through.
+            AddSettingsSearchRow(page);
+
+            // NOTE ON THE Y VALUES BELOW. They no longer place the cards — the stack is
+            // derived by RestackSettingsCards() at the end of this method, which is why
+            // the warnings that used to live down by the buttons ("these y positions must
+            // move whenever a group above grows") are gone. What they still do is
+            // establish the ORDER the cards appear in, so keep them ascending. Heights
+            // are real and do matter: a card is laid out at whatever height it declares.
+
             // ── Appearance ─────────────────────────────────────────────────────
             var appearance = UiFactory.Group(Localization.T("Appearance"), 12, 12, 696, 168, CardIcon.Star);
             appearance.Controls.Add(UiFactory.Label("Theme", 16, 32));
@@ -917,13 +927,12 @@ namespace AutoClicker.UI
             var movement = BuildMovementGroup();
 
             // ── Buttons ────────────────────────────────────────────────────────
-            // Placed BELOW the last card. These y positions must move whenever a group
-            // above grows — they were left behind twice while the Live Captions card
-            // gained rows, which buried Save/About/Check-for-updates UNDER the card for
-            // every user. The movement card (1192, h=240) pushed this row down again.
-            // The action row and the notes below it sit under the movement card, which
-            // moved down 36px when the captions card grew. Everything from here to the
-            // version stamp shifts with it.
+            // Placed below the last card. This row and everything under it used to be
+            // pinned by hand, and was left behind twice while the Live Captions card grew
+            // — burying Save/About/Check-for-updates UNDER that card for every user.
+            // They are now the "tail": CaptureSettingsLayout records the gap each one
+            // keeps from the bottom of the card stack, and they follow it from then on.
+            // The absolute Y here only has to preserve the gaps between them.
             _saveSettingsBtn = UiFactory.PrimaryButton("Save Settings", 12, 1866, 150, 36, _theme);
             _saveSettingsBtn.Click += OnSaveSettings;
 
@@ -948,13 +957,6 @@ namespace AutoClicker.UI
             page.Controls.Add(aboutBtn);
             page.Controls.Add(checkUpdatesBtn);
             page.Controls.Add(resetBtn);
-
-            // Every card on this page is positioned by a hand-written Y, and one of them
-            // (the movement card) is built in its own method — so resizing a card here
-            // silently pushed it under the next one, hiding that card's title and half
-            // its first row. Nothing failed; it just looked wrong, and only in a
-            // screenshot. Check it instead of trusting the arithmetic.
-            AssertNoCardOverlap(page);
 
             // "Last checked" sits BELOW the buttons row now (it used to hide behind
             // the Save button), and the notes stack under it without overlapping.
@@ -998,6 +1000,19 @@ namespace AutoClicker.UI
             var versionLabel = UiFactory.Caption(verText, 12, 2054);
             versionLabel.ForeColor = _theme.TextMuted;
             page.Controls.Add(versionLabel);
+
+            // Last thing in the method, on purpose: anything added after this is not in
+            // the tail and gets left behind the moment a card above it changes height.
+            CaptureSettingsLayout(page);
+            RestackSettingsCards();
+
+            // Kept as a guard, not as the fix. Cards used to be positioned by hand and
+            // one of them (the movement card) is built in its own method, so resizing a
+            // card silently pushed it under the next one — hiding that card's title and
+            // half its first row. Nothing failed; it just looked wrong, and only in a
+            // screenshot. The restack above makes that impossible, so this should now
+            // never fire; if it ever does, the stacker is wrong and wants knowing about.
+            AssertNoCardOverlap(page);
 
             _tabs.TabPages.Add(page);
         }
