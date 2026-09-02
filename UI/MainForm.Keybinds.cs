@@ -437,8 +437,12 @@ namespace AutoClicker.UI
 
                 _bindingControls[info.Action] = capture;
                 capture.HotkeyChanged += OnKeybindEdited;
-                capture.AccessibleName = "Hotkey for " + info.Label;
-                capture.AccessibleDescription = info.Description;
+                // Both translated: a screen reader announces these, and neither was
+                // going through the translator — the name was raw concatenation and the
+                // description came straight off the metadata table.
+                capture.AccessibleName = Utils.Localization.F("Hotkey for {0}",
+                    Utils.Localization.T(info.Label));
+                capture.AccessibleDescription = Utils.Localization.T(info.Description);
 
                 page.Controls.Add(label);
                 page.Controls.Add(capture);
@@ -452,7 +456,8 @@ namespace AutoClicker.UI
                 {
                     var pick = UiFactory.Combo(530, y, 186);
                     pick.DropDownStyle = ComboBoxStyle.DropDownList;
-                    pick.AccessibleName = Utils.Localization.F("Macro for {0}", info.Label);
+                    pick.AccessibleName = Utils.Localization.F("Macro for {0}",
+                        Utils.Localization.T(info.Label));
                     pick.SelectedIndexChanged += OnMacroSlotPicked;
                     pick.Tag = slot;
                     _macroSlotCombos[slot] = pick;

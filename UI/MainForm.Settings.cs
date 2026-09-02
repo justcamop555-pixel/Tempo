@@ -472,7 +472,11 @@ namespace AutoClicker.UI
             var modelLabels = new System.Collections.Generic.List<string>();
             foreach (var m in Utils.WhisperModelManager.Available)
             {
-                modelLabels.Add(m.Label);
+                // Translated here, because UiFactory.Combo does NOT translate its items
+                // (labels, buttons and checkboxes do; combo items never have). Safe to
+                // translate the display text: every reader of this combo goes through
+                // SelectedIndex — WhisperModelKeyFromIndex — never through the string.
+                modelLabels.Add(Utils.Localization.T(m.Label));
             }
             _captionModelCombo = UiFactory.Combo(150, 95, 220, modelLabels.ToArray());
             _captionModelCombo.SelectedIndexChanged += (s2, e2) => UpdateCaptionSourceUi();
@@ -1529,16 +1533,16 @@ namespace AutoClicker.UI
                         : (bytes / (1024.0 * 1024)).ToString("0") + " MB";
                 }
                 catch { }
-                _captionModelStatus.Text = "\u2713 " + model.Label + " " + Localization.T("is installed and ready") +
+                _captionModelStatus.Text = "\u2713 " + Localization.T(model.Label) + " " + Localization.T("is installed and ready") +
                     (size.Length > 0 ? " \u00b7 " + size + " " + Localization.T("on disk") : "") +
                     " \u00b7 " + language + ".";
                 _captionModelStatus.ForeColor = _theme.Success;
             }
             else
             {
-                _captionModelStatus.Text = "\u2b07 " + model.Label + " " +
+                _captionModelStatus.Text = "\u2b07 " + Localization.T(model.Label) + " " +
                     Localization.T("isn't downloaded yet \u2014 click \u201cDownload model\u201d.") + " " +
-                    model.Note;
+                    Localization.T(model.Note);
                 _captionModelStatus.ForeColor = _theme.Warning;
             }
         }
@@ -1558,7 +1562,8 @@ namespace AutoClicker.UI
             var confirm = MessageBox.Show(this,
                 Localization.F("Download the {0} speech model now?\n\n{1}"
                 + "\n\nThis downloads once into Tempo's models folder, then Tempo's own offline "
-                + "captions work with no further setup.", model.Label, model.Note),
+                + "captions work with no further setup.",
+                Localization.T(model.Label), Localization.T(model.Note)),
                 "Download speech model", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (confirm != DialogResult.Yes)
             {
