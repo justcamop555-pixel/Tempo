@@ -107,23 +107,42 @@ namespace AutoClicker.UI
             using (var capBrush = new SolidBrush(CaptionColor))
             using (var capFont = new Font("Segoe UI", 8.5f, FontStyle.Regular))
             {
-                g.DrawString(_caption.ToUpperInvariant(), capFont, capBrush, 14, 24);
+                string cap = _caption.ToUpperInvariant();
+                g.DrawString(cap, capFont, capBrush, 14, 24);
+
+                // The sublabel goes on the CAPTION row, right-aligned — not beside the
+                // value, where it used to live. The value is 18pt bold and a six-figure
+                // click count is most of a 172px card, so "+86,377 vs previous 7 days"
+                // had about 70px to sit in and was cut to "+86,377 vs". The caption row
+                // is short ("THIS WEEK") and leaves roughly a hundred, and the trend
+                // reads naturally as an annotation on the label rather than on the number.
+                if (!string.IsNullOrEmpty(_sub))
+                {
+                    float capW = g.MeasureString(cap, capFont).Width;
+                    float subLeft = 14 + capW + 6;
+                    float subWidth = Width - subLeft - 12;
+                    if (subWidth > 24)
+                    {
+                        using (var subFont = new Font("Segoe UI", 8f, FontStyle.Regular))
+                        using (var subBrush = new SolidBrush(CaptionColor))
+                        {
+                            var fmt = new StringFormat
+                            {
+                                Alignment = StringAlignment.Far,
+                                FormatFlags = StringFormatFlags.NoWrap,
+                                Trimming = StringTrimming.EllipsisCharacter
+                            };
+                            g.DrawString(_sub, subFont, subBrush,
+                                new RectangleF(subLeft, 23f, subWidth, 14f), fmt);
+                        }
+                    }
+                }
             }
 
             using (var valBrush = new SolidBrush(ValueColor))
             using (var valFont = new Font("Segoe UI", 18f, FontStyle.Bold))
             {
                 g.DrawString(_value, valFont, valBrush, 12, 40);
-
-                if (!string.IsNullOrEmpty(_sub))
-                {
-                    SizeF valSize = g.MeasureString(_value, valFont);
-                    using (var subBrush = new SolidBrush(CaptionColor))
-                    using (var subFont = new Font("Segoe UI", 8f, FontStyle.Regular))
-                    {
-                        g.DrawString(_sub, subFont, subBrush, 14 + valSize.Width, 54);
-                    }
-                }
             }
         }
 

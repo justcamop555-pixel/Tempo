@@ -987,6 +987,32 @@ namespace AutoClicker.UI
             _dailyBarChart.Invalidate();
         }
 
+        /// <summary>
+        /// The change against the previous period, as a percentage: "▲ 402%".
+        ///
+        /// A percentage, not the absolute delta, because the delta is as wide as the
+        /// numbers are big: "+86,377 vs last week" needs more room than a 172px card has
+        /// beside a six-figure value, and was cut to "+86,377 vs las…". A percentage is
+        /// the same handful of characters whether you clicked a hundred times or a
+        /// million, so it cannot outgrow the space.
+        ///
+        /// The period is left implicit — each card compares against the equivalent
+        /// preceding one, which is what its own caption already says. Empty when there is
+        /// no baseline, so a fresh install does not read a meaningless "0%" everywhere.
+        /// </summary>
+        private static string TrendSub(long current, long previous)
+        {
+            if (previous <= 0) { return string.Empty; }
+
+            double pct = (current - previous) * 100.0 / previous;
+            if (Math.Abs(pct) < 0.5) { return "= 0%"; }
+
+            // Clamped: a jump from 3 clicks to 90,000 is "+2,999,900%", which is true,
+            // useless, and wider than everything it sits beside.
+            string shown = Math.Abs(pct) >= 999 ? "999+" : Math.Abs(pct).ToString("0");
+            return (pct > 0 ? "▲ " : "▼ ") + shown + "%";
+        }
+
         /// <summary>Sum of clicks from completed runs dated today, plus the live run.</summary>
         /// <summary>Populates the Insights cards and the hour-of-day chart from history.</summary>
         private void ComputeInsights(long lifetimeClicks, long lifetimeRuntimeSeconds)
@@ -994,8 +1020,15 @@ namespace AutoClicker.UI
             DateTime now = DateTime.Now;
             DateTime today = now.Date;
             DateTime weekAgo = today.AddDays(-6); // rolling 7-day window incl. today
+            // The 7 days before that window, and the previous calendar month, so the
+            // week and month cards can say whether you are up or down — the same
+            // question the Today card already answers against yesterday. A total with
+            // nothing to compare it to says very little.
+            DateTime prevWeekStart = today.AddDays(-13);
+            DateTime prevMonthAnchor = new DateTime(now.Year, now.Month, 1).AddMonths(-1);
 
             long weekClicks = 0, monthClicks = 0, yearClicks = 0;
+            long prevWeekClicks = 0, prevMonthClicks = 0;
             var byDay = new System.Collections.Generic.Dictionary<DateTime, long>();
             var byWeekday = new long[7];
             var byHour = new long[24];
@@ -1007,7 +1040,9 @@ namespace AutoClicker.UI
                 DateTime day = local.Date;
 
                 if (day >= weekAgo) weekClicks += r.Clicks;
+                else if (day >= prevWeekStart) prevWeekClicks += r.Clicks;
                 if (day.Year == now.Year && day.Month == now.Month) monthClicks += r.Clicks;
+                else if (day.Year == prevMonthAnchor.Year && day.Month == prevMonthAnchor.Month) prevMonthClicks += r.Clicks;
                 if (day.Year == now.Year) yearClicks += r.Clicks;
 
                 byDay.TryGetValue(day, out long dc);
@@ -1020,8 +1055,16 @@ namespace AutoClicker.UI
                 byProfile[prof] = pc + r.Clicks;
             }
 
-            if (_cardThisWeek != null) _cardThisWeek.Value = weekClicks.ToString("N0");
-            if (_cardThisMonth != null) _cardThisMonth.Value = monthClicks.ToString("N0");
+            if (_cardThisWeek != null)
+            {
+                _cardThisWeek.Value = weekClicks.ToString("N0");
+                _cardThisWeek.Sub = TrendSub(weekClicks, prevWeekClicks);
+            }
+            if (_cardThisMonth != null)
+            {
+                _cardThisMonth.Value = monthClicks.ToString("N0");
+                _cardThisMonth.Sub = TrendSub(monthClicks, prevMonthClicks);
+            }
 
             // Today card: add a signed "vs yesterday" trend in the sublabel (reusing the
             // per-day totals already built above). Today includes the live run so it matches
@@ -1035,12 +1078,10 @@ namespace AutoClicker.UI
                 // beside it as soon as the 200-entry cap starts trimming today's runs.
                 long todayTotal = ComputeTodayClicks();
                 byDay.TryGetValue(today.AddDays(-1), out long yesterday);
-                long delta = todayTotal - yesterday;
-                // Only show once there is a yesterday baseline, so a fresh install doesn't
-                // read a noisy "+0 vs yesterday".
-                _cardToday.Sub = yesterday > 0
-                    ? (delta >= 0 ? "+" : "") + delta.ToString("N0") + " " + Utils.Localization.T("vs yesterday")
-                    : string.Empty;
+                // Same percentage form as the week and month cards beside it. It used to
+                // print the absolute delta and the words "vs yesterday", which is the
+                // shape that outgrew the card once the numbers got long.
+                _cardToday.Sub = TrendSub(todayTotal, yesterday);
             }
 
             // Lifetime average CPS = total clicks / total active seconds.
@@ -1353,15 +1394,39 @@ namespace AutoClicker.UI
             DateTime local = r.WhenUtc.ToLocalTime();
             var ts = TimeSpan.FromSeconds(r.DurationSeconds);
 
-            string details =
-                $"When:        {local:dddd, dd MMM yyyy  HH:mm:ss}\n" +
-                $"Profile:     {(string.IsNullOrEmpty(r.Profile) ? "—" : r.Profile)}\n" +
-                $"Clicks:      {r.Clicks:N0}\n" +
-                $"Duration:    {FormatDuration(ts)}  ({r.DurationSeconds:0.0} s)\n" +
-                $"Average CPS: {r.AverageCps:0.0}\n" +
-                $"Peak CPS:    {r.PeakCps:0.0}";
+            // Built from translated labels, and padded to line up AFTER translation.
+            //
+            // This was one interpolated string with the labels written into it, which the
+            // themed message box cannot translate: it looks the whole message up as a key,
+            // and a message containing this session's numbers is a key that can never
+            // exist. So the six labels here, and the window title, were English in every
+            // language. Hand-aligned padding would not have survived translation either —
+            // "Average CPS:" and "CPS media:" are different widths — so the column is
+            // measured from the longest label at runtime.
+            var rows = new[]
+            {
+                new[] { Utils.Localization.T("When"),
+                        local.ToString("dddd, dd MMM yyyy  HH:mm:ss", Utils.Localization.DateCulture) },
+                new[] { Utils.Localization.T("Profile"),
+                        string.IsNullOrEmpty(r.Profile) ? "—" : r.Profile },
+                new[] { Utils.Localization.T("Clicks"), r.Clicks.ToString("N0") },
+                new[] { Utils.Localization.T("Duration"),
+                        FormatDuration(ts) + "  (" + r.DurationSeconds.ToString("0.0") + " s)" },
+                new[] { Utils.Localization.T("Average CPS"), r.AverageCps.ToString("0.0") },
+                new[] { Utils.Localization.T("Peak CPS"), r.PeakCps.ToString("0.0") },
+            };
 
-            MessageBox.Show(this, details, "Session details",
+            int pad = 0;
+            foreach (var row in rows) { if (row[0].Length > pad) { pad = row[0].Length; } }
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var row in rows)
+            {
+                sb.Append((row[0] + ":").PadRight(pad + 2)).Append(row[1]).Append('\n');
+            }
+
+            MessageBox.Show(this, sb.ToString().TrimEnd('\n'),
+                Utils.Localization.T("Session details"),
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
