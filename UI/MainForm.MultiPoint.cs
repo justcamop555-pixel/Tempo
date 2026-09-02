@@ -25,7 +25,8 @@ namespace AutoClicker.UI
             string helpText =
                 "Define a sequence of points. In Multi-Point mode the engine visits the " +
                 "enabled points using the chosen order. Tick a row to enable/disable it; " +
-                "Delete removes the selected point, Ctrl+D duplicates it, Ctrl+\u2191/\u2193 reorders, Ctrl+Home/End jumps it to the ends.";
+                "Delete removes the selected point, Ctrl+D duplicates it, Ctrl+\u2191/\u2193 reorders, Ctrl+Home/End jumps it to the ends, " +
+                "and Alt+arrows nudge it a pixel at a time (hold Shift for 10).";
             var help = UiFactory.Label(helpText, 12, 12);
             help.MaximumSize = new Size(720, 0);
             help.AutoSize = true;
@@ -72,15 +73,18 @@ namespace AutoClicker.UI
             _pointsList.KeyDown += OnPointsListKeyDown;
             _pointsList.SelectedIndexChanged += (s, e) => UpdatePointButtonStates();
 
+            // Every item goes through T(). Three of these — Edit, Duplicate, Remove —
+            // were raw literals sitting between translated siblings, so the right-click
+            // menu came up half in English in every other language.
             var pointMenu = new ContextMenuStrip();
-            pointMenu.Items.Add("Edit…", null, (s, e) => EditSelectedPoint());
-            pointMenu.Items.Add("Duplicate", null, OnDuplicatePoint);
+            pointMenu.Items.Add(Utils.Localization.T("Edit…"), null, (s, e) => EditSelectedPoint());
+            pointMenu.Items.Add(Utils.Localization.T("Duplicate"), null, OnDuplicatePoint);
             pointMenu.Items.Add(Utils.Localization.T("Toggle On / Off"), null, OnTogglePoint);
             pointMenu.Items.Add(new ToolStripSeparator());
             pointMenu.Items.Add(Utils.Localization.T("Move to top"), null, (s, e) => MovePointToEnd(true));
             pointMenu.Items.Add(Utils.Localization.T("Move to bottom"), null, (s, e) => MovePointToEnd(false));
             pointMenu.Items.Add(new ToolStripSeparator());
-            pointMenu.Items.Add("Remove", null, OnRemovePoint);
+            pointMenu.Items.Add(Utils.Localization.T("Remove"), null, OnRemovePoint);
             _pointsList.ContextMenuStrip = pointMenu;
             _pointsList.MouseDown += (s, e) =>
             {
@@ -263,19 +267,59 @@ namespace AutoClicker.UI
             }
             else
             {
+                // Built with F(), not interpolation. Every piece of this line used to be
+                // an interpolated string assigned straight to .Text, so the one summary
+                // that says what the sequence will actually do was English in all five
+                // other languages.
                 int total = _workingPoints.Count;
                 string pointsText = enabled == total
-                    ? $"{enabled} active point(s)"
-                    : $"{enabled} of {total} points active";
-                string text = $"{pointsText}  \u2022  {clicksPerCycle} click(s) per cycle";
-                if (dwellPerCycle > 0)
+                    ? Utils.Localization.F("{0} active point(s)", enabled)
+                    : Utils.Localization.F("{0} of {1} points active", enabled, total);
+                string text = pointsText + "  \u2022  "
+                    + Utils.Localization.F("{0} click(s) per cycle", clicksPerCycle);
+
+                // How long one full pass takes. The dwell was already counted here, but
+                // the clicks were not \u2014 and the clicks are most of it. Without them the
+                // line said "0 ms" for a sequence that plainly takes a second to run.
+                double cycleMs = dwellPerCycle + clicksPerCycle * CurrentIntervalMs();
+                if (cycleMs > 0)
                 {
-                    text += dwellPerCycle >= 1000
-                        ? $"  \u2022  {dwellPerCycle / 1000.0:0.0} s dwell/cycle"
-                        : $"  \u2022  {dwellPerCycle} ms dwell/cycle";
+                    text += "  \u2022  " + Utils.Localization.F("about {0} per cycle",
+                        FormatDuration(cycleMs));
                 }
                 _cycleInfoLabel.Text = text;
             }
+        }
+
+        /// <summary>
+        /// The Clicker tab's current interval in milliseconds, as the engine would use it
+        /// between clicks. Sub-millisecond rates from the manual slider are honoured, so
+        /// the estimate does not read as zero at high CPS.
+        /// </summary>
+        private double CurrentIntervalMs()
+        {
+            try
+            {
+                if (_speedTrack != null && _speedTrack.Value > 1000)
+                {
+                    return 1000.0 / _speedTrack.Value;
+                }
+                double ms = (double)_hoursNum.Value * 3600000
+                          + (double)_minutesNum.Value * 60000
+                          + (double)_secondsNum.Value * 1000
+                          + (double)_millisNum.Value;
+                return ms;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>"820 ms", "2.4 s" or "1 m 05 s" \u2014 whichever reads best at that scale.</summary>
+        private static string FormatDuration(double ms)
+        {
+            if (ms < 1000) { return ((int)Math.Round(ms)) + " ms"; }
+            if (ms < 60000) { return (ms / 1000.0).ToString("0.0") + " s"; }
+            int totalSec = (int)Math.Round(ms / 1000.0);
+            return (totalSec / 60) + " m " + (totalSec % 60).ToString("00") + " s";
         }
 
         private int GetSelectedPointIndex()
@@ -439,6 +483,53 @@ namespace AutoClicker.UI
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
+            else if (e.Alt && (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right
+                            || e.KeyCode == Keys.Up || e.KeyCode == Keys.Down))
+            {
+                // Alt+arrows nudge the point itself. Getting a target onto the right
+                // pixel used to mean opening the editor, changing a number, closing it,
+                // and looking again — for every attempt. Shift makes it 10px at a time.
+                //
+                // Alt rather than a bare arrow because bare arrows move the SELECTION
+                // through the list, which is what a list is expected to do.
+                int step = e.Shift ? 10 : 1;
+                int dx = e.KeyCode == Keys.Left ? -step : e.KeyCode == Keys.Right ? step : 0;
+                int dy = e.KeyCode == Keys.Up ? -step : e.KeyCode == Keys.Down ? step : 0;
+                NudgeSelectedPoint(dx, dy);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+        }
+
+        /// <summary>
+        /// Moves the selected point by (dx, dy) pixels and keeps the row selected, so a
+        /// run of nudges lands on one point instead of walking off it.
+        /// </summary>
+        private void NudgeSelectedPoint(int dx, int dy)
+        {
+            int index = GetSelectedPointIndex();
+            if (index < 0 || index >= _workingPoints.Count) { return; }
+
+            ClickPoint p = _workingPoints[index];
+            p.X += dx;
+            p.Y += dy;
+            RefreshPointsList();
+
+            if (index < _pointsList.Items.Count)
+            {
+                _pointsList.Items[index].Selected = true;
+                _pointsList.Items[index].EnsureVisible();
+                _pointsList.Focus();
+            }
+
+            // Say where it landed, and say so plainly when that is off every monitor —
+            // a point nudged off-screen still looks perfectly ordinary in the list.
+            string where = Utils.Localization.F("Point moved to ({0}, {1})", p.X, p.Y);
+            if (!AutoClicker.Utils.ScreenGeometry.IsOnScreen(p.X, p.Y))
+            {
+                where += "  •  " + Utils.Localization.T("off-screen");
+            }
+            _statusState.Text = where;
         }
 
         private void OnRemovePoint(object sender, EventArgs e)
@@ -586,8 +677,9 @@ namespace AutoClicker.UI
 
             if (!any)
             {
-                MessageBox.Show(this, "Add at least one enabled point first.",
-                    "Tempo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                // ShowInfo, not a bare MessageBox: it translates the message and uses
+                // Tempo's own themed dialog, which this call was bypassing.
+                ShowInfo(Utils.Localization.T("Add at least one enabled point first."));
                 return;
             }
 
@@ -598,7 +690,13 @@ namespace AutoClicker.UI
                 snapshot.Add(p.Clone());
             }
 
-            using (var overlay = new PointsOverlayForm(_theme, snapshot))
+            // Pass the order too, so the overlay can draw the route rather than just the
+            // dots — Reverse and Ping-Pong were otherwise indistinguishable on screen.
+            MultiPointOrder order = _pointOrderCombo != null
+                ? (MultiPointOrder)_pointOrderCombo.SelectedIndex
+                : MultiPointOrder.Sequential;
+
+            using (var overlay = new PointsOverlayForm(_theme, snapshot, order))
             {
                 overlay.ShowDialog(this);
             }
