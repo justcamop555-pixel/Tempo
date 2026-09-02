@@ -76,15 +76,92 @@ namespace AutoClicker.UI
                 // "should be fine now" into a number, and prints anything still wrong with
                 // enough detail to find it in the source. This is what makes the layout
                 // checkable in EVERY language instead of one screenshot at a time.
-                int left = CountOverlaps(root);
-                Utils.Logger.Info("[layout] overlap check for " + Utils.Localization.Current +
-                                  ": " + left + " remaining.");
+                //
+                // These two checks are PURE DIAGNOSTICS — they only count and log, they
+                // never move a control (the clamping above is what fixes anything). Two
+                // more full walks of the whole control tree is real time on a path the
+                // user is waiting behind, so they run once the window is actually up.
+                // Same lines in the log, no longer in front of the window.
+                Action verify = () =>
+                {
+                    try
+                    {
+                        // Re-fit the BUTTON ROWS first, because some captions are not
+                        // final when FitAll runs. The Start/Stop pair gains its shortcut
+                        // suffix once the hotkeys are registered — "▶ Démarrer" becomes
+                        // "▶ Démarrer · F6" — which is 14px wider than the slot it was
+                        // fitted into. Checking here without re-fitting reports a fault
+                        // the fitter was never given the chance to fix.
+                        //
+                        // Only the button pass, not the whole of FitAll: the caption
+                        // clamping is already done and re-running it would log every
+                        // "clamped …" line a second time.
+                        RefitButtons(root);
 
-                int clipped = CountClippedButtons(root);
-                Utils.Logger.Info("[layout] button check for " + Utils.Localization.Current +
-                                  ": " + clipped + " clipped.");
+                        int left = CountOverlaps(root);
+                        Utils.Logger.Info("[layout] overlap check for " + Utils.Localization.Current +
+                                          ": " + left + " remaining.");
+
+                        int clipped = CountClippedButtons(root);
+                        Utils.Logger.Info("[layout] button check for " + Utils.Localization.Current +
+                                          ": " + clipped + " clipped.");
+                    }
+                    catch (Exception ex) { Utils.Logger.Swallow("LayoutFitter/verify", ex); }
+                };
+
+                // Deferred to Application.Idle, NOT to the form's Shown event.
+                //
+                // Shown looks like the obvious hook and is wrong here, measurably: with
+                // "Start minimised to tray" — the default for launch-at-sign-in, and this
+                // machine's own setting — the window is never shown, Shown never fires,
+                // and the two checks below simply never run. Measured across five launches
+                // each: on Shown they appeared in 0/5, on Application.Idle in 5/5. That
+                // silently removes the only layout check that covers all six languages,
+                // and it takes the six-language suite's input with it, so a real overlap
+                // in Spanish would ship with the suite reporting nothing at all.
+                //
+                // This codebase has been bitten by that same hole repeatedly — the tray
+                // start is why HookSystemEvents, ApplyNotificationSettings and the
+                // clipboard watcher are all called from two places.
+                //
+                // Application.Idle fires once the message loop has nothing left to do,
+                // on both start paths, whether or not a window was ever shown. Unhooked
+                // on the first call so it runs exactly once.
+                EventHandler onIdle = null;
+                onIdle = (s, e) =>
+                {
+                    Application.Idle -= onIdle;
+                    verify();
+                };
+                Application.Idle += onIdle;
+
+                // ...unless there is no message loop to go idle (a bare control tree in a
+                // probe). Nothing is on screen to hold up in that case, so run it now and
+                // drop the handler again.
+                if (root.FindForm() == null && !(root is Form))
+                {
+                    Application.Idle -= onIdle;
+                    verify();
+                }
             }
             catch (Exception ex) { Utils.Logger.Swallow("LayoutFitter", ex); }
+        }
+
+        /// <summary>
+        /// Runs the button pass again over every card, without re-clamping captions.
+        ///
+        /// Used once at start-up idle, when every caption that is filled in late has
+        /// settled. Widening is idempotent: a button already wide enough is skipped by
+        /// the first test in <see cref="FitButtonRow"/>, so a second pass costs a
+        /// measure per button and changes nothing unless the text actually grew.
+        /// </summary>
+        private static void RefitButtons(Control parent)
+        {
+            foreach (Control c in parent.Controls)
+            {
+                if (c.HasChildren) { FitButtonRow(c); }
+                RefitButtons(c);
+            }
         }
 
         private static int Walk(Control parent)

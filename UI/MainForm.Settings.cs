@@ -1440,26 +1440,24 @@ namespace AutoClicker.UI
                 "Segoe UI", "Segoe UI Semibold", "Arial", "Verdana", "Tahoma",
                 "Calibri", "Consolas", "Georgia", "Trebuchet MS", "Comic Sans MS"
             };
-            var installed = new System.Collections.Generic.HashSet<string>(
-                StringComparer.OrdinalIgnoreCase);
-            try
-            {
-                using (var ifc = new System.Drawing.Text.InstalledFontCollection())
-                {
-                    foreach (var f in ifc.Families)
-                    {
-                        installed.Add(f.Name);
-                    }
-                }
-            }
-            catch { }
-
+            // Ask about the ten names we actually offer instead of enumerating every
+            // font on the machine. InstalledFontCollection builds the WHOLE system font
+            // list (142 families here, ~24 ms cold) to answer ten membership questions;
+            // constructing a FontFamily by name throws if it isn't installed, which is
+            // the same answer for ~2 ms. This runs while the user waits for the window.
             var list = new System.Collections.Generic.List<string>();
             foreach (var name in preferred)
             {
-                if (installed.Count == 0 || installed.Contains(name))
+                try
                 {
-                    list.Add(name);
+                    using (var probe = new FontFamily(name))
+                    {
+                        list.Add(name);   // constructed => installed
+                    }
+                }
+                catch
+                {
+                    // Not installed on this PC — simply don't offer it.
                 }
             }
             if (list.Count == 0) list.Add("Segoe UI");

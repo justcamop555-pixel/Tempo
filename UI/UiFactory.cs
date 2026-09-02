@@ -17,6 +17,39 @@ namespace AutoClicker.UI
         public static readonly Font SubtitleFont = new Font("Segoe UI", 8.5f);
         public static readonly Font ButtonFont = new Font("Segoe UI", 10f, FontStyle.Bold);
 
+        /// <summary>
+        /// Segoe UI fonts by (size, style), created once and shared.
+        ///
+        /// Every label used to allocate its own Font. A Font is a GDI+ handle, and the
+        /// tabs build hundreds of labels between them at a handful of distinct sizes, so
+        /// nearly all of those allocations were duplicates of one another — paid on the
+        /// startup path, then held for the life of the process.
+        ///
+        /// Sharing one instance per distinct (size, style) is safe here because these are
+        /// never disposed and never mutated: a Font is immutable, and assigning the same
+        /// instance to many controls is explicitly supported by WinForms (controls do not
+        /// dispose a Font they were merely given). That is already how BodyFont and the
+        /// other statics above are used throughout.
+        /// </summary>
+        private static readonly System.Collections.Generic.Dictionary<(float, FontStyle), Font> FontCache =
+            new System.Collections.Generic.Dictionary<(float, FontStyle), Font>();
+
+        /// <summary>Shared Segoe UI font for this size/style — see <see cref="FontCache"/>.</summary>
+        public static Font FontFor(float size, FontStyle style)
+        {
+            // The UI is built on one thread, but lock anyway: a stray call from a worker
+            // would otherwise corrupt the dictionary, and this is far off any hot path.
+            lock (FontCache)
+            {
+                if (!FontCache.TryGetValue((size, style), out Font f))
+                {
+                    f = new Font("Segoe UI", size, style);
+                    FontCache[(size, style)] = f;
+                }
+                return f;
+            }
+        }
+
         public static Label Label(string text, int x, int y, FontStyle style = FontStyle.Regular, float size = 9f)
         {
             text = Localization.T(text);
@@ -26,7 +59,7 @@ namespace AutoClicker.UI
                 Left = x,
                 Top = y,
                 AutoSize = true,
-                Font = new Font("Segoe UI", size, style)
+                Font = FontFor(size, style)
                 // BackColor set by ThemeManager (solid, parent-matched) - not transparent.
             };
         }

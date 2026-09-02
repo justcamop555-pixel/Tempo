@@ -12479,7 +12479,30 @@ HookSystemEvents();
         {
             if (step == null) { return; }
             long before = _startupClock?.ElapsedMilliseconds ?? 0;
-            step();
+
+            // Build with layout suspended. Each tab adds hundreds of controls, and every
+            // single Controls.Add otherwise triggers its own layout pass over everything
+            // already in the container — the same work repeated hundreds of times while
+            // the user waits for the window. Suspending once around the whole step and
+            // resuming after collapses that into one pass.
+            //
+            // ResumeLayout(false) on purpose: the layout that matters is performed when
+            // the form is shown, and every control here is positioned by explicit
+            // coordinates rather than by a layout engine, so forcing an immediate pass
+            // here would only repeat work the show is going to do anyway.
+            SuspendLayout();
+            try
+            {
+                step();
+            }
+            finally
+            {
+                // In a finally so a throwing build step can't leave the form permanently
+                // suspended (which would render it unable to lay out at all). The
+                // exception still propagates to the crash handler, as before.
+                ResumeLayout(false);
+            }
+
             long took = (_startupClock?.ElapsedMilliseconds ?? 0) - before;
             if (took >= 40)
             {
