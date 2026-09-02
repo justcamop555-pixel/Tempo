@@ -28,6 +28,9 @@ REM                  build is stamped "test", and the app says so on screen.
 REM                  The build NUMBER increases either way, on every publish.
 REM
 REM   OUTPUT
+REM     NOTE: the uploadable artifacts below go to bin\publish only with
+REM           /official. A test build stages them in bin\publish\test instead,
+REM           so it can never overwrite a release.
 REM     bin\publish\<rid>\Tempo.exe            self-contained single file
 REM     bin\publish\<rid>\Tempo.exe.sha256     checksum for that exe
 REM     bin\publish\<rid>\install.cmd          per-user installer
@@ -163,6 +166,20 @@ if /i not "%RID%"=="win-x64" if /i not "%RID%"=="win-x86" if /i not "%RID%"=="wi
 
 set "OUTDIR=bin\publish\%RID%"
 set "EXE=%OUTDIR%\Tempo.exe"
+rem  WHERE THE UPLOADABLE ARTIFACTS GO.
+rem
+rem  A test build must not overwrite a release. Five files are staged in one
+rem  folder so they are easy to upload - Tempo.exe, its .sha256, CHECKSUMS.txt,
+rem  the <version>.zip and the release notes - and a test build used to write
+rem  all five over the top of the release sitting there. The zip collided too,
+rem  because a test build carries the SAME version number. What was left was a
+rem  release zip beside a test exe, with a CHECKSUMS.txt describing the test
+rem  build - and nothing on disk to say which was which.
+rem
+rem  /official keeps bin\publish, so the upload workflow is unchanged.
+set "STAGE=bin\publish"
+if not defined OPT_OFFICIAL set "STAGE=bin\publish\test"
+if not exist "%STAGE%" md "%STAGE%" >nul 2>&1
 rem  Relative on purpose. This was "%~dp0publish-log.txt", which resolved to
 rem  C:\publish-log.txt after the SHIFT loop (see the note beside "set ROOT" above),
 rem  so every ">> %LOG%" answered "Access is denied." and the log stayed empty for
@@ -636,7 +653,7 @@ REM and wonder what to do.
 ) > "%OUTDIR%\INSTALL-README.txt"
 echo        Wrote INSTALL-README.txt into the bundle.
 
-set "SETUPZIP=bin\publish\%VER%.zip"
+set "SETUPZIP=%STAGE%\%VER%.zip"
 set "MADEZIP="
 if defined OPT_NOZIP (
   echo        Setup zip skipped ^(/nozip^).
@@ -677,7 +694,7 @@ set "ZIPSHA="
 if defined MADEZIP (
   for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-FileHash -LiteralPath '%SETUPZIP%' -Algorithm SHA256).Hash"`) do if not defined ZIPSHA set "ZIPSHA=%%H"
 )
-set "SUMS=bin\publish\CHECKSUMS.txt"
+set "SUMS=%STAGE%\CHECKSUMS.txt"
 (
   echo Tempo %VER%  -  SHA-256 checksums
   echo Generated %DATE% %TIME%
@@ -697,10 +714,10 @@ REM this bare Tempo.exe to the release is what powers the in-app one-click updat
 REM UpdateChecker prefers an .exe asset, and only then does "Update now" (install in
 REM place) appear instead of just an "Open download page" button.
 if exist "%EXE%" (
-  copy /y "%EXE%" "bin\publish\Tempo.exe" >nul 2>&1
-  if exist "%EXE%.sha256" copy /y "%EXE%.sha256" "bin\publish\Tempo.exe.sha256" >nul 2>&1
-  echo        Staged standalone exe for release: bin\publish\Tempo.exe
-  >> "%LOG%" echo ExeCopy : bin\publish\Tempo.exe
+  copy /y "%EXE%" "%STAGE%\Tempo.exe" >nul 2>&1
+  if exist "%EXE%.sha256" copy /y "%EXE%.sha256" "%STAGE%\Tempo.exe.sha256" >nul 2>&1
+  echo        Staged standalone exe: %STAGE%\Tempo.exe
+  >> "%LOG%" echo ExeCopy : %STAGE%\Tempo.exe
 )
 
 REM If this version's release notes exist, copy them next to the artifacts so
@@ -708,8 +725,8 @@ REM attaching/pasting them is one step instead of a hunt.
 set "NOTES=%ROOT%release-notes\%VER%.md"
 set "NOTESOUT="
 if exist "%NOTES%" (
-  copy /y "%NOTES%" "bin\publish\RELEASE-NOTES-%VER%.md" >nul
-  set "NOTESOUT=bin\publish\RELEASE-NOTES-%VER%.md"
+  copy /y "%NOTES%" "%STAGE%\RELEASE-NOTES-%VER%.md" >nul
+  set "NOTESOUT=%STAGE%\RELEASE-NOTES-%VER%.md"
   echo        Release notes found and copied: !NOTESOUT!
   >> "%LOG%" echo Notes   : !NOTESOUT!
 ) else (
@@ -758,6 +775,14 @@ echo      App version: %VER%
 if defined BUILDNO echo      Build ID   : build !BUILDNO!  ^(!BUILDCH!^)
 echo  ---------------------------------------------------------------------------
 echo    %C_TITLE%NEXT STEPS%C_RESET%
+if not defined OPT_OFFICIAL (
+  echo      This is a %C_WARN%TEST%C_RESET% build. It says so on every screen, and its
+  echo      artifacts are staged in %C_OK%%STAGE%%C_RESET% so they cannot be mistaken
+  echo      for - or written over - a release.
+  echo.
+  echo      Re-run with %C_OK%/official%C_RESET% when you want the build to upload.
+  goto :afterNextSteps
+)
 echo      0. Run the built Tempo.exe once and click around ^(start/stop a click,
 echo         switch tabs, open a macro^) to confirm it works before you ship it.
 echo      1. Create a GitHub release tagged  v%VER%
@@ -765,7 +790,7 @@ echo      2. Attach BOTH of these so every user is covered:
 echo         - Tempo.exe ^(+ Tempo.exe.sha256^)  - REQUIRED for the in-app one-click
 echo           updater. With it attached, existing users get an "Update now" button
 echo           that downloads and installs in place; without it they only get a
-echo           download-page link. Both files are now in bin\publish next to the zip.
+echo           download-page link. Both files are now in %STAGE% next to the zip.
 echo         - %VER%.zip  - for brand-new users. Serves both ways:
 echo           INSTALLED ^(unzip, run install.cmd: shortcuts + uninstall entry, no
 echo           admin^) or PORTABLE ^(unzip anywhere, run Tempo.exe; keep the runtimes
@@ -773,6 +798,7 @@ echo           folder beside it^). Either way, settings live in your local AppDa
 echo           ^(the AutoClicker folder^), not beside the exe.
 if defined NOTESOUT echo      3. Paste !NOTESOUT! as the release description
 echo      4. No .NET install needed for users either way
+:afterNextSteps
 echo    ^(Windows may warn "Unknown publisher" because it isn't code-signed;
 echo     choose More info ^> Run anyway.^)
 echo  ---------------------------------------------------------------------------
