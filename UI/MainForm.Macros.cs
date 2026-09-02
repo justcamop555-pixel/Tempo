@@ -95,14 +95,14 @@ namespace AutoClicker.UI
             _macroListBox.KeyDown += OnMacroListKeyDown;
 
             var macroMenu = new ContextMenuStrip();
-            macroMenu.Items.Add("Play", null, OnPlayMacroClicked);
-            macroMenu.Items.Add("Play once", null, OnPlayMacroOnceClicked);
+            macroMenu.Items.Add(Utils.Localization.T("Play"), null, OnPlayMacroClicked);
+            macroMenu.Items.Add(Utils.Localization.T("Play once"), null, OnPlayMacroOnceClicked);
             macroMenu.Items.Add("Edit…", null, (s, e) => EditSelectedMacro());
             macroMenu.Items.Add("Rename…", null, OnRenameMacro);
             macroMenu.Items.Add("Duplicate", null, OnDuplicateMacro);
             macroMenu.Items.Add("Export…", null, OnExportMacro);
             macroMenu.Items.Add(new ToolStripSeparator());
-            macroMenu.Items.Add("Pin / Unpin", null, OnPinMacroClicked);
+            macroMenu.Items.Add(Utils.Localization.T("Pin / Unpin"), null, OnPinMacroClicked);
             macroMenu.Items.Add("Delete", null, OnDeleteMacroClicked);
             _macroListBox.ContextMenuStrip = macroMenu;
             _macroListBox.MouseDown += (s, e) =>

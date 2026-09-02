@@ -217,7 +217,16 @@ namespace AutoClicker.UI
             };
             live.Controls.Add(_capTranscript);
 
-            _capCountLabel = UiFactory.Caption("", 16, 352);
+            // y=326, not 352. The card is 348 tall, so a child at 352 sits BELOW its own
+            // client area and is clipped away entirely — which is why none of the three
+            // messages this label carries has ever been seen: the empty-state hint
+            // ("Nothing transcribed yet — start captions and play something with
+            // speech."), the line counter, and the "Nothing matches … press Esc to clear
+            // the filter." that explains an empty box during a search. The transcript
+            // ends at 62+258=320, so this sits just under it with room to spare.
+            _capCountLabel = UiFactory.Caption("", 16, 326);
+            _capCountLabel.AutoSize = false;
+            _capCountLabel.Size = new Size(660, 16);
             live.Controls.Add(_capCountLabel);
 
             // ── Actions ───────────────────────────────────────────────────────
@@ -597,7 +606,7 @@ namespace AutoClicker.UI
             }
             catch { }
 
-            menu.Items.Add("Open the models folder", null, (s, e) =>
+            menu.Items.Add(Utils.Localization.T("Open the models folder"), null, (s, e) =>
             {
                 try
                 {
@@ -608,17 +617,17 @@ namespace AutoClicker.UI
                 catch (Exception ex) { Logger.Warn("[Captions] models folder: " + ex.Message); }
             });
 
-            menu.Items.Add("Get more models from the official site…", null, (s, e) => OpenOfficialModelsPage());
+            menu.Items.Add(Utils.Localization.T("Get more models from the official site…"), null, (s, e) => OpenOfficialModelsPage());
 
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Use a model file from anywhere…", null, (s, e) => BrowseForCaptionModel());
+            menu.Items.Add(Utils.Localization.T("Use a model file from anywhere…"), null, (s, e) => BrowseForCaptionModel());
 
             // Models already on this PC, put there by another app or left in Downloads.
             var elsewhere = WhisperModelManager.FindModelsElsewhere();
             if (elsewhere.Count > 0)
             {
                 menu.Items.Add(new ToolStripSeparator());
-                menu.Items.Add(new ToolStripMenuItem("Already on this PC") { Enabled = false });
+                menu.Items.Add(new ToolStripMenuItem(Utils.Localization.T("Already on this PC")) { Enabled = false });
                 foreach (string path in elsewhere)
                 {
                     string p = path;
@@ -641,7 +650,7 @@ namespace AutoClicker.UI
             if (loose.Count > 0)
             {
                 menu.Items.Add(new ToolStripSeparator());
-                menu.Items.Add(new ToolStripMenuItem("Found in the models folder") { Enabled = false });
+                menu.Items.Add(new ToolStripMenuItem(Utils.Localization.T("Found in the models folder")) { Enabled = false });
                 foreach (string path in loose)
                 {
                     string p = path;
@@ -668,14 +677,14 @@ namespace AutoClicker.UI
                     (cf.Valid ? "Using: " + cf.Headline : "Using a file that is missing: " + cf.FileName)
                         .Replace("&", "&&"))
                 { Enabled = false });
-                menu.Items.Add("Show details of this model…", null, (s, e) =>
+                menu.Items.Add(Utils.Localization.T("Show details of this model…"), null, (s, e) =>
                 {
                     using (var dlg = new ModelDetailsForm(_theme, WhisperModelManager.ReadFacts(current)))
                     {
                         dlg.ShowDialog(this);
                     }
                 });
-                menu.Items.Add("Go back to Tempo's own models", null, (s, e) => UseCaptionModelFile(""));
+                menu.Items.Add(Utils.Localization.T("Go back to Tempo's own models"), null, (s, e) => UseCaptionModelFile(""));
             }
 
             try { menu.Show(anchor, new System.Drawing.Point(0, anchor.Height)); }

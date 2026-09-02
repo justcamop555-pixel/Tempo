@@ -75,10 +75,10 @@ namespace AutoClicker.UI
             var pointMenu = new ContextMenuStrip();
             pointMenu.Items.Add("Edit…", null, (s, e) => EditSelectedPoint());
             pointMenu.Items.Add("Duplicate", null, OnDuplicatePoint);
-            pointMenu.Items.Add("Toggle On / Off", null, OnTogglePoint);
+            pointMenu.Items.Add(Utils.Localization.T("Toggle On / Off"), null, OnTogglePoint);
             pointMenu.Items.Add(new ToolStripSeparator());
-            pointMenu.Items.Add("Move to top", null, (s, e) => MovePointToEnd(true));
-            pointMenu.Items.Add("Move to bottom", null, (s, e) => MovePointToEnd(false));
+            pointMenu.Items.Add(Utils.Localization.T("Move to top"), null, (s, e) => MovePointToEnd(true));
+            pointMenu.Items.Add(Utils.Localization.T("Move to bottom"), null, (s, e) => MovePointToEnd(false));
             pointMenu.Items.Add(new ToolStripSeparator());
             pointMenu.Items.Add("Remove", null, OnRemovePoint);
             _pointsList.ContextMenuStrip = pointMenu;

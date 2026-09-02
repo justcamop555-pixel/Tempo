@@ -2045,7 +2045,7 @@ namespace AutoClicker.UI
             }
             catch { }
 
-            var header = new ToolStripMenuItem("Second cursor") { Enabled = false };
+            var header = new ToolStripMenuItem(Utils.Localization.T("Second cursor")) { Enabled = false };
             menu.Items.Add(header);
             menu.Items.Add(new ToolStripSeparator());
 
@@ -2071,7 +2071,7 @@ namespace AutoClicker.UI
 
             menu.Items.Add(new ToolStripSeparator());
 
-            menu.Items.Add("Change colour…", null, (s, ev) =>
+            menu.Items.Add(Utils.Localization.T("Change colour…"), null, (s, ev) =>
             {
                 using (var dlg = new ColorDialog { Color = Color.FromArgb(_settings.SecondCursorColorArgb), FullOpen = true })
                 {
@@ -2190,9 +2190,9 @@ namespace AutoClicker.UI
             menu.Items.Add(use2nd);
 
             // Choose which physical mouse — real product names, current one checked.
-            var chooseItem = new ToolStripMenuItem("Choose 2nd mouse");
+            var chooseItem = new ToolStripMenuItem(Utils.Localization.T("Choose 2nd mouse"));
             string chosenRaw = _settings.SecondCursorMouseDeviceName ?? "";
-            var wiggleEntry = new ToolStripMenuItem("Ask by wiggling")
+            var wiggleEntry = new ToolStripMenuItem(Utils.Localization.T("Ask by wiggling"))
             { Checked = chosenRaw.Length == 0, CheckOnClick = false };
             wiggleEntry.Click += (s, ev) =>
             {
@@ -2264,7 +2264,7 @@ namespace AutoClicker.UI
             }
 
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Hide second cursor", null, (s, ev) =>
+            menu.Items.Add(Utils.Localization.T("Hide second cursor"), null, (s, ev) =>
             {
                 _settings.SecondCursorEnabled = false;
                 Persistence.SettingsManager.Save(_settings);

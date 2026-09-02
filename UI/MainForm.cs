@@ -6338,7 +6338,7 @@ namespace AutoClicker.UI
             // Notification switches. These were previously buried in Settings, which
             // meant silencing Tempo mid-game cost a window open; from the tray it's two
             // clicks. Both persist immediately, like the Settings toggles do.
-            _trayNotifyItem = new ToolStripMenuItem("Pop-up notifications")
+            _trayNotifyItem = new ToolStripMenuItem(Utils.Localization.T("Pop-up notifications"))
             {
                 CheckOnClick = true,
                 Checked = _settings != null && _settings.CustomNotifications,
@@ -6355,7 +6355,7 @@ namespace AutoClicker.UI
             };
             _trayMenu.Items.Add(_trayNotifyItem);
 
-            _trayScreenshotItem = new ToolStripMenuItem("Screenshot alerts")
+            _trayScreenshotItem = new ToolStripMenuItem(Utils.Localization.T("Screenshot alerts"))
             {
                 CheckOnClick = true,
                 Checked = _settings != null && _settings.NotifyOnClipboardImage,
@@ -6372,7 +6372,7 @@ namespace AutoClicker.UI
             _trayMenu.Items.Add(_trayScreenshotItem);
 
             // Straight to Settings without hunting for the tab.
-            var traySettings = new ToolStripMenuItem("Settings…")
+            var traySettings = new ToolStripMenuItem(Utils.Localization.T("Settings…"))
             { Tag = new TrayItemStyle(TrayGlyph.Window) };
             traySettings.Click += (s, e) =>
             {
@@ -6391,7 +6391,7 @@ namespace AutoClicker.UI
             // Check for updates without opening the window. Reuses the same handler as
             // the Settings button, so the result (dialog, "up to date" note, the cached
             // "last seen" value) behaves identically wherever it's run from.
-            var trayUpdate = new ToolStripMenuItem("Check for updates…")
+            var trayUpdate = new ToolStripMenuItem(Utils.Localization.T("Check for updates…"))
             { Tag = new TrayItemStyle(TrayGlyph.Window) };
             trayUpdate.Click += (s, e) =>
             {
@@ -6402,7 +6402,7 @@ namespace AutoClicker.UI
 
             // Tempo is open source and people like knowing that — give the repository a
             // first-class way in rather than burying it in About.
-            var traySource = new ToolStripMenuItem("View source on GitHub")
+            var traySource = new ToolStripMenuItem(Utils.Localization.T("View source on GitHub"))
             { Tag = new TrayItemStyle(TrayGlyph.Brand) };
             traySource.Click += (s, e) =>
             {
@@ -6412,7 +6412,7 @@ namespace AutoClicker.UI
             _trayMenu.Items.Add(traySource);
 
             _trayMenu.Items.Add(new ToolStripSeparator());
-            var trayExit = new ToolStripMenuItem("Exit")
+            var trayExit = new ToolStripMenuItem(Utils.Localization.T("Exit"))
             { Tag = new TrayItemStyle(TrayGlyph.Power) };
             trayExit.Click += (s, e) => ExitApplication();
             _trayMenu.Items.Add(trayExit);

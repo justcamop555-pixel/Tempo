@@ -296,10 +296,10 @@ namespace AutoClicker.UI
             _sessionHistoryList.ColumnClick += OnSessionHistoryColumnClick;
 
             var histMenu = new ContextMenuStrip();
-            histMenu.Items.Add("View details", null, (s, e) => OnSessionHistoryDetails(s, e));
-            histMenu.Items.Add("Copy row", null, OnCopyHistoryRow);
+            histMenu.Items.Add(Utils.Localization.T("View details"), null, (s, e) => OnSessionHistoryDetails(s, e));
+            histMenu.Items.Add(Utils.Localization.T("Copy row"), null, OnCopyHistoryRow);
             histMenu.Items.Add(new ToolStripSeparator());
-            histMenu.Items.Add("Delete entry", null, OnDeleteHistoryEntry);
+            histMenu.Items.Add(Utils.Localization.T("Delete entry"), null, OnDeleteHistoryEntry);
             _sessionHistoryList.ContextMenuStrip = histMenu;
             page.Controls.Add(_sessionHistoryList);
 
