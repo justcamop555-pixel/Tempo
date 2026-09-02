@@ -6,11 +6,15 @@
   the release it was cut from carry the SAME version, and without a build ID there is
   nothing on screen to tell them apart.
 
-  THE ID IS THE BUILD TIME, to the second, in UTC. It used to be a counter, which read
-  more nicely ("build 5") but had to be stored somewhere — and once the generated file
-  became git-ignored, that store lived in exactly one working tree. A fresh clone
-  restarted at 1 and two different builds could both claim to be build 5. A timestamp
-  needs no store, cannot repeat, and sorts into build order by itself.
+  THE ID IS THE BUILD TIME, to the minute, in UTC ("260902-2112"). It used to be a
+  counter, which read more nicely ("build 5") but had to be stored somewhere — and once
+  the generated file became git-ignored, that store lived in exactly one working tree. A
+  fresh clone restarted at 1 and two different builds could both claim to be build 5. A
+  timestamp needs no store and sorts into build order by itself.
+
+  Minutes, not seconds, because the ID is meant to be read aloud. Two publishes inside
+  one minute would then collide, so this compares against the stamp already in the file
+  and waits out the rest of the minute rather than issue a duplicate.
 
     .\stamp-build.ps1                  -> stamp now, channel "test"
     .\stamp-build.ps1 -Channel release -> stamp now, channel "release"
@@ -83,9 +87,33 @@ foreach ($pair in @(@($reStamp, 'StampUtc'), @($reChannel, 'Channel'))) {
     }
 }
 
-$now   = [DateTime]::UtcNow
+# The ID is only precise to the MINUTE, because it has to be readable. So a second
+# publish inside the same minute would hand out an ID that already exists. The previous
+# stamp is right there in the file, so compare against it and wait out the remainder of
+# the minute rather than issue a duplicate. Costs at most 59s, only on a rapid
+# re-publish, and keeps "the ID never repeats" actually true.
+$now  = [DateTime]::UtcNow
+$prev = [regex]::Match($text, $reStamp).Groups['v'].Value
+if ($prev) {
+    $prevT = [DateTime]::MinValue
+    if ([DateTime]::TryParse($prev, [ref] $prevT)) {
+        $prevT = $prevT.ToUniversalTime()
+        if ($prevT.ToString('yyMMdd-HHmm') -eq $now.ToString('yyMMdd-HHmm')) {
+            $wait = 60 - $now.Second
+            if ($DryRun) {
+                Write-Host "would wait ${wait}s: same minute as the last build ($prev)"
+            }
+            else {
+                Write-Host "same minute as the last build - waiting ${wait}s so the ID stays unique"
+                Start-Sleep -Seconds $wait
+                $now = [DateTime]::UtcNow
+            }
+        }
+    }
+}
+
 $stamp = $now.ToString('yyyy-MM-ddTHH:mm:ssZ')
-$id    = $now.ToString('yyMMdd-HHmmss')
+$id    = $now.ToString('yyMMdd-HHmm')
 
 if ($DryRun) {
     Write-Host "would stamp: build $id, channel $Channel"
