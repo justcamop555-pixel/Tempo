@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -199,7 +199,7 @@ namespace AutoClicker
             // cannot distinguish a test build from the release it was cut from, and this
             // is the first line of every log attached to a bug report.
             Logger.Info("[startup] Tempo starting (version " + Utils.AppVersion.Text
-                        + ", " + Utils.BuildInfo.Full + ").");
+                        + ", " + Utils.BuildInfo.Short + ").");
             Utils.SelfCheck.Run();   // does the single-file bundle actually work here?
 
             // Every build Tempo has ever run left ~263 MB of unpacked natives in TEMP and
