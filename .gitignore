@@ -16,3 +16,8 @@ publish-log.txt
 # Windows / OneDrive litter.
 Thumbs.db
 desktop.ini
+
+# The build number, rewritten by stamp-build.ps1 on every publish. Ignored because a
+# file that changes on every build has no place in history; the csproj's EnsureBuildInfo
+# target writes a neutral one if it's missing, so a fresh clone still compiles.
+Utils/BuildInfo.Generated.cs

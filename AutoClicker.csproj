@@ -108,6 +108,29 @@
     this, move the floor in the same commit — that keeps the number meaningful
     instead of something to be silenced.
   -->
+  <!--
+    Utils\BuildInfo.Generated.cs carries the build number and is git-ignored, because it
+    changes on every publish and a file that churns on every build has no place in
+    history. publish.cmd writes it via stamp-build.ps1; this target covers the case
+    nobody remembers — a fresh clone, or someone running "dotnet build" without ever
+    publishing — where the file simply is not there and the compiler would fail on the
+    missing half of a partial class.
+
+    Only when MISSING. Rewriting it every build would erase the stamped number, which is
+    the one thing it exists to carry. Build 0 reports as "unstamped dev build": honest,
+    and better than inventing a number.
+  -->
+  <Target Name="EnsureBuildInfo" BeforeTargets="BeforeCompile"
+          Condition="!Exists('$(MSBuildProjectDirectory)\Utils\BuildInfo.Generated.cs')">
+    <WriteLinesToFile
+        File="$(MSBuildProjectDirectory)\Utils\BuildInfo.Generated.cs"
+        Overwrite="true"
+        WriteOnlyWhenDifferent="true"
+        Lines="// GENERATED because it was missing - do not hand-edit, and do not commit.;// stamp-build.ps1 rewrites this on every publish. Logic lives in BuildInfo.cs.;namespace AutoClicker.Utils;{;    public static partial class BuildInfo;    {;        public const int Number = 0%3B;        public const string StampUtc = &quot;&quot;%3B;        public const string Channel = &quot;dev&quot;%3B;    };}" />
+    <Message Importance="high"
+             Text="EnsureBuildInfo: wrote a neutral Utils\BuildInfo.Generated.cs (unstamped dev build)." />
+  </Target>
+
   <Target Name="VerifyReadyToRun" AfterTargets="Publish"
           Condition="'$(RuntimeIdentifier)' != '' And '$(PublishSingleFile)' == 'true'">
     <PropertyGroup>
