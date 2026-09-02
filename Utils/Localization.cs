@@ -1066,6 +1066,14 @@ namespace AutoClicker.Utils
             // Off-screen click targets, warned about when a run starts.
             ["Some click points are off-screen"] = "Algunos puntos de clic están fuera de la pantalla",
             ["{0} — a monitor may have been unplugged since this profile was saved. Clicks there land on the edge of the screen instead."] = "{0}: puede que se haya desconectado un monitor desde que se guardó este perfil. Esos clics caen en el borde de la pantalla.",
+            // ── Clicker tab: background clicking and run tones. ────────────────
+            ["Background Clicking"] = "Clic en segundo plano",
+            ["Click without moving my cursor"] = "Hacer clic sin mover el cursor",
+            ["Sends each click straight to the window under the target point, so your real pointer stays where it is and you can keep using the PC while Tempo runs. Needs a fixed or multi-point target. Many games ignore posted clicks and only react to a real pointer — leave this off for those."] = "Envía cada clic directamente a la ventana que hay bajo el punto objetivo, así tu puntero real se queda donde está y puedes seguir usando el PC mientras Tempo funciona. Necesita un objetivo fijo o multipunto. Muchos juegos ignoran los clics enviados y solo responden a un puntero real: déjalo desactivado para esos.",
+            ["Sound"] = "Sonido",
+            ["Beep when clicking starts"] = "Pitido al empezar a hacer clic",
+            ["Beep when clicking stops"] = "Pitido al dejar de hacer clic",
+            ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Un tono ascendente al empezar y otro descendente al parar, para confirmar la pulsación de la tecla rápida incluso con la ventana oculta en la bandeja.",
         };
 
         private static readonly Dictionary<string, string> FrExtra = new Dictionary<string, string>
@@ -1822,6 +1830,14 @@ namespace AutoClicker.Utils
             // Off-screen click targets, warned about when a run starts.
             ["Some click points are off-screen"] = "Certains points de clic sont hors de l'écran",
             ["{0} — a monitor may have been unplugged since this profile was saved. Clicks there land on the edge of the screen instead."] = "{0} — un écran a peut-être été débranché depuis l'enregistrement de ce profil. Ces clics atterrissent sur le bord de l'écran.",
+            // ── Clicker tab: background clicking and run tones. ────────────────
+            ["Background Clicking"] = "Clic en arrière-plan",
+            ["Click without moving my cursor"] = "Cliquer sans déplacer mon curseur",
+            ["Sends each click straight to the window under the target point, so your real pointer stays where it is and you can keep using the PC while Tempo runs. Needs a fixed or multi-point target. Many games ignore posted clicks and only react to a real pointer — leave this off for those."] = "Envoie chaque clic directement à la fenêtre située sous le point ciblé : votre vrai pointeur reste où il est et vous pouvez continuer à utiliser le PC pendant que Tempo tourne. Nécessite une cible fixe ou multipoint. Beaucoup de jeux ignorent les clics envoyés et ne réagissent qu'à un vrai pointeur — laissez ceci désactivé pour ceux-là.",
+            ["Sound"] = "Son",
+            ["Beep when clicking starts"] = "Bip au démarrage du clic",
+            ["Beep when clicking stops"] = "Bip à l'arrêt du clic",
+            ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Un ton montant au démarrage et un ton descendant à l'arrêt, pour confirmer l'appui du raccourci même avec la fenêtre masquée dans la zone de notification.",
         };
 
         private static readonly Dictionary<string, string> DeExtra = new Dictionary<string, string>
@@ -2578,6 +2594,14 @@ namespace AutoClicker.Utils
             // Off-screen click targets, warned about when a run starts.
             ["Some click points are off-screen"] = "Einige Klickpunkte liegen außerhalb des Bildschirms",
             ["{0} — a monitor may have been unplugged since this profile was saved. Clicks there land on the edge of the screen instead."] = "{0} – seit dem Speichern dieses Profils wurde möglicherweise ein Monitor abgesteckt. Diese Klicks landen stattdessen am Bildschirmrand.",
+            // ── Clicker tab: background clicking and run tones. ────────────────
+            ["Background Clicking"] = "Klicken im Hintergrund",
+            ["Click without moving my cursor"] = "Klicken, ohne meinen Cursor zu bewegen",
+            ["Sends each click straight to the window under the target point, so your real pointer stays where it is and you can keep using the PC while Tempo runs. Needs a fixed or multi-point target. Many games ignore posted clicks and only react to a real pointer — leave this off for those."] = "Sendet jeden Klick direkt an das Fenster unter dem Zielpunkt, sodass dein echter Zeiger bleibt, wo er ist, und du den PC weiter benutzen kannst, während Tempo läuft. Erfordert ein festes oder Mehrpunkt-Ziel. Viele Spiele ignorieren gesendete Klicks und reagieren nur auf einen echten Zeiger – lass es dafür aus.",
+            ["Sound"] = "Ton",
+            ["Beep when clicking starts"] = "Signalton beim Start des Klickens",
+            ["Beep when clicking stops"] = "Signalton beim Stoppen des Klickens",
+            ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Ein steigender Ton beim Start und ein fallender beim Stopp, damit ein Tastendruck auch bei im Infobereich verstecktem Fenster bestätigt wird.",
         };
 
         private static readonly Dictionary<string, string> ItExtra = new Dictionary<string, string>
@@ -3334,6 +3358,14 @@ namespace AutoClicker.Utils
             // Off-screen click targets, warned about when a run starts.
             ["Some click points are off-screen"] = "Alcuni punti di clic sono fuori dallo schermo",
             ["{0} — a monitor may have been unplugged since this profile was saved. Clicks there land on the edge of the screen instead."] = "{0} — potrebbe essere stato scollegato un monitor da quando questo profilo è stato salvato. Quei clic finiscono sul bordo dello schermo.",
+            // ── Clicker tab: background clicking and run tones. ────────────────
+            ["Background Clicking"] = "Clic in secondo piano",
+            ["Click without moving my cursor"] = "Fai clic senza spostare il cursore",
+            ["Sends each click straight to the window under the target point, so your real pointer stays where it is and you can keep using the PC while Tempo runs. Needs a fixed or multi-point target. Many games ignore posted clicks and only react to a real pointer — leave this off for those."] = "Invia ogni clic direttamente alla finestra sotto il punto di destinazione, così il puntatore reale resta dov'è e puoi continuare a usare il PC mentre Tempo lavora. Richiede un bersaglio fisso o multipunto. Molti giochi ignorano i clic inviati e rispondono solo a un puntatore reale: per quelli lascialo disattivato.",
+            ["Sound"] = "Suono",
+            ["Beep when clicking starts"] = "Bip all'avvio dei clic",
+            ["Beep when clicking stops"] = "Bip all'arresto dei clic",
+            ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Un tono ascendente all'avvio e uno discendente all'arresto, così la pressione del tasto rapido è confermata anche con la finestra nascosta nell'area di notifica.",
         };
 
         private static readonly Dictionary<string, string> PtExtra = new Dictionary<string, string>
@@ -4090,6 +4122,14 @@ namespace AutoClicker.Utils
             // Off-screen click targets, warned about when a run starts.
             ["Some click points are off-screen"] = "Alguns pontos de clique estão fora do ecrã",
             ["{0} — a monitor may have been unplugged since this profile was saved. Clicks there land on the edge of the screen instead."] = "{0} — pode ter sido desligado um monitor desde que este perfil foi guardado. Esses cliques acabam na berma do ecrã.",
+            // ── Clicker tab: background clicking and run tones. ────────────────
+            ["Background Clicking"] = "Clique em segundo plano",
+            ["Click without moving my cursor"] = "Clicar sem mover o cursor",
+            ["Sends each click straight to the window under the target point, so your real pointer stays where it is and you can keep using the PC while Tempo runs. Needs a fixed or multi-point target. Many games ignore posted clicks and only react to a real pointer — leave this off for those."] = "Envia cada clique diretamente para a janela sob o ponto de destino, por isso o teu ponteiro real fica onde está e podes continuar a usar o PC enquanto o Tempo trabalha. Precisa de um alvo fixo ou multiponto. Muitos jogos ignoram cliques enviados e só reagem a um ponteiro real — deixa isto desligado nesses casos.",
+            ["Sound"] = "Som",
+            ["Beep when clicking starts"] = "Aviso sonoro ao começar a clicar",
+            ["Beep when clicking stops"] = "Aviso sonoro ao parar de clicar",
+            ["A rising tone to start and a falling one to stop, so a hotkey press is confirmed even with the window hidden in the tray."] = "Um tom ascendente ao iniciar e um descendente ao parar, para confirmar a tecla de atalho mesmo com a janela escondida na área de notificação.",
         };
 
         private static readonly Dictionary<string, string> Es = new Dictionary<string, string>

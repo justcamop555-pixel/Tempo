@@ -459,14 +459,22 @@ namespace AutoClicker.UI
             page.Controls.Add(afGroup);
 
             page.Controls.Add(BuildSecondCursorGroup());
+            page.Controls.Add(BuildBackgroundClickGroup());
+            page.Controls.Add(BuildClickSoundGroup());
 
             // Footer hint bar (matches the design): a faint info line under the cards.
+            //
+            // It used to sit at y=904, which is INSIDE the Second Cursor card's band
+            // (766-928). LayoutFitter saw the collision and did its job — it clamped
+            // the tip to 174px — so the line has been rendering as
+            // "Tip: Press F6 to start/stop    •    All t…" in every language since the
+            // card was added. It belongs below the last card, not on top of it.
             var tipLabel = new Label
             {
                 Text = "ⓘ  " + Localization.T("Tip: Press F6 to start/stop")
                      + "    •    " + Localization.T("All times in milliseconds"),
                 Left = 14,
-                Top = 904,
+                Top = 1070,
                 AutoSize = true,
                 Font = new Font("Segoe UI", 8.5f),
                 ForeColor = _theme.TextMuted,
@@ -1268,7 +1276,14 @@ namespace AutoClicker.UI
                 RandomizePosition = _randPosCheck.Checked,
                 PositionJitterPixels = (int)_posJitterNum.Value,
                 ClickHoldMilliseconds = (int)_holdMsNum.Value,
-                RestoreCursorOnStop = _restoreCursorCheck.Checked
+                RestoreCursorOnStop = _restoreCursorCheck.Checked,
+                // These three were missing from the rebuild entirely. BackgroundClick
+                // in particular meant a profile saved with it on came back with it off,
+                // because Save rebuilds the profile from the controls and there was no
+                // control carrying it.
+                BackgroundClick = _backgroundClickCheck != null && _backgroundClickCheck.Checked,
+                PlaySoundOnStart = _soundOnStartCheck != null && _soundOnStartCheck.Checked,
+                PlaySoundOnStop = _soundOnStopCheck != null && _soundOnStopCheck.Checked
             };
 
             // Above 1000 CPS the manual slider needs a sub-millisecond interval that
@@ -1373,6 +1388,9 @@ namespace AutoClicker.UI
                 _fixedXNum.Value = Clamp(p.FixedX, -100000, 100000);
                 _fixedYNum.Value = Clamp(p.FixedY, -100000, 100000);
                 _restoreCursorCheck.Checked = p.RestoreCursorOnStop;
+                if (_backgroundClickCheck != null) { _backgroundClickCheck.Checked = p.BackgroundClick; }
+                if (_soundOnStartCheck != null) { _soundOnStartCheck.Checked = p.PlaySoundOnStart; }
+                if (_soundOnStopCheck != null) { _soundOnStopCheck.Checked = p.PlaySoundOnStop; }
 
                 _repeatUntilRadio.Checked = p.RepeatMode == RepeatMode.UntilStopped;
                 _repeatCountRadio.Checked = p.RepeatMode == RepeatMode.FixedCount;
@@ -1693,6 +1711,72 @@ namespace AutoClicker.UI
             public string Raw;
             public string Display;
             public override string ToString() => Display;
+        }
+
+        /// <summary>
+        /// Background clicking: deliver the click to the window under the target point
+        /// instead of moving the pointer there.
+        ///
+        /// THE ENGINE HAS ALWAYS SUPPORTED THIS. ClickEngine reads
+        /// ClickProfile.BackgroundClick and routes through
+        /// InputSimulator.BackgroundClick / BackgroundClickHeld — a complete
+        /// implementation. There was simply no control anywhere that set the flag, so
+        /// BuildProfileFromUi left it at its default and the whole path was dead.
+        ///
+        /// It was also quietly destructive: a profile whose JSON had the flag on loaded
+        /// fine, then lost it the moment the user pressed Save, because the rebuilt
+        /// profile did not carry the field.
+        /// </summary>
+        private Control BuildBackgroundClickGroup()
+        {
+            var g = UiFactory.Group(Localization.T("Background Clicking"), 12, 938, 360, 122, CardIcon.Cursor);
+
+            _backgroundClickCheck = UiFactory.Check("Click without moving my cursor", 16, 28);
+            g.Controls.Add(_backgroundClickCheck);
+
+            var note = UiFactory.Caption(
+                "Sends each click straight to the window under the target point, so your " +
+                "real pointer stays where it is and you can keep using the PC while Tempo " +
+                "runs. Needs a fixed or multi-point target. Many games ignore posted " +
+                "clicks and only react to a real pointer — leave this off for those.",
+                16, 54);
+            note.MaximumSize = new Size(330, 0);
+            note.AutoSize = true;
+            note.ForeColor = _theme.TextMuted;
+            g.Controls.Add(note);
+
+            return g;
+        }
+
+        /// <summary>
+        /// A short tone when a run starts and stops.
+        ///
+        /// PlaySoundOnStart and PlaySoundOnStop have been on ClickProfile since it was
+        /// written, serialised on every save, and read by nothing at all. They earn
+        /// their place here: Tempo normally lives in the tray and is driven by F6, so
+        /// the usual question is "did that actually start?" with no window on screen to
+        /// answer it. Two different pitches answer it without one.
+        /// </summary>
+        private Control BuildClickSoundGroup()
+        {
+            var g = UiFactory.Group(Localization.T("Sound"), 384, 938, 324, 122, CardIcon.Bolt);
+
+            _soundOnStartCheck = UiFactory.Check("Beep when clicking starts", 16, 28);
+            g.Controls.Add(_soundOnStartCheck);
+
+            _soundOnStopCheck = UiFactory.Check("Beep when clicking stops", 16, 54);
+            g.Controls.Add(_soundOnStopCheck);
+
+            var note = UiFactory.Caption(
+                "A rising tone to start and a falling one to stop, so a hotkey press is " +
+                "confirmed even with the window hidden in the tray.",
+                16, 80);
+            note.MaximumSize = new Size(292, 0);
+            note.AutoSize = true;
+            note.ForeColor = _theme.TextMuted;
+            g.Controls.Add(note);
+
+            return g;
         }
 
         private Control BuildSecondCursorGroup()

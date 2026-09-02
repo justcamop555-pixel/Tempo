@@ -1489,6 +1489,9 @@ namespace AutoClicker.UI
         private RadioButton _posFixedRadio;
         private RadioButton _posMultiRadio;
         private CheckBox _restoreCursorCheck;
+        private CheckBox _backgroundClickCheck;
+        private CheckBox _soundOnStartCheck;
+        private CheckBox _soundOnStopCheck;
         private CheckBox _secondCursorEnableCheck;
         private CheckBox _secondMouseUseCheck;
         private Label _miceDetectedLabel;
@@ -6866,6 +6869,28 @@ namespace AutoClicker.UI
             _engine.RunCompleted += (s, e) => UiInvoke(OnEngineRunCompleted);
         }
 
+        /// <summary>
+        /// Two short notes marking a run starting or stopping — rising for start,
+        /// falling for stop, so the two are told apart without looking.
+        ///
+        /// Off the UI thread deliberately: Console.Beep BLOCKS for its full duration,
+        /// and this fires from the engine's state-changed handler. Beeping inline would
+        /// stall the message pump for 160 ms at the exact moment the run begins, which
+        /// is the worst possible time to freeze the window.
+        /// </summary>
+        private static void PlayRunTone(bool starting)
+        {
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    if (starting) { Console.Beep(784, 70); Console.Beep(1047, 90); }
+                    else { Console.Beep(1047, 70); Console.Beep(784, 90); }
+                }
+                catch { }   // no speaker, or a device that refuses the call
+            });
+        }
+
         private void OnEngineStateChanged(EngineState state)
         {
             Point keepScroll = CaptureActiveScroll();
@@ -6878,6 +6903,7 @@ namespace AutoClicker.UI
                     _statusState.ForeColor = _theme.Success;
                     _stopBtn.Enabled = true;
                     ShowClickingIndicator(true);
+                    if (_soundOnStartCheck != null && _soundOnStartCheck.Checked) { PlayRunTone(true); }
                     break;
 
                 case EngineState.Idle:
@@ -6887,6 +6913,7 @@ namespace AutoClicker.UI
                     _statusState.ForeColor = _theme.TextMuted;
                     _stopBtn.Enabled = false;
                     ShowClickingIndicator(false);
+                    if (_soundOnStopCheck != null && _soundOnStopCheck.Checked) { PlayRunTone(false); }
                     break;
 
                 case EngineState.Paused:

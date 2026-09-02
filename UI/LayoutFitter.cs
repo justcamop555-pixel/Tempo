@@ -207,7 +207,8 @@ namespace AutoClicker.UI
                 if (TextRenderer.MeasureText(b.Text, b.Font).Width + ButtonClipPad <= b.Width) { continue; }
 
                 // How far right can this button reach before it touches something?
-                int limit = card.ClientSize.Width - CardPad;
+                // Same unselected-TabPage caveat as the caption pass below.
+                int limit = ContainerWidth(card) - CardPad;
                 foreach (Control other in all)
                 {
                     if (ReferenceEquals(other, b)) { continue; }
@@ -246,6 +247,53 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>The WinForms default control width; a page reporting this was never laid out.</summary>
+        private const int UnsizedPageWidth = 200;
+
+        /// <summary>
+        /// The width to measure a page's contents against.
+        ///
+        /// WHY THIS IS NOT JUST ClientSize. Tempo normally starts minimised to the
+        /// tray, so the window is never shown and NOTHING is ever laid out — measured,
+        /// the whole ModernTabControl and every page inside it still report the
+        /// WinForms default 200x100. The fitter then computed a limit of 200-12=188
+        /// and clamped any wide caption to about 174px.
+        ///
+        /// That is why the Clicker tab's footer tip rendered as
+        /// "Tip: Press F6 to start/stop    •    All t…". The clamp was a fixed 174px in
+        /// every language, which is the giveaway — a real neighbour collision varies
+        /// with the text, a bogus container width does not.
+        ///
+        /// Deferring the pass until the window is shown is NOT the fix: on a
+        /// start-to-tray launch that never happens, and the six-language layout suite
+        /// would lose the verification lines it reads (the same failure mode as
+        /// deferring to Shown). Instead, when a page is still at the default size, its
+        /// own content extent stands in — the cards are hand-placed at fixed
+        /// coordinates, so the rightmost child's edge IS the designed page width.
+        ///
+        /// A page that HAS been laid out keeps using its real ClientSize, so nothing
+        /// changes once the window is on screen.
+        /// </summary>
+        private static int ContainerWidth(Control card)
+        {
+            int width = card.ClientSize.Width;
+
+            // Only pages get the fallback. A card really can be narrow, and widening
+            // its limit would defeat the whole point of the pass; a TabPage is never
+            // legitimately 200px in this app.
+            if (card is TabPage && width <= UnsizedPageWidth)
+            {
+                int right = 0;
+                foreach (Control c in card.Controls)
+                {
+                    if (c.Right > right) { right = c.Right; }
+                }
+                if (right + CardPad > width) { width = right + CardPad; }
+            }
+
+            return width;
+        }
+
         private static int FitContainer(Control card)
         {
             int trimmed = 0;
@@ -270,7 +318,7 @@ namespace AutoClicker.UI
             {
                 if (!IsCaption(c)) { continue; }
 
-                int limit = card.ClientSize.Width - CardPad;
+                int limit = ContainerWidth(card) - CardPad;
 
                 // The nearest thing to the right that shares this row sets the real limit.
                 foreach (Control other in kids)
