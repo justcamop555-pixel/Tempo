@@ -36,10 +36,25 @@ namespace AutoClicker.Persistence
             return Path.Combine(SettingsManager.GetSettingsDirectory(), "profiles.json");
         }
 
+        /// <summary>
+        /// Where the recycle bin lives — a SEPARATE file, deliberately.
+        ///
+        /// profiles.json is a bare JSON array and has been since the first release.
+        /// Folding the bin into it would mean changing that to an object, which an
+        /// older Tempo would read as "no profiles" and helpfully replace with a
+        /// default. A second file keeps the format of the important one frozen, and
+        /// makes a missing or damaged bin cost nothing at all.
+        /// </summary>
+        public static string GetRecycleBinPath()
+        {
+            return Path.Combine(SettingsManager.GetSettingsDirectory(), "profiles.recycle.json");
+        }
+
         /// <summary>Loads profiles from disk, seeding a default if none exist.</summary>
         public void Load()
         {
             _profiles.Clear();
+            LoadRecycleBin();
 
             try
             {
@@ -97,12 +112,71 @@ namespace AutoClicker.Persistence
                 {
                     Logger.Info("[Profiles] saved.");
                 }
+                SaveRecycleBin();
                 return ok;
             }
             catch (Exception ex)
             {
                 Logger.Error("Failed to save profiles.", ex);
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Reads the soft-deleted profiles back. Any problem here is swallowed to an
+        /// empty bin: losing the undo history is a nuisance, and it must never be
+        /// allowed to stop the real profiles from loading.
+        /// </summary>
+        private void LoadRecycleBin()
+        {
+            _recycleBin.Clear();
+
+            try
+            {
+                string path = GetRecycleBinPath();
+                if (!File.Exists(path)) { return; }
+
+                string json = File.ReadAllText(path);
+                if (string.IsNullOrWhiteSpace(json)) { return; }
+
+                var loaded = JsonSerializer.Deserialize<List<ClickProfile>>(json, Options);
+                if (loaded == null) { return; }
+
+                foreach (var p in loaded)
+                {
+                    if (p == null) { continue; }
+                    if (p.Points == null) { p.Points = new List<ClickPoint>(); }
+                    _recycleBin.Add(p);
+                }
+
+                while (_recycleBin.Count > MaxRecycleBin)
+                {
+                    _recycleBin.RemoveAt(0);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Failed to load the profile recycle bin; starting empty.", ex);
+                _recycleBin.Clear();
+            }
+        }
+
+        /// <summary>
+        /// Writes the bin alongside the profiles. Without this the soft delete only
+        /// lasted until the app closed — Remove() has always moved a profile aside
+        /// rather than dropping it, but nothing ever persisted where it went, so
+        /// "delete, restart, restore" quietly could not work.
+        /// </summary>
+        private void SaveRecycleBin()
+        {
+            try
+            {
+                string json = JsonSerializer.Serialize(_recycleBin, Options);
+                PersistenceHelper.WriteAtomic(GetRecycleBinPath(), json);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Failed to save the profile recycle bin.", ex);
             }
         }
 

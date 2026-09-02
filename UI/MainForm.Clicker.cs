@@ -1425,6 +1425,13 @@ namespace AutoClicker.UI
             {
                 _profileDirtyLabel.Visible = false;
             }
+
+            // _currentProfileName was set above, and this is the only place it moves
+            // during a normal switch — so the Profiles grid re-rings from here. Doing
+            // it in SelectProfileInCombo alone would miss the startup load, where the
+            // combo is selected BEFORE the profile is loaded and the name is still
+            // empty at that point.
+            RefreshProfileGridActive();
         }
 
         private ClickMode GetSelectedMode()
@@ -1483,6 +1490,11 @@ namespace AutoClicker.UI
             {
                 _suppressProfileEvents = false;
             }
+
+            // "The library changed" has exactly one choke point, and this is it, so
+            // the Profiles grid rebuilds from here rather than from each of the six
+            // call sites that add, rename, duplicate or delete a profile.
+            RefreshProfileGrid();
         }
 
         private void SelectProfileInCombo(string name)
@@ -1506,6 +1518,10 @@ namespace AutoClicker.UI
             {
                 _header.ProfileText = Localization.T("Profile  •  ") + name;
             }
+
+            // Re-ring the active card. This only repaints, so it is cheap enough to
+            // run on every profile switch — including the Ctrl+Tab cycle.
+            RefreshProfileGridActive();
         }
 
         private void OnProfileSelected(object sender, EventArgs e)

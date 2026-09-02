@@ -9,6 +9,7 @@ namespace AutoClicker.UI
     {
         None,
         Cursor,    // Clicker
+        Profile,   // Profiles
         Points,    // Multi-Point
         Macro,     // Macros
         Chart,     // Statistics
@@ -44,6 +45,7 @@ namespace AutoClicker.UI
                 switch (kind)
                 {
                     case NavIconKind.Cursor: DrawCursor(g, brush, b); break;
+                    case NavIconKind.Profile: DrawProfile(g, brush, pen, b, color); break;
                     case NavIconKind.Points: DrawPoints(g, brush, b); break;
                     case NavIconKind.Macro: DrawMacro(g, brush, b); break;
                     case NavIconKind.Chart: DrawChart(g, brush, b); break;
@@ -69,6 +71,60 @@ namespace AutoClicker.UI
                 Pt(b, 0.74f, 0.55f)
             };
             g.FillPolygon(brush, arrow);
+        }
+
+        /// <summary>
+        /// Two stacked cards for the profile library. A stack rather than a single
+        /// card because the tab is about having several, and it has to stay distinct
+        /// from Macro's document shape at 20px.
+        /// </summary>
+        private static void DrawProfile(Graphics g, Brush brush, Pen pen, RectangleF b, Color color)
+        {
+            // Back card: outline only, peeking out at the top-right.
+            var back = new RectangleF(
+                b.X + b.Width * 0.30f, b.Y + b.Height * 0.10f,
+                b.Width * 0.56f, b.Height * 0.62f);
+            using (var faint = new Pen(Color.FromArgb(130, color), pen.Width * 0.85f))
+            using (var path = RoundedF(back, b.Width * 0.12f))
+            {
+                faint.LineJoin = LineJoin.Round;
+                g.DrawPath(faint, path);
+            }
+
+            // Front card: solid, with a punched-out dot so it reads as a labelled
+            // card rather than a plain rectangle.
+            var front = new RectangleF(
+                b.X + b.Width * 0.10f, b.Y + b.Height * 0.30f,
+                b.Width * 0.58f, b.Height * 0.62f);
+            using (var path = RoundedF(front, b.Width * 0.12f))
+            {
+                g.FillPath(brush, path);
+            }
+
+            float r = b.Width * 0.075f;
+            var dot = Pt(front, 0.28f, 0.30f);
+            using (var punch = new SolidBrush(Color.FromArgb(70, 0, 0, 0)))
+            {
+                g.FillEllipse(punch, dot.X - r, dot.Y - r, r * 2, r * 2);
+            }
+        }
+
+        private static GraphicsPath RoundedF(RectangleF r, float radius)
+        {
+            var path = new GraphicsPath();
+            if (radius <= 0.5f || r.Width <= radius * 2 || r.Height <= radius * 2)
+            {
+                path.AddRectangle(r);
+                return path;
+            }
+
+            float d = radius * 2;
+            path.AddArc(r.Left, r.Top, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
         }
 
         private static void DrawPoints(Graphics g, Brush brush, RectangleF b)

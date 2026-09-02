@@ -1736,6 +1736,7 @@ namespace AutoClicker.UI
             _startupClock = System.Diagnostics.Stopwatch.StartNew();
             StartupStep("shell", InitializeShell);
             StartupStep("clicker tab", BuildClickerTab);
+            StartupStep("profiles tab", BuildProfilesTab);
             StartupStep("multi-point tab", BuildMultiPointTab);
             StartupStep("macros tab", BuildMacrosTab);
             StartupStep("statistics tab", BuildStatisticsTab);
@@ -5093,13 +5094,14 @@ namespace AutoClicker.UI
             const int btnHeight = 44;
             const int gap = 8;
 
-            // Tab order is fixed (Clicker, Multi-Point, Macros, Statistics, Keybinds,
-            // Captions, Settings), so map a recognisable icon to each by position.
+            // Tab order is fixed (Clicker, Profiles, Multi-Point, Macros, Statistics,
+            // Keybinds, Captions, Settings), so map a recognisable icon to each by
+            // position. Keep this in step with the StartupStep order that builds them.
             NavIconKind[] icons =
             {
-                NavIconKind.Cursor, NavIconKind.Points, NavIconKind.Macro,
-                NavIconKind.Chart, NavIconKind.Keyboard, NavIconKind.Caption,
-                NavIconKind.Gear
+                NavIconKind.Cursor, NavIconKind.Profile, NavIconKind.Points,
+                NavIconKind.Macro, NavIconKind.Chart, NavIconKind.Keyboard,
+                NavIconKind.Caption, NavIconKind.Gear
             };
 
             for (int i = 0; i < _tabs.TabPages.Count; i++)
@@ -7206,6 +7208,18 @@ namespace AutoClicker.UI
 
             double runSeconds = _statistics.GetElapsed().TotalSeconds;
             _settings.LifetimeRuntimeSeconds += (long)runSeconds;
+
+            // Credit the run to the profile it ran under. ProfileManager has had
+            // AddRuntime since it was written and nothing ever called it, so every
+            // profile's TotalRuntimeSeconds was permanently zero and the Profiles
+            // tab would have shown a column of noughts. Placed after the privacy
+            // return above, so "don't record history" covers this too.
+            if (_profiles != null && !string.IsNullOrEmpty(_currentProfileName))
+            {
+                _profiles.AddRuntime(_currentProfileName, (long)runSeconds);
+                _profiles.Save();
+                RefreshProfileGrid();
+            }
 
             // Record this run in the session history (skip empty runs).
             long runClicks = _statistics.TotalClicks - _runStartClicks;
@@ -10136,6 +10150,85 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>Last off-screen warning shown, so an unchanged setup only says it once.</summary>
+        private string _lastOffScreenWarning;
+
+        /// <summary>
+        /// Warns when a profile's saved coordinates no longer land on any monitor.
+        ///
+        /// WHY THIS IS WORTH A WARNING. InputSimulator clamps every coordinate into the
+        /// virtual desktop before it clicks, so a point saved on a second screen that
+        /// has since been unplugged does not fail — it quietly clicks the edge of the
+        /// remaining monitor instead. That is the bad kind of wrong: the run looks
+        /// healthy, the click counter goes up, and it has been hitting the wrong place
+        /// for as long as it was left going.
+        ///
+        /// ScreenGeometry.IsOnScreen was written for precisely this check and had never
+        /// been called from anywhere.
+        ///
+        /// It warns rather than refuses, because the run may well have been started by
+        /// a hotkey with the window hidden, and a modal dialog there would strand it.
+        /// The toast is non-blocking and the WARN line lands in Live Debug.
+        /// </summary>
+        private void WarnAboutOffScreenTargets(ClickProfile profile)
+        {
+            if (profile == null) { return; }
+
+            var stray = new System.Collections.Generic.List<string>();
+            try
+            {
+                if (profile.PositionMode == PositionMode.FixedPosition)
+                {
+                    if (!ScreenGeometry.IsOnScreen(profile.FixedX, profile.FixedY))
+                    {
+                        stray.Add(profile.FixedX + ", " + profile.FixedY);
+                    }
+                }
+                else if (profile.PositionMode == PositionMode.MultiPoint && profile.Points != null)
+                {
+                    foreach (var pt in profile.Points)
+                    {
+                        // A disabled point is never visited, so it is not a problem.
+                        if (pt == null || !pt.Enabled) { continue; }
+                        if (!ScreenGeometry.IsOnScreen(pt.X, pt.Y))
+                        {
+                            string label = string.IsNullOrWhiteSpace(pt.Label) ? "?" : pt.Label;
+                            stray.Add(label + " (" + pt.X + ", " + pt.Y + ")");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("OffScreenCheck", ex); return; }
+
+            if (stray.Count == 0)
+            {
+                _lastOffScreenWarning = null;
+                return;
+            }
+
+            string list = string.Join(", ", stray.GetRange(0, Math.Min(3, stray.Count)));
+            if (stray.Count > 3) { list += ", …"; }
+
+            // Starting the same unchanged setup repeatedly should not nag on every run.
+            string signature = stray.Count + "|" + list;
+            if (string.Equals(signature, _lastOffScreenWarning, StringComparison.Ordinal)) { return; }
+            _lastOffScreenWarning = signature;
+
+            Logger.Warn("[clicker] " + stray.Count + " click target(s) lie outside every monitor and " +
+                        "will be clamped to the screen edge: " + list);
+
+            try
+            {
+                _notifications?.Notify("Tempo",
+                    Localization.T("Some click points are off-screen"),
+                    Localization.F(
+                        "{0} — a monitor may have been unplugged since this profile was saved. " +
+                        "Clicks there land on the edge of the screen instead.", list),
+                    ToastKind.Warning);
+            }
+            catch { }
+        }
+
         private void StartEngine()
         {
             bool wasRunning = _engine.IsRunning;
@@ -10144,6 +10237,7 @@ namespace AutoClicker.UI
             ApplyAntiFreezeToEngine();
 
             ClickProfile profile = BuildProfileFromUi();
+            WarnAboutOffScreenTargets(profile);
             _lastRunWasFinite = profile.RepeatMode != RepeatMode.UntilStopped;
             _lastRunDurationSeconds = profile.RepeatMode == RepeatMode.ForDuration
                 ? profile.RepeatDurationSeconds : 0;
@@ -10816,6 +10910,10 @@ namespace AutoClicker.UI
 
             // Theme the statistics dashboard cards + graph.
             ApplyThemeToStatCards();
+
+            // The profile library's cards are owner-drawn too, so they take their
+            // colours the same way.
+            ApplyThemeToProfileCards();
 
             // Keep the Settings live preview in sync.
             RefreshThemePreview();
@@ -12344,6 +12442,9 @@ HookSystemEvents();
             try { if (_clipboardListenerOn) { RemoveClipboardFormatListener(Handle); _clipboardListenerOn = false; } } catch { }
             ShutdownStep("notification mirror", () => _notifyMirror?.Dispose());
             ShutdownStep("notifications", () => _notifications?.Dispose());
+            // The profile card menu is not in Controls, so nothing else would ever
+            // dispose it — and its ThemedMenuRenderer owns a live animation timer.
+            ShutdownStep("profile menu", () => _profileCardMenu?.Dispose());
             ShutdownStep("caption transcriber", () => _captionTranscriber?.Dispose());
             ShutdownStep("self-voice guard", () => _selfVoiceGuard?.Dispose());
             try { if (_captionHistoryForm != null) { _captionHistoryForm.Dispose(); } } catch { }

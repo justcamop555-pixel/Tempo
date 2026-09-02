@@ -787,6 +787,14 @@ namespace AutoClicker.UI
                 ["Tray"] = LineKind.System,
                 ["Update"] = LineKind.System,
                 ["Uninstall"] = LineKind.System,
+
+                // Trust and storage. Both were falling through to the uncategorised
+                // safety net: [Integrity] is the tamper check's verdict — the one
+                // subsystem a user is most likely to open this window to read — and
+                // [Store] is every atomic file write, which is what you want when a
+                // setting or a profile did not survive a restart.
+                ["Integrity"] = LineKind.System,
+                ["Store"] = LineKind.System,
                 ["Welcome"] = LineKind.System,
                 ["Settings"] = LineKind.System,
                 ["Profiles"] = LineKind.System,
