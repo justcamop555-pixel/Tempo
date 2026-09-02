@@ -188,6 +188,86 @@ namespace AutoClicker.UI
             });
         }
 
+        /// <summary>The quick-play combos, keyed by slot number (1-3).</summary>
+        private readonly Dictionary<int, ComboBox> _macroSlotCombos = new Dictionary<int, ComboBox>();
+
+        /// <summary>Guards programmatic repopulation of those combos.</summary>
+        private bool _suppressMacroSlotEvents;
+
+        /// <summary>Which quick-play slot an action drives, or 0 for everything else.</summary>
+        private static int SlotForAction(HotkeyAction action)
+        {
+            switch (action)
+            {
+                case HotkeyAction.PlayMacro1: return 1;
+                case HotkeyAction.PlayMacro2: return 2;
+                case HotkeyAction.PlayMacro3: return 3;
+                default: return 0;
+            }
+        }
+
+        /// <summary>
+        /// Fills the quick-play pickers from the macro library and selects whatever
+        /// each slot is assigned to. Called whenever the library changes, so a rename
+        /// or a delete shows up here immediately.
+        /// </summary>
+        private void RefreshMacroSlotCombos()
+        {
+            if (_macroSlotCombos.Count == 0 || _macros == null) { return; }
+
+            _suppressMacroSlotEvents = true;
+            try
+            {
+                foreach (var pair in _macroSlotCombos)
+                {
+                    var combo = pair.Value;
+                    if (combo == null || combo.IsDisposed) { continue; }
+
+                    combo.Items.Clear();
+                    combo.Items.Add(Utils.Localization.T("(first in the list)"));
+                    foreach (var m in _macros.Macros)
+                    {
+                        if (m != null) { combo.Items.Add(m.Name); }
+                    }
+
+                    string assigned = MacroSlotName(pair.Key);
+                    int idx = string.IsNullOrEmpty(assigned) ? 0 : combo.Items.IndexOf(assigned);
+
+                    // Assigned to something that is gone. Keep the name visible rather
+                    // than silently snapping back to "first in the list" — the hotkey
+                    // does nothing right now and the user needs to see why.
+                    if (idx < 0)
+                    {
+                        combo.Items.Add(Utils.Localization.F("{0}  (missing)", assigned));
+                        idx = combo.Items.Count - 1;
+                    }
+
+                    combo.SelectedIndex = idx;
+                }
+            }
+            finally
+            {
+                _suppressMacroSlotEvents = false;
+            }
+        }
+
+        private void OnMacroSlotPicked(object sender, EventArgs e)
+        {
+            if (_suppressMacroSlotEvents) { return; }
+
+            var combo = sender as ComboBox;
+            if (combo == null || !(combo.Tag is int slot)) { return; }
+
+            // Index 0 is "(first in the list)" — i.e. clear the assignment and fall
+            // back to the old positional behaviour.
+            string name = combo.SelectedIndex <= 0 ? "" : combo.SelectedItem as string;
+            SetMacroSlotName(slot, name);
+            try { Persistence.SettingsManager.Save(_settings); } catch { }
+
+            Utils.Logger.Info("[Macros] quick-play slot " + slot + " -> " +
+                              (string.IsNullOrEmpty(name) ? "(first in the list)" : "'" + name + "'"));
+        }
+
         private void BuildKeybindsTab()
         {
             var page = new BackdropTabPage(Utils.Localization.T("Keybinds")) { AutoScroll = true };
@@ -355,11 +435,6 @@ namespace AutoClicker.UI
                     Font = UiFactory.BodyFont
                 };
 
-                var desc = UiFactory.Caption(info.Description, 530, y + 1);
-                desc.ForeColor = _theme.TextMuted;
-                desc.AutoSize = false;
-                desc.Size = new Size(186, 40);
-
                 _bindingControls[info.Action] = capture;
                 capture.HotkeyChanged += OnKeybindEdited;
                 capture.AccessibleName = "Hotkey for " + info.Label;
@@ -367,7 +442,33 @@ namespace AutoClicker.UI
 
                 page.Controls.Add(label);
                 page.Controls.Add(capture);
-                page.Controls.Add(desc);
+
+                // The three quick-play rows get a macro picker where the description
+                // would go. That is the one place a user actually asks "play macro 1 —
+                // which macro is that?", and until now nothing on this page answered
+                // it. The description moves to the tooltip so nothing is lost.
+                int slot = SlotForAction(info.Action);
+                if (slot > 0)
+                {
+                    var pick = UiFactory.Combo(530, y, 186);
+                    pick.DropDownStyle = ComboBoxStyle.DropDownList;
+                    pick.AccessibleName = Utils.Localization.F("Macro for {0}", info.Label);
+                    pick.SelectedIndexChanged += OnMacroSlotPicked;
+                    pick.Tag = slot;
+                    _macroSlotCombos[slot] = pick;
+                    page.Controls.Add(pick);
+                    // The description tooltip is attached in SetupTooltips — _tips does
+                    // not exist yet at tab-build time, so setting it here would be a
+                    // silent no-op.
+                }
+                else
+                {
+                    var desc = UiFactory.Caption(info.Description, 530, y + 1);
+                    desc.ForeColor = _theme.TextMuted;
+                    desc.AutoSize = false;
+                    desc.Size = new Size(186, 40);
+                    page.Controls.Add(desc);
+                }
 
                 y += rowHeight;
             }

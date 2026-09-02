@@ -205,7 +205,7 @@ namespace AutoClicker.UI
                 int needed;
                 using (var g = CreateGraphics())
                 {
-                    string statsLine = string.IsNullOrEmpty(_stats) ? "running…" : _stats;
+                    string statsLine = string.IsNullOrEmpty(_stats) ? Utils.Localization.T("running…") : _stats;
                     float w = g.MeasureString(_title, _titleFont).Width;
                     w = Math.Max(w, g.MeasureString(statsLine, _subFont).Width);
                     if (!string.IsNullOrEmpty(_hint))
@@ -366,7 +366,7 @@ namespace AutoClicker.UI
             using (var mb = new SolidBrush(_theme.TextMuted))
             {
                 g.DrawString(_title, _titleFont, tb, TextLeft, 5);
-                g.DrawString(string.IsNullOrEmpty(_stats) ? "running\u2026" : _stats, _subFont, mb, TextLeft, 25);
+                g.DrawString(string.IsNullOrEmpty(_stats) ? Utils.Localization.T("running\u2026") : _stats, _subFont, mb, TextLeft, 25);
                 if (!string.IsNullOrEmpty(_hint))
                 {
                     g.DrawString(_hint, _subFont, mb, TextLeft, 43);

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -137,7 +137,7 @@ namespace AutoClicker.UI
                 using (var emptyBrush = new SolidBrush(MutedColor))
                 using (var emptyFont = new Font("Segoe UI", 9f, FontStyle.Italic))
                 {
-                    g.DrawString("No data yet.", emptyFont, emptyBrush, plot.Left + 4, plot.Top + plot.Height / 2 - 8);
+                    g.DrawString(Utils.Localization.T("No data yet."), emptyFont, emptyBrush, plot.Left + 4, plot.Top + plot.Height / 2 - 8);
                 }
                 return;
             }

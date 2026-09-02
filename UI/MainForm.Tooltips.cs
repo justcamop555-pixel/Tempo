@@ -256,6 +256,18 @@ namespace AutoClicker.UI
             T(_resetStatsBtn, "Reset the current-session counters (not your lifetime totals).");
             T(_resetLifetimeBtn, "Reset your all-time totals. This cannot be undone.");
 
+            // ── Keybinds: the quick-play macro pickers ──────────────────────────
+            // These combos took the place of the description labels on their rows, so
+            // the description each one replaced is attached here instead.
+            foreach (var hk in Models.HotkeyActions.All)
+            {
+                int slot = SlotForAction(hk.Action);
+                if (slot > 0 && _macroSlotCombos.TryGetValue(slot, out ComboBox slotCombo))
+                {
+                    T(slotCombo, hk.Description);
+                }
+            }
+
             // ── Settings ────────────────────────────────────────────────────────
             T(_themeCombo, "Choose a colour theme. Applied instantly.");
             T(_followSystemThemeCheck, "Match Windows: with the Light or Dark theme selected, Tempo follows Windows' light/dark mode AND adopts your Windows accent colour, switching live the moment you change either in Windows Settings. Pick a colourful theme (Synthwave, Ocean, …) and it keeps that look untouched. While this is on the theme picker is turned off; a custom accent colour still overrides everything.");

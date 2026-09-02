@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -94,7 +94,7 @@ namespace AutoClicker.UI
                     // word to say otherwise.
                     using (var font = new Font("Segoe UI", 8f, FontStyle.Italic))
                     {
-                        TextRenderer.DrawText(g, "No clicks recorded yet", font, barRect,
+                        TextRenderer.DrawText(g, Utils.Localization.T("No clicks recorded yet"), font, barRect,
                             MutedColor,
                             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
                             TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);

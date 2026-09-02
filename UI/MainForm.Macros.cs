@@ -906,8 +906,10 @@ namespace AutoClicker.UI
             _macroListBox.EndUpdate();
 
             // "The macro library changed" has one choke point, and this is it, so the
-            // bin button's count comes from here rather than from every delete site.
+            // bin button's count and the quick-play pickers both refresh from here
+            // rather than from every add / rename / delete / sort site.
             UpdateMacroRecycleButton();
+            RefreshMacroSlotCombos();
 
             if (_macroSummaryLabel != null)
             {
@@ -2077,14 +2079,66 @@ namespace AutoClicker.UI
         }
 
         /// <summary>Plays the macro at the given 1-based slot (for quick-play hotkeys).</summary>
+        /// <summary>The macro name assigned to a quick-play slot, or "" if unassigned.</summary>
+        private string MacroSlotName(int slot)
+        {
+            if (_settings == null) { return ""; }
+            switch (slot)
+            {
+                case 1: return _settings.MacroSlot1 ?? "";
+                case 2: return _settings.MacroSlot2 ?? "";
+                case 3: return _settings.MacroSlot3 ?? "";
+                default: return "";
+            }
+        }
+
+        private void SetMacroSlotName(int slot, string name)
+        {
+            if (_settings == null) { return; }
+            name = name ?? "";
+            switch (slot)
+            {
+                case 1: _settings.MacroSlot1 = name; break;
+                case 2: _settings.MacroSlot2 = name; break;
+                case 3: _settings.MacroSlot3 = name; break;
+            }
+        }
+
+        /// <summary>
+        /// Fires one of the three quick-play hotkeys.
+        ///
+        /// BY NAME, not by position. This used to run _macros.Macros[slot-1], and that
+        /// list is not stable: the Sort dropdown calls MacroStore.SortBy, which sorts
+        /// the stored list in place and saves it, and Move up / Move down / Delete
+        /// shift it as well. So changing the sort order silently changed which macro a
+        /// hotkey played — into whatever game was in the foreground.
+        ///
+        /// An unassigned slot still falls back to the old positional behaviour, so
+        /// anyone who was relying on it before this change keeps what they had.
+        /// </summary>
         private void PlayMacroSlot(int slot)
         {
-            int index = slot - 1;
-            if (index < 0 || index >= _macros.Macros.Count || _player.IsPlaying)
+            if (_player.IsPlaying) { return; }
+
+            string wanted = MacroSlotName(slot);
+            if (!string.IsNullOrEmpty(wanted))
             {
+                var byName = _macros.GetByName(wanted);
+                if (byName != null)
+                {
+                    PlayMacro(byName);
+                    return;
+                }
+
+                // Assigned but gone — renamed or deleted. Say so rather than silently
+                // playing whatever now sits in that position.
+                Logger.Warn("[Macros] quick-play slot " + slot + " is assigned to '" + wanted +
+                            "', which no longer exists. Nothing played.");
                 return;
             }
 
+            int index = slot - 1;
+            if (index < 0 || index >= _macros.Macros.Count) { return; }
             PlayMacro(_macros.Macros[index]);
         }
 

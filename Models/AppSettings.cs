@@ -409,6 +409,23 @@ namespace AutoClicker.Models
             = new System.Collections.Generic.List<HotkeyBinding>();
 
         /// <summary>
+        /// Which macro each of the three quick-play hotkeys fires, BY NAME.
+        ///
+        /// These used to be positions: PlayMacro1 ran whatever happened to be first in
+        /// the list. The Macros tab sorts that list in place and saves it — A-Z, most
+        /// played, newest — and Move up / Move down and Delete shift it too, so the
+        /// macro behind a hotkey changed without the hotkey being touched. Pressing
+        /// "play macro 1" into a game and getting a different recording is the sort of
+        /// surprise a hotkey must never spring.
+        ///
+        /// Empty means "not assigned"; playback then falls back to the old positional
+        /// behaviour so existing setups keep working.
+        /// </summary>
+        public string MacroSlot1 { get; set; } = "";
+        public string MacroSlot2 { get; set; } = "";
+        public string MacroSlot3 { get; set; } = "";
+
+        /// <summary>
         /// Amount (milliseconds) added or removed by the increase/decrease-interval
         /// hotkeys.
         /// </summary>

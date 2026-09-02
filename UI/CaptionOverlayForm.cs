@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
@@ -1213,7 +1213,7 @@ namespace AutoClicker.UI
             using (var fmt = new StringFormat
             { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
             {
-                g.DrawString("Drag me where you want captions, then turn move mode off",
+                g.DrawString(Utils.Localization.T("Drag me where you want captions, then turn move mode off"),
                     f, b, rect, fmt);
             }
         }
