@@ -349,13 +349,13 @@ namespace AutoClicker.UI
                 Height = 186
             };
             _liveStepList.Columns.Add("#", 54);
-            _liveStepList.Columns.Add("Time", 84);
-            _liveStepList.Columns.Add("Action", 132);
+            _liveStepList.Columns.Add(Utils.Localization.T("Time"), 84);
+            _liveStepList.Columns.Add(Utils.Localization.T("Action"), 132);
             // Detail is sized to whatever is left over (see FitLastColumn) rather than
             // a fixed 350: the fixed widths used to total a fraction MORE than the
             // client area once the scrollbar appeared, which put a useless horizontal
             // scrollbar across the bottom of the card.
-            _liveStepList.Columns.Add("Detail", 320);
+            _liveStepList.Columns.Add(Utils.Localization.T("Detail"), 320);
             _liveStepList.ApplyTheme(_theme);
             _liveStepList.FitLastColumn();
             liveGroup.Controls.Add(_liveStepList);

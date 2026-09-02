@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Globalization;
 using System.Windows.Forms;
@@ -67,9 +67,9 @@ namespace AutoClicker.UI
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
             _list.Columns.Add("#", 44);
-            _list.Columns.Add("Time", 78);
-            _list.Columns.Add("Action", 130);
-            _list.Columns.Add("Detail", 168);
+            _list.Columns.Add(Utils.Localization.T("Time"), 78);
+            _list.Columns.Add(Utils.Localization.T("Action"), 130);
+            _list.Columns.Add(Utils.Localization.T("Detail"), 168);
             _list.DoubleClick += (s, e) => EditDelay();
 
             int bx = 444;

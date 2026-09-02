@@ -265,7 +265,10 @@ namespace AutoClicker.UI
             _historySearchBox.TextChanged += (s, e) => { _historySearchText = _historySearchBox.Text; RefreshSessionHistory(); };
             page.Controls.Add(_historySearchBox);
 
-            _historyProfileFilter = UiFactory.Combo(rightEdge - 230, histTitleY - 2, 170, "All profiles");
+            // Safe to translate: the filter keys off SelectedIndex > 0, not off this
+            // string, so item 0 means "everything" whatever it says.
+            _historyProfileFilter = UiFactory.Combo(rightEdge - 230, histTitleY - 2, 170,
+                Utils.Localization.T("All profiles"));
             _historyProfileFilter.DropDownStyle = ComboBoxStyle.DropDownList;
             _historyProfileFilter.SelectedIndex = 0;
             _historyProfileFilter.SelectedIndexChanged += OnHistoryFilterChanged;
@@ -279,12 +282,12 @@ namespace AutoClicker.UI
                 Width = (CardW * 4) + (CardGap * 3),
                 Height = 180
             };
-            _sessionHistoryList.Columns.Add("When", 150);
-            _sessionHistoryList.Columns.Add("Profile", 130);
-            _sessionHistoryList.Columns.Add("Clicks", 90);
-            _sessionHistoryList.Columns.Add("Duration", 100);
-            _sessionHistoryList.Columns.Add("Avg CPS", 80);
-            _sessionHistoryList.Columns.Add("Peak CPS", 80);
+            _sessionHistoryList.Columns.Add(Utils.Localization.T("When"), 150);
+            _sessionHistoryList.Columns.Add(Utils.Localization.T("Profile"), 130);
+            _sessionHistoryList.Columns.Add(Utils.Localization.T("Clicks"), 90);
+            _sessionHistoryList.Columns.Add(Utils.Localization.T("Duration"), 100);
+            _sessionHistoryList.Columns.Add(Utils.Localization.T("Avg CPS"), 80);
+            _sessionHistoryList.Columns.Add(Utils.Localization.T("Peak CPS"), 80);
             // 94px of the control was left unused: the automatic fit in
             // ThemedListView.OnSizeChanged runs when Width is set above, before any
             // column exists, so it has nothing to fit.
@@ -826,10 +829,33 @@ namespace AutoClicker.UI
 
             if (_historySummaryLabel != null)
             {
-                _historySummaryLabel.Text = shownCount == 0
+                string summary = shownCount == 0
                     ? Utils.Localization.T("No sessions to show.")
                     : Utils.Localization.F("{0:N0} session(s) shown  •  {1:N0} clicks total",
                         shownCount, shownClicks);
+
+                // SAY WHEN THE LIST IS ABOUT TO START FORGETTING. The store keeps the
+                // newest 200 runs and silently drops the rest — the lifetime totals
+                // survive, but individual runs do not, and nothing anywhere said so.
+                // Someone sitting on 196 rows is four runs from losing the oldest with
+                // no warning at all, and Export CSV (right below this line) is the
+                // thing that would have kept them.
+                int kept = _history != null ? _history.Records.Count : 0;
+                int cap = Persistence.SessionHistoryStore.Capacity;
+                if (kept >= cap)
+                {
+                    summary += "  •  " + Utils.Localization.F(
+                        "keeping the newest {0:N0} — older runs drop off as new ones arrive; Export CSV keeps them",
+                        cap);
+                }
+                else if (kept >= cap - 10)
+                {
+                    summary += "  •  " + Utils.Localization.F(
+                        "{0:N0} of {1:N0} kept — the oldest start dropping off after that",
+                        kept, cap);
+                }
+
+                _historySummaryLabel.Text = summary;
             }
 
             // Feed the recent-session bar chart (last 24, oldest → newest).
@@ -890,7 +916,7 @@ namespace AutoClicker.UI
             _suppressHistoryFilterEvent = true;
             _historyProfileFilter.BeginUpdate();
             _historyProfileFilter.Items.Clear();
-            _historyProfileFilter.Items.Add("All profiles");
+            _historyProfileFilter.Items.Add(Utils.Localization.T("All profiles"));
             foreach (string p in profiles)
             {
                 _historyProfileFilter.Items.Add(p);

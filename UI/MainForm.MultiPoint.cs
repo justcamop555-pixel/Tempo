@@ -54,13 +54,13 @@ namespace AutoClicker.UI
             // and a vertical scrollbar — so the last "Rep" column is never clipped once the
             // list has enough rows to scroll (it used to be cut off at the right edge).
             _pointsList.Columns.Add("#", 36);
-            _pointsList.Columns.Add("Label", 130);
+            _pointsList.Columns.Add(Utils.Localization.T("Label"), 130);
             _pointsList.Columns.Add("X", 56, HorizontalAlignment.Right);
             _pointsList.Columns.Add("Y", 56, HorizontalAlignment.Right);
-            _pointsList.Columns.Add("Button", 72);
-            _pointsList.Columns.Add("Type", 72);
-            _pointsList.Columns.Add("Dwell", 54, HorizontalAlignment.Right);
-            _pointsList.Columns.Add("Rep", 52, HorizontalAlignment.Right);
+            _pointsList.Columns.Add(Utils.Localization.T("Button"), 72);
+            _pointsList.Columns.Add(Utils.Localization.T("Type"), 72);
+            _pointsList.Columns.Add(Utils.Localization.T("Dwell"), 54, HorizontalAlignment.Right);
+            _pointsList.Columns.Add(Utils.Localization.T("Rep"), 52, HorizontalAlignment.Right);
             // The columns add up to 24px less than the control, leaving dead space at
             // the right edge. ThemedListView's own OnSizeChanged fires when Width is
             // set in the initializer above — BEFORE any column exists — so the only

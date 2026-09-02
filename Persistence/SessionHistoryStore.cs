@@ -16,6 +16,9 @@ namespace AutoClicker.Persistence
     {
         private const int MaxEntries = 200;
 
+        /// <summary>How many runs are kept, so the UI can warn before the oldest drop off.</summary>
+        public static int Capacity => MaxEntries;
+
         private static readonly JsonSerializerOptions Options = new JsonSerializerOptions
         {
             WriteIndented = true
@@ -88,7 +91,15 @@ namespace AutoClicker.Persistence
             _records.Insert(0, record);
             while (_records.Count > MaxEntries)
             {
+                // Say so. The lifetime aggregates already carry this run's totals
+                // forward, so nothing is lost from the numbers — but the row itself is
+                // gone for good, and a silent drop is how someone discovers months
+                // later that their history only ever went back so far.
+                var dropped = _records[_records.Count - 1];
                 _records.RemoveAt(_records.Count - 1);
+                Logger.Info("[history] at the " + MaxEntries + "-run limit; dropped the oldest run (" +
+                            (dropped != null ? dropped.WhenUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "?") +
+                            "). Export CSV keeps a copy.");
             }
 
             Save();

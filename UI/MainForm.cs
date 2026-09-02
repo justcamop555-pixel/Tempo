@@ -12798,15 +12798,30 @@ HookSystemEvents();
             }
         }
 
+        // These two translate their message, and that is load-bearing.
+        //
+        // They used to hand the string straight to MessageBox. Because they did NOT
+        // translate, they were invisible to the choke-point audit — that scan looks for
+        // methods which call Localization.T on a parameter, so a helper that translates
+        // nothing is exactly the one it cannot flag. Thirty messages reached the user in
+        // English in every language: "Select a macro to play first.", "Settings
+        // exported.", "Statistics exported." and the rest.
+        //
+        // Translating here rather than at thirty call sites fixes them together AND
+        // makes the pair a real choke point, so the existing audit now covers every
+        // future call as well. Passing an already-translated string back through T() is
+        // a no-op — a miss returns its input — so the sites that already localise are
+        // unaffected.
+
         private void ShowWarning(string message)
         {
-            MessageBox.Show(this, message, "Tempo",
+            MessageBox.Show(this, Localization.T(message), "Tempo",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         private void ShowInfo(string message)
         {
-            MessageBox.Show(this, message, "Tempo",
+            MessageBox.Show(this, Localization.T(message), "Tempo",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }

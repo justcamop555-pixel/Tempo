@@ -72,14 +72,26 @@ namespace AutoClicker.UI
             // with the "light flash" report. Owner-draw it in the theme surface colour.
             ThemeTooltip(_tips);
 
+            // Translates, and that matters twice over.
+            //
+            // This helper used to set the text straight onto the control. Because it
+            // translated nothing it was invisible to the choke-point audit — that scan
+            // finds helpers which DO call Localization.T on a parameter, so one that
+            // never translates is precisely the one it cannot flag. The result was 137
+            // tooltips, and the AccessibleDescription a screen reader reads out, in
+            // English no matter what language Tempo was running in.
+            //
+            // T() returns its input on a miss, so a tooltip with no entry yet is
+            // unchanged and nothing regresses; the ones that have entries now appear.
             void T(Control c, string text)
             {
                 if (c != null)
                 {
-                    _tips.SetToolTip(c, text);
+                    string localized = Utils.Localization.T(text);
+                    _tips.SetToolTip(c, localized);
                     // Screen readers read AccessibleDescription, so the same help is
                     // available without a mouse.
-                    c.AccessibleDescription = text;
+                    c.AccessibleDescription = localized;
                 }
             }
 
@@ -289,9 +301,12 @@ namespace AutoClicker.UI
 
             // Accessible names for controls a screen reader would otherwise announce
             // only by their value (e.g. an unlabelled "0" spinner).
+            // Same story: a screen reader announces AccessibleName, so leaving it
+            // untranslated means the spinner a Spanish user just tabbed onto is read
+            // out as "Hours".
             void Name(Control c, string name)
             {
-                if (c != null) c.AccessibleName = name;
+                if (c != null) c.AccessibleName = Utils.Localization.T(name);
             }
             Name(_hoursNum, "Hours");
             Name(_minutesNum, "Minutes");
