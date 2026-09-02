@@ -4607,8 +4607,20 @@ namespace AutoClicker.UI
                 // waiting it says so, in the accent colour, right where the version is
                 // already being read.
                 string ver = "Tempo " + VersionStamp();
-                string note = null;
-                Color noteColor = _theme.TextMuted;
+
+                // Lines stacked under the version.
+                //
+                // The first is the build ID, and it is here because the version line
+                // CANNOT answer "which copy is this?". A test build carries the same
+                // 1.0.319 as the release it was cut from, so the two are identical
+                // everywhere the version is printed. The build number is the only thing
+                // that differs, so a non-release build says so permanently, in the
+                // warning colour, at the bottom of every screen.
+                var notes = new System.Collections.Generic.List<(string Text, Color Colour)>();
+                if (Utils.BuildInfo.IsTest)
+                {
+                    notes.Add((Utils.BuildInfo.Short, _theme.Warning));
+                }
                 try
                 {
                     if (_settings != null && _settings.LastCheckFoundUpdate &&
@@ -4617,8 +4629,7 @@ namespace AutoClicker.UI
                                        Utils.UpdateChecker.CurrentVersion?.ToString(),
                                        StringComparison.OrdinalIgnoreCase))
                     {
-                        note = "v" + _settings.LastKnownLatestVersion + " available";
-                        noteColor = _theme.Accent;
+                        notes.Add(("v" + _settings.LastKnownLatestVersion + " available", _theme.Accent));
                     }
                 }
                 catch { /* the footer must never be the thing that throws */ }
@@ -4628,22 +4639,27 @@ namespace AutoClicker.UI
                 using (var lp = new Pen(_theme.Border))
                 {
                     var sz = gfx.MeasureString(ver, vf);
+                    float lineH = sz.Height + 1f;
                     float vy = h - sz.Height - 12f;
-                    if (note != null)
-                    {
-                        // Lift the version line to make room for the notice under it.
-                        vy -= sz.Height + 1f;
-                    }
+                    // Lift the version line to make room for every notice under it.
+                    vy -= notes.Count * lineH;
                     gfx.DrawLine(lp, _sidebar.Padding.Left, vy - 10f, w - _sidebar.Padding.Right - 2, vy - 10f);
                     gfx.DrawString(ver, vf, vb, (w - sz.Width) / 2f, vy);
 
-                    if (note != null)
+                    if (notes.Count > 0)
                     {
+                        float ny = vy + lineH;
                         using (var nf = new Font("Segoe UI", 8f, FontStyle.Bold))
-                        using (var nb = new SolidBrush(noteColor))
                         {
-                            var nsz = gfx.MeasureString(note, nf);
-                            gfx.DrawString(note, nf, nb, (w - nsz.Width) / 2f, vy + sz.Height + 1f);
+                            foreach (var n in notes)
+                            {
+                                using (var nb = new SolidBrush(n.Colour))
+                                {
+                                    var nsz = gfx.MeasureString(n.Text, nf);
+                                    gfx.DrawString(n.Text, nf, nb, (w - nsz.Width) / 2f, ny);
+                                }
+                                ny += lineH;
+                            }
                         }
                     }
                 }

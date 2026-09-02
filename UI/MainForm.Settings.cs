@@ -995,6 +995,9 @@ namespace AutoClicker.UI
             string verText = asmVer != null
                 ? $"Tempo v{asmVer.Major}.{asmVer.Minor}.{asmVer.Build}"
                 : "Tempo";
+            // Build ID beside the version: the version is shared by a test build and the
+            // release it came from, so on its own it cannot tell you which this is.
+            verText += "   ·   " + Utils.BuildInfo.Full;
             // True bottom of the page — the old y=724 had ended up BEHIND the cards
             // as the page grew over the releases.
             var versionLabel = UiFactory.Caption(verText, 12, 2054);
@@ -2891,7 +2894,9 @@ namespace AutoClicker.UI
             sb.AppendLine("=== THIS PC ===");
             sb.AppendLine("Windows          : " + os + (win11 ? "  (Windows 11 — Live Captions supported)"
                                                               : "  (pre-Windows 11 — no Live Captions)"));
-            sb.AppendLine("Tempo            : " + VersionStamp());
+            // Build ID, not just the version — a bug report against "1.0.319" is
+            // ambiguous between the release and every test build cut from it.
+            sb.AppendLine("Tempo            : " + VersionStamp() + "  ·  " + Utils.BuildInfo.Full);
             sb.AppendLine("Caption source   : " + (_settings != null ? _settings.CaptionSource.ToString() : "?"));
             sb.AppendLine("Tempo engine     : " + (_captionTranscriber != null && _captionTranscriber.IsRunning
                                                     ? "running" : "not running"));

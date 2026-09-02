@@ -99,6 +99,14 @@ namespace AutoClicker.UI
             {
                 Version v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
                 _versionText = v != null ? "v" + v.Major + "." + v.Minor + "." + v.Build : "";
+                // Say it on the way in, too: the splash is the first thing you see, and
+                // "am I testing or running the real one?" is best answered before the
+                // window opens rather than after.
+                if (Utils.BuildInfo.IsTest)
+                {
+                    _versionText = (_versionText.Length > 0 ? _versionText + "  ·  " : "")
+                                   + Utils.BuildInfo.Short;
+                }
             }
             catch { _versionText = ""; }
 

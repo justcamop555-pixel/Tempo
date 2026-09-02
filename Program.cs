@@ -193,7 +193,13 @@ namespace AutoClicker
                 e.SetObserved();
             };
 
-            Logger.Info("[startup] Tempo starting (version 1.0.319).");
+            // Read the version rather than spelling it out: this line said "1.0.319" as a
+            // literal, so every log from a later release would have kept claiming 1.0.319
+            // until somebody noticed. The build ID rides along because the version alone
+            // cannot distinguish a test build from the release it was cut from, and this
+            // is the first line of every log attached to a bug report.
+            Logger.Info("[startup] Tempo starting (version " + Utils.AppVersion.Text
+                        + ", " + Utils.BuildInfo.Full + ").");
             Utils.SelfCheck.Run();   // does the single-file bundle actually work here?
 
             // Every build Tempo has ever run left ~263 MB of unpacked natives in TEMP and

@@ -23,6 +23,9 @@ REM                  Intended for scripted/automated runs.
 REM     /open        Open the output folder when done (skips the question).
 REM     /noprompt    Never ask anything; same prompts policy as /ci but keeps
 REM                  the colourful output.
+REM     /official    Mark this build as an official RELEASE. Without it every
+REM                  build is stamped "test", and the app says so on screen.
+REM                  The build NUMBER increases either way, on every publish.
 REM
 REM   OUTPUT
 REM     bin\publish\<rid>\Tempo.exe            self-contained single file
@@ -75,6 +78,7 @@ set "OPT_NOZIP="
 set "OPT_CI="
 set "OPT_OPEN="
 set "OPT_NOPROMPT="
+set "OPT_OFFICIAL="
 set "BADARG="
 
 :parseArgs
@@ -88,6 +92,7 @@ if /i "%ARG%"=="/nozip"     set "OPT_NOZIP=1"    & goto :nextArg
 if /i "%ARG%"=="/ci"        set "OPT_CI=1"       & goto :nextArg
 if /i "%ARG%"=="/open"      set "OPT_OPEN=1"     & goto :nextArg
 if /i "%ARG%"=="/noprompt"  set "OPT_NOPROMPT=1" & goto :nextArg
+if /i "%ARG%"=="/official"  set "OPT_OFFICIAL=1" & goto :nextArg
 REM Anything that doesn't start with a slash is treated as the runtime ID.
 set "FIRSTCHAR=%ARG:~0,1%"
 if "%FIRSTCHAR%"=="/" (
@@ -357,6 +362,30 @@ call :SecsBetween "%TP3%" "%TIME: =0%" PH3S
 REM ===========================================================================
 REM  PHASE 4 of 7  -  Build  (this is the slow part)
 REM ===========================================================================
+echo.
+REM ---------------------------------------------------------------------------
+REM  BUILD ID. Stamped BEFORE the build so it is compiled in.
+REM
+REM  The version number cannot tell a test build from the release it was cut
+REM  from - they share it. The build number moves on EVERY publish, so it can.
+REM  Default channel is "test"; pass /official for a release you will upload.
+REM ---------------------------------------------------------------------------
+set "BUILDCH=test"
+if defined OPT_OFFICIAL set "BUILDCH=release"
+set "BUILDNO="
+where powershell >nul 2>&1
+if errorlevel 1 (
+  echo        %C_WARN%WARNING%C_RESET% PowerShell not found - build ID NOT stamped.
+  >> "%LOG%" echo BuildID : NOT STAMPED ^(no powershell^)
+) else (
+  for /f "usebackq delims=" %%b in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%stamp-build.ps1" -Channel !BUILDCH! 2^>nul`) do set "BUILDNO=%%b"
+)
+if not defined BUILDNO (
+  echo        %C_WARN%WARNING%C_RESET% build ID was not stamped - see stamp-build.ps1.
+) else (
+  echo        Build ID   : %C_OK%build !BUILDNO!%C_RESET%  ^(!BUILDCH!^)
+  >> "%LOG%" echo BuildID : !BUILDNO! ^(!BUILDCH!^)
+)
 echo.
 echo  %C_STEP%[4/7]%C_RESET% Building Tempo - this can take a minute or two ...
 echo        ^(compiling and embedding the .NET runtime into one .exe^)
@@ -726,6 +755,7 @@ echo      Build log  : publish-log.txt
 if defined DOTNETVER echo      Built with : .NET SDK %DOTNETVER%
 echo      Target     : %RID%  ^(self-contained single file; everything bundled, runs anywhere^)
 echo      App version: %VER%
+if defined BUILDNO echo      Build ID   : build !BUILDNO!  ^(!BUILDCH!^)
 echo  ---------------------------------------------------------------------------
 echo    %C_TITLE%NEXT STEPS%C_RESET%
 echo      0. Run the built Tempo.exe once and click around ^(start/stop a click,
@@ -793,12 +823,14 @@ echo     /nozip      Do not build the setup zip bundle.
 echo     /ci         Plain output: no banner, no spinner, no prompts.
 echo     /open       Open the output folder when done.
 echo     /noprompt   Never ask anything ^(keeps colourful output^).
+echo     /official   Mark as an official RELEASE ^(default is a test build^).
 echo.
 echo   EXAMPLES
 echo     publish.cmd
 echo     publish.cmd win-x86
 echo     publish.cmd /quick /open
 echo     publish.cmd win-arm64 /ci
+echo     publish.cmd /official        ^(the build you upload to GitHub^)
 echo.
 echo   OUTPUT  ^(under bin\publish^)
 echo     ^<rid^>\Tempo.exe              self-contained single file

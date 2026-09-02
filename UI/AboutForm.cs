@@ -217,6 +217,13 @@ namespace AutoClicker.UI
                 {
                     verText = "Version " + asmVer.Major + "." + asmVer.Minor + "." + asmVer.Build;
                 }
+                // The version alone cannot say which copy this is — a test build shares
+                // it with the release it was cut from. The build ID can, so it goes
+                // wherever someone looks up "what am I running", which is exactly here.
+                // Short, not Full: this row ends where the logo begins, and the full
+                // form ran underneath it. The build TIME goes on the .NET row below,
+                // which has the space for it.
+                verText += "   ·   " + Utils.BuildInfo.Short;
             }
             catch { }
             var version = UiFactory.Label(verText, 24, 64, FontStyle.Regular, 9.5f);
@@ -238,7 +245,9 @@ namespace AutoClicker.UI
             string netVer;
             try { netVer = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription; }
             catch { netVer = ".NET"; }
-            var buildInfo = UiFactory.Label($"{edition}  \u00b7  {netVer}", 24, 104, FontStyle.Regular, 9f);
+            string builtAt = Utils.BuildInfo.BuiltUtcText;
+            if (builtAt.Length > 0) { builtAt = "  \u00b7  built " + builtAt; }
+            var buildInfo = UiFactory.Label($"{edition}  \u00b7  {netVer}{builtAt}", 24, 104, FontStyle.Regular, 9f);
             buildInfo.ForeColor = theme.TextMuted;
 
             string dataDir = Persistence.SettingsManager.GetSettingsDirectory();
