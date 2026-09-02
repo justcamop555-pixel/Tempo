@@ -1,13 +1,13 @@
-using System;
+﻿using System;
 using System.Reflection;
 
 namespace AutoClicker.Utils
 {
     /// <summary>
-    /// The running assembly's version as "1.0.319".
+    /// The running assembly's version, e.g. "1.0.320".
     ///
     /// Exists because the startup log spelled the version out as a literal —
-    /// "Tempo starting (version 1.0.319)" — which would have gone on claiming 1.0.319
+    /// "Tempo starting (version 1.0.319)" — which would have gone on claiming that
     /// out of every release after it, in the one line most likely to be quoted in a bug
     /// report. Read it, never type it.
     ///
@@ -18,7 +18,7 @@ namespace AutoClicker.Utils
     {
         private static string _text;
 
-        /// <summary>"1.0.319", or "" if the version can't be read.</summary>
+        /// <summary>The version, or "" if it can't be read.</summary>
         public static string Text
         {
             get
@@ -34,7 +34,7 @@ namespace AutoClicker.Utils
             }
         }
 
-        /// <summary>"v1.0.319" — the form the UI stamps use.</summary>
+        /// <summary>The version with a leading "v" — the form the UI stamps use.</summary>
         public static string Stamp
         {
             get { return Text.Length == 0 ? "" : "v" + Text; }
