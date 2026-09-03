@@ -6960,6 +6960,16 @@ namespace AutoClicker.UI
                 _statusStrip.BackColor = _theme.Surface;
                 _statusStrip.ForeColor = _theme.Text;
 
+                // The four session counters carry an EXPLICIT ForeColor once they have
+                // been dimmed, so they stop inheriting the strip's — which would leave
+                // them painted in the old palette after a theme change. Put them back to
+                // a known colour here; the next tick re-dims them if the session is still
+                // empty, a fifth of a second later at most.
+                SetStatusColor(_statusClicks, _theme.Text);
+                SetStatusColor(_statusCps, _theme.Text);
+                SetStatusColor(_statusPeak, _theme.Text);
+                SetStatusColor(_statusElapsed, _theme.Text);
+
                 // Icons sit a touch brighter than muted text so they read as a set
                 // without shouting; the live values stay in the normal text colour.
                 Color hue = MixColor(_theme.TextMuted, _theme.Accent, 0.55);
@@ -10632,6 +10642,21 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
+        /// Sets a status item's colour, but only when it actually changes.
+        ///
+        /// Guarded exactly like <see cref="SetStatusText"/>, and for the same reason:
+        /// assigning to a ToolStripItem relayouts and repaints the strip whether or not
+        /// the value differs, and with a wallpaper the window carries WS_EX_COMPOSITED,
+        /// where any repaint redraws the WHOLE window. This is called five times a
+        /// second, so in the ordinary case it has to do nothing at all.
+        /// </summary>
+        private static void SetStatusColor(ToolStripItem item, Color want)
+        {
+            if (item == null) { return; }
+            if (item.ForeColor != want) { item.ForeColor = want; }
+        }
+
+        /// <summary>
         /// What Tempo is costing right now: its CPU share, its working set, and how long
         /// it has been running.
         ///
@@ -10849,6 +10874,19 @@ namespace AutoClicker.UI
                 Utils.Localization.T("Peak:") + $" {_statistics.PeakClicksPerSecond:0.0}");
             SetStatusText(_statusElapsed,
                 Utils.Localization.T("Time:") + " " + FormatDuration(_statistics.GetElapsed()));
+
+            // Dimmed until the session has actually recorded something. On a fresh
+            // launch these four read "0 · 0.0 · 0.0 · 00:00", which is four figures'
+            // worth of nothing competing with the parts of the strip that do mean
+            // something. They come up to full strength on the first click and stay
+            // there — once you HAVE clicked, the numbers are worth reading even while
+            // stopped, so this keys off the session having any clicks rather than off
+            // the engine running.
+            Color counters = _statistics.SessionClicks > 0 ? _theme.Text : _theme.TextMuted;
+            SetStatusColor(_statusClicks, counters);
+            SetStatusColor(_statusCps, counters);
+            SetStatusColor(_statusPeak, counters);
+            SetStatusColor(_statusElapsed, counters);
 
             UpdateResourceReadout(windowShowing);
 
