@@ -494,9 +494,15 @@ namespace AutoClicker.UI
                 }
 
                 string text = sb.ToString();
-                if (text == _capRenderedText) { return; }
-                _capRenderedText = text;
 
+                // The count label is updated BEFORE the early-out below, not after it.
+                //
+                // It used to sit behind "has the transcript text changed?", which is the
+                // wrong question: this label reports the history COUNT and the FILTER,
+                // and both can change while the rendered text does not — most obviously
+                // when there is no transcript at all, which is the one moment the
+                // empty-state hint exists for. On a fresh launch the box sat blank with
+                // nothing under it saying why.
                 if (_capCountLabel != null)
                 {
                     // Every branch goes through the translator. This expression used to
@@ -504,26 +510,42 @@ namespace AutoClicker.UI
                     // exactly the shape the literal audit skipped — it saw the T() and
                     // treated the whole assignment as handled, so "12 of 300 lines match"
                     // stayed English in all five languages.
+                    string caption;
                     if (_captionHistory.Count == 0)
                     {
-                        _capCountLabel.Text = Localization.T(
+                        caption = Localization.T(
                             "Nothing transcribed yet — start captions and play something with speech.");
                     }
                     else if (filtering)
                     {
                         // A filter that matches nothing says so, rather than leaving an
                         // empty box and "0 of 300" to be worked out.
-                        _capCountLabel.Text = shown == 0
+                        caption = shown == 0
                             ? Localization.F("Nothing matches “{0}” — press Esc to clear the filter.", _capFilter)
                             : Localization.F("{0} of {1} lines match", shown, _captionHistory.Count);
                     }
                     else
                     {
-                        _capCountLabel.Text = _captionHistory.Count == 1
+                        caption = _captionHistory.Count == 1
                             ? Localization.F("{0} line · newest at the bottom", _captionHistory.Count)
                             : Localization.F("{0} lines · newest at the bottom", _captionHistory.Count);
                     }
+
+                    // Assigned only when it differs. This now runs on every tick rather
+                    // than only when the transcript text changed, and setting .Text on a
+                    // Label repaints it whether or not the string is new.
+                    if (!string.Equals(_capCountLabel.Text, caption, StringComparison.Ordinal))
+                    {
+                        _capCountLabel.Text = caption;
+                    }
                 }
+
+                // NOW the early-out, and only for the expensive half. Rewriting the
+                // transcript box throws away the selection and scroll position, so it is
+                // still skipped whenever the text is unchanged — which is most ticks
+                // during a long run.
+                if (text == _capRenderedText) { return; }
+                _capRenderedText = text;
 
                 // Only follow the tail when the user is already at the bottom, so reading
                 // back through the transcript isn't yanked away every time a line lands.

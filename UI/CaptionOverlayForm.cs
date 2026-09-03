@@ -773,7 +773,11 @@ namespace AutoClicker.UI
             string drawText = _text;
             if (_pending && !_movable)
             {
-                drawText = "Captions on \u00b7 listening\u2026";
+                // Translated. It reaches the screen through a local and a DrawString, so
+                // it is invisible to the call-site scanner AND to the owner-drawn one \u2014
+                // and it is the first thing the caption bar ever says, in English, in
+                // every language.
+                drawText = Utils.Localization.T("Captions on \u00b7 listening\u2026");
             }
             else if (!_movable && _targetWords.Length > 0)
             {
