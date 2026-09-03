@@ -1,4 +1,4 @@
-using System.Drawing;
+﻿using System.Drawing;
 using AutoClicker.Models;
 
 namespace AutoClicker.UI
@@ -95,7 +95,7 @@ namespace AutoClicker.UI
                         Danger = Color.FromArgb(251, 113, 133),
                         Warning = Color.FromArgb(251, 191, 36),
                         Text = Color.FromArgb(232, 238, 248),
-                        TextMuted = Color.FromArgb(102, 118, 152),
+                        TextMuted = Color.FromArgb(111, 126, 158),
                         InputBackground = Color.FromArgb(20, 26, 46)
                     };
 
@@ -163,11 +163,11 @@ namespace AutoClicker.UI
                         Border = Color.FromArgb(213, 205, 178),
                         Accent = Color.FromArgb(38, 139, 210),
                         AccentHover = Color.FromArgb(58, 159, 230),
-                        Success = Color.FromArgb(133, 153, 0),
+                        Success = Color.FromArgb(132, 151, 0),
                         Danger = Color.FromArgb(220, 50, 47),
-                        Warning = Color.FromArgb(181, 137, 0),
+                        Warning = Color.FromArgb(179, 136, 0),
                         Text = Color.FromArgb(40, 54, 60),
-                        TextMuted = Color.FromArgb(131, 148, 150),
+                        TextMuted = Color.FromArgb(102, 115, 117),
                         InputBackground = Color.FromArgb(255, 252, 242)
                     };
 
@@ -185,7 +185,7 @@ namespace AutoClicker.UI
                         Danger = Color.FromArgb(248, 113, 113),
                         Warning = Color.FromArgb(251, 191, 36),
                         Text = Color.FromArgb(240, 240, 245),
-                        TextMuted = Color.FromArgb(120, 120, 135),
+                        TextMuted = Color.FromArgb(121, 121, 136),
                         InputBackground = Color.FromArgb(16, 16, 20)
                     };
 
@@ -203,7 +203,7 @@ namespace AutoClicker.UI
                         Danger = Color.FromArgb(191, 97, 106),
                         Warning = Color.FromArgb(235, 203, 139),
                         Text = Color.FromArgb(236, 239, 244),
-                        TextMuted = Color.FromArgb(150, 160, 180),
+                        TextMuted = Color.FromArgb(166, 174, 191),
                         InputBackground = Color.FromArgb(59, 66, 82)
                     };
 
@@ -221,7 +221,7 @@ namespace AutoClicker.UI
                         Danger = Color.FromArgb(249, 38, 114),
                         Warning = Color.FromArgb(253, 151, 31),
                         Text = Color.FromArgb(248, 248, 242),
-                        TextMuted = Color.FromArgb(150, 150, 135),
+                        TextMuted = Color.FromArgb(155, 155, 141),
                         InputBackground = Color.FromArgb(49, 51, 44)
                     };
 
@@ -236,7 +236,7 @@ namespace AutoClicker.UI
                         Accent = Color.FromArgb(215, 153, 33),
                         AccentHover = Color.FromArgb(250, 189, 47),
                         Success = Color.FromArgb(152, 151, 26),
-                        Danger = Color.FromArgb(204, 36, 29),
+                        Danger = Color.FromArgb(209, 56, 49),
                         Warning = Color.FromArgb(214, 93, 14),
                         Text = Color.FromArgb(235, 219, 178),
                         TextMuted = Color.FromArgb(168, 153, 132),
@@ -293,7 +293,7 @@ namespace AutoClicker.UI
                         Danger = Color.FromArgb(255, 85, 85),
                         Warning = Color.FromArgb(241, 250, 140),
                         Text = Color.FromArgb(248, 248, 242),
-                        TextMuted = Color.FromArgb(145, 150, 175),
+                        TextMuted = Color.FromArgb(152, 156, 180),
                         InputBackground = Color.FromArgb(50, 52, 67)
                     };
 
@@ -402,13 +402,13 @@ namespace AutoClicker.UI
                         Surface = Color.FromArgb(252, 248, 240),
                         Surface2 = Color.FromArgb(236, 229, 217),
                         Border = Color.FromArgb(214, 204, 188),
-                        Accent = Color.FromArgb(202, 138, 4),
+                        Accent = Color.FromArgb(186, 127, 4),
                         AccentHover = Color.FromArgb(176, 118, 0),
-                        Success = Color.FromArgb(101, 163, 13),
+                        Success = Color.FromArgb(95, 153, 12),
                         Danger = Color.FromArgb(200, 50, 40),
-                        Warning = Color.FromArgb(202, 138, 4),
+                        Warning = Color.FromArgb(186, 127, 4),
                         Text = Color.FromArgb(58, 48, 36),
-                        TextMuted = Color.FromArgb(128, 114, 96),
+                        TextMuted = Color.FromArgb(120, 107, 90),
                         InputBackground = Color.FromArgb(252, 248, 240)
                     };
 
@@ -442,11 +442,11 @@ namespace AutoClicker.UI
                         Border = Color.FromArgb(238, 210, 222),
                         Accent = Color.FromArgb(219, 68, 134),
                         AccentHover = Color.FromArgb(190, 48, 114),
-                        Success = Color.FromArgb(101, 163, 13),
+                        Success = Color.FromArgb(97, 156, 12),
                         Danger = Color.FromArgb(200, 50, 60),
-                        Warning = Color.FromArgb(202, 138, 4),
+                        Warning = Color.FromArgb(190, 130, 4),
                         Text = Color.FromArgb(60, 40, 50),
-                        TextMuted = Color.FromArgb(150, 110, 128),
+                        TextMuted = Color.FromArgb(138, 101, 118),
                         InputBackground = Color.FromArgb(255, 250, 252)
                     };
 
@@ -520,9 +520,9 @@ namespace AutoClicker.UI
                         AccentHover = Color.FromArgb(8, 130, 158),
                         Success = Color.FromArgb(13, 148, 90),
                         Danger = Color.FromArgb(200, 50, 50),
-                        Warning = Color.FromArgb(200, 130, 4),
+                        Warning = Color.FromArgb(196, 127, 4),
                         Text = Color.FromArgb(28, 44, 54),
-                        TextMuted = Color.FromArgb(96, 120, 136),
+                        TextMuted = Color.FromArgb(92, 115, 131),
                         InputBackground = Color.FromArgb(248, 252, 254)
                     };
 
@@ -596,9 +596,9 @@ namespace AutoClicker.UI
                         AccentHover = Color.FromArgb(219, 39, 119),
                         Success = Color.FromArgb(13, 148, 90),
                         Danger = Color.FromArgb(220, 38, 38),
-                        Warning = Color.FromArgb(217, 119, 6),
+                        Warning = Color.FromArgb(213, 117, 6),
                         Text = Color.FromArgb(60, 36, 54),
-                        TextMuted = Color.FromArgb(150, 116, 140),
+                        TextMuted = Color.FromArgb(134, 103, 125),
                         InputBackground = Color.FromArgb(255, 251, 255)
                     };
 
@@ -706,13 +706,13 @@ namespace AutoClicker.UI
                         Surface = Color.FromArgb(255, 250, 246),
                         Surface2 = Color.FromArgb(250, 238, 230),
                         Border = Color.FromArgb(238, 220, 208),
-                        Accent = Color.FromArgb(244, 114, 94),
+                        Accent = Color.FromArgb(227, 106, 87),
                         AccentHover = Color.FromArgb(234, 88, 66),
                         Success = Color.FromArgb(22, 150, 110),
                         Danger = Color.FromArgb(220, 38, 38),
-                        Warning = Color.FromArgb(202, 138, 4),
+                        Warning = Color.FromArgb(192, 131, 4),
                         Text = Color.FromArgb(74, 52, 44),
-                        TextMuted = Color.FromArgb(160, 128, 116),
+                        TextMuted = Color.FromArgb(134, 108, 97),
                         InputBackground = Color.FromArgb(255, 250, 246)
                     };
 

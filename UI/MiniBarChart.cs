@@ -89,7 +89,11 @@ namespace AutoClicker.UI
                 if (idx >= 0)
                 {
                     string lab = idx < _labels.Length && !string.IsNullOrEmpty(_labels[idx]) ? _labels[idx] + ": " : "";
-                    _tip.Show($"{lab}{_values[idx]:N0} clicks", this, e.X + 12, e.Y + 8, 1200);
+                    // Interpolated straight into the tooltip, so "clicks" was English in
+                    // every language — on the one piece of text that exists to explain
+                    // what a bar means.
+                    _tip.Show(lab + Utils.Localization.F("{0} clicks", _values[idx].ToString("N0")),
+                              this, e.X + 12, e.Y + 8, 1200);
                 }
                 Invalidate();
             }
@@ -150,7 +154,11 @@ namespace AutoClicker.UI
 
             // Max scale label on the right.
             using (var scaleBrush = new SolidBrush(MutedColor))
-            using (var scaleFont = new Font("Segoe UI", 7.5f, FontStyle.Regular))
+            // 8.5pt, not 7.5. The chart's scale and axis labels were the smallest text in
+            // the app — about ten pixels tall at 100% scaling — and they carry real
+            // numbers, not decoration. 8.5 is the size the rest of the interface already
+            // uses for secondary text, so this reads as consistent rather than enlarged.
+            using (var scaleFont = new Font("Segoe UI", 8.5f, FontStyle.Regular))
             {
                 g.DrawString(max.ToString("N0"), scaleFont, scaleBrush, plot.Right + 4, plot.Top - 4);
             }
@@ -160,7 +168,7 @@ namespace AutoClicker.UI
             float barW = Math.Max(2f, slot * 0.7f);
             float barRadius = Math.Min(4f, barW / 2f);
 
-            using (var labelFont = new Font("Segoe UI", 7.5f, FontStyle.Regular))
+            using (var labelFont = new Font("Segoe UI", 8.5f, FontStyle.Regular))
             using (var labelBrush = new SolidBrush(MutedColor))
             using (var trackBrush = new SolidBrush(Color.FromArgb(28, MutedColor)))
             {

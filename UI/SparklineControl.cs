@@ -94,7 +94,7 @@ namespace AutoClicker.UI
             // Horizontal grid lines + right-side scale labels.
             using (var gridPen = new Pen(GridColor))
             using (var scaleBrush = new SolidBrush(MutedColor))
-            using (var scaleFont = new Font("Segoe UI", 7.5f, FontStyle.Regular))
+            using (var scaleFont = new Font("Segoe UI", 8.5f, FontStyle.Regular))
             {
                 int lines = 4;
                 for (int i = 0; i <= lines; i++)

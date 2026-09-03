@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -332,7 +332,7 @@ namespace AutoClicker.UI
             int chipRight = left;
             if (!string.IsNullOrEmpty(CategoryText))
             {
-                using (var chipFont = new Font("Segoe UI", 7.5f, FontStyle.Bold))
+                using (var chipFont = new Font("Segoe UI", 8.5f, FontStyle.Bold))
                 {
                     Size sz = TextRenderer.MeasureText(CategoryText, chipFont,
                         new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
@@ -365,7 +365,7 @@ namespace AutoClicker.UI
 
             if (!string.IsNullOrEmpty(UsageText))
             {
-                using (var useFont = new Font("Segoe UI", 7.5f))
+                using (var useFont = new Font("Segoe UI", 8.5f))
                 {
                     TextRenderer.DrawText(g, UsageText, useFont,
                         new Rectangle(chipRight, footerY, Math.Max(10, card.Right - 14 - chipRight), 18),
