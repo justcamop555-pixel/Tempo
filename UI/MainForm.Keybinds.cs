@@ -299,6 +299,7 @@ namespace AutoClicker.UI
             var resetBtn = UiFactory.Button(Utils.Localization.T("Reset to defaults"), 172, rowY, 150, 32);
             resetBtn.Click += OnResetKeybinds;
 
+
             _keybindsDirtyLabel = new Label
             {
                 Text = Utils.Localization.T("\u25CF Unsaved changes \u2014 click Save Keybinds"),
@@ -477,6 +478,20 @@ namespace AutoClicker.UI
 
                 y += rowHeight;
             }
+
+            // Twenty-six actions, and on a typical setup five or six are bound. Finding
+            // out which means scrolling the whole list, and there was no way to get the
+            // answer out of Tempo at all — for a note, a guide, or a bug report.
+            //
+            // BELOW the list, not up in the button row. That row looks like it has a gap
+            // to the right of the interval step, and it has not: the "Unsaved changes"
+            // notice lives there, hidden until you edit something, and its width moves
+            // with the translation. A button at x=530 overlapped it in all six languages
+            // — which the layout suite caught and I had not, because at rest the notice
+            // is invisible. Down here the space is the page's own, after the last row.
+            _copyKeybindsBtn = UiFactory.Button(Utils.Localization.T("Copy keybinds"), 12, y + 12, 190, 32);
+            _copyKeybindsBtn.Click += OnCopyKeybinds;
+            page.Controls.Add(_copyKeybindsBtn);
 
             _tabs.TabPages.Add(page);
         }
@@ -683,6 +698,67 @@ namespace AutoClicker.UI
             if (_keybindsDirtyLabel != null)
             {
                 _keybindsDirtyLabel.Visible = false;
+            }
+        }
+
+        private Button _copyKeybindsBtn;
+
+        /// <summary>
+        /// Puts the current bindings on the clipboard as plain text.
+        ///
+        /// Reads the CONTROLS, not the saved settings, so what you copy is what you are
+        /// looking at — including edits you have not pressed Save on yet. The unbound
+        /// actions are listed too, under their own heading: "what could I bind?" is the
+        /// other half of the question, and the answer is otherwise a scroll through
+        /// twenty-six rows.
+        /// </summary>
+        private void OnCopyKeybinds(object sender, EventArgs e)
+        {
+            try
+            {
+                var bound = new System.Text.StringBuilder();
+                var free = new System.Text.StringBuilder();
+                int boundCount = 0, total = 0;
+
+                foreach (HotkeyActions.Info info in HotkeyActions.All)
+                {
+                    total++;
+                    string label = Utils.Localization.T(info.Label);
+                    HotkeyDefinition hk = _bindingControls.TryGetValue(info.Action, out var ctl)
+                        ? ctl.Hotkey
+                        : null;
+
+                    if (hk != null && hk.IsValid)
+                    {
+                        boundCount++;
+                        bound.Append("  ").Append(label.PadRight(28)).Append(hk.ToString()).AppendLine();
+                    }
+                    else
+                    {
+                        free.Append("  ").Append(label).AppendLine();
+                    }
+                }
+
+                var sb = new System.Text.StringBuilder();
+                sb.Append("Tempo ").Append(Utils.AppVersion.Stamp)
+                  .Append("  ·  ").Append(Utils.Localization.T("Keybinds")).AppendLine();
+                sb.AppendLine(Utils.Localization.F("{0} of {1} actions bound", boundCount, total));
+                sb.AppendLine();
+                if (boundCount > 0) { sb.Append(bound); }
+                if (free.Length > 0)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine(Utils.Localization.T("Not bound:"));
+                    sb.Append(free);
+                }
+
+                Clipboard.SetText(sb.ToString());
+                ConfirmOnButton(_copyKeybindsBtn);
+            }
+            catch (Exception ex)
+            {
+                Utils.Logger.Swallow("OnCopyKeybinds", ex);
+                ShowWarning(Utils.Localization.T("Could not copy the keybinds to the clipboard."));
             }
         }
 

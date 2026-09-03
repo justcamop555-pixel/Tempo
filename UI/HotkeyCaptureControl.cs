@@ -219,10 +219,17 @@ namespace AutoClicker.UI
                 return;
             }
 
+            // Same treatment HotkeyDefinition.ToString gives a SAVED binding: the
+            // modifiers read as they are printed on that language's keyboard — Strg,
+            // Maiusc, Maj — and Win is left alone because it is a logo, not a word.
+            //
+            // These four were raw English here, so the live preview said "Ctrl + …"
+            // while the field it was about to fill said "Strg + …". The same key
+            // rendered two ways depending on whether you were still holding it.
             var sb = new System.Text.StringBuilder();
-            if (ctrl) { sb.Append("Ctrl + "); }
-            if (alt) { sb.Append("Alt + "); }
-            if (shift) { sb.Append("Shift + "); }
+            if (ctrl) { sb.Append(Utils.Localization.T("Ctrl")).Append(" + "); }
+            if (alt) { sb.Append(Utils.Localization.T("Alt")).Append(" + "); }
+            if (shift) { sb.Append(Utils.Localization.T("Shift")).Append(" + "); }
             if (win) { sb.Append("Win + "); }
             sb.Append('…');
             Text = sb.ToString();
