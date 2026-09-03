@@ -4673,7 +4673,11 @@ namespace AutoClicker.UI
                 // StatusStripRenderer): flat surface, accent top hairline, slim
                 // separators, and small painted stat icons.
                 Padding = new Padding(8, 0, 14, 0),
-                SizingGrip = true
+                SizingGrip = true,
+                // StatusStrip defaults this to FALSE, unlike ToolStrip. Without it the
+                // ToolTipText set on every segment is simply never shown, which is why
+                // the strip could explain none of its eleven figures.
+                ShowItemToolTips = true
             };
             // A coloured dot precedes the state word and recolours with the engine
             // state (green running / amber paused / grey idle) for an at-a-glance read.
@@ -4722,6 +4726,7 @@ namespace AutoClicker.UI
             _statusStrip.Items.Add(new ToolStripSeparator());
             _statusStrip.Items.Add(_statusElapsed);
 
+            WireStatusBarShortcuts();
             StyleStatusBar();
 
             // Order matters for docking: status strip bottom first, header top
@@ -6894,6 +6899,55 @@ namespace AutoClicker.UI
         /// theme hues. Called at build time and on every theme change. Disposes the
         /// previous icon bitmaps so repeated theme switches don't leak them.
         /// </summary>
+        /// <summary>
+        /// Says what each status-bar figure means, and makes the ones that stand for a
+        /// tab open it.
+        ///
+        /// The strip is the most-read part of the window and had no tooltips at all: it
+        /// showed eleven numbers and never explained one of them. "Up 0:01:30" is Tempo's
+        /// own uptime, not the run's, and "CPU 1.1%" is Tempo's share rather than the
+        /// machine's — both easy to read as the opposite of what they are.
+        ///
+        /// The click targets are the segments that are already a summary of a tab, so the
+        /// obvious gesture does the obvious thing instead of nothing.
+        /// </summary>
+        private void WireStatusBarShortcuts()
+        {
+            void Tip(ToolStripItem item, string text)
+            {
+                if (item == null) { return; }
+                item.ToolTipText = Utils.Localization.T(text);
+            }
+
+            void Opens(ToolStripItem item, string tabKey, string text)
+            {
+                if (item == null) { return; }
+                item.ToolTipText = Utils.Localization.T(text);
+                item.Click += (s, e) =>
+                {
+                    try
+                    {
+                        int i = IndexOfTabKey(tabKey);
+                        if (i >= 0 && _tabs != null) { _tabs.SelectedIndex = i; }
+                    }
+                    catch (Exception ex) { Utils.Logger.Swallow("StatusBarShortcut", ex); }
+                };
+            }
+
+            Tip(_statusState, "What Tempo is doing right now, and the hotkey that changes it.");
+            Opens(_statusProfile, "profiles", "The active profile. Click to open the Profiles tab.");
+            Opens(_statusHint, "clicker", "How the clicker is set up. Click to open the Clicker tab.");
+
+            Tip(_statusCpu, "How much processor Tempo itself is using — not the whole machine.");
+            Tip(_statusRam, "Memory Tempo itself is using.");
+            Tip(_statusUptime, "How long Tempo has been running — not the length of the current run.");
+
+            Opens(_statusClicks, "statistics", "Clicks this session. Click to open Statistics.");
+            Opens(_statusCps, "statistics", "Clicks per second right now. Click to open Statistics.");
+            Opens(_statusPeak, "statistics", "The highest clicks per second this session. Click to open Statistics.");
+            Opens(_statusElapsed, "statistics", "Time spent clicking this session. Click to open Statistics.");
+        }
+
         private void StyleStatusBar()
         {
             if (_statusStrip == null)
@@ -10520,15 +10574,18 @@ namespace AutoClicker.UI
                             // Engine active-time, so the countdown freezes while paused.
                             int leftS = _lastRunDurationSeconds - (int)(_engine.RunActiveMs / 1000);
                             if (leftS < 0) leftS = 0;
-                            timeLeft = " \u00b7 " + leftS + " s left";
+                            timeLeft = " \u00b7 " + Utils.Localization.F("{0} s left", leftS);
                         }
                         else if (_lastRunTargetClicks > 0)
                         {
                             timeLeft = " \u00b7 " + _engine.RunClicks.ToString("N0") +
                                        " / " + _lastRunTargetClicks.ToString("N0");
                         }
-                        string verb = runMode == ClickMode.HoldToClick ? "Clicking (hold)" : "Clicking";
-                        text = verb + rate + timeLeft + (hk.Length > 0 ? (" \u2014 " + hk + " to stop") : "");
+                        string verb = runMode == ClickMode.HoldToClick
+                            ? Localization.T("Clicking (hold)")
+                            : Localization.T("Clicking");
+                        text = verb + rate + timeLeft
+                               + (hk.Length > 0 ? (" \u2014 " + Localization.F("{0} to stop", hk)) : "");
                     }
                     else
                     {
@@ -10654,7 +10711,8 @@ namespace AutoClicker.UI
                         double cps = _statistics.GetCurrentCps();
                         if (remaining > 0 && cps > 0.1)
                         {
-                            text += "  \u00B7  ~" + FormatDuration(TimeSpan.FromSeconds(remaining / cps)) + " left";
+                            text += "  \u00B7  " + Utils.Localization.F("~{0} left",
+                                FormatDuration(TimeSpan.FromSeconds(remaining / cps)));
                         }
                     }
                 }
@@ -10663,7 +10721,8 @@ namespace AutoClicker.UI
                     long targetMs = (long)_repeatDurationNum.Value * 1000L;
                     long elapsedMs = _engine.RunActiveMs;
                     long remainMs = Math.Max(0, targetMs - elapsedMs);
-                    text = "\u25B8 remaining " + FormatDuration(TimeSpan.FromMilliseconds(remainMs));
+                    text = "\u25B8 " + Utils.Localization.F("{0} remaining",
+                        FormatDuration(TimeSpan.FromMilliseconds(remainMs)));
                     if (targetMs > 0)
                     {
                         int pct = (int)Math.Round(100.0 * Math.Min(elapsedMs, targetMs) / targetMs);
@@ -10693,8 +10752,14 @@ namespace AutoClicker.UI
         {
             try
             {
+                // Translated. These three words are the mode picker's own labels and have
+                // been in every language table since that combo existed — this summary
+                // just never asked for them, so the segment describing what the clicker
+                // is set up to do read in English whatever language you chose.
                 ClickMode mode = GetSelectedMode();
-                string modeName = mode == ClickMode.HoldToClick ? "Hold" : mode == ClickMode.Burst ? "Burst" : "Interval";
+                string modeName = mode == ClickMode.HoldToClick ? Localization.T("Hold")
+                                : mode == ClickMode.Burst ? Localization.T("Burst")
+                                : Localization.T("Interval");
                 string s = modeName;
                 if (_speedTrack != null)
                 {
@@ -10719,7 +10784,10 @@ namespace AutoClicker.UI
                 else if (_posMultiRadio != null && _posMultiRadio.Checked)
                 {
                     int pts = _pointsList != null ? _pointsList.Items.Count : 0;
-                    s += " \u00b7 multi-point" + (pts > 0 ? " (" + pts + ")" : "");
+                    // The tab's own name, so the summary and the tab agree in every
+                    // language rather than only in English.
+                    s += " \u00b7 " + Localization.T("Multi-Point")
+                         + (pts > 0 ? " (" + pts + ")" : "");
                 }
                 return s;
             }
@@ -10777,7 +10845,8 @@ namespace AutoClicker.UI
                 Utils.Localization.T("Clicks:") + " " + _statistics.SessionClicks.ToString("N0"));
             SetStatusText(_statusCps,
                 Utils.Localization.T("CPS:") + $" {_statistics.GetCurrentCps():0.0}");
-            SetStatusText(_statusPeak, $"Peak {_statistics.PeakClicksPerSecond:0.0}");
+            SetStatusText(_statusPeak,
+                Utils.Localization.T("Peak:") + $" {_statistics.PeakClicksPerSecond:0.0}");
             SetStatusText(_statusElapsed,
                 Utils.Localization.T("Time:") + " " + FormatDuration(_statistics.GetElapsed()));
 
