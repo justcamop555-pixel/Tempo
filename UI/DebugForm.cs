@@ -602,6 +602,17 @@ namespace AutoClicker.UI
                 text = "(stats error: " + ex.Message + ")";
             }
 
+            // Say so when a tag has been seen that the colour table has no entry for.
+            // Those lines render as ordinary Info and look like everything else, so the
+            // table falling behind the code is otherwise invisible — which is exactly how
+            // [Macros], [history] and [sidebar] went uncoloured without anyone noticing.
+            string[] unknown = UncategorisedTags();
+            if (unknown.Length > 0)
+            {
+                text += Environment.NewLine + "⚠ uncategorised log tags (shown without a colour): ["
+                        + string.Join("], [", unknown) + "]";
+            }
+
             if (text == _lastStats)
             {
                 return;                     // unchanged — don't destroy the user's selection
@@ -770,6 +781,12 @@ namespace AutoClicker.UI
                 // second cursor, which is a clicking automaton of its own.
                 ["Clicker"] = LineKind.Clicker,
                 ["Macro"] = LineKind.Clicker,
+                // [Macros] as well as [Macro]: the ENGINE tags its lines with the
+                // singular (MacroPlayer, MacroRecorder) and the TAB with the plural
+                // (quick-play slots, delete, the recycle bin). Only the singular was
+                // mapped, so every line about deleting or restoring a macro — exactly
+                // what you open this window to check — rendered uncoloured.
+                ["Macros"] = LineKind.Clicker,
                 ["2nd cursor"] = LineKind.Clicker,
 
                 // Script steps run a whole external process, with failure modes nothing
@@ -795,10 +812,17 @@ namespace AutoClicker.UI
                 // setting or a profile did not survive a restart.
                 ["Integrity"] = LineKind.System,
                 ["Store"] = LineKind.System,
+                // [history] is the session-history store trimming or failing to write —
+                // the other half of "where did my data go", alongside [Store].
+                ["history"] = LineKind.System,
                 ["Welcome"] = LineKind.System,
                 ["Settings"] = LineKind.System,
                 ["Profiles"] = LineKind.System,
                 ["UI"] = LineKind.System,
+                // [sidebar] is the nav-rail table check. It only ever warns, so severity
+                // colours it anyway — but relying on that would leave it uncoloured the
+                // day someone adds an Info line under the same tag.
+                ["sidebar"] = LineKind.System,
                 ["window"] = LineKind.System,
                 ["perf"] = LineKind.System,
                 ["Debug"] = LineKind.System,
@@ -813,6 +837,33 @@ namespace AutoClicker.UI
         /// Classifies a log line into a subsystem category. Severity wins first (an
         /// ERROR is red whatever it is about), then the subsystem tag the line carries.
         /// </summary>
+        /// <summary>
+        /// Tags seen in the log that TagKinds has no entry for.
+        ///
+        /// The table above claims to be exhaustive, and it was not: [Macros], [history]
+        /// and [sidebar] were all being written and none of them had a colour. Nothing
+        /// announced that — an uncategorised line looks like an ordinary one, so the only
+        /// way to notice was to go looking. This records them instead, and the stats
+        /// header says so, which turns "the table quietly fell behind the code" into
+        /// something the window reports about itself.
+        ///
+        /// Deliberately not logged: this runs from the classifier while rendering the
+        /// log, and writing a log line from there would feed the thing it is reading.
+        /// </summary>
+        private static readonly System.Collections.Generic.SortedSet<string> UnknownTags =
+            new System.Collections.Generic.SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly object UnknownTagsSync = new object();
+
+        internal static string[] UncategorisedTags()
+        {
+            lock (UnknownTagsSync)
+            {
+                var a = new string[UnknownTags.Count];
+                UnknownTags.CopyTo(a);
+                return a;
+            }
+        }
+
         private static LineKind KindOf(string line)
         {
             if (line.IndexOf("[ERROR]", StringComparison.Ordinal) >= 0) { return LineKind.Error; }
@@ -822,6 +873,16 @@ namespace AutoClicker.UI
             if (tag != null && TagKinds.TryGetValue(tag, out LineKind kind))
             {
                 return kind;
+            }
+
+            if (tag != null)
+            {
+                lock (UnknownTagsSync)
+                {
+                    // Capped: Logger.Swallow builds its tag from a method name, so a
+                    // pathological run could otherwise add one entry per call site.
+                    if (UnknownTags.Count < 40) { UnknownTags.Add(tag); }
+                }
             }
 
             // No tag, or one added since this table was last reviewed. Every
