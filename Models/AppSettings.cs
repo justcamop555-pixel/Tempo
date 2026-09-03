@@ -99,6 +99,17 @@ namespace AutoClicker.Models
         public long IntegrityBaselineSize { get; set; } = 0;
         public string IntegrityBaselineUtc { get; set; } = "";
 
+        /// <summary>
+        /// Which BUILD the baseline was taken from ("260903-0217"), or "" for a baseline
+        /// recorded before build IDs existed.
+        ///
+        /// The version alone cannot identify a build — every test build of 1.0.320 calls
+        /// itself 1.0.320 — so when the hash stops matching, this is what turns "the file
+        /// was replaced or edited" into a sentence naming which build you had and which
+        /// you have now.
+        /// </summary>
+        public string IntegrityBaselineBuild { get; set; } = "";
+
         // The exact file GitHub has confirmed as the published build. Remembered so the
         // question is asked once per distinct executable rather than once per launch —
         // the answer cannot change while the bytes do not.

@@ -128,5 +128,45 @@ $text = [regex]::Replace($text, $reChannel, { param($m) $m.Groups['a'].Value + $
 # rest of the project's .cs files carry a BOM too.
 [System.IO.File]::WriteAllText($Path, $text, (New-Object System.Text.UTF8Encoding $true))
 
+# ── developer build history ──────────────────────────────────────────────────
+#
+# One line per build, appended forever. This is a DEVELOPER record and nothing in
+# the app reads it: it answers "when did I make 260902-2123, and was it a release?"
+# and "which build did I hand to someone last Tuesday?" -- questions the shipped
+# app has no way to answer, because a build only knows about itself.
+#
+# Lives under bin\ so it is git-ignored along with everything else there, and it
+# survives publish.cmd's clean, which removes bin\publish\<rid>, obj and
+# bin\Release but not bin\ itself. publish.cmd appends the exe hash and size to
+# the same row once the build has actually produced one.
+try {
+    $histDir = Join-Path (Split-Path -Parent $Path) '..'
+    $histDir = Join-Path (Resolve-Path $histDir).Path 'bin'
+    if (-not (Test-Path -LiteralPath $histDir)) {
+        New-Item -ItemType Directory -Path $histDir -Force | Out-Null
+    }
+    $hist = Join-Path $histDir 'build-history.tsv'
+    if (-not (Test-Path -LiteralPath $hist)) {
+        Set-Content -LiteralPath $hist -Encoding utf8 `
+            -Value "stamped_utc`tbuild_id`tchannel`tversion`tsha256`tbytes"
+    }
+
+    # The version comes from the csproj, so the row says what this build IS rather
+    # than what the tooling assumed.
+    $ver = ''
+    $csproj = Join-Path (Split-Path -Parent (Split-Path -Parent $Path)) 'AutoClicker.csproj'
+    if (Test-Path -LiteralPath $csproj) {
+        $m = Select-String -LiteralPath $csproj -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+        if ($m) { $ver = $m.Matches[0].Groups[1].Value }
+    }
+
+    Add-Content -LiteralPath $hist -Encoding utf8 `
+        -Value ("{0}`t{1}`t{2}`t{3}`t`t" -f $stamp, $id, $Channel, $ver)
+}
+catch {
+    # A history line is a convenience, never a reason to fail a build.
+    Write-Host "note: could not append to build-history.tsv ($_)"
+}
+
 # stdout is the contract with publish.cmd — the ID, alone, nothing else.
 Write-Output $id

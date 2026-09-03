@@ -41,22 +41,93 @@ namespace AutoClicker.Utils
         private static readonly int[] IconFrameSizes = { 16, 20, 24, 32, 40, 48, 64, 128, 256 };
 
         /// <summary>
+        /// The part of <paramref name="src"/> that actually has ink in it, or the whole
+        /// image when it has no alpha channel or is blank.
+        ///
+        /// Logos are usually PNGs with generous transparent padding — art on a square
+        /// canvas, the mark filling perhaps half of it. Fitted whole, that padding is
+        /// scaled down with everything else, and at 16px in a title bar the visible mark
+        /// ends up a handful of pixels across. Trimming first means the icon is the LOGO,
+        /// not the logo plus its margins.
+        ///
+        /// Alpha only: a mark on an opaque white card is a deliberate design, and
+        /// guessing a background colour to trim would be a good way to eat a real border.
+        /// </summary>
+        private static Rectangle InkedBounds(Bitmap src)
+        {
+            var whole = new Rectangle(0, 0, src.Width, src.Height);
+            if (!Image.IsAlphaPixelFormat(src.PixelFormat)) { return whole; }
+
+            System.Drawing.Imaging.BitmapData data = null;
+            try
+            {
+                data = src.LockBits(whole, System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                int minX = src.Width, minY = src.Height, maxX = -1, maxY = -1;
+
+                // Copied a row at a time through Marshal rather than read through a
+                // pointer: this is the only place in Tempo that would want /unsafe, and
+                // turning it on for the whole assembly to save a per-row memcpy on an
+                // image the user picks once is a poor trade.
+                var row = new byte[data.Stride];
+                for (int y = 0; y < src.Height; y++)
+                {
+                    System.Runtime.InteropServices.Marshal.Copy(
+                        data.Scan0 + y * data.Stride, row, 0, data.Stride);
+
+                    for (int x = 0; x < src.Width; x++)
+                    {
+                        // Alpha is the 4th byte of each BGRA pixel. 8/255 rather than 0,
+                        // so a faint anti-aliased halo does not count as ink.
+                        if (row[x * 4 + 3] > 8)
+                        {
+                            if (x < minX) { minX = x; }
+                            if (x > maxX) { maxX = x; }
+                            if (y < minY) { minY = y; }
+                            if (y > maxY) { maxY = y; }
+                        }
+                    }
+                }
+                if (maxX < minX || maxY < minY) { return whole; }   // fully transparent
+                return Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
+            }
+            catch { return whole; }
+            finally
+            {
+                if (data != null) { try { src.UnlockBits(data); } catch { } }
+            }
+        }
+
+        /// <summary>
         /// Draws <paramref name="src"/> centred on a square transparent canvas of
         /// <paramref name="size"/> px, keeping its aspect ratio so a wide or tall picture
-        /// is letterboxed rather than stretched into the box.
+        /// is letterboxed rather than stretched into the box. Transparent margins are
+        /// trimmed first, so the mark fills the icon.
         /// </summary>
         private static Bitmap RenderSquare(Image src, int size)
         {
+            // Fit the INKED part, not the file. See InkedBounds.
+            Rectangle ink = src is Bitmap bmp
+                ? InkedBounds(bmp)
+                : new Rectangle(0, 0, src.Width, src.Height);
+            if (ink.Width <= 0 || ink.Height <= 0)
+            {
+                ink = new Rectangle(0, 0, src.Width, src.Height);
+            }
+
             var square = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
             using (var g = Graphics.FromImage(square))
             {
                 g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                 g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
 
-                double scale = Math.Min((double)size / src.Width, (double)size / src.Height);
-                int w = Math.Max(1, (int)Math.Round(src.Width * scale));
-                int h = Math.Max(1, (int)Math.Round(src.Height * scale));
-                g.DrawImage(src, (size - w) / 2, (size - h) / 2, w, h);
+                double scale = Math.Min((double)size / ink.Width, (double)size / ink.Height);
+                int w = Math.Max(1, (int)Math.Round(ink.Width * scale));
+                int h = Math.Max(1, (int)Math.Round(ink.Height * scale));
+                g.DrawImage(src,
+                    new Rectangle((size - w) / 2, (size - h) / 2, w, h),
+                    ink,
+                    GraphicsUnit.Pixel);
             }
             return square;
         }

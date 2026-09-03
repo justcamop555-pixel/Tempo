@@ -23,6 +23,7 @@ REM                  Intended for scripted/automated runs.
 REM     /open        Open the output folder when done (skips the question).
 REM     /noprompt    Never ask anything; same prompts policy as /ci but keeps
 REM                  the colourful output.
+REM     /history     Show the developer build history and exit.
 REM     /official    Mark this build as an official RELEASE. Without it every
 REM                  build is stamped "test", and the app says so on screen.
 REM                  The build NUMBER increases either way, on every publish.
@@ -96,6 +97,7 @@ if /i "%ARG%"=="/ci"        set "OPT_CI=1"       & goto :nextArg
 if /i "%ARG%"=="/open"      set "OPT_OPEN=1"     & goto :nextArg
 if /i "%ARG%"=="/noprompt"  set "OPT_NOPROMPT=1" & goto :nextArg
 if /i "%ARG%"=="/official"  set "OPT_OFFICIAL=1" & goto :nextArg
+if /i "%ARG%"=="/history"   goto :history
 REM Anything that doesn't start with a slash is treated as the runtime ID.
 set "FIRSTCHAR=%ARG:~0,1%"
 if "%FIRSTCHAR%"=="/" (
@@ -620,6 +622,12 @@ REM ===========================================================================
 REM  PHASE 6 of 7  -  Package: installer bundle, checksums, release notes
 REM ===========================================================================
 echo.
+REM  Fill in this build's hash and size in the developer history. Never fatal:
+REM  a missing history line must not fail a build that otherwise succeeded.
+if defined BUILDNO if defined SHA (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%record-build.ps1" -Id !BUILDNO! -Sha %SHA% -Bytes %SIZE% >nul 2>&1
+)
+
 echo  %C_STEP%[6/7]%C_RESET% Packaging ...
 echo        %C_DIM%Bundling the installer, uninstaller, checksums and release notes into the setup zip.%C_RESET%
 set "TP6=%TIME: =0%"
@@ -823,6 +831,13 @@ exit /b 0
 REM ===========================================================================
 REM  Help screen
 REM ===========================================================================
+:history
+REM  Developer build history. Nothing in the shipped app reads this - it answers
+REM  "when did I make that build, and was it a release?", which a build cannot
+REM  answer about anything but itself.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%record-build.ps1" -Show 20
+endlocal & exit /b 0
+
 :help
 echo.
 echo   TEMPO  -  publish.cmd
@@ -850,6 +865,7 @@ echo     /ci         Plain output: no banner, no spinner, no prompts.
 echo     /open       Open the output folder when done.
 echo     /noprompt   Never ask anything ^(keeps colourful output^).
 echo     /official   Mark as an official RELEASE ^(default is a test build^).
+echo     /history    Show the developer build history and exit.
 echo.
 echo   EXAMPLES
 echo     publish.cmd

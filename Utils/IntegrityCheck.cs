@@ -249,9 +249,44 @@ namespace AutoClicker.Utils
 
             if (!string.Equals(baseHash, scan.Hash, StringComparison.OrdinalIgnoreCase))
             {
+                // Name the BUILDS, not just the version.
+                //
+                // "the file was replaced or edited" is true and nearly useless: the
+                // version is unchanged by definition here, so it identifies nothing. The
+                // build ID does — and it separates the two cases that look identical
+                // otherwise. A DIFFERENT build id is a different build of the same
+                // version, which is what swapping a test build over an installed one
+                // looks like. The SAME build id with different bytes is the alarming one:
+                // those bytes should be identical and are not.
+                //
+                // The verdict does not change either way. A build id is compiled into the
+                // file it describes, so anyone who can edit the bytes can edit the id;
+                // treating "the id differs" as innocent would hand them the check. This
+                // only makes the message say what actually happened.
+                string wasBuild = settings.IntegrityBaselineBuild;
+                string nowBuild = BuildInfo.Id;
+                string detail;
+                if (!string.IsNullOrEmpty(wasBuild) && !string.IsNullOrEmpty(nowBuild))
+                {
+                    detail = string.Equals(wasBuild, nowBuild, StringComparison.OrdinalIgnoreCase)
+                        ? " — same build (" + nowBuild + "), different bytes"
+                        : " — was build " + wasBuild + ", now build " + nowBuild;
+                }
+                else
+                {
+                    detail = " — the file was replaced or edited";
+                }
+
+                // A test build is expected to change on every publish, so say so rather
+                // than letting a developer's own routine read as an attack.
+                if (BuildInfo.IsTest && !BuildInfo.IsUnstamped)
+                {
+                    detail += ". This is a test build, which changes on every publish.";
+                }
+
                 return Set(IntegrityVerdict.Modified,
-                    "Tempo.exe has changed since it was installed, but its version is still " +
-                    version + " — the file was replaced or edited");
+                    "Tempo.exe has changed since it was installed, but its version is still "
+                    + version + detail);
             }
 
             return Set(IntegrityVerdict.Ok, "matches the copy installed on " +
@@ -428,6 +463,7 @@ namespace AutoClicker.Utils
             settings.IntegrityBaselineHash = scan.Hash;
             settings.IntegrityBaselineSize = scan.Length;
             settings.IntegrityBaselineUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm 'UTC'");
+            settings.IntegrityBaselineBuild = BuildInfo.Id ?? "";
             ExpectedHash = scan.Hash;
         }
 
