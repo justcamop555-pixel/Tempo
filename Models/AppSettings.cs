@@ -51,6 +51,18 @@ namespace AutoClicker.Models
         public bool CustomNotifications { get; set; } = true;
 
         /// <summary>
+        /// Whether an animated custom logo (a GIF) plays in the title bar, the taskbar,
+        /// the tray and the header, or is shown as a still first frame.
+        ///
+        /// On by default: someone who chooses an animated logo has already said what they
+        /// want. The switch exists because an icon that moves in the corner of the eye is
+        /// exactly the kind of thing that is delightful to one person and distracting to
+        /// the next, and because it is the honest off-ramp for anyone who would otherwise
+        /// have to convert their logo to a PNG to make it stop.
+        /// </summary>
+        public bool AnimateCustomLogo { get; set; } = true;
+
+        /// <summary>
         /// Capture OTHER apps' Windows notifications and re-show them in Tempo's
         /// style. Requires Windows to grant notification-listener access (asked
         /// once); availability depends on the Windows build. Off by default.
@@ -721,6 +733,42 @@ namespace AutoClicker.Models
                     b.Hotkey = new HotkeyDefinition();
                 }
             }
+        }
+
+        /// <summary>
+        /// Writes the three legacy single-hotkey properties back from <see cref="Bindings"/>.
+        ///
+        /// Those properties are the pre-Bindings format. Nothing in Tempo READS them any
+        /// more — <see cref="EnsureBindings"/> migrates them in once, on the first load of
+        /// an old settings file, and after that they were never touched again. So they sat
+        /// in settings.json frozen at whatever the keys were before the migration,
+        /// disagreeing with the real bindings forever, for two bad outcomes:
+        ///
+        ///   * anyone reading settings.json — the user, a support question, a backup diff —
+        ///     sees a Start/Pick/Emergency key that is simply not the one in use;
+        ///   * they are still the migration fallback. Should Bindings ever come back empty
+        ///     from a partial or hand-edited file, EnsureBindings would seed from these and
+        ///     silently RESURRECT keys the user changed long ago.
+        ///
+        /// Keeping them current costs three assignments per save and fixes both. It also
+        /// keeps the downgrade path honest: an older Tempo reading this file gets the keys
+        /// the user actually has, which matters here because moving between a test build
+        /// and the release is routine.
+        /// </summary>
+        public void SyncLegacyHotkeys()
+        {
+            // Populate first, ALWAYS. Deriving from an empty Bindings would hand back the
+            // unbound fallback for all three and blank the legacy properties — destroying
+            // the very migration source they exist to be. That is reachable: SettingsManager
+            // returns CreateDefault() un-ensured when there is no file or it cannot be read,
+            // and MainForm saves immediately after load for the language auto-detect, so the
+            // first save of a fresh install would run this against a Bindings list that
+            // nothing had seeded yet. EnsureBindings is idempotent and cheap.
+            EnsureBindings();
+
+            StartStopHotkey = HotkeyFor(HotkeyAction.ToggleStartStop).Clone();
+            PickPositionHotkey = HotkeyFor(HotkeyAction.PickPosition).Clone();
+            EmergencyStopHotkey = HotkeyFor(HotkeyAction.EmergencyStop).Clone();
         }
 
         private void ApplyLegacy(HotkeyAction action, HotkeyDefinition legacy)

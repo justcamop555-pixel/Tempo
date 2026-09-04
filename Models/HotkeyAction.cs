@@ -138,7 +138,19 @@ namespace AutoClicker.Models
         public static string LabelFor(HotkeyAction action)
         {
             Info info = Get(action);
-            return info != null ? info.Label : action.ToString();
+            if (info == null)
+            {
+                // No label to translate — the enum name is a last resort, not a string.
+                return action.ToString();
+            }
+
+            // Translated here rather than at the call sites. Both callers splice this into
+            // a sentence that IS translated — the conflict dialog ("F9: Start / Stop
+            // (toggle) / Pause / Resume") and the hook-fallback warning — so a raw label
+            // put English action names inside Spanish, French and German prose, while the
+            // very same labels appeared correctly translated in the table right above.
+            // The labels are already in all five tables; only this path skipped the lookup.
+            return Utils.Localization.T(info.Label);
         }
 
         /// <summary>Builds the factory default set of bindings.</summary>

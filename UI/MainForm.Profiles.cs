@@ -622,6 +622,27 @@ namespace AutoClicker.UI
 
                 ApplyHotkeysFromSettings();
                 HighlightConflicts();
+
+                // Say it out loud if the profile's keys now collide with something.
+                //
+                // ApplyTo MERGES — deliberately, because replacing wholesale would unbind
+                // actions an older snapshot never knew about. But that means an incomplete
+                // snapshot can leave the outgoing profile's key on an action it does not
+                // mention, colliding with one it does restore. Profile activation is the
+                // only path that can create a duplicate — the tab's auto-clear is
+                // suppressed here on purpose — and it was the only one that never checked,
+                // so the sole signal was a recoloured row on a tab the user is not looking
+                // at, while the health panel blamed "another program" for a key Tempo
+                // itself had taken twice.
+                string clashes = FindConflicts();
+                if (!string.IsNullOrEmpty(clashes))
+                {
+                    ShowWarning(Utils.Localization.F(
+                        "The keybinds saved with “{0}” collide with combinations already in use. "
+                        + "Windows cannot reserve one combination twice, so a single press will run BOTH "
+                        + "actions:\n\n{1}", profile.Name, clashes));
+                }
+
                 Logger.Info("[profiles] applied the keybinds saved with '" + profile.Name + "'.");
             }
 

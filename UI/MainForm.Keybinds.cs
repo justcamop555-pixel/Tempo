@@ -40,6 +40,12 @@ namespace AutoClicker.UI
             }
         }
         private Label _keybindsRouteLabel;
+
+        /// <summary>Says which action just lost its key to the combination you assigned.</summary>
+        private Label _keybindsTakenLabel;
+
+        /// <summary>Warns when the hold trigger is the button the clicker itself clicks.</summary>
+        private Label _keybindsHoldLabel;
         private Button _keybindsSaveBtn;
         private bool _suppressKeybindEvents;
         private NumericUpDown _intervalStepNum;
@@ -132,6 +138,15 @@ namespace AutoClicker.UI
                 {
                     continue;
                 }
+                // A combination Tempo itself already holds is not "another program" —
+                // it used to be reported as one, which sent people hunting for a
+                // conflicting app that did not exist. The clash is listed by the
+                // conflict warning instead, which now names both actions.
+                if (_hotkeys.SelfCollisionOwner(binding.Action.ToString()) != null)
+                {
+                    continue;
+                }
+
                 if (_hotkeys.RouteOf(binding.Action.ToString()) ==
                     Native.GlobalHotkeyManager.BindRoute.HookFallback)
                 {
@@ -380,6 +395,35 @@ namespace AutoClicker.UI
             page.Controls.Add(_keybindsTraySleepLabel);
             RefreshTraySleepNotice();
 
+            // "That key was taken from another action." Assigning a combination already
+            // in use clears the previous owner — the right resolution, but it used to
+            // happen in complete silence, and the evidence was one row out of 26 going
+            // blank somewhere off-screen. Its own reserved band, rowY+174 .. rowY+204,
+            // for the same reason as the notices above: a label that appears and shoves
+            // every keybind row down the page is worse than the news it carries.
+            _keybindsTakenLabel = new Label
+            {
+                AutoSize = false,
+                Location = new Point(12, rowY + 174),
+                Size = new Size(760, 30),
+                Font = new Font("Segoe UI", 8.5f),
+                ForeColor = _theme.Accent,
+                Visible = false
+            };
+            page.Controls.Add(_keybindsTakenLabel);
+
+            // Its own reserved band, rowY+206 .. rowY+236.
+            _keybindsHoldLabel = new Label
+            {
+                AutoSize = false,
+                Location = new Point(12, rowY + 206),
+                Size = new Size(760, 30),
+                Font = new Font("Segoe UI", 8.5f),
+                ForeColor = _theme.Warning,
+                Visible = false
+            };
+            page.Controls.Add(_keybindsHoldLabel);
+
             var stepCaption = UiFactory.Caption("Interval step (ms):", 344, rowY + 1);
             stepCaption.AutoSize = false;
             // Sized to the TEXT, not a round 250. The old fixed box was more than twice
@@ -413,7 +457,7 @@ namespace AutoClicker.UI
             //   rowY+80   .. rowY+96    detected keyboard
             //   rowY+98   .. rowY+130   "Windows refused this hotkey" notice (also reserved)
             //   rowY+132  .. rowY+170   "Sleep in tray pauses these" notice (also reserved)
-            int headerY = rowY + 178;
+            int headerY = rowY + 244;   // + the taken-from and hold-conflict bands above
             page.Controls.Add(UiFactory.Label(Utils.Localization.T("Action"), 16, headerY, FontStyle.Bold));
             page.Controls.Add(UiFactory.Label(Utils.Localization.T("Hotkey"), 300, headerY, FontStyle.Bold));
 
@@ -434,6 +478,12 @@ namespace AutoClicker.UI
                     Top = y,
                     Width = 220,
                     Font = UiFactory.BodyFont
+                };
+
+                // Silence the live hotkeys while this field is listening.
+                capture.PauseHotkeys = paused =>
+                {
+                    if (_hotkeys != null) { _hotkeys.DeliveryPaused = paused; }
                 };
 
                 _bindingControls[info.Action] = capture;
@@ -538,7 +588,12 @@ namespace AutoClicker.UI
             var changed = sender as HotkeyCaptureControl;
             if (changed != null && changed.Hotkey != null && changed.Hotkey.IsValid)
             {
-                string combo = changed.Hotkey.ToDisplayString();
+                // Compared structurally, not by the translated display string: this
+                // branch DESTROYS the other binding, so a false match caused by two key
+                // names translating alike would silently throw away the user's work.
+                // See HotkeyDefinition.ToIdentityString.
+                HotkeyDefinition combo = changed.Hotkey;
+                var taken = new List<HotkeyAction>();
                 _suppressKeybindEvents = true;
                 try
                 {
@@ -547,16 +602,41 @@ namespace AutoClicker.UI
                         HotkeyCaptureControl other = pair.Value;
                         if (!ReferenceEquals(other, changed) &&
                             other.Hotkey != null && other.Hotkey.IsValid &&
-                            string.Equals(other.Hotkey.ToDisplayString(), combo,
-                                StringComparison.OrdinalIgnoreCase))
+                            other.Hotkey.SameCombination(combo))
                         {
                             other.Hotkey = new HotkeyDefinition(); // the previous owner loses the key
+                            taken.Add(pair.Key);
                         }
                     }
                 }
                 finally
                 {
                     _suppressKeybindEvents = false;
+                }
+
+                // SAY SO. Clearing the previous owner is the right resolution, but doing
+                // it in silence is not: the only trace was one of 26 rows — almost
+                // certainly scrolled out of view — quietly reading "(none)", and after
+                // the clear there is no clash left for the colouring to show. A stray
+                // keypress into the wrong field could therefore unbind Emergency stop
+                // with nothing on screen to say it had happened, and nothing to undo it.
+                if (taken.Count > 0 && _keybindsTakenLabel != null)
+                {
+                    var names = new List<string>();
+                    foreach (HotkeyAction a in taken)
+                    {
+                        names.Add(HotkeyActions.LabelFor(a));
+                    }
+                    names.Sort(StringComparer.CurrentCultureIgnoreCase);
+
+                    _keybindsTakenLabel.Text = Utils.Localization.F(
+                        "{0} was already used by {1} — that action is now unbound.",
+                        combo.ToDisplayString(), string.Join(", ", names.ToArray()));
+                    _keybindsTakenLabel.Visible = true;
+                }
+                else if (_keybindsTakenLabel != null)
+                {
+                    _keybindsTakenLabel.Visible = false;
                 }
             }
 
@@ -594,7 +674,8 @@ namespace AutoClicker.UI
                     continue;
                 }
 
-                string key = hk.ToDisplayString();
+                // Identity, not display text — see HotkeyDefinition.ToIdentityString.
+                string key = hk.ToIdentityString();
                 counts[key] = counts.TryGetValue(key, out int c) ? c + 1 : 1;
             }
 
@@ -606,8 +687,13 @@ namespace AutoClicker.UI
                 HotkeyDefinition hk = pair.Value.Hotkey;
                 bool valid = hk != null && hk.IsValid;
                 bool isClash = valid &&
-                               counts.TryGetValue(hk.ToDisplayString(), out int c) && c > 1;
-                bool isRisky = valid && hk.IsRiskyBareKey;
+                               counts.TryGetValue(hk.ToIdentityString(), out int c) && c > 1;
+                // Mouse buttons count too. A bare Middle/X1/X2 is swallowed system-wide
+                // exactly like a bare letter is, but IsRiskyBareKey returns false for
+                // every mouse binding — so the one case where a user is MOST likely to
+                // break something they use constantly (middle-click, Back) was the one
+                // case that got no amber field and no warning at all.
+                bool isRisky = valid && (hk.IsRiskyBareKey || hk.IsRiskyBareMouseButton);
 
                 if (isRisky && !isClash)
                 {
@@ -619,6 +705,27 @@ namespace AutoClicker.UI
                     isClash ? BlendColors(normal, _theme.Danger, 0.35)
                   : isRisky ? BlendColors(normal, _theme.Warning, 0.30)
                   : normal;
+            }
+
+            // Hold mode + a trigger that is the button being clicked = a hold that can
+            // never be released, so PollHoldKey refuses it. Say why here, where the
+            // binding is chosen, rather than leaving hold mode mysteriously inert.
+            HotkeyDefinition holdTrigger =
+                _bindingControls.TryGetValue(HotkeyAction.ToggleStartStop, out HotkeyCaptureControl tc)
+                    ? tc.Hotkey : null;
+            if (_keybindsHoldLabel != null)
+            {
+                bool fights = holdTrigger != null && holdTrigger.IsValid &&
+                              HoldTriggerFightsClickButton(holdTrigger);
+                if (fights)
+                {
+                    _keybindsHoldLabel.Text = Utils.Localization.F(
+                        "⚠ {0} is also the button the clicker clicks. In Hold-to-click mode Tempo's own "
+                        + "clicks would keep that button reading as held, so the hold could never be "
+                        + "released — it will not engage. Pick a different button, or a side button.",
+                        holdTrigger.ToDisplayString());
+                }
+                _keybindsHoldLabel.Visible = fights;
             }
 
             if (_keybindsWarnLabel != null)
@@ -683,9 +790,18 @@ namespace AutoClicker.UI
 
             if (!string.IsNullOrEmpty(conflicts))
             {
+                // NOT "only one action will respond" — that was wrong, and wrong in the
+                // direction that matters. Windows will not reserve one combination twice,
+                // so the second action falls back to the low-level keyboard hook, which
+                // still sees the keystroke WM_HOTKEY consumed: one press then runs BOTH
+                // actions. Telling someone only one would fire meant the surprising case
+                // (start clicking AND emergency-stop on one key) read as a Tempo bug with
+                // no explanation. Mouse bindings really do stop at the first match, but
+                // the keyboard case is the common one.
                 ShowWarning(
                     Utils.Localization.F("Keybinds saved, but some combinations are used more than once. "
-                    + "Only one action per combination will respond:\n\n{0}", conflicts));
+                    + "Windows cannot reserve one combination twice, so a single press will run BOTH "
+                    + "actions:\n\n{0}", conflicts));
             }
             else
             {
@@ -799,10 +915,13 @@ namespace AutoClicker.UI
                     continue;
                 }
 
-                string key = hk.ToDisplayString();
+                // Grouped by identity, reported by display string: the first is the
+                // question "same combination?", the second is what the user reads.
+                // See HotkeyDefinition.ToIdentityString for why they must not be one.
+                string key = hk.ToIdentityString();
                 if (seen.TryGetValue(key, out HotkeyAction other))
                 {
-                    clashes.Add($"  • {key}: {HotkeyActions.LabelFor(other)} / {HotkeyActions.LabelFor(pair.Key)}");
+                    clashes.Add($"  • {hk.ToDisplayString()}: {HotkeyActions.LabelFor(other)} / {HotkeyActions.LabelFor(pair.Key)}");
                 }
                 else
                 {

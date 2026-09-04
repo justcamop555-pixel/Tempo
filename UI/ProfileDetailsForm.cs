@@ -311,11 +311,25 @@ namespace AutoClicker.UI
                 profile.Icon = form.Glyph;
                 profile.ColorTagArgb = form.ColorArgb;
 
-                // Capture on tick, clear on untick. Re-ticking an already-ticked box
-                // re-captures, which is what "Save" should mean for a live snapshot.
-                profile.Keybinds = form.CaptureKeybinds && live != null
-                    ? ProfileKeybinds.CaptureFrom(live)
-                    : null;
+                // Capture on an actual TICK, clear on untick, and otherwise leave the
+                // stored snapshot alone.
+                //
+                // The box is pre-ticked whenever a snapshot already exists, and a CheckBox
+                // cannot tell "the user just ticked this" from "it was already on" — so
+                // re-capturing whenever it is ticked meant every OK overwrote the profile's
+                // saved keys with whatever is live NOW. Opening "Edit details…" to change
+                // an emoji, on a different profile, silently replaced the keybinds this
+                // profile existed to restore. Nothing warned, the dialog never showed what
+                // was stored, and there was no way back.
+                bool hadSnapshot = profile.Keybinds != null;
+                if (!form.CaptureKeybinds)
+                {
+                    profile.Keybinds = null;              // explicitly turned off
+                }
+                else if (!hadSnapshot && live != null)
+                {
+                    profile.Keybinds = ProfileKeybinds.CaptureFrom(live);   // newly ticked
+                }
                 profile.AppSettings = form.CaptureAppearance && live != null
                     ? ProfileAppSettings.CaptureFrom(live)
                     : null;

@@ -57,7 +57,8 @@ namespace AutoClicker.UI
             // are real and do matter: a card is laid out at whatever height it declares.
 
             // ── Appearance ─────────────────────────────────────────────────────
-            var appearance = UiFactory.Group(Localization.T("Appearance"), 12, 12, 696, 168, CardIcon.Star);
+            // 200, not 168: the logo row below was added under the background-image row.
+            var appearance = UiFactory.Group(Localization.T("Appearance"), 12, 12, 696, 200, CardIcon.Star);
             appearance.Controls.Add(UiFactory.Label("Theme", 16, 32));
             _themeCombo = UiFactory.Combo(120, 29, 150,
                 "Dark", "Light", "Midnight", "Ocean", "Forest", "Crimson",
@@ -184,6 +185,21 @@ namespace AutoClicker.UI
             _bgGifNote.AutoSize = false;
             _bgGifNote.Width = 150;
             appearance.Controls.Add(_bgGifNote);
+
+            // The custom logo (About → "Choose image…") accepts a GIF, and a GIF now
+            // plays wherever the logo appears. This is the off switch, and — more useful
+            // day to day — the only place that says out loud what the logo is doing:
+            // "3.2s loop" means it worked, "still image" means the file has one frame.
+            _animateLogoCheck = UiFactory.Check("Animate my logo", 16, 176);
+            _animateLogoCheck.AutoSize = true;
+            _animateLogoCheck.CheckedChanged += OnAnimateLogoToggled;
+            appearance.Controls.Add(_animateLogoCheck);
+
+            _animateLogoNote = UiFactory.Caption("", 190, 178);
+            _animateLogoNote.AutoSize = false;
+            _animateLogoNote.Width = 496;
+            _animateLogoNote.ForeColor = _theme.TextMuted;
+            appearance.Controls.Add(_animateLogoNote);
 
             // ── Startup & Window ───────────────────────────────────────────────
             var startup = UiFactory.Group(Localization.T("Startup & Window"), 12, 192, 696, 114, CardIcon.Play);
@@ -1035,6 +1051,8 @@ namespace AutoClicker.UI
                 _themeCombo.Enabled = !_settings.FollowSystemTheme;
                 _alwaysOnTopCheck.Checked = _settings.AlwaysOnTop;
                 _customAccentCheck.Checked = _settings.CustomAccentEnabled;
+                _animateLogoCheck.Checked = _settings.AnimateCustomLogo;
+                UpdateAnimateLogoNote();
 
                 int langIndex = (int)_settings.Language;
                 if (langIndex < 0 || langIndex >= _languageCombo.Items.Count) langIndex = 0;
@@ -1326,6 +1344,52 @@ namespace AutoClicker.UI
                 ShowInfo("Window position reset.");
             }
             catch { }
+        }
+
+        private void OnAnimateLogoToggled(object sender, EventArgs e)
+        {
+            if (_suppressSettingsEvents || _settings == null)
+            {
+                return;
+            }
+
+            _settings.AnimateCustomLogo = _animateLogoCheck.Checked;
+
+            // Live, not on restart: SetEnabled rebuilds or tears down the animation, and
+            // the frame event puts the result on the window and the tray immediately.
+            Utils.AnimatedLogo.SetEnabled(_settings.AnimateCustomLogo);
+            RefreshAppIconEverywhere();
+            UpdateAnimateLogoNote();
+        }
+
+        /// <summary>
+        /// Explains what the logo is doing right now — how many frames it has and how long
+        /// the loop runs, or why it is not moving.
+        ///
+        /// The build happens on a background thread, so this is also called from the frame
+        /// event: when the page is drawn the answer is often still "reading the logo…",
+        /// and a note that never resolved would be worse than no note.
+        /// </summary>
+        private void UpdateAnimateLogoNote()
+        {
+            if (_animateLogoNote == null || _animateLogoCheck == null)
+            {
+                return;
+            }
+
+            try
+            {
+                bool haveLogo = Utils.CustomLogo.Exists();
+
+                // Nothing to animate is not the same as "off". Greying the tick with the
+                // reason beside it says the feature exists and where to feed it, instead
+                // of offering a switch that would visibly do nothing.
+                _animateLogoCheck.Enabled = haveLogo;
+                _animateLogoNote.Text = haveLogo
+                    ? Utils.AnimatedLogo.Status
+                    : Utils.Localization.T("No custom logo — set one in About.");
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("UpdateAnimateLogoNote", ex); }
         }
 
         private void OnCustomAccentToggled(object sender, EventArgs e)

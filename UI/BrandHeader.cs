@@ -568,6 +568,12 @@ namespace AutoClicker.UI
         /// </summary>
         private Image LogoImage()
         {
+            // An animated logo overrides the cache entirely: the frame showing right now
+            // is the answer, and it changes under us between paints. Borrowed, never
+            // disposed — AnimatedLogo owns the frame set.
+            Image frame = Utils.AnimatedLogo.CurrentTile;
+            if (frame != null) { return frame; }
+
             if (_logoTried) { return _logo; }
             _logoTried = true;
             try

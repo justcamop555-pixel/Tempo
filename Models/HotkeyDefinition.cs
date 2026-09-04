@@ -75,6 +75,64 @@ namespace AutoClicker.Models
             return (uint)Key;
         }
 
+        /// <summary>
+        /// A stable identity for the question "are these the same combination?".
+        /// Culture-independent, and never shown to anyone.
+        ///
+        /// <see cref="ToDisplayString"/> must NOT be used for that question, which is what
+        /// the Keybinds tab used to do. That string is deliberately TRANSLATED — it names
+        /// keys as they are printed on the user's own keyboard — and it funnels many
+        /// distinct <see cref="Keys"/> values through a friendly-name table. So two
+        /// different combinations rendering to one identical string is one translation
+        /// away at any time, in any of the six languages, with nothing to catch it.
+        ///
+        /// That would not merely misreport. The tab does not just FLAG a duplicate, it
+        /// clears the other field so the newest binding wins — so a false match silently
+        /// destroys a hotkey the user had deliberately set. Comparing the flags and codes
+        /// underneath cannot drift, whatever a translator does.
+        /// </summary>
+        public string ToIdentityString()
+        {
+            // Fixed-width flags and a tagged trigger, so no combination can spell
+            // another: mouse and keyboard triggers live in separate namespaces, matching
+            // ToDisplayString's rule that Key is ignored once MouseButton is set.
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            return (Control ? "C" : "-")
+                 + (Alt ? "A" : "-")
+                 + (Shift ? "S" : "-")
+                 + (Win ? "W" : "-")
+                 + (IsMouse
+                     ? "|m" + ((int)MouseButton).ToString(inv)
+                     : "|k" + ((int)Key).ToString(inv));
+        }
+
+        /// <summary>
+        /// True when <paramref name="other"/> is the same combination as this one.
+        /// Field-by-field rather than via <see cref="ToIdentityString"/> so a pairwise
+        /// check costs no allocation; the two agree by construction.
+        /// </summary>
+        public bool SameCombination(HotkeyDefinition other)
+        {
+            if (other == null)
+            {
+                return false;
+            }
+
+            if (Control != other.Control || Alt != other.Alt ||
+                Shift != other.Shift || Win != other.Win)
+            {
+                return false;
+            }
+
+            if (MouseButton != other.MouseButton)
+            {
+                return false;
+            }
+
+            // Both mouse: the buttons matched above and Key is not part of the identity.
+            return IsMouse || Key == other.Key;
+        }
+
         public string ToDisplayString()
         {
             if (!IsValid)
@@ -249,6 +307,31 @@ namespace AutoClicker.Models
                     default:
                         return false;
                 }
+            }
+        }
+
+        /// <summary>
+        /// True for a bare mouse binding that Tempo will SWALLOW system-wide.
+        ///
+        /// The keyboard half of this — <see cref="IsRiskyBareKey"/> — has always earned a
+        /// prominent amber warning, and the mouse half had none, because that property
+        /// returns false for every mouse binding on its first line. But
+        /// GlobalHotkeyManager suppresses every match that is not a bare Left/Right, so a
+        /// bare Middle, X1 or X2 genuinely does stop doing its normal job everywhere while
+        /// Tempo runs — middle-click no longer opens links in a new tab, X1 no longer goes
+        /// Back — which is exactly the consequence the amber warning exists to announce.
+        ///
+        /// Bare Left/Right are excluded because the manager deliberately lets those
+        /// through rather than eating ordinary clicking.
+        /// </summary>
+        public bool IsRiskyBareMouseButton
+        {
+            get
+            {
+                if (!IsMouse) { return false; }
+                if (Control || Alt || Shift || Win) { return false; }
+                return MouseButton != HotkeyMouseButton.Left
+                    && MouseButton != HotkeyMouseButton.Right;
             }
         }
 

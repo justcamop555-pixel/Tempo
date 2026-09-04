@@ -202,6 +202,12 @@ namespace AutoClicker.Persistence
 
             try
             {
+                // Mirror the modern bindings into the three legacy hotkey properties before
+                // serializing, so the file can never disagree with itself. Done here rather
+                // than at each of the dozen call sites that mutate bindings: this is the one
+                // place every one of them ends up.
+                settings.SyncLegacyHotkeys();
+
                 string json = JsonSerializer.Serialize(settings, Options);
                 bool ok = PersistenceHelper.WriteAtomic(GetSettingsPath(), json);
                 if (ok)

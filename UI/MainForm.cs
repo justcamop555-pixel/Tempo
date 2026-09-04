@@ -1684,6 +1684,10 @@ namespace AutoClicker.UI
         private Label _notifyStatusLabel;
         private CheckBox _alwaysOnTopCheck;
         private CheckBox _customAccentCheck;
+
+        /// <summary>"Animate my logo", plus the line that says what the logo is doing.</summary>
+        private CheckBox _animateLogoCheck;
+        private Label _animateLogoNote;
         private Button _chooseAccentBtn;
         private Panel _accentSwatch;
         private Panel[] _previewSwatches;
@@ -1704,6 +1708,11 @@ namespace AutoClicker.UI
             _settings = SettingsManager.Load();
             _lifetimeBaseline = _settings.LifetimeClicks;
             Logger.Enabled = _settings.WriteLogFile;
+
+            // Before the first AppIcon.Get(), which is what builds the animation — set it
+            // after and a logo the user has switched off would be rendered in full and
+            // then thrown away.
+            Utils.AnimatedLogo.SetEnabled(_settings.AnimateCustomLogo);
 
             // First run only: match Tempo to the user's Windows display language
             // using the translations already built in (no new languages added).
@@ -3628,7 +3637,15 @@ namespace AutoClicker.UI
                     sb.Append("Logo: ");
                     if (!string.IsNullOrEmpty(custom))
                     {
-                        sb.Append("custom · ").Append(System.IO.Path.GetFileName(custom));
+                        // The animation status too. "My GIF logo isn't moving" has no
+                        // answer from the outside — a still first frame looks exactly
+                        // like a still image — so the reason is stated here.
+                        sb.Append("custom · ").Append(System.IO.Path.GetFileName(custom))
+                          .Append(" · ").Append(Utils.AnimatedLogo.Status);
+                        if (Utils.AnimatedLogo.IsAnimating)
+                        {
+                            sb.Append(" · ANIMATING");
+                        }
                     }
                     else
                     {
@@ -4553,6 +4570,9 @@ namespace AutoClicker.UI
 
             // Follow the custom logo. Without this it only ever reached the header.
             Utils.CustomLogo.Changed += OnCustomLogoChangedRefreshIcon;
+
+            // …and follow it frame by frame when it moves.
+            Utils.AnimatedLogo.FrameChanged += OnLogoFrame;
 
             _tabs = new ModernTabControl
             {
@@ -6508,6 +6528,59 @@ namespace AutoClicker.UI
         {
             try { UiInvoke(RefreshAppIconEverywhere); }
             catch (Exception ex) { Utils.Logger.Swallow("CustomLogo.Changed", ex); }
+        }
+
+        /// <summary>
+        /// Puts the animated logo's current frame on everything that shows an icon.
+        ///
+        /// Application.OpenForms rather than just this window: a logo animating in the
+        /// title bar while the About dialog that set it sits frozen on frame 0 is worse
+        /// than not animating at all. The list is normally one to three forms, and each
+        /// assignment is a WM_SETICON — cheap enough to do per frame, which is why the
+        /// frame rate is capped in AnimatedLogo rather than here.
+        /// </summary>
+        private void OnLogoFrame()
+        {
+            if (_shuttingDown || IsDisposed) { return; }
+
+            Icon frame = Utils.AnimatedLogo.CurrentIcon;
+            if (frame == null) { return; }
+
+            try
+            {
+                if (_trayIcon != null) { _trayIcon.Icon = frame; }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("OnLogoFrame(tray)", ex); }
+
+            try
+            {
+                FormCollection open = Application.OpenForms;
+                for (int i = 0; i < open.Count; i++)
+                {
+                    Form f = open[i];
+                    // ShowIcon false means the form deliberately has no title-bar icon
+                    // (the splash, the toasts); setting one would put it back.
+                    if (f == null || f.IsDisposed || !f.ShowIcon) { continue; }
+                    try { f.Icon = frame; } catch { }
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("OnLogoFrame(forms)", ex); }
+
+            // The header tile draws a bitmap, not an icon, so it animates separately.
+            try { _header?.Invalidate(); } catch { }
+
+            // The Settings note starts out as "reading the logo…" and has to be told when
+            // that finished. Only while Settings can actually be seen — this runs at the
+            // frame rate, and a label nobody is looking at is not worth a text compare.
+            try
+            {
+                if (_animateLogoNote != null && _animateLogoNote.IsHandleCreated
+                    && _animateLogoNote.Text != Utils.AnimatedLogo.Status)
+                {
+                    UpdateAnimateLogoNote();
+                }
+            }
+            catch { }
         }
 
         private void RefreshAppIconEverywhere()
@@ -10060,6 +10133,23 @@ namespace AutoClicker.UI
                     continue;
                 }
 
+                // An action THIS build does not know must never reserve a key. Bindings
+                // are stored by enum NUMBER, so a settings file or profile written by a
+                // build with more actions deserializes cleanly here and survives
+                // EnsureBindings (which only adds what is missing). Registering it took
+                // the combination away from every other program to run a DispatchAction
+                // case that does not exist — a key that did nothing, anywhere, with no
+                // row in this tab to find it by.
+                //
+                // Guarded at the registration site rather than pruned from the list on
+                // purpose: deleting it would destroy a newer build's binding on a
+                // downgrade, and moving between the test build and the release is
+                // routine here. Ignored now, honoured again by the build that owns it.
+                if (HotkeyActions.Get(binding.Action) == null)
+                {
+                    continue;
+                }
+
                 // Asleep: bind only what cannot start input.
                 if (sleepingInTray && !SurvivesTraySleep(binding.Action))
                 {
@@ -10196,6 +10286,46 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>
+        /// True when the hold trigger is the same physical mouse button the clicker
+        /// clicks — the combination that would hold itself down. Left/Right/Middle only:
+        /// X1 and X2 are not click targets, so they can never collide this way.
+        /// </summary>
+        internal bool HoldTriggerFightsClickButton(Models.HotkeyDefinition toggle)
+        {
+            if (toggle == null || !toggle.IsMouse)
+            {
+                return false;
+            }
+
+            // Read the combo directly rather than BuildProfileFromUi(): this runs on the
+            // 15 ms hold poll, and allocating a whole ClickProfile 66 times a second to
+            // learn one index would be a poor trade in the app's most timing-sensitive
+            // loop. Same source, same mapping the engine uses.
+            if (_buttonCombo == null || _buttonCombo.SelectedIndex < 0)
+            {
+                return false;
+            }
+
+            // A keystroke target cannot hold a mouse button down; only a click can.
+            if (_buttonCombo.SelectedIndex == KeyTargetIndex)
+            {
+                return false;
+            }
+
+            switch ((Models.MouseButtonType)_buttonCombo.SelectedIndex)
+            {
+                case Models.MouseButtonType.Left:
+                    return toggle.MouseButton == Models.HotkeyMouseButton.Left;
+                case Models.MouseButtonType.Right:
+                    return toggle.MouseButton == Models.HotkeyMouseButton.Right;
+                case Models.MouseButtonType.Middle:
+                    return toggle.MouseButton == Models.HotkeyMouseButton.Middle;
+                default:
+                    return false;
+            }
+        }
+
         private void PollHoldKey()
         {
             if (_traySleepActive)
@@ -10213,6 +10343,26 @@ namespace AutoClicker.UI
             int vk = toggle.IsMouse ? MouseButtonVk(toggle.MouseButton) : (int)toggle.Key;
             if (vk == 0)
             {
+                return;
+            }
+
+            // Refuse the one configuration that cannot work: holding a mouse button that
+            // the clicker is also clicking.
+            //
+            // GetAsyncKeyState cannot tell injected input from a finger, and hold mode
+            // deliberately bypasses the hotkey manager (which DOES filter injected events)
+            // so this poll can own the trigger. So once clicking starts, Tempo's own
+            // synthetic presses of that same button keep reading as "still held" — the
+            // hold never releases and the run cannot be stopped by letting go, which is
+            // the only way hold mode is meant to stop. Refusing to engage is kinder than
+            // a runaway; the Keybinds tab explains it.
+            if (toggle.IsMouse && HoldTriggerFightsClickButton(toggle))
+            {
+                if (_holdActive)
+                {
+                    _holdActive = false;
+                    try { _engine.Stop(); } catch { }
+                }
                 return;
             }
 
@@ -12689,6 +12839,8 @@ HookSystemEvents();
             ShutdownStep("profile menu", () => _profileCardMenu?.Dispose());
             ShutdownStep("logo subscription",
                 () => Utils.CustomLogo.Changed -= OnCustomLogoChangedRefreshIcon);
+            ShutdownStep("logo animation",
+                () => Utils.AnimatedLogo.FrameChanged -= OnLogoFrame);
             ShutdownStep("caption transcriber", () => _captionTranscriber?.Dispose());
             ShutdownStep("self-voice guard", () => _selfVoiceGuard?.Dispose());
             try { if (_captionHistoryForm != null) { _captionHistoryForm.Dispose(); } } catch { }

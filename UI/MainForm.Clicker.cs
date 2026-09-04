@@ -1583,6 +1583,24 @@ namespace AutoClicker.UI
                     _header.ProfileText = Localization.T("Profile  •  ") + name;
                 }
                 _settings.LastProfileName = name;
+
+                // A profile's saved keybinds (and appearance) used to follow it only when
+                // it was activated from the Profiles TAB — ApplyProfileExtras had exactly
+                // one caller. Switching from this dropdown loaded the intervals and the
+                // click settings but left the previous profile's hotkeys registered, so
+                // the app was running one profile's clicking with another's keys and
+                // nothing said so. The Next/Previous-profile HOTKEYS land here too, via
+                // CycleProfile setting SelectedIndex, so the one switch a user cannot
+                // watch happening was also the one that silently desynced.
+                //
+                // Safe to do here: this handler returns early on _suppressProfileEvents,
+                // which every programmatic combo change sets, so it runs only for a real
+                // user switch or that hotkey cycle.
+                ApplyProfileExtras(profile);
+
+                // ApplyProfileExtras writes the bindings into _settings and LastProfileName
+                // changed above; neither survives a restart unless it is written down.
+                try { SettingsManager.Save(_settings); } catch { }
             }
         }
 

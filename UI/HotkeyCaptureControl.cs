@@ -179,16 +179,29 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>
+        /// Told to pause and resume global hotkey delivery while this field is capturing.
+        /// Set by the Keybinds tab; null elsewhere, so the control stays standalone.
+        /// </summary>
+        public Action<bool> PauseHotkeys { get; set; }
+
         protected override void OnEnter(EventArgs e)
         {
             base.OnEnter(e);
             ShowListening();
+
+            // Stop the bound hotkeys firing while we are listening. Otherwise pressing
+            // the combination you want to CHANGE also performs its action — and for a
+            // mouse binding it was worse than noise: the hook consumed the click before
+            // the field ever saw it, so an already-bound button could never be rebound.
+            try { PauseHotkeys?.Invoke(true); } catch { }
         }
 
         protected override void OnLeave(EventArgs e)
         {
             base.OnLeave(e);
             UpdateText();
+            try { PauseHotkeys?.Invoke(false); } catch { }
         }
 
         /// <summary>The idle prompt shown while the field is focused and waiting.</summary>

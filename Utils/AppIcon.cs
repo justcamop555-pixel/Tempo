@@ -35,6 +35,12 @@ namespace AutoClicker.Utils
         {
             _cached = null;
             _cachedFrom = null;
+
+            // The single point every "the logo changed" path already passes through, so
+            // the animation rebuilds from here rather than subscribing to CustomLogo
+            // separately and racing this for the same work.
+            try { AnimatedLogo.Reload(); }
+            catch (Exception ex) { Logger.Swallow("AnimatedLogo.Reload", ex); }
         }
 
         /// <summary>The sizes baked into a custom logo's icon, smallest first.</summary>
@@ -52,8 +58,13 @@ namespace AutoClicker.Utils
         ///
         /// Alpha only: a mark on an opaque white card is a deliberate design, and
         /// guessing a background colour to trim would be a good way to eat a real border.
+        /// This covers GIFs and palette PNGs as well as it covers 32-bit ones — GDI+
+        /// expands any indexed image carrying transparency to Format32bppArgb on load, so
+        /// the alpha test is true by the time the pixels get here. (Measured, after the
+        /// opposite was assumed: both a transparent GIF and a PNG-8 with a tRNS chunk
+        /// report Format32bppArgb, not Format8bppIndexed.)
         /// </summary>
-        private static Rectangle InkedBounds(Bitmap src)
+        internal static Rectangle InkedBounds(Bitmap src)
         {
             var whole = new Rectangle(0, 0, src.Width, src.Height);
             if (!Image.IsAlphaPixelFormat(src.PixelFormat)) { return whole; }
@@ -110,6 +121,21 @@ namespace AutoClicker.Utils
             Rectangle ink = src is Bitmap bmp
                 ? InkedBounds(bmp)
                 : new Rectangle(0, 0, src.Width, src.Height);
+            return RenderSquare(src, size, ink);
+        }
+
+        /// <summary>
+        /// As <see cref="RenderSquare(Image,int)"/>, but with the source rectangle already
+        /// decided.
+        ///
+        /// An animation needs this. Measuring each frame's ink on its own would re-fit the
+        /// logo every frame, so a mark that shrinks, moves or fades — which is most of
+        /// what a logo animation IS — would be re-centred and re-scaled against its own
+        /// bounding box, and the icon would pump and jitter instead of playing. One
+        /// rectangle, measured across the whole animation, holds the framing still.
+        /// </summary>
+        internal static Bitmap RenderSquare(Image src, int size, Rectangle ink)
+        {
             if (ink.Width <= 0 || ink.Height <= 0)
             {
                 ink = new Rectangle(0, 0, src.Width, src.Height);
@@ -144,10 +170,22 @@ namespace AutoClicker.Utils
         /// </summary>
         private static byte[] BuildIcoBytes(Image src)
         {
-            var frames = new byte[IconFrameSizes.Length][];
-            for (int i = 0; i < IconFrameSizes.Length; i++)
+            Rectangle ink = src is Bitmap bmp
+                ? InkedBounds(bmp)
+                : new Rectangle(0, 0, src.Width, src.Height);
+            return BuildIcoBytes(src, ink, IconFrameSizes);
+        }
+
+        /// <summary>
+        /// As above, with the source rectangle and the frame sizes chosen by the caller.
+        /// An animation packs fewer sizes per frame — see <see cref="AnimatedLogo"/>.
+        /// </summary>
+        internal static byte[] BuildIcoBytes(Image src, Rectangle ink, int[] sizes)
+        {
+            var frames = new byte[sizes.Length][];
+            for (int i = 0; i < sizes.Length; i++)
             {
-                using (var bmp = RenderSquare(src, IconFrameSizes[i]))
+                using (var bmp = RenderSquare(src, sizes[i], ink))
                 using (var ms = new System.IO.MemoryStream())
                 {
                     bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
@@ -167,7 +205,7 @@ namespace AutoClicker.Utils
             for (int i = 0; i < frames.Length; i++)
             {
                 int e = 6 + i * 16;
-                int size = IconFrameSizes[i];
+                int size = sizes[i];
                 ico[e] = (byte)(size >= 256 ? 0 : size);       // 0 means 256 in the ICO format
                 ico[e + 1] = (byte)(size >= 256 ? 0 : size);
                 ico[e + 2] = 0;                                // palette entries (0 = truecolour)
@@ -181,6 +219,21 @@ namespace AutoClicker.Utils
                 offset += frames[i].Length;
             }
             return ico;
+        }
+
+        /// <summary>
+        /// Wraps packed .ico bytes in an Icon.
+        ///
+        /// new Icon(stream) copies what it needs and owns the resulting handle, so unlike
+        /// Icon.FromHandle there is nothing for the caller to destroy by hand — which is
+        /// what makes it safe to build a few hundred of these for an animation.
+        /// </summary>
+        internal static Icon IconFromIcoBytes(byte[] bytes)
+        {
+            using (var ms = new System.IO.MemoryStream(bytes))
+            {
+                return new Icon(ms);
+            }
         }
 
         /// <summary>
@@ -199,12 +252,7 @@ namespace AutoClicker.Utils
                     bytes = BuildIcoBytes(src);
                 }
 
-                // new Icon(stream) copies what it needs and owns the resulting handle, so
-                // unlike Icon.FromHandle there is nothing for us to destroy by hand.
-                using (var ms = new System.IO.MemoryStream(bytes))
-                {
-                    return new Icon(ms);
-                }
+                return IconFromIcoBytes(bytes);
             }
             catch (Exception ex)
             {
@@ -224,6 +272,15 @@ namespace AutoClicker.Utils
             if (!string.Equals(custom ?? "", _cachedFrom ?? "", StringComparison.OrdinalIgnoreCase))
             {
                 Reset();
+            }
+
+            // An animated logo answers with whichever frame is showing, so a window or a
+            // dialog opening mid-animation lands on the same frame as everything already
+            // on screen instead of starting from frame 0.
+            Icon live = AnimatedLogo.CurrentIcon;
+            if (live != null)
+            {
+                return live;
             }
 
             if (_cached != null)
