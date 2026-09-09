@@ -1,13 +1,21 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="./support.js"></script>
-</head>
-<body>
-<x-dc>
-<helmet data-dc-atomics>
+<title>Tempo — a precision auto-clicker for Windows</title>
+<meta name="description" content="A free, open-source precision auto-clicker for Windows. Multi-point sequences, macro record &amp; replay, offline live captions, a Roblox account manager, 38 themes and 6 languages. Runs entirely on your PC — no account, no telemetry.">
+<meta name="theme-color" content="#E7E2D2">
+<link rel="canonical" href="https://justcamop555-pixel.github.io/Tempo/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Tempo">
+<meta property="og:title" content="Tempo — a precision auto-clicker for Windows">
+<meta property="og:description" content="Multi-point sequences, macro record &amp; replay, offline live captions, a Roblox account manager, 38 themes and 6 languages. Free, open source, and entirely local.">
+<meta property="og:url" content="https://justcamop555-pixel.github.io/Tempo/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Tempo — a precision auto-clicker for Windows">
+<meta name="twitter:description" content="Free, open source, entirely local. Multi-point sequences, macros, offline captions and more.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%2317140C'/%3E%3Cpath d='M13 3 5 14h5.2l-.9 7 8-11h-5.2l.9-7z' fill='%23E64014'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -300,11 +308,18 @@ footer{border-top:1.5px solid var(--ink);padding:44px 0 34px}
 #totop.show{opacity:1;transform:none;pointer-events:auto}
 #totop:hover{background:var(--signal);border-color:var(--signal)}
 #totop svg{width:19px;height:19px}
-.reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
-.reveal.in{opacity:1;transform:none}
+/* Scroll-reveal is an ENHANCEMENT and must never be load-bearing. The page is
+   visible by default; only once the script has actually started (it sets .js on
+   <html>) is anything hidden, and any script error removes .js again. This page
+   once shipped with every .reveal stuck at opacity:0 because its script never
+   ran, which left the hero — and most of the site — permanently blank. */
+.reveal{opacity:1;transform:none}
+html.js .reveal{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+html.js .reveal.in{opacity:1;transform:none}
 @media(prefers-reduced-motion:reduce){*{animation:none!important}.reveal{opacity:1;transform:none;transition:none}.pane{animation:none}}
 </style>
-</helmet>
+</head>
+<body>
 <div id="prog"></div>
 <header><div class="wrap nav"><a class="brand" href="#top"><span class="mk"><svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor"></path></svg></span><span class="nm">Tempo</span><span class="tag">TMP·38</span></a><nav class="nav-links" aria-label="Primary"><a href="#panel">Panel</a><a href="#console">Console</a><a href="#capabilities">Capabilities</a><a href="#signal">Signal</a><a href="#install">Install</a><a href="#faq">FAQ</a></nav><div class="nav-meta"><span class="nav-clock"><span class="rec"></span><span id="clock">00:00:00</span></span><a class="btn btn-primary btn-sm" href="https://github.com/justcamop555-pixel/Tempo/releases">Download</a></div></div></header>
 <a id="top"></a>
@@ -327,12 +342,36 @@ footer{border-top:1.5px solid var(--ink);padding:44px 0 34px}
 <section class="sec final"><div class="wrap"><div class="final-card reveal"><span class="scan"></span><span class="corners lite"></span><h2>Set the <span class="sig">pace</span>.</h2><p>Download Tempo and have it clicking in about a minute. Free, forever.</p><a class="btn btn-primary" href="https://github.com/justcamop555-pixel/Tempo/releases" style="border-color:var(--signal)"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"></path><path d="M5 21h14"></path></svg>Download for Windows</a></div></div></section>
 <footer><div class="wrap"><div class="foot"><div class="brand" style="align-items:center"><span class="mk" style="width:28px;height:28px"><svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor"></path></svg></span><span class="nm" style="font-size:1.1rem">Tempo</span><span class="tag">TMP·38</span></div><div class="cols"><a href="https://github.com/justcamop555-pixel/Tempo">GitHub</a><a href="https://github.com/justcamop555-pixel/Tempo/releases">Releases</a><a href="https://github.com/justcamop555-pixel/Tempo/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/justcamop555-pixel/Tempo/issues">Report a bug</a></div></div><p class="colophon">TEMPO · MODEL TMP·38 · PRECISION AUTO-CLICKER FOR WINDOWS 10/11 x64 · Only download from the official GitHub Releases page. Use responsibly — auto-clicking may violate the terms of service of some games and apps, and you are responsible for how you use it. Free &amp; open · runs 100% on your PC · no account · no telemetry.</p></div></footer>
 <button id="totop" type="button" aria-label="Back to top"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m0 0-7 7m7-7 7 7"></path></svg></button>
-</x-dc>
-<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:900},&quot;signalTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;Ember&quot;,&quot;options&quot;:[&quot;Ember&quot;,&quot;Cobalt&quot;,&quot;Forest&quot;,&quot;Crimson&quot;,&quot;Violet&quot;,&quot;Sunset&quot;,&quot;Emerald&quot;,&quot;Sapphire&quot;,&quot;Neon&quot;,&quot;Teal&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Instrument&quot;},&quot;animatedWaveforms&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Instrument&quot;}}">
-class Component extends DCLogic {
-  componentDidMount() {
+<script>
+/* Everything below drives the page: the clock, the oscilloscopes, the console,
+   the tap test, the signal switcher and the scroll reveals.
+
+   It used to be wrapped in `class Component extends DCLogic { componentDidMount(){…} }`
+   inside a <script type="text/x-dc"> — the authoring format of the tool this page
+   was exported from. Browsers do not execute an unknown script type, and DCLogic
+   only existed in a support.js that was never shipped, so NONE of this ran: the
+   clock sat at 00:00:00 and every .reveal element stayed at opacity:0, which is
+   why the hero rendered as an empty band. It is now plain page script. */
+(function () {
+  var docEl = document.documentElement;
+
+  // The reveal animation hides content until told otherwise, so it must never
+  // outlive the script that undoes it. Marking <html> as script-capable is what
+  // arms the hiding at all, and any error disarms it again.
+  function showEverything() {
+    docEl.classList.remove('js');
+    Array.prototype.forEach.call(document.querySelectorAll('.reveal'), function (el) {
+      el.classList.add('in');
+    });
+  }
+  window.addEventListener('error', showEverything);
+
+  try {
+    docEl.classList.add('js');
+
     const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const P = this.props || {};
+    // Defaults that the design tool used to inject as props.
+    const P = { signalTheme: 'Ember', animatedWaveforms: true };
     const wavesOn = (P.animatedWaveforms ?? true) && !REDUCE;
     const $ = (s, r) => (r || document).querySelector(s);
     const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -377,7 +416,7 @@ class Component extends DCLogic {
     // ---- ticker ----
     (() => {
       const t = $('#mq'); if (!t) return;
-      const tags = ['Interval', 'Hold-to-click', 'Burst', 'Multi-point routes', 'Macro record & replay', 'Live statistics', 'Rebindable hotkeys', '38 themes', '6 languages', 'Anti-freeze', 'Randomization', 'CSV export', 'Session goals', 'System tray', 'Launch at startup', '100% local', 'No telemetry', 'Free & open'];
+      const tags = ['Interval', 'Hold-to-click', 'Burst', 'Multi-point routes', 'Macro record & replay', 'Python macro steps', 'Offline live captions', 'Roblox account manager', 'Live statistics', 'Rebindable hotkeys', '38 themes', '6 languages', 'Anti-freeze', 'Randomization', 'CSV export', 'Session goals', 'System tray', 'Launch at startup', '100% local', 'No telemetry', 'Free & open'];
       const build = () => tags.map(x => '<span><b>◆</b> ' + x + '</span>').join('');
       t.innerHTML = build() + build();
     })();
@@ -573,8 +612,12 @@ class Component extends DCLogic {
       const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting && !seen.has(e.target)) { seen.add(e.target); run(e.target); } }), { threshold: .5 });
       $$('[data-count]').forEach(e => io.observe(e));
     })();
+  } catch (err) {
+    // Never let a failure here leave the page blank.
+    showEverything();
+    if (window.console && console.error) { console.error('[tempo site]', err); }
   }
-}
+})();
 </script>
 </body>
 </html>
