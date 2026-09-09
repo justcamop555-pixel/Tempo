@@ -394,6 +394,75 @@ html.js .reveal.in{opacity:1;transform:none}
       for (let y = 0; y <= h; y += step) { ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(w, y + .5); ctx.stroke(); }
     };
 
+    // ── shared animation plumbing ─────────────────────────────────────────
+    // Each canvas loop below used to start at load and then run for the life of
+    // the page, whether or not its canvas was anywhere near the screen. Reading
+    // the hero therefore also paid for the console scope 2,200px further down
+    // and the tap-test scope at 2,700px — and every one of those frames strokes
+    // a shadow-blurred path, which is among the most expensive things a 2D
+    // canvas can do. A loop now runs only while its element is actually on
+    // screen and the tab is in front.
+    let pageVisible = !document.hidden;
+    const loops = [];
+
+    // Drives L.onScreen from whether `el` is anywhere near the viewport, with a
+    // margin so an animation is already up to speed by the time it scrolls in.
+    //
+    // The fallback matters: this gating is the ONLY thing that starts these
+    // animations, so if IntersectionObserver were unavailable or never reported,
+    // gating them would turn "always animating" into "never animating" — a worse
+    // bug than the one being fixed. If no report arrives, it assumes visible and
+    // runs, which is exactly the old behaviour. In a browser where the observer
+    // works it reports within a frame and this never fires.
+    const gate = (L, el) => {
+      loops.push(L);
+      if (!('IntersectionObserver' in window)) { L.onScreen = true; L.start(); return L; }
+      let reported = false;
+      new IntersectionObserver(function (es) {
+        reported = true;
+        L.onScreen = es[es.length - 1].isIntersecting;
+        if (L.onScreen) { L.start(); } else { L.stop(); }
+      }, { rootMargin: '160px 0px' }).observe(el);
+      setTimeout(() => { if (!reported) { L.onScreen = true; L.start(); } }, 1500);
+      return L;
+    };
+
+    const liveLoop = (el, fn) => {
+      const L = { running: false, onScreen: false };
+      const pump = () => { if (!L.running) { return; } fn(); requestAnimationFrame(pump); };
+      L.start = () => {
+        if (L.running || !L.onScreen || !pageVisible) { return; }
+        L.running = true; requestAnimationFrame(pump);
+      };
+      L.stop = () => { L.running = false; };
+      return gate(L, el);
+    };
+
+    // Same idea for the two setIntervals: only tick while their section is on screen.
+    const liveTimer = (el, fn, ms) => {
+      let id = 0;
+      const L = { onScreen: false };
+      L.stop = () => { if (id) { clearInterval(id); id = 0; } };
+      L.start = () => { if (!id && L.onScreen && pageVisible) { id = setInterval(fn, ms); } };
+      return gate(L, el);
+    };
+
+    document.addEventListener('visibilitychange', () => {
+      pageVisible = !document.hidden;
+      loops.forEach(L => { if (pageVisible) { L.start(); } else { L.stop(); } });
+    });
+
+    // One debounced resize fan-out. Three canvases each re-allocated their
+    // backing store (assigning canvas.width/height throws the old one away) on
+    // every single resize event, so dragging a window edge did that dozens of
+    // times a second.
+    const onResize = [];
+    let resizeTimer = 0;
+    addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => { onResize.forEach(f => { try { f(); } catch (e) {} }); }, 120);
+    });
+
     // ---- header clock ----
     (() => {
       const c = $('#clock'); if (!c) return;
@@ -404,12 +473,31 @@ html.js .reveal.in{opacity:1;transform:none}
     // ---- scroll progress + back to top ----
     (() => {
       const prog = $('#prog'), totop = $('#totop');
-      const upd = () => {
-        const h = document.documentElement, max = h.scrollHeight - h.clientHeight;
-        prog.style.transform = 'scaleX(' + (max > 0 ? h.scrollTop / max : 0) + ')';
-        totop.classList.toggle('show', h.scrollTop > 720);
+      if (!prog || !totop) { return; }
+      // scrollHeight/clientHeight force the browser to flush layout, and this
+      // ran on EVERY scroll event, interleaved with a style write — a layout
+      // thrash on a 13,000px page. The page height only changes on resize, so
+      // it is measured there instead, and the write is coalesced into one
+      // animation frame however many scroll events arrive.
+      const h = document.documentElement;
+      let max = 1, queued = false;
+      const measure = () => { max = Math.max(1, h.scrollHeight - h.clientHeight); };
+      const paint = () => {
+        queued = false;
+        const y = h.scrollTop;
+        prog.style.transform = 'scaleX(' + (y / max) + ')';
+        totop.classList.toggle('show', y > 720);
       };
-      addEventListener('scroll', upd, { passive: true }); addEventListener('resize', upd); upd();
+      const upd = () => { if (!queued) { queued = true; requestAnimationFrame(paint); } };
+      addEventListener('scroll', upd, { passive: true });
+      onResize.push(() => { measure(); upd(); });
+      // The window is not the only thing that changes the page height — switching
+      // a tab pane or opening an FAQ row does too, and measuring only on resize
+      // would leave the progress bar scaled against a stale height.
+      if ('ResizeObserver' in window) {
+        new ResizeObserver(() => { measure(); upd(); }).observe(document.body);
+      }
+      measure(); paint();
       totop.addEventListener('click', () => scrollTo({ top: 0, behavior: 'smooth' }));
     })();
 
@@ -427,8 +515,7 @@ html.js .reveal.in{opacity:1;transform:none}
       let dim = fit(cv), buf = [], spike = 0, next = 0, t = 0;
       const seed = () => { if (!buf.length) for (let i = 0; i < Math.ceil(dim.w); i++) buf.push(dim.h / 2); };
       seed();
-      const resize = () => { dim = fit(cv); buf = []; seed(); };
-      addEventListener('resize', resize);
+      onResize.push(() => { dim = fit(cv); buf = []; seed(); });
       const draw = () => {
         const { ctx, w, h } = dim;
         t++;
@@ -442,10 +529,9 @@ html.js .reveal.in{opacity:1;transform:none}
         for (let i = 0; i < buf.length; i++) { const x = w - (buf.length - i); i ? ctx.lineTo(x, buf[i]) : ctx.moveTo(x, buf[i]); }
         ctx.stroke(); ctx.shadowBlur = 0;
         // sweep dot
-        ctx.fillStyle = SIG.css; ctx.beginPath(); ctx.arc(w - 1, buf[buf.length - 1], 3, 0, 7); ctx.fill();
-        if (wavesOn) requestAnimationFrame(draw);
+        ctx.fillStyle = SIG.css; ctx.beginPath(); ctx.arc(w - 1, buf[buf.length - 1], 3, 0, Math.PI * 2); ctx.fill();
       };
-      if (wavesOn) requestAnimationFrame(draw); else { const { ctx, w, h } = dim; gridBg(ctx, w, h, Math.max(14, h / 4)); ctx.strokeStyle = SIG.css; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke(); }
+      if (wavesOn) liveLoop(cv, draw); else { const { ctx, w, h } = dim; gridBg(ctx, w, h, Math.max(14, h / 4)); ctx.strokeStyle = SIG.css; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke(); }
     })();
 
     // ---- hero readout wander ----
@@ -453,7 +539,13 @@ html.js .reveal.in{opacity:1;transform:none}
       const el = $('#cpsBig'); if (!el) return;
       if (REDUCE) { el.textContent = '247'; return; }
       let cur = 160, target = 320;
-      setInterval(() => { if (Math.abs(cur - target) < 8) target = 120 + Math.floor(Math.random() * 760); cur += (target - cur) * 0.16; el.textContent = Math.round(cur); }, 130);
+      // Only wander while it is on screen — it used to keep writing to the DOM
+      // ~8 times a second for the whole visit, hero long since scrolled past.
+      liveTimer(el, () => {
+        if (Math.abs(cur - target) < 8) { target = 120 + Math.floor(Math.random() * 760); }
+        cur += (target - cur) * 0.16;
+        el.textContent = Math.round(cur);
+      }, 130);
     })();
 
     // ---- preview beat bars ----
@@ -481,7 +573,7 @@ html.js .reveal.in{opacity:1;transform:none}
       const fmt = n => Math.round(n).toLocaleString();
       // mini pulse train canvas
       const cv = $('#cfgWave'); let dim = cv ? fit(cv) : null, offset = 0, cps = 20;
-      if (cv) addEventListener('resize', () => { dim = fit(cv); });
+      if (cv) onResize.push(() => { dim = fit(cv); });
       const drawWave = () => {
         if (!cv) return; const { ctx, w, h } = dim;
         gridBg(ctx, w, h, Math.max(12, h / 3));
@@ -494,9 +586,9 @@ html.js .reveal.in{opacity:1;transform:none}
           ctx.lineTo(p, base); ctx.lineTo(p, top); ctx.lineTo(p + 4, top); ctx.lineTo(p + 4, base);
         }
         ctx.lineTo(w, base); ctx.stroke(); ctx.shadowBlur = 0;
-        if (wavesOn) { offset += Math.max(0.4, cps / 90); requestAnimationFrame(drawWave); }
+        if (wavesOn) { offset += Math.max(0.4, cps / 90); }
       };
-      if (cv && wavesOn) requestAnimationFrame(drawWave); else if (cv) drawWave();
+      if (cv && wavesOn) liveLoop(cv, drawWave); else if (cv) drawWave();
       const update = () => {
         cps = +slider.value;
         el.lab.textContent = cps;
@@ -526,7 +618,7 @@ html.js .reveal.in{opacity:1;transform:none}
       const cv = $('#tapWave'); let dim = cv ? fit(cv) : null;
       const seed = () => { if (cv && !buf.length) for (let i = 0; i < Math.ceil(dim.w); i++) buf.push(dim.h / 2); };
       seed();
-      if (cv) addEventListener('resize', () => { dim = fit(cv); buf = []; seed(); });
+      if (cv) onResize.push(() => { dim = fit(cv); buf = []; seed(); });
       pad.addEventListener('pointerdown', e => { e.preventDefault(); times.push(performance.now()); spike = 1; });
       const drawTap = () => {
         if (cv) {
@@ -538,10 +630,11 @@ html.js .reveal.in{opacity:1;transform:none}
           for (let i = 0; i < buf.length; i++) { const x = w - (buf.length - i); i ? ctx.lineTo(x, buf[i]) : ctx.moveTo(x, buf[i]); }
           ctx.stroke(); ctx.shadowBlur = 0;
         }
-        if (wavesOn) requestAnimationFrame(drawTap);
       };
-      if (wavesOn) requestAnimationFrame(drawTap); else if (cv) { const { ctx, w, h } = dim; gridBg(ctx, w, h, Math.max(14, h / 3)); }
-      setInterval(() => {
+      if (wavesOn && cv) { liveLoop(cv, drawTap); } else if (cv) { const { ctx, w, h } = dim; gridBg(ctx, w, h, Math.max(14, h / 3)); }
+      // The meter used to tick ten times a second for the whole visit, updating
+      // three nodes for a test nobody had scrolled to, let alone tapped.
+      liveTimer(pad, () => {
         const t = performance.now(); times = times.filter(x => t - x < 1000);
         const cps = times.length; now.textContent = cps;
         if (cps > best) { best = cps; bestEl.textContent = best; }
@@ -595,8 +688,15 @@ html.js .reveal.in{opacity:1;transform:none}
     // ---- reveal on scroll ----
     (() => {
       if (REDUCE) { $$('.reveal').forEach(e => e.classList.add('in')); return; }
-      const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { threshold: .1, rootMargin: '0px 0px -40px 0px' });
+      let reported = false;
+      const io = new IntersectionObserver(es => { reported = true; es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }); }, { threshold: .1, rootMargin: '0px 0px -40px 0px' });
       $$('.reveal').forEach(e => io.observe(e));
+      // The CSS fallback covers this script FAILING, but not the observer simply
+      // never reporting — which happens in prerender and other non-rendering
+      // contexts. Marking <html> as script-capable has already armed the hiding
+      // by that point, so without this the page renders blank all over again:
+      // exactly the bug this file shipped with. If no report arrives, un-hide.
+      setTimeout(() => { if (!reported) { showEverything(); } }, 1200);
     })();
 
     // ---- animated counters ----
