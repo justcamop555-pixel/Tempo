@@ -39,7 +39,10 @@ namespace AutoClicker.UI
 
             _cycleInfoLabel = UiFactory.Label("", 232, 56, FontStyle.Italic, 9f);
             _cycleInfoLabel.AutoSize = false;
-            _cycleInfoLabel.Width = 360;
+            // 520, not 360: this row is empty all the way to the button column at x≈568,
+            // and at 360 the third clause ("about 600 ms per cycle") was already being
+            // ellipsised away in English, never mind the longer translations.
+            _cycleInfoLabel.Width = 520;
             _cycleInfoLabel.Height = 18;
             _cycleInfoLabel.AutoEllipsis = true;
             _cycleInfoLabel.ForeColor = _theme.TextMuted;
@@ -156,6 +159,25 @@ namespace AutoClicker.UI
             };
             page.Controls.Add(_pointsEmptyHint);
             _pointsEmptyHint.BringToFront();
+
+            // The two things that stop this page's sequence working, given room to say
+            // themselves. They started life spliced onto the cycle summary at the top,
+            // which is 360px of AutoEllipsis label — so the sentence was cut mid-word at
+            // "these points are…" and the half carrying the counts never appeared at all.
+            // Below the list (which ends at y=530) there is nothing but empty page.
+            _pointsWarnLabel = new Label
+            {
+                AutoSize = false,
+                Location = new Point(12, 538),
+                // 64, not 40: two warnings at once need four lines at this width, and the
+                // page below the list is otherwise empty. At 40 the off-screen sentence
+                // lost the half that explains WHY ("a monitor may have been unplugged").
+                Size = new Size(552, 64),
+                Font = new Font("Segoe UI", 8.75f),
+                ForeColor = _theme.WarningText,
+                Visible = false
+            };
+            page.Controls.Add(_pointsWarnLabel);
             page.Controls.Add(_addPointBtn);
             page.Controls.Add(_capturePointBtn);
             page.Controls.Add(_editPointBtn);
@@ -199,9 +221,33 @@ namespace AutoClicker.UI
                 item.Tag = i;
                 item.Checked = p.Enabled;
 
+                // A point that is not on any monitor cannot be clicked. Windows does not
+                // fail the move, it CLAMPS it — measured: asking for (3000, 400) lands the
+                // cursor at (1919, 400), and (-5000, 400) at (0, 400) — so the click still
+                // happens, just somewhere the user never chose. Tempo has warned about this
+                // at start time for a while, in the log and a toast; the list where the
+                // coordinates actually live said nothing, so there was no way to tell WHICH
+                // row was the bad one. (Typically a monitor unplugged since the profile was
+                // saved.)
+                bool offScreen = !Utils.ScreenGeometry.IsOnScreen(p.X, p.Y);
+                if (offScreen)
+                {
+                    // The marker goes on the LABEL column, not X. X is 56px and right
+                    // aligned, so "3000 ⚠" ellipsised to "3000 …" — a marker you cannot
+                    // see is worse than none, because the row still looks ordinary.
+                    item.SubItems[1].Text = "⚠ " + p.Label;
+                    item.ToolTipText = Utils.Localization.T(
+                        "This point is not on any monitor. The click will be clamped to the "
+                        + "screen edge and land somewhere you didn't choose.");
+                }
+
                 if (!p.Enabled)
                 {
                     item.ForeColor = _theme.TextMuted;
+                }
+                else if (offScreen)
+                {
+                    item.ForeColor = _theme.DangerText;
                 }
 
                 _pointsList.Items.Add(item);
@@ -249,6 +295,7 @@ namespace AutoClicker.UI
             }
 
             int enabled = 0;
+            int offScreen = 0;
             long clicksPerCycle = 0;
             long dwellPerCycle = 0;
             foreach (ClickPoint p in _workingPoints)
@@ -258,7 +305,38 @@ namespace AutoClicker.UI
                     enabled++;
                     clicksPerCycle += p.Repeat < 1 ? 1 : p.Repeat;
                     if (p.DwellMilliseconds > 0) dwellPerCycle += p.DwellMilliseconds;
+                    if (!Utils.ScreenGeometry.IsOnScreen(p.X, p.Y)) { offScreen++; }
                 }
+            }
+
+            // This whole page describes a sequence that only runs in Multi-point mode, and
+            // it said so nowhere. With the Clicker tab on "Current cursor position" the
+            // line still read "5 active points · 5 clicks per cycle · about 100 ms per
+            // cycle" — a confident description of something that will not happen. Same
+            // shape as the background-click checkbox that was live in a mode that ignores
+            // it; this is the other half of that page's silence.
+            bool mpSelected = _posMultiRadio != null && _posMultiRadio.Checked;
+            if (_pointsWarnLabel != null)
+            {
+                var lines = new List<string>();
+                if (!mpSelected && _workingPoints.Count > 0)
+                {
+                    lines.Add(Utils.Localization.T(
+                        "⚠ Multi-point isn't selected on the Clicker tab, so these points aren't used."));
+                }
+                if (offScreen > 0)
+                {
+                    lines.Add(offScreen == 1
+                        ? Utils.Localization.T(
+                            "⚠ 1 point is not on any monitor — its click gets clamped to the screen edge. "
+                            + "A monitor may have been unplugged since this profile was saved.")
+                        : Utils.Localization.F(
+                            "⚠ {0} points are not on any monitor — their clicks get clamped to the screen "
+                            + "edge. A monitor may have been unplugged since this profile was saved.",
+                            offScreen));
+                }
+                _pointsWarnLabel.Text = string.Join("\r\n", lines.ToArray());
+                _pointsWarnLabel.Visible = lines.Count > 0;
             }
 
             if (enabled == 0)
@@ -287,8 +365,15 @@ namespace AutoClicker.UI
                     text += "  \u2022  " + Utils.Localization.F("about {0} per cycle",
                         FormatDuration(cycleMs));
                 }
+                // The off-screen tally used to be appended here as well. It is said in full
+                // \u2014 with the reason \u2014 by the warning label under the list, and repeating it
+                // on a single ellipsised line only pushed the cycle time off the end.
                 _cycleInfoLabel.Text = text;
             }
+
+            // The counts line only turns amber for the off-screen tally it now carries;
+            // the mode warning has its own label below the list.
+            _cycleInfoLabel.ForeColor = offScreen > 0 ? _theme.WarningText : _theme.TextMuted;
         }
 
         /// <summary>

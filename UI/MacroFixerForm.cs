@@ -118,7 +118,7 @@ namespace AutoClicker.UI
                 Size = new Size(112, 32),
                 DialogResult = DialogResult.OK,
                 BackColor = theme.Accent,
-                ForeColor = Color.White,
+                ForeColor = theme.OnAccent,
                 FlatStyle = FlatStyle.Flat
             };
             fix.Click += (s, e) =>

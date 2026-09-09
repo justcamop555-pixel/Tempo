@@ -620,6 +620,21 @@ namespace AutoClicker.UI
                     _suppressKeybindEvents = false;
                 }
 
+                // The tab's fields have just been overwritten wholesale, so whatever the
+                // user had half-typed in there is gone — and the "Unsaved changes" banner
+                // was left standing, still promising work that no longer exists. Every
+                // other writer of these controls clears it (LoadKeybindsIntoUi,
+                // OnSaveKeybinds); this one did not, purely because it writes them under
+                // _suppressKeybindEvents and so never reached the handler that does.
+                if (_keybindsDirtyLabel != null)
+                {
+                    _keybindsDirtyLabel.Visible = false;
+                }
+                if (_keybindsTakenLabel != null)
+                {
+                    _keybindsTakenLabel.Visible = false;   // it described the old binding
+                }
+
                 ApplyHotkeysFromSettings();
                 HighlightConflicts();
 

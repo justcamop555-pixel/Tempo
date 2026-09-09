@@ -74,6 +74,87 @@ namespace AutoClicker.Utils
         private static string[] _cachedArgsPrefix;
         private static bool _probed;
 
+        /// <summary>
+        /// An interpreter the USER chose, which beats everything below. "" = decide
+        /// automatically. Set from settings at startup and whenever the picker changes.
+        ///
+        /// This exists because of the failure ScriptStepForm already names: "my script
+        /// does nothing" is nearly always "Tempo is using a different Python from the one
+        /// I installed my packages into". Until now the dialog could only REPORT which
+        /// interpreter had been found — there was no way to point it at the right one.
+        /// </summary>
+        public static volatile string PreferredExe = "";
+
+        /// <summary>
+        /// Raised when <see cref="PreferredExe"/> is changed from the UI, so the choice is
+        /// persisted. MainForm assigns this; the dialogs that offer the picker are two
+        /// levels from any settings object and threading one down to them would be a
+        /// worse trade than one hook here.
+        /// </summary>
+        public static Action<string> PreferredExeChanged;
+
+        /// <summary>Sets the chosen interpreter and lets it be saved. "" = automatic.</summary>
+        public static void ChoosePreferred(string exe)
+        {
+            PreferredExe = exe ?? "";
+            Logger.Info("[Python] interpreter " +
+                        (PreferredExe.Length == 0 ? "choice cleared — deciding automatically."
+                                                  : "set to " + PreferredExe + " by the user."));
+            try { PreferredExeChanged?.Invoke(PreferredExe); } catch { }
+        }
+
+        /// <summary>
+        /// The interpreter that will actually run <paramref name="scriptPath"/>, and why.
+        ///
+        /// Precedence, most specific first:
+        ///   1. the user's explicit choice — they said it, so it wins;
+        ///   2. a virtual environment beside the script (.venv or venv, in the script's
+        ///      own folder or its parent). This is the convention every Python tool
+        ///      follows, and it is the whole reason a script "can't find" a package it
+        ///      plainly has: the packages are in the venv, and Tempo was running the
+        ///      system Python. Logged whenever it is used, so it is never silent magic;
+        ///   3. whatever Probe() found.
+        /// </summary>
+        internal static (string exe, string[] prefix, string why) ResolveFor(string scriptPath)
+        {
+            string chosen = PreferredExe;
+            if (!string.IsNullOrWhiteSpace(chosen))
+            {
+                try
+                {
+                    if (File.Exists(chosen)) { return (chosen, Array.Empty<string>(), "chosen in Settings"); }
+                    Logger.Warn("[Python] the chosen interpreter is missing (" + chosen +
+                                ") — falling back to the one Tempo can find.");
+                }
+                catch (Exception ex) { Logger.Swallow("PythonRunner.ResolveFor(chosen)", ex); }
+            }
+
+            string venv = FindVenvFor(scriptPath);
+            if (venv != null) { return (venv, Array.Empty<string>(), "virtual environment beside the script"); }
+
+            return (InterpreterPath, _cachedArgsPrefix ?? Array.Empty<string>(), "found on this PC");
+        }
+
+        /// <summary>A .venv/venv interpreter beside the script, or null.</summary>
+        private static string FindVenvFor(string scriptPath)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(scriptPath);
+                for (int up = 0; up < 2 && !string.IsNullOrEmpty(dir); up++)
+                {
+                    foreach (string name in new[] { ".venv", "venv" })
+                    {
+                        string exe = Path.Combine(dir, name, "Scripts", "python.exe");
+                        if (File.Exists(exe)) { return exe; }
+                    }
+                    dir = Path.GetDirectoryName(dir);
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("PythonRunner.FindVenvFor", ex); }
+            return null;
+        }
+
         /// <summary>Forgets the cached interpreter, so a fresh install is picked up.</summary>
         internal static void Rescan()
         {
@@ -237,7 +318,7 @@ namespace AutoClicker.Utils
                 return result;
             }
 
-            string exe = InterpreterPath;
+            (string exe, string[] prefix, string why) = ResolveFor(scriptPath);
             if (string.IsNullOrEmpty(exe))
             {
                 result.Outcome = Outcome.NoPython;
@@ -246,6 +327,8 @@ namespace AutoClicker.Utils
                     + "then use Rescan in the script step.");
                 return result;
             }
+            Logger.Info("[Python] running " + Path.GetFileName(scriptPath) + " with " + exe +
+                        " (" + why + ").");
 
             if (timeoutMs < 100) { timeoutMs = 100; }
 
@@ -268,7 +351,10 @@ namespace AutoClicker.Utils
             try
             {
                 var psi = NewStartInfo(exe);
-                foreach (string a in _cachedArgsPrefix ?? Array.Empty<string>()) { psi.ArgumentList.Add(a); }
+                // The prefix belongs to the RESOLVED interpreter ("py" needs -3; a venv's
+                // python.exe must not be handed it), so it comes from ResolveFor rather
+                // than from whatever the last probe happened to cache.
+                foreach (string a in prefix ?? Array.Empty<string>()) { psi.ArgumentList.Add(a); }
                 // -u: unbuffered, so output arrives as it is produced rather than in one
                 // lump when the process exits — which is what makes it useful in Live debug
                 // while a long script is still running.

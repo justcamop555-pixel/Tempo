@@ -244,6 +244,10 @@ namespace AutoClicker.Engine
                 }
 
                 _paused = true;
+                // Stop the statistics clock too. _runClock (below) has always stopped
+                // here; the statistics kept their own wall-clock and did not, so a pause
+                // was filed as time spent clicking. See SessionStatistics._pausedTotal.
+                _statistics.PauseRun();
                 SetState(EngineState.Paused);
             }
 
@@ -261,6 +265,7 @@ namespace AutoClicker.Engine
                 }
 
                 _paused = false;
+                _statistics.ResumeRun();
                 _resyncScheduler = true; // worker resets the schedule baseline
                 SetState(EngineState.Running);
             }

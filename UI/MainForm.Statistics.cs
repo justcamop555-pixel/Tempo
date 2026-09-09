@@ -131,6 +131,25 @@ namespace AutoClicker.UI
             page.Controls.Add(_cardRight);
             page.Controls.Add(_cardMiddle);
 
+            // Say what these numbers actually cover, in the fourth column of this row —
+            // which has always been empty, so it costs no layout.
+            //
+            // Two things were ambiguous and one of them is a genuine surprise. The three
+            // cards accumulate since LAUNCH (only Reset clears them), so they sum to
+            // "Total (Launch)" above and not to "Session Clicks" beside it. And every
+            // figure on this page comes from the click ENGINE alone — SessionStatistics
+            // is only ever written by ClickEngine — so a session spent spam-clicking with
+            // the second cursor, or playing macros that click, shows zero here and reads
+            // as broken statistics rather than as statistics about something else.
+            var byBtnNote = UiFactory.Caption(Utils.Localization.T(
+                "Since launch. These count the auto-clicker only — macro playback and the "
+                + "second cursor's spam-clicks are not included."), c3, row3 + 4);
+            byBtnNote.AutoSize = false;
+            byBtnNote.Width = CardW;
+            byBtnNote.Height = CardH - 4;
+            byBtnNote.ForeColor = _theme.TextMuted;
+            page.Controls.Add(byBtnNote);
+
             // Distribution bar visualising the split.
             int distY = row3 + CardH + 10;
             _distBar = new DistributionBar

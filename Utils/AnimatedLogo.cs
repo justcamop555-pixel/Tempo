@@ -38,6 +38,9 @@ namespace AutoClicker.Utils
             public Icon Icon;      // multi-size: window, taskbar, tray, dialogs
             public Bitmap Tile;    // 64px, for the header tile
             public int DelayMs;
+
+            /// <summary>Milliseconds from the start of the loop to this frame.</summary>
+            public int StartMs;
         }
 
         /// <summary>
@@ -97,6 +100,62 @@ namespace AutoClicker.Utils
         private static bool _enabled = true;
 
         /// <summary>
+        /// Real time since the last tick, which is NOT the interval we asked for.
+        ///
+        /// A WinForms Timer is WM_TIMER, and WM_TIMER only fires on the system clock tick
+        /// (~15.6 ms) however fine a resolution the process has requested. A 65 ms request
+        /// arrives at 78 ms and a 50 ms request at 62.5 ms, so treating Interval as the
+        /// elapsed time ran a 1.5 s logo at 1.69 s — measured — and left the fast settings
+        /// short of what they claimed. Advancing by the clock instead makes the loop take
+        /// what the setting says whatever the timer actually does.
+        /// </summary>
+        private static readonly System.Diagnostics.Stopwatch _clock = new System.Diagnostics.Stopwatch();
+
+        /// <summary>Playback speed as a percentage of the file's own timing; 100 = as authored.</summary>
+        private static int _speedPercent = 100;
+
+        /// <summary>
+        /// How fast to play, relative to the GIF's own frame delays. 100 is exactly as the
+        /// file was authored.
+        ///
+        /// Clamped to 10-400 rather than left open: a 10x slowdown already parks a frame
+        /// for the better part of a minute, which reads as "the animation broke".
+        ///
+        /// The speed sets how long the LOOP takes; MinDelayMs separately caps how often
+        /// the icon may be repainted. Those are different limits and they no longer fight:
+        /// when the requested rate outruns the repaint budget, OnTick skips frames instead
+        /// of refusing to go faster. An earlier version applied the floor to every frame
+        /// delay, which made 4x on a 23-frame logo come out 1.3x -- indistinguishable from
+        /// normal, which is exactly how it was reported.
+        /// </summary>
+        public static int SpeedPercent
+        {
+            get { return _speedPercent; }
+            set
+            {
+                int v = value < 10 ? 10 : (value > 400 ? 400 : value);
+                if (v == _speedPercent) { return; }
+                _speedPercent = v;
+                // Re-pace immediately: the running timer holds the OLD frame's interval,
+                // so without this a change does nothing until the next frame lands — and
+                // at a slow speed that could be seconds away.
+                try
+                {
+                    if (_timer != null && _frames != null && _frames.Count > 0)
+                    {
+                        int i = _index >= 0 && _index < _frames.Count ? _index : 0;
+                        double factor = Math.Max(0.1, v / 100.0);
+                        double remaining = (_frames[i].StartMs + _frames[i].DelayMs) - _authoredPos;
+                        if (remaining <= 0) { remaining = _frames[i].DelayMs; }
+                        int next = (int)Math.Round(remaining / factor);
+                        _timer.Interval = Math.Max(MinDelayMs, Math.Min(60000, next));
+                    }
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>
         /// Raised on the UI thread whenever the showing frame changes, so the window, the
         /// tray and the header can repaint. Also raised once when an animation starts or
         /// stops, so listeners settle on the right still frame.
@@ -105,6 +164,50 @@ namespace AutoClicker.Utils
 
         /// <summary>Whether a logo is playing right now.</summary>
         public static bool IsAnimating => _frames != null && _frames.Count > 1;
+
+        /// <summary>The loop's length as authored, in milliseconds.</summary>
+        private static int _authoredLoopMs;
+
+        /// <summary>Where playback currently sits in the AUTHORED timeline, in ms.</summary>
+        private static double _authoredPos;
+
+        /// <summary>
+        /// The frame showing at a given point in the authored loop. Linear over a list
+        /// capped at 200 entries and walked once per tick — a binary search would be
+        /// faster in theory and unmeasurable here.
+        /// </summary>
+        private static int FrameAtAuthored(double ms)
+        {
+            var f = _frames;
+            if (f == null || f.Count == 0) { return 0; }
+            for (int i = f.Count - 1; i >= 0; i--)
+            {
+                if (ms >= f[i].StartMs) { return i; }
+            }
+            return 0;
+        }
+
+        /// <summary>
+        /// How long one loop actually takes at the current speed, in seconds, or 0 when
+        /// nothing is animating.
+        ///
+        /// Not the authored figure: Status is built once when the frames are rendered, so
+        /// it can only ever quote the file's own timing. Changing the speed afterwards
+        /// would leave the UI stating a loop length that is no longer true.
+        /// </summary>
+        public static double EffectiveLoopSeconds
+        {
+            get
+            {
+                var f = _frames;
+                if (f == null || f.Count == 0 || _authoredLoopMs <= 0) { return 0; }
+                // The clock runs through the authored timeline at exactly this rate, so
+                // the loop takes authored/speed — whatever gets skipped along the way.
+                // Summing the per-frame delays would overstate a fast loop, because fast
+                // playback drops frames rather than shortening every one of them.
+                return _authoredLoopMs / Math.Max(0.1, _speedPercent / 100.0) / 1000.0;
+            }
+        }
 
         /// <summary>Frames in the running animation, or 0.</summary>
         public static int FrameCount => _frames?.Count ?? 0;
@@ -306,7 +409,8 @@ namespace AutoClicker.Utils
                 }
 
                 int total = 0;
-                foreach (LogoFrame f in frames) { total += f.DelayMs; }
+                foreach (LogoFrame f in frames) { f.StartMs = total; total += f.DelayMs; }
+                _authoredLoopMs = total;
                 status = name + " · " + count + " frames · " + (total / 1000.0).ToString("0.0") + "s loop";
                 return frames;
             }
@@ -353,11 +457,13 @@ namespace AutoClicker.Utils
             }
             _timer.Interval = Math.Max(1, intervalMs);
             _timer.Start();
+            _clock.Restart();
         }
 
         private static void StopTimer()
         {
             try { _timer?.Stop(); } catch { }
+            _clock.Reset();
         }
 
         private static void OnTick(object sender, EventArgs e)
@@ -382,17 +488,71 @@ namespace AutoClicker.Utils
 
                 _frames = built;
                 _index = 0;
-                _timer.Interval = built[0].DelayMs;
+                _authoredPos = 0;
+                _timer.Interval = Math.Max(MinDelayMs, Math.Min(60000,
+                    (int)Math.Round(built[0].DelayMs / Math.Max(0.1, _speedPercent / 100.0))));
+                // Frame 0 starts now; the wait for the frames is not playback time.
+                _clock.Restart();
                 Logger.Info("[Logo] animating: " + _status);
                 RaiseFrameChanged();
                 return;
             }
 
-            _index = (_index + 1) % _frames.Count;
+            // Advance a CLOCK through the authored loop, rather than stepping one frame
+            // per tick.
+            //
+            // Stepping per frame made the fast settings do almost nothing. The tick
+            // interval cannot go below MinDelayMs — every frame is a WM_SETICON on each
+            // open window plus a Shell_NotifyIcon for the tray — so on a typical logo
+            // (23 frames over 1.5 s, ~65 ms each) asking for 4× produced a 50 ms floor
+            // and a loop only 1.3× faster. It looked like nothing had changed, because
+            // very nearly nothing had.
+            //
+            // The speed the user picked is a statement about how long the LOOP should
+            // take, and the floor is a limit on how often the icon may be repainted.
+            // Those are different things, and they only conflict if every frame has to be
+            // shown. So: move a position through the authored timeline at the chosen
+            // rate, draw whichever frame that position lands on, and let frames be
+            // skipped when the rate outruns the repaint budget — which is exactly what a
+            // video player does when it cannot keep up. 4× now takes a quarter of the
+            // time whatever the frame count, and the repaint rate never exceeds 20/s.
+            double factor = Math.Max(0.1, _speedPercent / 100.0);
+            int loopMs = _authoredLoopMs > 0 ? _authoredLoopMs : 1;
 
-            // Frame delays vary within one GIF, so the interval is per frame rather than
-            // an average. Assigning Interval restarts the timer, which is the intent.
-            int delay = _frames[_index].DelayMs;
+            // Advance by the time that actually passed. See _clock: the timer fires later
+            // than it was asked to, and by a margin that changes with the interval, so
+            // Interval understates every step and does it unevenly.
+            double elapsed = _clock.IsRunning ? _clock.Elapsed.TotalMilliseconds : _timer.Interval;
+            _clock.Restart();
+
+            // A gap this long is the machine having been asleep or the UI thread having
+            // been blocked, not playback. Stepping the whole gap would fling the logo
+            // through several loops in one frame; carry on from here instead.
+            if (elapsed > 500) { elapsed = 500; }
+
+            _authoredPos += elapsed * factor;
+            if (_authoredPos >= loopMs || _authoredPos < 0)
+            {
+                _authoredPos %= loopMs;
+                if (_authoredPos < 0) { _authoredPos += loopMs; }
+            }
+
+            int idx = FrameAtAuthored(_authoredPos);
+            _index = idx;
+
+            // Wait until this frame's own end, in real time. A slow speed stretches it, a
+            // fast one shortens it into the floor and the next tick simply lands further
+            // along the timeline.
+            double remaining = (_frames[idx].StartMs + _frames[idx].DelayMs) - _authoredPos;
+            if (remaining <= 0) { remaining = _frames[idx].DelayMs; }
+
+            // Ask for a little less than the frame needs. WM_TIMER rounds the request UP
+            // to the next system tick, so asking for exactly the frame's length arrives
+            // ~15 ms late and skips a frame that had time to show. The clock above keeps
+            // the loop honest either way; this only stops 1x dropping frames it needn't.
+            int delay = (int)Math.Round(remaining / factor) - 8;
+            if (delay < MinDelayMs) { delay = MinDelayMs; }
+            if (delay > 60000) { delay = 60000; }
             if (_timer.Interval != delay) { _timer.Interval = delay; }
 
             RaiseFrameChanged();

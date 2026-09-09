@@ -40,6 +40,88 @@ namespace AutoClicker.UI
         private ThemedProgressBar _macroProgressBar;
         private Label _macroProgressLabel;
 
+        /// <summary>The last playback stopped the clicker, so the finish line can say so.</summary>
+        private bool _clickerYieldedToMacro;
+
+        /// <summary>Names the macros in the library that have Problem-level faults.</summary>
+        private Label _macroHealthLabel;
+
+        /// <summary>
+        /// Sweeps the WHOLE library with the macro doctor and names anything that is
+        /// actually broken — an input pressed and never released, or coordinates outside
+        /// the monitors attached right now — plus script steps whose file has gone.
+        ///
+        /// All three checks already existed; what did not was anything that RAN them.
+        /// "Fix…" reports on the one macro you have selected, once you think to press it,
+        /// so a recording that cannot work is indistinguishable from one that can. Only
+        /// Problem-level findings count here: the doctor's Suggestions (redundant moves,
+        /// robotic timing) are improvements, not faults, and a notice that fires on those
+        /// would be showing for almost every recording ever made.
+        /// </summary>
+        private void RefreshMacroHealthNotice()
+        {
+            if (_macroHealthLabel == null || _macroHealthLabel.IsDisposed) { return; }
+
+            var bad = new List<string>();
+            try
+            {
+                if (_macros != null && _macros.Macros != null)
+                {
+                    foreach (Macro m in _macros.Macros)
+                    {
+                        if (m == null || m.Actions == null || m.Actions.Count == 0) { continue; }
+
+                        bool broken = false;
+                        foreach (Engine.MacroFinding f in Engine.MacroDoctor.Diagnose(m))
+                        {
+                            if (f.Level == Engine.MacroFindingLevel.Problem) { broken = true; break; }
+                        }
+
+                        // Script steps are checked outside the doctor for the reason given
+                        // at OnFixMacroClicked: it only reports what it can also repair,
+                        // and it cannot guess where a moved .py went.
+                        if (!broken)
+                        {
+                            foreach (MacroAction a in m.Actions)
+                            {
+                                if (a == null || a.Type != MacroActionType.Script) { continue; }
+                                if (string.IsNullOrWhiteSpace(a.ScriptPath) ||
+                                    !System.IO.File.Exists(a.ScriptPath))
+                                {
+                                    broken = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (broken) { bad.Add(m.Name); }
+                    }
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RefreshMacroHealthNotice", ex); }
+
+            if (bad.Count == 0)
+            {
+                _macroHealthLabel.Visible = false;
+                return;
+            }
+
+            bad.Sort(StringComparer.CurrentCultureIgnoreCase);
+            string names = bad.Count <= 3
+                ? string.Join(", ", bad.ToArray())
+                : string.Join(", ", bad.GetRange(0, 3).ToArray()) + ", "
+                  + Utils.Localization.F("and {0} more", bad.Count - 3);
+
+            _macroHealthLabel.Text = bad.Count == 1
+                ? Utils.Localization.F(
+                    "⚠ {0} won't play correctly — select it and press “Fix…” to see what's wrong.", names)
+                : Utils.Localization.F(
+                    "⚠ {0} won't play correctly — select each and press “Fix…” to see what's wrong.", names);
+            _macroHealthLabel.Visible = true;
+            Utils.Logger.Info("[Macros] health sweep: " + bad.Count + " of " +
+                              (_macros?.Macros?.Count ?? 0) + " macro(s) have problems (" + names + ").");
+        }
+
         // Live monitor + append-recording state.
         private CheckBox _appendRecordCheck;
         private CheckBox _cursorTrailCheck;
@@ -124,7 +206,10 @@ namespace AutoClicker.UI
             // at y=634, so there is room for it without moving anything else.
             // 536 rather than 496: the Recycle bin button below Delete needs the room,
             // and the Live Monitor card does not start until y=634.
-            var manageGroup = UiFactory.Group(Utils.Localization.T("Manage"), 320, 84, 124, 536, CardIcon.Gear);
+            // Top 92, not 84: the Sort combo above it ends at y=91, so the card's top
+            // border ran 7px through the bottom of the combo. Height is unchanged, so the
+            // bottom moves to 628 and still clears the Live Monitor card at 634.
+            var manageGroup = UiFactory.Group(Utils.Localization.T("Manage"), 320, 92, 124, 536, CardIcon.Gear);
             int mx = 6;
             int mw = 112;
 
@@ -168,7 +253,7 @@ namespace AutoClicker.UI
             _fixMacroBtn.Click += OnFixMacroClicked;
 
             _deleteMacroBtn = UiFactory.Button("Delete", mx, 456, mw, 30);
-            _deleteMacroBtn.ForeColor = _theme.Danger;
+            _deleteMacroBtn.ForeColor = _theme.DangerText;
             _deleteMacroBtn.Click += OnDeleteMacroClicked;
 
             // Directly under Delete, because that is the button people press by
@@ -209,6 +294,23 @@ namespace AutoClicker.UI
             _macroSummaryLabel.Height = 16;
             _macroSummaryLabel.ForeColor = _theme.TextMuted;
 
+            // Library-wide health. "Fix…" has always been able to find a stuck key or a
+            // click aimed at a monitor that is gone — but only for the macro you happen to
+            // have selected, and only if you think to press it. A macro that cannot work
+            // looks exactly like one that can until then. This says so without being asked.
+            // Hidden when the library is clean, like every other notice in the app.
+            // (12,526)..(312,622): under the summary line, clear of the Manage card at
+            // x=320 and the Live Monitor at y=634.
+            _macroHealthLabel = new Label
+            {
+                AutoSize = false,
+                Location = new Point(12, 526),
+                Size = new Size(300, 96),
+                Font = new Font("Segoe UI", 8.5f),
+                ForeColor = _theme.WarningText,
+                Visible = false
+            };
+
             // ── Record group ───────────────────────────────────────────────────
             var recGroup = UiFactory.Group(Utils.Localization.T("Record"), 444, 80, 268, 202, CardIcon.Target);
 
@@ -234,7 +336,7 @@ namespace AutoClicker.UI
             recGroup.Controls.Add(_recordCountdownNum);
 
             _recordBtn = UiFactory.Button("● Record", 16, 120, 118, 34);
-            _recordBtn.ForeColor = _theme.Danger;
+            _recordBtn.ForeColor = _theme.DangerText;
             _recordBtn.Click += (s, e) => StartRecording();
             recGroup.Controls.Add(_recordBtn);
 
@@ -308,7 +410,7 @@ namespace AutoClicker.UI
 
             _stopPlayBtn = UiFactory.Button("■ Stop", 178, 176, 74, 38);
             _stopPlayBtn.BackColor = _theme.Danger;
-            _stopPlayBtn.ForeColor = Color.White;
+            _stopPlayBtn.ForeColor = Theme.ReadableOn(_theme.Danger);
             _stopPlayBtn.FlatAppearance.BorderSize = 0;
             _stopPlayBtn.Enabled = false;
             _stopPlayBtn.Click += (s, e) => _player.Stop();
@@ -372,15 +474,14 @@ namespace AutoClicker.UI
             page.Controls.Add(_pinMacroBtn);
             page.Controls.Add(_resetMacroStatsBtn);
             page.Controls.Add(_macroSummaryLabel);
+            page.Controls.Add(_macroHealthLabel);
             page.Controls.Add(recGroup);
             page.Controls.Add(playGroup);
             page.Controls.Add(liveGroup);
 
-            // Just-for-fun: a colourful trail that follows the mouse cursor.
-            _cursorTrailCheck = UiFactory.Check("Colorful cursor trail (just for fun)", 12, 854);
-            _cursorTrailCheck.Checked = _settings != null && _settings.CursorTrailEnabled;
-            _cursorTrailCheck.CheckedChanged += OnCursorTrailChanged;
-            page.Controls.Add(_cursorTrailCheck);
+            // The cursor trail moved to Settings › Behaviour. It is an app-wide
+            // preference that has nothing to do with macros, and it sat on this page only
+            // because it was added here; the Macros tab is for recording and playback.
 
             // If the intro paragraph wraps to more lines than designed (e.g. at a
             // higher display scale), push everything below it down so nothing
@@ -440,7 +541,7 @@ namespace AutoClicker.UI
                 _macroProgressBar.Value = 0;
                 _playbackCurrentLoop = 0;
                 _macroProgressLabel.Text = Utils.Localization.T("Playing…");
-                _liveHeaderLabel.ForeColor = _theme.Accent;
+                _liveHeaderLabel.ForeColor = _theme.AccentText;
                 string playName = _liveMonitorMacro != null
                     ? _liveMonitorMacro.Name : Utils.Localization.T("macro");
                 string playMeta = _liveMonitorMacro != null
@@ -530,7 +631,13 @@ namespace AutoClicker.UI
                 RefreshMacroButtons();
                 _statusState.Text = Utils.Localization.T("Idle");
                 _macroProgressBar.Value = 0;
-                _macroProgressLabel.Text = Utils.Localization.T("Ready.");
+                // Answer "why did my clicker stop?" where the person is already looking.
+                // Stopping it is the right call (see StopClickerBecause) but doing it in
+                // silence would just move the mystery.
+                _macroProgressLabel.Text = _clickerYieldedToMacro
+                    ? Utils.Localization.T("Ready. The auto-clicker was stopped for this macro.")
+                    : Utils.Localization.T("Ready.");
+                _clickerYieldedToMacro = false;
                 ClearLiveHighlight();
                 HideMacroIndicator();
                 _liveHeaderLabel.ForeColor = _theme.TextMuted;
@@ -944,6 +1051,10 @@ namespace AutoClicker.UI
             // Selection may have changed (e.g. a delete) — keep the action buttons
             // in step with whether anything is selected.
             RefreshMacroButtons();
+
+            // Every path that changes the library ends up here, so this is the one place
+            // the health sweep has to be wired into.
+            RefreshMacroHealthNotice();
         }
 
         /// <summary>
@@ -1052,6 +1163,14 @@ namespace AutoClicker.UI
             // After the countdown, so cancelling with Esc changes nothing.
             DisarmMovementBecause("recording a macro needs the real W/A/S/D");
 
+            // And the clicker, which is a quieter version of the same trap. The recorder
+            // drops injected input, so Tempo's own clicks never appear IN the take — but
+            // they still reach the app you are recording, so the recording captures what
+            // they did without the clicks that did it, and plays back into a window that
+            // has moved on. See StopClickerBecause.
+            _clickerYieldedToMacro =
+                StopClickerBecause("recording a macro should capture only your own input");
+
             _recorder.RecordMovements = _recordMovesCheck.Checked;
             _recorder.RecordKeyboard = _recordKeysCheck.Checked;
 
@@ -1100,7 +1219,13 @@ namespace AutoClicker.UI
             _recordBtn.Enabled = false;
             RefreshBusyLock();
             _stopRecordBtn.Enabled = true;
-            _recordStatusLabel.Text = Utils.Localization.T("Recording… bind/press the Record or Emergency-stop hotkey to finish.");
+            // Set here, not where the clicker is actually stopped: this line runs a moment
+            // later and would overwrite anything said earlier.
+            _recordStatusLabel.Text = _clickerYieldedToMacro
+                ? Utils.Localization.T("Recording… (the auto-clicker was stopped so the take is only your input). "
+                    + "Bind/press the Record or Emergency-stop hotkey to finish.")
+                : Utils.Localization.T("Recording… bind/press the Record or Emergency-stop hotkey to finish.");
+            _clickerYieldedToMacro = false;
             _statusState.Text = Utils.Localization.T("Recording macro");
 
             // Show a small always-on-top REC badge so the user knows recording is
@@ -1419,6 +1544,12 @@ namespace AutoClicker.UI
             // it is holding stays down straight through the macro. The macro is the
             // explicit request, so movement yields to it here too.
             DisarmMovementBecause("playing a macro drives the keyboard itself");
+
+            // And the auto-clicker, for the same reason: it clicks wherever the pointer
+            // is, and moving the pointer is what a macro does. Measured: a 50 ms clicker
+            // put 26 clicks into a window the macro merely passed over. See
+            // StopClickerBecause.
+            _clickerYieldedToMacro = StopClickerBecause("a macro is driving the pointer");
 
             _statusState.Text = Utils.Localization.T("Playing macro");
             ShowMacroIndicator(macro.Name);

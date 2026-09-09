@@ -98,13 +98,26 @@ namespace AutoClicker.UI
                         // "clamped …" line a second time.
                         RefitButtons(root);
 
+                        // The counts are logged alongside the faults on purpose. "0
+                        // remaining" is only good news if the check actually looked at
+                        // something; a scanner that silently examines nothing reports a
+                        // clean layout just as loudly as a clean layout does.
                         int left = CountOverlaps(root);
                         Utils.Logger.Info("[layout] overlap check for " + Utils.Localization.Current +
-                                          ": " + left + " remaining.");
+                                          ": " + left + " remaining, " + _pairsCompared + " pairs compared.");
 
                         int clipped = CountClippedButtons(root);
                         Utils.Logger.Info("[layout] button check for " + Utils.Localization.Current +
                                           ": " + clipped + " clipped.");
+
+                        int over = CountOverflows(root);
+                        Utils.Logger.Info("[layout] overflow check for " + Utils.Localization.Current +
+                                          ": " + over + " out of bounds, " + _overflowExamined + " examined.");
+
+                        int stray = CountStraySideways(root);
+                        Utils.Logger.Info("[layout] sideways check for " + Utils.Localization.Current +
+                                          ": " + stray + " page(s) scroll sideways, " +
+                                          _sidewaysExamined + " examined.");
                     }
                     catch (Exception ex) { Utils.Logger.Swallow("LayoutFitter/verify", ex); }
                 };
@@ -399,10 +412,14 @@ namespace AutoClicker.UI
         /// count. Only text-bearing controls are considered: a panel deliberately sitting
         /// behind its children overlaps them by design and is not a fault.
         /// </summary>
+        /// <summary>How many pairs the last CountOverlaps compared; see the log line.</summary>
+        private static int _pairsCompared;
+
         private static int CountOverlaps(Control root)
         {
             const int MinOverlapPx = 6;   // ignore touching edges and 1px rounding
             int found = 0;
+            _pairsCompared = 0;
 
             foreach (Control container in Containers(root))
             {
@@ -422,7 +439,8 @@ namespace AutoClicker.UI
                         // reported a 146px "overlap" that is entirely empty box against
                         // empty box, in every language including English. What a reader
                         // can actually see collide is the glyphs.
-                        Rectangle hit = Rectangle.Intersect(InkedBounds(kids[i]), InkedBounds(kids[k]));
+                        _pairsCompared++;
+                        Rectangle hit = Rectangle.Intersect(CollisionBounds(kids[i]), CollisionBounds(kids[k]));
                         if (hit.Width < MinOverlapPx || hit.Height < MinOverlapPx) { continue; }
                         found++;
                         Utils.Logger.Warn("[layout] STILL OVERLAPPING in \"" + Shorten(container.Text) + "\": \"" +
@@ -488,16 +506,170 @@ namespace AutoClicker.UI
         /// DID see it and warned about it; when that check was removed as duplicated noise
         /// this one was assumed to cover the same ground, and it did not.
         /// </summary>
+        /// <summary>
+        /// Reports controls that stick out of the container holding them, and returns the
+        /// count.
+        ///
+        /// Overlap alone does not catch this: a control can clear every sibling and still
+        /// hang over the edge of its card, where it is drawn clipped or spills onto
+        /// whatever is behind. That is the shape a too-long translated caption takes when
+        /// it is the LAST control in a row — there is nothing to its right to collide
+        /// with, so the overlap pass sees a clean layout.
+        ///
+        /// Scrolling containers are skipped: running past the bottom of a scrolling page
+        /// is what scrolling is for.
+        /// </summary>
+        /// <summary>How many controls the last CountOverflows examined; see the log line.</summary>
+        private static int _overflowExamined;
+
+        private static int CountOverflows(Control root)
+        {
+            const int Tolerance = 2;      // rounding and 1px borders
+            int found = 0;
+            _overflowExamined = 0;
+
+            foreach (Control container in Containers(root))
+            {
+                if (container is Form) { continue; }
+                var scroll = container as ScrollableControl;
+                bool scrolls = scroll != null && scroll.AutoScroll;
+
+                Size box = container.ClientSize;
+                if (box.Width <= 0 || box.Height <= 0) { continue; }
+
+                // ContainerWidth, not ClientSize: on a start-to-tray launch every page
+                // still reports the WinForms default 200x100, and measuring against that
+                // reported 175 "out of bounds" controls in English alone — every one of
+                // them a page that had simply never been laid out. See ContainerWidth.
+                int limitW = ContainerWidth(container);
+
+                // A page that was never laid out has no meaningful bottom either, and
+                // unlike width there is no designed value to stand in for it, so the
+                // vertical half of the check sits out rather than inventing a number.
+                bool unsizedPage = container is TabPage && box.Width <= UnsizedPageWidth;
+                int limitH = (scrolls || unsizedPage) ? int.MaxValue : box.Height;
+
+                foreach (Control c in container.Controls)
+                {
+                    // NOT c.Visible. That getter reports the EFFECTIVE visibility of the
+                    // whole parent chain, and this check runs at Application.Idle, which
+                    // is the only hook that fires when Tempo starts to the tray — where
+                    // no parent is visible and every control claims to be hidden. It made
+                    // this examine exactly 0 controls while reporting a clean layout.
+                    // Size is what the rest of the fitter uses, for the same reason.
+                    if (c.Width <= 0 || c.Height <= 0) { continue; }
+                    if (!IsCollidable(c)) { continue; }
+                    _overflowExamined++;
+
+                    int overRight = c.Right - limitW;
+                    int overBottom = limitH == int.MaxValue ? 0 : c.Bottom - limitH;
+                    if (overRight <= Tolerance && overBottom <= Tolerance) { continue; }
+
+                    found++;
+                    Utils.Logger.Warn("[layout] OVERFLOWS \"" + Shorten(container.Text) + "\": \"" +
+                        Shorten(c.Text) + "\"@" + c.Left + "," + c.Top + " " + c.Width + "x" + c.Height +
+                        " runs " + (overRight > Tolerance ? overRight + "px past the right edge" : "") +
+                        (overRight > Tolerance && overBottom > Tolerance ? " and " : "") +
+                        (overBottom > Tolerance ? overBottom + "px past the bottom" : "") +
+                        " of a " + limitW + "x" +
+                        (limitH == int.MaxValue ? "unbounded" : limitH.ToString()) + " box.");
+                }
+            }
+            return found;
+        }
+
+        /// <summary>How many scrolling pages the last CountStraySideways looked at.</summary>
+        private static int _sidewaysExamined;
+
+        /// <summary>
+        /// Reports pages whose SCROLL RANGE is wider than their viewport, and returns the
+        /// count.
+        ///
+        /// This is a different fault from <see cref="CountOverflows"/> and neither one can
+        /// see the other. Overflow compares each control's rectangle against its container:
+        /// it catches a card that is too wide. This compares the page's own
+        /// <see cref="ScrollableControl.DisplayRectangle"/> against its client area, which
+        /// is what actually decides whether a horizontal scrollbar appears — and that range
+        /// only ever GROWS in WinForms. A page whose cards were centred out to the right
+        /// while the window was maximised keeps the wide range after the window is restored,
+        /// so every control passes the overflow check while the page still scrolls sideways
+        /// and drags the cards off the left edge. That shipped, unnoticed, past three
+        /// "ALL LANGUAGES CLEAN" runs.
+        ///
+        /// Vertical range is deliberately not checked here: a long page scrolling down is
+        /// the normal case, and there is no cheap way to tell a legitimate one from a stale
+        /// one at this point. Sideways is unambiguous — nothing in this app is meant to.
+        /// </summary>
+        private static int CountStraySideways(Control root)
+        {
+            const int Tolerance = 2;
+            int found = 0;
+            _sidewaysExamined = 0;
+
+            foreach (Control container in Containers(root))
+            {
+                var scroll = container as ScrollableControl;
+                if (scroll == null || !scroll.AutoScroll) { continue; }
+
+                // A page that has never been laid out reports the WinForms default 200x100
+                // and would fail this every time on a start-to-tray launch — the same trap
+                // that once made the overflow check report 175 phantom faults.
+                int box = scroll.ClientSize.Width;
+                if (box <= UnsizedPageWidth) { continue; }
+
+                _sidewaysExamined++;
+                int range = scroll.DisplayRectangle.Width;
+                if (range - box <= Tolerance) { continue; }
+
+                found++;
+                Utils.Logger.Warn("[layout] SCROLLS SIDEWAYS \"" + Shorten(container.Text) +
+                    "\": a " + range + "px range in a " + box + "px viewport — " +
+                    (range - box) + "px of it is off to the right.");
+            }
+            return found;
+        }
+
         private static bool IsCollidable(Control c)
         {
             if (c is CheckBox || c is RadioButton || c is Label)
             {
                 return !string.IsNullOrEmpty(c.Text);
             }
+            // A container full of controls is as visible as any of them, and two of them
+            // landing on each other is the worst kind of overlap — it hides whole rows,
+            // not a few glyphs. The Settings page derives each card's Y from the height
+            // of the one above, so a card that grows past its allowance lands squarely on
+            // its neighbour, and nothing here used to notice.
+            //
+            // Only ever compared against SIBLINGS, so a panel containing its own children
+            // is never reported against them.
+            //
+            // Size, not Visible: see the note in CountOverflows. Gating on Visible here
+            // silently excluded every container whenever the check ran with the window
+            // still hidden, which is precisely when it runs.
+            //
+            // TabPages are the one kind of sibling container that SHARES its rectangle
+            // by design — a tab control is a stack, and only one page shows at a time.
+            // Counting them reported all 28 pairs of Tempo's eight tabs as collisions.
+            if (c is TabPage) { return false; }
+            if (c.HasChildren) { return true; }
+
             // Opaque inputs: they paint their whole rectangle whether or not they hold
             // text, so an empty box is just as much of a collision as a full one.
             return c is NumericUpDown || c is ComboBox || c is TextBox
                 || c is Button || c is TrackBar;
+        }
+
+        /// <summary>
+        /// What a collision should be measured against: the glyphs for a text control,
+        /// the whole rectangle for a container.
+        ///
+        /// A card's Text is only its title, so measuring a container by its ink would
+        /// compare two title strings and miss the bodies sliding through each other.
+        /// </summary>
+        private static Rectangle CollisionBounds(Control c)
+        {
+            return c.HasChildren ? c.Bounds : InkedBounds(c);
         }
 
         /// <summary>
@@ -523,11 +695,19 @@ namespace AutoClicker.UI
             return b;
         }
 
+        /// <summary>
+        /// Every container under <paramref name="parent"/>, INCLUDING parent itself.
+        ///
+        /// It used to start one level down, so whatever sits directly on the page — the
+        /// cards, and any loose control placed straight onto it — was never compared
+        /// against anything. The overlap check silently covered the inside of each card
+        /// and nothing between them.
+        /// </summary>
         private static IEnumerable<Control> Containers(Control parent)
         {
+            if (parent.HasChildren) { yield return parent; }
             foreach (Control c in parent.Controls)
             {
-                if (c.HasChildren) { yield return c; }
                 foreach (Control inner in Containers(c)) { yield return inner; }
             }
         }

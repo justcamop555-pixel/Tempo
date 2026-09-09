@@ -800,6 +800,20 @@ namespace AutoClicker.UI
                 ["Restart"] = LineKind.System,
                 ["SelfCheck"] = LineKind.System,
                 ["Icon"] = LineKind.System,
+                // [Logo] is the animated custom logo: how many frames it decoded, how
+                // long the loop is, or why it is showing still. It sits beside [Icon] for
+                // the same reason — "my logo isn't doing what I set" is one question, and
+                // splitting its answer across a coloured tag and an uncoloured one would
+                // hide half of it.
+                ["Logo"] = LineKind.System,
+                // [Install] is the Settings > Apps entry being corrected — the version
+                // Windows shows, and a repaired Uninstall button. Rare, and exactly the
+                // kind of line you go looking for when Control Panel disagrees with the
+                // app.
+                ["Install"] = LineKind.System,
+                // [OS] names the Windows this is running on and says whether it is older
+                // than Tempo supports. First line of any bug report.
+                ["OS"] = LineKind.System,
                 ["Notify"] = LineKind.System,
                 ["Tray"] = LineKind.System,
                 ["Update"] = LineKind.System,

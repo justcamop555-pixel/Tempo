@@ -181,7 +181,7 @@ namespace AutoClicker.UI
                 Height = 32,
                 FlatStyle = FlatStyle.Flat,
                 BackColor = primary ? t.Accent : t.Surface,
-                ForeColor = primary ? Color.White : t.Text,
+                ForeColor = primary ? t.OnAccent : t.Text,
                 Font = new Font("Segoe UI", 9.75f)
             };
             b.FlatAppearance.BorderColor = primary ? t.Accent : t.Border;

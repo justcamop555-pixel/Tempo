@@ -104,7 +104,7 @@ namespace AutoClicker.UI
             _cpsLabel.Width = 360;
             _cpsLabel.AutoSize = false;
             _cpsLabel.TextAlign = ContentAlignment.MiddleCenter;
-            _cpsLabel.ForeColor = _theme.Accent;
+            _cpsLabel.ForeColor = _theme.AccentText;
 
             _bestLabel = UiFactory.Label(Utils.Localization.F("Best CPS: {0:0.0}", 0.0), 0, 288, FontStyle.Regular, 9.5f);
             _bestLabel.Width = 360;
@@ -220,7 +220,7 @@ namespace AutoClicker.UI
             {
                 bool selected = b.Tag is int s && s == _testSeconds;
                 b.BackColor = selected ? _theme.Accent : _theme.Surface2;
-                b.ForeColor = selected ? Color.White : _theme.Text;
+                b.ForeColor = selected ? _theme.OnAccent : _theme.Text;
             }
         }
 
@@ -415,7 +415,9 @@ namespace AutoClicker.UI
                     ? (!_keyboardMode && mb == _testButton)
                     : _keyboardMode; // the "kbd" (Space) button
                 b.BackColor = selected ? _theme.Accent : _theme.Surface2;
-                b.ForeColor = selected ? Color.White : _theme.Text;
+                // Selected fills the button with Accent, and white on that is below 4.5:1
+                // in 36 of the 38 palettes — read the label off its own fill instead.
+                b.ForeColor = selected ? Theme.ReadableOn(_theme.Accent) : _theme.Text;
             }
         }
 
@@ -451,7 +453,7 @@ namespace AutoClicker.UI
             if (_bestLabel != null) _bestLabel.ForeColor = _theme.TextMuted;
             if (_cpsLabel != null)
             {
-                _cpsLabel.ForeColor = _theme.Accent;
+                _cpsLabel.ForeColor = _theme.AccentText;
                 _cpsLabel.Text = Utils.Localization.F("CPS: {0:0.0}", 0.0);
             }
             if (_timeBar != null) _timeBar.Value = 0;
@@ -573,7 +575,7 @@ namespace AutoClicker.UI
 
             if (newAllTimeBest)
             {
-                _bestLabel.ForeColor = _theme.Accent;
+                _bestLabel.ForeColor = _theme.AccentText;
                 _bestLabel.Text = Utils.Localization.F("\u2605 New best!  {0:0.0} CPS", AllTimeBest);
                 _clickArea.Text = Utils.Localization.T("New best \u2014 retry");
             }

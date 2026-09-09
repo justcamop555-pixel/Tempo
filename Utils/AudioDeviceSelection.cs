@@ -15,6 +15,53 @@ namespace AutoClicker.Utils
     /// threading settings through all of them. MainForm writes it from settings at
     /// startup and whenever the pickers change.
     /// </summary>
+    /// <summary>
+    /// One audio endpoint as the pickers see it: what it is, and whether Windows will
+    /// actually let Tempo open it.
+    ///
+    /// The lists used to hold only ACTIVE endpoints, which meant a device Windows knows
+    /// about but has unplugged or disabled simply did not exist as far as Tempo was
+    /// concerned. From the user's side that is indistinguishable from "Tempo can't detect
+    /// my device" — the headset is right there in Windows' own sound panel. Carrying the
+    /// state lets the picker list it and say why it can't be used, which is a different
+    /// message from not listing it at all.
+    /// </summary>
+    public sealed class AudioEndpointInfo
+    {
+        public string Id;
+        public string Name;
+        public DeviceState State;
+
+        /// <summary>Only an Active endpoint can actually be opened for capture.</summary>
+        public bool Usable => State == DeviceState.Active;
+
+        /// <summary>Why this endpoint cannot be used, or "" when it can.</summary>
+        public string StateNote
+        {
+            get
+            {
+                switch (State)
+                {
+                    case DeviceState.Active: return "";
+                    case DeviceState.Unplugged: return Localization.T("not plugged in");
+                    case DeviceState.Disabled: return Localization.T("disabled in Windows");
+                    case DeviceState.NotPresent: return Localization.T("driver not present");
+                    default: return Localization.T("unavailable");
+                }
+            }
+        }
+
+        /// <summary>The picker's label: the model, plus the reason when there is one.</summary>
+        public string Label
+        {
+            get
+            {
+                string note = StateNote;
+                return note.Length == 0 ? Name : Name + " — " + note;
+            }
+        }
+    }
+
     public static class AudioDeviceSelection
     {
         /// <summary>Endpoint id of the chosen speaker; "" = Windows default.</summary>

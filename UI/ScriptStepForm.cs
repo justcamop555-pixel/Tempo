@@ -35,7 +35,8 @@ namespace AutoClicker.UI
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false;
             MinimizeBox = false;
-            Size = new Size(560, 320);
+            // 352, not 320: one more row for the interpreter picker below the Rescan line.
+            Size = new Size(560, 352);
             BackColor = theme.Background;
             ForeColor = theme.Text;
             Font = UiFactory.BodyFont;
@@ -119,11 +120,30 @@ namespace AutoClicker.UI
             };
             Controls.Add(rescan);
 
-            var ok = UiFactory.PrimaryButton("OK", 348, 236, 88, 30, theme);
+            // The answer to "Tempo is using a different Python from the one I installed my
+            // packages into", which this dialog has always described and never let anyone
+            // fix. Point it at a venv's python.exe and every script step uses it.
+            var choose = UiFactory.Button("Choose…", 416, 204, 120, 26);
+            choose.BackColor = theme.Surface2;
+            choose.ForeColor = theme.Text;
+            choose.Click += (s, e) => ChooseInterpreter();
+            Controls.Add(choose);
+
+            var auto = UiFactory.Button("Use automatic", 282, 204, 126, 26);
+            auto.BackColor = theme.Surface2;
+            auto.ForeColor = theme.Text;
+            auto.Click += (s, e) =>
+            {
+                Utils.PythonRunner.ChoosePreferred("");
+                ShowInterpreter();
+            };
+            Controls.Add(auto);
+
+            var ok = UiFactory.PrimaryButton("OK", 348, 268, 88, 30, theme);
             ok.Click += (s, e) => Accept();
             Controls.Add(ok);
 
-            var cancel = UiFactory.Button("Cancel", 444, 236, 84, 30);
+            var cancel = UiFactory.Button("Cancel", 444, 268, 84, 30);
             cancel.BackColor = theme.Surface2;
             cancel.ForeColor = theme.Text;
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
@@ -144,17 +164,49 @@ namespace AutoClicker.UI
             return v < lo ? lo : v > hi ? hi : v;
         }
 
+        /// <summary>
+        /// Names the interpreter that will run THIS script, and why it was picked.
+        ///
+        /// Resolved against the script's own path rather than reported globally, so a
+        /// virtual environment beside the script shows up here — which is the whole point:
+        /// the difference between "Python 3.12" and "the Python that has your packages"
+        /// is invisible until something says which one it is.
+        /// </summary>
         private void ShowInterpreter()
         {
             try
             {
-                bool have = !string.IsNullOrEmpty(Utils.PythonRunner.InterpreterPath);
+                (string exe, _, string why) = Utils.PythonRunner.ResolveFor(_path?.Text ?? "");
+                bool have = !string.IsNullOrEmpty(exe);
                 _interpreter.Text = have
-                    ? Utils.Localization.F("Using: {0}", Utils.PythonRunner.DescribeInterpreter())
+                    // One line, no embedded newline: a key with a line break in it is
+                    // awkward to keep identical across five dictionaries, and the label
+                    // wraps on its own anyway.
+                    ? Utils.Localization.F("Using: {0} — {1}", exe, why)
                     : Utils.Localization.T("No Python interpreter found on this PC.");
-                _interpreter.ForeColor = have ? _theme.Success : _theme.Warning;
+                _interpreter.ForeColor = have ? _theme.SuccessText : _theme.WarningText;
             }
             catch (Exception ex) { Utils.Logger.Swallow("ScriptStepForm.ShowInterpreter", ex); }
+        }
+
+        /// <summary>Lets the user point Tempo at a specific python.exe (usually a venv).</summary>
+        private void ChooseInterpreter()
+        {
+            try
+            {
+                using (var dlg = new OpenFileDialog
+                {
+                    Title = Utils.Localization.T("Choose a Python interpreter"),
+                    Filter = Utils.Localization.T("Python interpreter (python.exe)|python.exe|All programs (*.exe)|*.exe"),
+                    CheckFileExists = true,
+                })
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK) { return; }
+                    Utils.PythonRunner.ChoosePreferred(dlg.FileName);
+                    ShowInterpreter();
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("ScriptStepForm.ChooseInterpreter", ex); }
         }
 
         private void Browse()

@@ -1253,10 +1253,90 @@ namespace AutoClicker.Utils
         /// be explained. Best-effort: a device that refuses the volume interface simply
         /// leaves the values unknown, and nothing downstream depends on them.
         /// </summary>
+        /// <summary>The output Tempo is actually capturing, so it can be named and compared.</summary>
+        private volatile string _captureDeviceId;
+        private volatile string _captureDeviceName;
+
+        /// <summary>Friendly name of the output being captured, or null.</summary>
+        public string CaptureDeviceName => _captureDeviceName;
+
+        /// <summary>
+        /// Another output that is producing sound while the captured one is silent, or
+        /// null. This is the "captions do nothing and I can't see why" case that neither
+        /// mute nor volume explains: the audio is simply going somewhere else.
+        /// </summary>
+        private volatile string _audioElsewhereOn;
+        public string AudioElsewhereOn => _audioElsewhereOn;
+
+        private long _lastRoutingCheckTick;
+
+        /// <summary>
+        /// Looks for sound on an output OTHER than the one being captured.
+        ///
+        /// Everything else in this class watches the captured endpoint — its volume, its
+        /// mute state, its packets — and every one of those answers "silence" identically
+        /// whether the video is paused or playing to a different device entirely. A game
+        /// routed to a headset, a browser pinned to another output in Windows' per-app
+        /// volume settings, or simply a Tempo speaker choice that no longer matches where
+        /// sound goes: all of them look exactly like "nothing is playing", and the user is
+        /// told to check a volume slider that is already correct.
+        ///
+        /// Only runs while OUR endpoint is quiet, and at most once every few seconds:
+        /// enumerating endpoints and reading peak meters is not something to do per frame.
+        /// </summary>
+        private void CheckAudioRouting(bool ourEndpointQuiet)
+        {
+            if (!ourEndpointQuiet)
+            {
+                _audioElsewhereOn = null;
+                return;
+            }
+            if (Environment.TickCount64 - _lastRoutingCheckTick < 4000) { return; }
+            _lastRoutingCheckTick = Environment.TickCount64;
+
+            try
+            {
+                string ours = _captureDeviceId;
+                string loudest = null;
+                float best = 0.02f;      // above the meter's noise floor
+
+                using (var en = new MMDeviceEnumerator())
+                {
+                    foreach (MMDevice d in en.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+                    {
+                        try
+                        {
+                            if (ours != null && string.Equals(d.ID, ours, StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;   // that is the one we are already listening to
+                            }
+                            float peak = d.AudioMeterInformation.MasterPeakValue;
+                            if (peak > best) { best = peak; loudest = d.FriendlyName; }
+                        }
+                        catch { }
+                        finally { try { d.Dispose(); } catch { } }
+                    }
+                }
+
+                string was = _audioElsewhereOn;
+                _audioElsewhereOn = loudest;
+                if (loudest != null && was == null)
+                {
+                    RaiseStatus("Sound is playing on “" + loudest + "”, but Tempo is listening to “" +
+                                (_captureDeviceName ?? "the default output") + "”. Pick that device under " +
+                                "Settings → Live Captions, or move the app's audio back.");
+                    Logger.Warn("[Captions] audio is on '" + loudest + "' but capture is on '" +
+                                (_captureDeviceName ?? "?") + "'.");
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("CheckAudioRouting", ex); }
+        }
+
         private void ReadEndpointVolume(MMDevice dev)
         {
             try
             {
+                try { _captureDeviceId = dev.ID; _captureDeviceName = dev.FriendlyName; } catch { }
                 var vol = dev.AudioEndpointVolume;
                 if (vol == null) { return; }
                 _systemVolume = vol.MasterVolumeLevelScalar;
@@ -2365,6 +2445,11 @@ namespace AutoClicker.Utils
                     bool wasMuted = _systemMuted;
                     float wasVol = _systemVolume;
                     RefreshEndpointVolume();
+
+                    // Neither mute nor volume explains a silent capture when the sound is
+                    // simply going to another output. Checked only while OUR endpoint is
+                    // quiet, so a working session never pays for it.
+                    CheckAudioRouting(_levelDb <= -60);
                     if (_systemMuted && !wasMuted)
                     {
                         RaiseStatus("Your speaker was just MUTED — there is no sound left for Tempo to caption. " +

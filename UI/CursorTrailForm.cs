@@ -44,10 +44,24 @@ namespace AutoClicker.UI
             get
             {
                 CreateParams cp = base.CreateParams;
-                // Tool window (no alt-tab) + no-activate (never steals focus).
-                // Transparency + layering come from TransparencyKey; click-through is
-                // handled in WndProc via HTTRANSPARENT so the window still paints.
-                cp.ExStyle |= 0x00000080 | 0x08000000;
+                // WS_EX_TOOLWINDOW (no alt-tab) | WS_EX_NOACTIVATE (never takes focus)
+                // | WS_EX_TRANSPARENT (the mouse does not see this window at all).
+                //
+                // WS_EX_TRANSPARENT was missing. The class summary above has always said
+                // this window "never captures input (WS_EX_TRANSPARENT)", but the style
+                // was never set: click-through rested entirely on answering WM_NCHITTEST
+                // with HTTRANSPARENT. That works for anything that hit-tests — and it
+                // measured 10/10 clicks through the overlay onto Tempo's own controls —
+                // but it is a per-message opt-out from a window that IS in the input
+                // path, so anything reaching this window by another route (a capture, a
+                // synthesised click, a game that reads the window under the cursor
+                // itself) has nothing to opt out of.
+                //
+                // WS_EX_TRANSPARENT takes it out of the input path entirely, which is
+                // what the documentation promises and what the comment already claimed.
+                // Both are kept: the style for the OS, HTTRANSPARENT for anything that
+                // still asks.
+                cp.ExStyle |= 0x00000080 | 0x08000000 | 0x00000020;
                 return cp;
             }
         }

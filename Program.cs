@@ -27,16 +27,61 @@ namespace AutoClicker
         private static readonly IntPtr HWND_BROADCAST = (IntPtr)0xFFFF;
 
         /// <summary>
+        /// Hands our foreground right to the already-running Tempo.
+        ///
+        /// Windows refuses SetForegroundWindow to a process that does not own the
+        /// foreground, and the running instance never does — it is in the background by
+        /// definition when someone launches Tempo again. So it asked to come forward and
+        /// Windows quietly flashed its taskbar button instead. Measured: with Notepad in
+        /// front, launching Tempo a second time left the foreground on another window
+        /// entirely, while the notice said "Its window has been brought to the front".
+        ///
+        /// THIS process is the one Windows will listen to — the user just launched it, so
+        /// it holds the foreground right. AllowSetForegroundWindow passes that right to
+        /// the target, which is the sanctioned way to do this rather than a trick.
+        /// </summary>
+        [DllImport("user32.dll")]
+        private static extern bool AllowSetForegroundWindow(int dwProcessId);
+        private const int ASFW_ANY = -1;
+
+        /// <summary>
         /// Signals the already-running Tempo to surface its window (out of the tray and
         /// to the front). Broadcasts a registered message that the running instance's
         /// MainForm listens for; all top-level windows — including a tray-hidden one —
         /// receive it. Best-effort: if it doesn't land, the info dialog still guides the
         /// user to the tray.
         /// </summary>
+        /// <summary>
+        /// Passes this process's foreground right to the other Tempo.
+        ///
+        /// Named to that process rather than ASFW_ANY: the effect here is the same, but
+        /// it does not leave every process on the desktop free to grab the foreground for
+        /// the rest of this one's short life.
+        /// </summary>
+        private static void GrantForegroundToOtherTempo()
+        {
+            bool granted = false;
+            try
+            {
+                int me = System.Diagnostics.Process.GetCurrentProcess().Id;
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("Tempo"))
+                {
+                    using (p)
+                    {
+                        if (p.Id != me && AllowSetForegroundWindow(p.Id)) { granted = true; }
+                    }
+                }
+            }
+            catch { }
+            if (!granted) { try { AllowSetForegroundWindow(ASFW_ANY); } catch { } }
+        }
+
         private static void TryActivateExistingInstance()
         {
             try
             {
+                GrantForegroundToOtherTempo();
+
                 int msg = RegisterWindowMessage(MainForm.ShowInstanceMessageName);
                 if (msg != 0)
                 {
@@ -140,12 +185,42 @@ namespace AutoClicker
                 }
                 catch { /* fall back to the default dark theme and English */ }
 
+                // This instance returns from here and never reaches the startup block
+                // below, so nothing has prepared WinForms yet: no visual styles, and no
+                // default window icon. That is why this notice came up with the stock
+                // icon in its title bar, its taskbar button and Alt-Tab, while every
+                // other Tempo window shows the app icon — or the custom logo, since
+                // AppIcon.Get() prefers it. No form sets its own Icon; they all rely on
+                // this one call, so the path that skips it is the path that loses it.
+                //
+                // Both Application calls must happen before the first window exists,
+                // which here is still true.
+                try
+                {
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    Utils.AppIcon.SetAsWindowDefault();
+                }
+                catch (Exception ex)
+                {
+                    Utils.Logger.Warn("[startup] preparing the already-running notice: " + ex.Message);
+                }
+
                 try
                 {
                     using (var dlg = new UI.AlreadyRunningForm(theme, version))
                     {
                         dlg.ShowDialog();
                     }
+
+                    // Again, now the notice is gone. The first call restores the window
+                    // while this dialog is still up, but the dialog is itself a
+                    // foreground window in THIS process, and closing it hands the
+                    // foreground to whatever Windows picks next — measured, that was the
+                    // app the user came from, straight back over the window we had just
+                    // raised. Asking once more after the notice closes is what makes the
+                    // result stick, and it is the last thing this process does.
+                    TryActivateExistingInstance();
                 }
                 catch (Exception ex)
                 {
@@ -207,6 +282,13 @@ namespace AutoClicker
             // SelfCheck, which is what establishes the folder we're running from and must
             // therefore be kept. Never blocks startup, never throws.
             Utils.BundleCleanup.SweepInBackground();
+
+            // Keep the version Windows shows in sync with the exe that is running.
+            // Self-updates replace Tempo.exe without touching the registry, so the number
+            // in Settings > Apps drifts further behind with every release. Off-thread and
+            // best-effort: it is a cosmetic value and must never delay startup.
+            System.Threading.ThreadPool.QueueUserWorkItem(
+                _ => Utils.Uninstaller.RefreshRegisteredVersion());
 
             // Prime WinForms and put the splash on screen FIRST, before any other
             // startup work, so there's instant visible feedback. Everything below this
@@ -332,6 +414,32 @@ namespace AutoClicker
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
             }
+        }
+
+        /// <summary>
+        /// True when Windows launched us from the Uninstall button in Settings → Apps.
+        ///
+        /// The registry used to point that button at uninstall.cmd in the install folder,
+        /// which install.cmd copies only IF it finds one to copy — but it wrote the
+        /// registry value either way. On this machine the result was a dangling Uninstall
+        /// button that had never worked. The exe cannot dangle: it is the thing being
+        /// uninstalled, so it is present by definition.
+        /// </summary>
+        internal static bool StartedForUninstall()
+        {
+            try
+            {
+                foreach (string a in Environment.GetCommandLineArgs())
+                {
+                    if (string.Equals(a, "--uninstall", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(a, "/uninstall", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
         }
 
         /// <summary>True when this process was launched by Tempo's own restart flow.</summary>

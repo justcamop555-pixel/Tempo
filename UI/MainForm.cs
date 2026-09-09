@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Windows.Forms;
 using AutoClicker.Engine;
@@ -185,6 +185,17 @@ namespace AutoClicker.UI
         private bool _inMoveLoop;
         /// <summary>Whether compositing was on before the drag, so it can be put back.</summary>
         private bool _compositedBeforeMove;
+        private readonly System.Diagnostics.Stopwatch _moveLoopClock = new System.Diagnostics.Stopwatch();
+
+        /// <summary>
+        /// True while the user is dragging or resizing the window.
+        ///
+        /// Read by the animated logo so it stops pushing frames mid-drag: every frame
+        /// sets an Icon on each open form and invalidates the header, which is work the
+        /// move loop then has to paint through for a picture nobody can look at while
+        /// the window is in motion.
+        /// </summary>
+        internal bool InMoveLoop => _inMoveLoop;
 
         /// <summary>
         /// Drops the expensive-but-pointless work for the duration of a drag/resize.
@@ -202,6 +213,12 @@ namespace AutoClicker.UI
                     ApplyCompositedForBackdrop(false);
                 }
                 StopSharedBgAnimation();
+                // Logged because "the drag feels laggy" is otherwise unfalsifiable: this
+                // says whether the mitigation ran at all and what it had to switch off.
+                _moveLoopClock.Restart();
+                Utils.Logger.Info("[Drag] move loop started — compositing was " +
+                                  (_compositedBeforeMove ? "ON (suspended)" : "off") +
+                                  ", wallpaper " + (_wallpaperShowing ? "showing" : "none") + ".");
             }
             catch (Exception ex) { Utils.Logger.Swallow("BeginMoveResizeLoop", ex); }
         }
@@ -222,6 +239,8 @@ namespace AutoClicker.UI
                 // animator resumes, or the first frame back shows the stale slice.
                 InvalidateBackdropSurfaces();
                 UpdateGifAnimationState();
+                Utils.Logger.Info("[Drag] move loop ended after " +
+                                  _moveLoopClock.ElapsedMilliseconds + " ms.");
             }
             catch (Exception ex) { Utils.Logger.Swallow("EndMoveResizeLoop", ex); }
         }
@@ -802,9 +821,19 @@ namespace AutoClicker.UI
             // and any further image from that same app within the window is held very
             // briefly and only shown if that app's notification turns up to confirm it's
             // a genuinely new capture. Edits have no notification, so they fold away.
+            // ...but that whole scheme rests on a notification ARRIVING, and the only
+            // thing that delivers one is the Windows mirror — which is a SEPARATE
+            // setting the user may well have off (it is off by default). With it off,
+            // _shotNotifyTick is never set, so nothing could ever confirm a repeat and
+            // every screenshot after the first from the same app was silently dropped
+            // for a full 25 seconds. Two features that look independent, quietly wired
+            // together through one field.
+            bool canConfirm = _notifyMirror != null && _notifyMirror.Running;
+
             bool repeatFromSameApp =
                 !string.IsNullOrEmpty(_lastShotSignature) &&
-                now - _lastShotSignatureTick < ShotRepeatWindowMs;
+                now - _lastShotSignatureTick <
+                    (canConfirm ? ShotRepeatWindowMs : NoMirrorRepeatWindowMs);
 
             // Ask Windows WHO put this image on the clipboard, right now. This is the
             // reliable way to know the screenshot came from Snipping Tool: it needs no
@@ -844,6 +873,18 @@ namespace AutoClicker.UI
             _lastShotSignature = !string.IsNullOrEmpty(_shotAumid) ? _shotAumid
                                : !string.IsNullOrEmpty(_shotApp) ? _shotApp : "clipboard";
             _lastShotSignatureTick = now;
+
+            // No mirror, so no notification can ever vouch for this one. Holding it for a
+            // confirmation that cannot arrive would discard it, so fold only the rapid
+            // churn an edit produces (brush strokes re-copy continuously) and let
+            // anything slower through as the new screenshot it almost certainly is.
+            if (repeatFromSameApp && !canConfirm)
+            {
+                _shotRepeatsSuppressed++;
+                try { thumb.Dispose(); } catch { }
+                try { if (savedPath != null) { System.IO.File.Delete(savedPath); } } catch { }
+                return;
+            }
 
             StashPendingClipCard(thumb, dim, savedPath, repeatFromSameApp);
         }
@@ -885,11 +926,16 @@ namespace AutoClicker.UI
         // Extended on every repeat, so it spans a whole editing session.
         private const int ShotRepeatWindowMs = 25000;
 
-        private static long SafeFileLength(string path)
-        {
-            try { return path != null ? new System.IO.FileInfo(path).Length : 0; }
-            catch { return 0; }
-        }
+        /// <summary>
+        /// The repeat window used when the Windows mirror is OFF, so no capture-app
+        /// notification can arrive to tell an edit from a new shot.
+        ///
+        /// Time is the only discriminator left, and 25 s of it would swallow real
+        /// screenshots. An editing session re-copies the canvas continuously — stroke to
+        /// stroke is a few hundred ms — while taking a second deliberate screenshot takes
+        /// longer than this. It folds the churn and keeps the captures.
+        /// </summary>
+        private const int NoMirrorRepeatWindowMs = 2500;
 
         private void StashPendingClipCard(System.Drawing.Image thumb, string dim, string path,
                                           bool needsNotificationToConfirm = false)
@@ -1246,6 +1292,15 @@ namespace AutoClicker.UI
                 BringToFront();
                 EnsureOnScreen();
                 Activate();
+
+                // BringToFront and Activate are both subject to the foreground lock, so
+                // on their own they do nothing whenever another app owns the foreground —
+                // which is every time this runs. ForceForeground has existed for exactly
+                // this since the Widgets-board investigation; this path just never used
+                // it. Called here, after Show() and the WindowState restore, because it
+                // deliberately refuses to act on a hidden or minimised window.
+                ForceForeground();
+
                 ReassertTopMost();
                 // Retrying repair, for the same reason as ToggleWindowVisibility: a
                 // window opened straight from the tray was never minimised, so OnResize
@@ -1273,6 +1328,10 @@ namespace AutoClicker.UI
         private readonly MacroStore _macros = new MacroStore();
         private readonly SessionHistoryStore _history = new SessionHistoryStore();
         private long _runStartClicks;
+
+        /// <summary>The profile the current run STARTED under; see where it is set.</summary>
+        private string _runProfileName = string.Empty;
+
         private bool _runCompletedHandled;
         private MacroRecorder _recorder;
         private MacroPlayer _player;
@@ -1382,6 +1441,7 @@ namespace AutoClicker.UI
         private bool _externalLcWasPresent;
         private CaptionHistoryForm _captionHistoryForm;
         private ToolStripMenuItem _trayCaptionHistoryItem;
+        private ToolStripMenuItem _trayNotifyHistoryItem;
         private ToolStripMenuItem _trayMoveCaptionsItem;
         private ToolStripMenuItem _trayShowHideItem;
         private ToolStripMenuItem _trayStatusItem;
@@ -1449,6 +1509,13 @@ namespace AutoClicker.UI
         private System.Windows.Forms.Timer _holdPollTimer;
         private bool _holdActive;
         private bool _reallyClosing;
+
+        /// <summary>
+        /// Set only by the restart path, which asks its own question first. Distinct from
+        /// <see cref="_reallyClosing"/>, which the tray's Exit item also sets — see the
+        /// guard in OnFormClosing.
+        /// </summary>
+        private bool _restartingApp;
         // Set the moment OnFormClosing commits to actually exiting (past the
         // minimise-to-tray and "still running, exit anyway?" branches). Shutdown hides
         // the window straight away so the exit LOOKS instant, and routine state-tracking
@@ -1456,6 +1523,11 @@ namespace AutoClicker.UI
         // otherwise read the hide as "gone to tray" and re-register hotkeys on the way
         // out. Distinct from _reallyClosing, which only marks the deliberate Exit paths.
         private bool _shuttingDown;
+        // Set when Windows itself is ending the session (shutdown/restart/sign-out), as
+        // opposed to the user quitting. Latched in OnSessionEnding, which arrives BEFORE
+        // the close, so the exit path can tell the two apart even though WinForms reports
+        // CloseReason.WindowsShutDown for both a real shutdown and a sign-out.
+        private volatile bool _systemSessionEnding;
         // Times the whole exit so a slow teardown step names itself in the log instead
         // of being reported as a vague "Tempo freezes when I close it".
         private System.Diagnostics.Stopwatch _shutdownClock;
@@ -1490,6 +1562,8 @@ namespace AutoClicker.UI
         private RadioButton _posMultiRadio;
         private CheckBox _restoreCursorCheck;
         private CheckBox _backgroundClickCheck;
+        /// <summary>Says why background clicking is unavailable, when it is.</summary>
+        private Label _backgroundClickNote;
         private CheckBox _soundOnStartCheck;
         private CheckBox _soundOnStopCheck;
         private CheckBox _secondCursorEnableCheck;
@@ -1542,6 +1616,9 @@ namespace AutoClicker.UI
         private Button _showPointsBtn;
         private ComboBox _pointOrderCombo;
         private Label _cycleInfoLabel;
+
+        /// <summary>Says why the point list will not do what it looks like it will.</summary>
+        private Label _pointsWarnLabel;
 
         // ── Macros tab controls ───────────────────────────────────────────────
         private ListBox _macroListBox;
@@ -1688,6 +1765,21 @@ namespace AutoClicker.UI
         /// <summary>"Animate my logo", plus the line that says what the logo is doing.</summary>
         private CheckBox _animateLogoCheck;
         private Label _animateLogoNote;
+
+        /// <summary>Playback speed for an animated logo, as a ratio of its own timing.</summary>
+        private Label _logoSpeedLabel;
+        private ComboBox _logoSpeedCombo;
+
+        /// <summary>What the display is doing to the theme's colours (HDR, colour depth).</summary>
+        private Label _displayColourNote;
+
+        /// <summary>"Correct colours for HDR" — only meaningful while HDR is on.</summary>
+        private CheckBox _hdrCompensateCheck;
+
+        /// <summary>Accent details: the derived hover colour, the hex value, and its readability.</summary>
+        private Panel _accentHoverSwatch;
+        private FlatTextBox _accentHexBox;
+        private Label _accentContrastLabel;
         private Button _chooseAccentBtn;
         private Panel _accentSwatch;
         private Panel[] _previewSwatches;
@@ -1701,6 +1793,15 @@ namespace AutoClicker.UI
         private NumericUpDown _startupDelayNum;
         private Button _saveSettingsBtn;
 
+        /// <summary>Says how many notifications were dropped unseen, beside the history button.</summary>
+        private Label _notifyMissedLabel;
+
+        /// <summary>Opens Windows' notifications-access page; shown only when it refused.</summary>
+        private Button _notifyPermissionBtn;
+
+        /// <summary>The AnimatedLogo status the logo note was last rebuilt for.</summary>
+        private string _lastLogoNoteStatus;
+
         public MainForm()
         {
             Logger.Initialize();
@@ -1713,6 +1814,21 @@ namespace AutoClicker.UI
             // after and a logo the user has switched off would be rendered in full and
             // then thrown away.
             Utils.AnimatedLogo.SetEnabled(_settings.AnimateCustomLogo);
+            Utils.AnimatedLogo.SpeedPercent = _settings.LogoAnimationSpeed;
+
+            // The script step's interpreter picker is two dialogs deep and has no settings
+            // object; this is where the choice is loaded and where saving it is wired up.
+            Utils.PythonRunner.PreferredExe = _settings.PythonInterpreterPath ?? "";
+            Utils.PythonRunner.PreferredExeChanged = chosen =>
+            {
+                try
+                {
+                    _settings.PythonInterpreterPath = chosen ?? "";
+                    SettingsManager.Save(_settings);
+                }
+                catch (Exception ex) { Utils.Logger.Swallow("PythonInterpreterSave", ex); }
+            };
+            ApplyHdrCompensationSetting();
 
             // First run only: match Tempo to the user's Windows display language
             // using the translations already built in (no new languages added).
@@ -1730,6 +1846,7 @@ namespace AutoClicker.UI
 
             _profiles.Load();
             _macros.Load();
+            _accounts.Refresh();   // vault: just detect NoVault/Locked — never auto-unlock at startup
             _history.Load();
             // One-time: seed the rolling lifetime stat aggregates from existing history so
             // the all-time insight cards don't reset for users upgrading with past runs.
@@ -1758,7 +1875,21 @@ namespace AutoClicker.UI
             // tab, so anything appended after it would silently take over that menu item.
             StartupStep("captions tab", BuildCaptionsTab);
             StartupStep("settings tab", BuildSettingsTab);
+            // After Settings, which used to be unsafe: the tray's "Settings…" entry
+            // selected "the last tab". It now looks the page up by name, so appending
+            // here is fine — and Accounts wants to be last so it takes Ctrl+9 and sits at
+            // the bottom of the sidebar.
+            StartupStep("accounts tab", BuildAccountsTab);
             StartupStep("sidebar", BuildSidebar);
+
+            // The splash's third stage, reported where it actually finishes. This is the
+            // expensive part of startup — the eight tabs are ~940 ms of it — so it is
+            // also the stage most worth showing progress for.
+            try
+            {
+                SplashForm.Report(2, Localization.F("{0} tabs", _tabs?.TabPages.Count ?? 0));
+            }
+            catch { }
 
             WireEngineEvents();
             WireHotkeyEvents();
@@ -1829,7 +1960,10 @@ namespace AutoClicker.UI
             if (_startupClock != null)
             {
                 _startupClock.Stop();
-                Logger.Info("[startup] window built in " + _startupClock.ElapsedMilliseconds + " ms.");
+                long total = _startupClock.ElapsedMilliseconds;
+                Logger.Info("[startup] window built in " + total + " ms — " +
+                            _startupStepMs + " ms in " + _startupStepCount + " timed steps, " +
+                            (total - _startupStepMs) + " ms outside them.");
             }
         }
 
@@ -2104,23 +2238,34 @@ namespace AutoClicker.UI
                         (mic != null ? Localization.T("Microphone available:") + " " + mic + " — " +
                                        Localization.T("set \"Listen to\" to Microphone.")
                                      : Localization.T("Connect a speaker or microphone to use Tempo's captions."));
-                    _audioDeviceStatus.ForeColor = _theme != null ? _theme.Warning : Color.Orange;
+                    _audioDeviceStatus.ForeColor = _theme != null ? _theme.WarningText : Color.Orange;
                     return;
                 }
+                // Say WHY it can't be used when Windows has told us. "Isn't connected" is
+                // wrong and unhelpful for a device that is plugged in but disabled, and
+                // the fix the user needs is different in each case.
                 if (_settings != null && _settings.CaptionSpeakerDeviceId.Length > 0 &&
                     !DeviceIdPresent(_audioWatcher.Speakers, _settings.CaptionSpeakerDeviceId))
                 {
-                    _audioDeviceStatus.Text = "⚠ " + Localization.T(
-                        "Your chosen speaker isn't connected — captions are using the Windows default for now.");
-                    _audioDeviceStatus.ForeColor = _theme != null ? _theme.Warning : Color.Orange;
+                    var d = FindDevice(_audioWatcher.Speakers, _settings.CaptionSpeakerDeviceId);
+                    _audioDeviceStatus.Text = "⚠ " + (d != null
+                        ? Localization.F("Your chosen speaker \"{0}\" is {1}", d.Name, d.StateNote) + " — " +
+                          Localization.T("captions are using the Windows default for now.")
+                        : Localization.T(
+                            "Your chosen speaker isn't connected — captions are using the Windows default for now."));
+                    _audioDeviceStatus.ForeColor = _theme != null ? _theme.WarningText : Color.Orange;
                     return;
                 }
                 if (_settings != null && _settings.CaptionMicDeviceId.Length > 0 &&
                     !DeviceIdPresent(_audioWatcher.Microphones, _settings.CaptionMicDeviceId))
                 {
-                    _audioDeviceStatus.Text = "⚠ " + Localization.T(
-                        "Your chosen microphone isn't connected — the Windows default is used for now.");
-                    _audioDeviceStatus.ForeColor = _theme != null ? _theme.Warning : Color.Orange;
+                    var d = FindDevice(_audioWatcher.Microphones, _settings.CaptionMicDeviceId);
+                    _audioDeviceStatus.Text = "⚠ " + (d != null
+                        ? Localization.F("Your chosen microphone \"{0}\" is {1}", d.Name, d.StateNote) + " — " +
+                          Localization.T("the Windows default is used for now.")
+                        : Localization.T(
+                            "Your chosen microphone isn't connected — the Windows default is used for now."));
+                    _audioDeviceStatus.ForeColor = _theme != null ? _theme.WarningText : Color.Orange;
                     return;
                 }
                 _audioDeviceStatus.Text = "";
@@ -2128,14 +2273,32 @@ namespace AutoClicker.UI
             catch { }
         }
 
+        /// <summary>
+        /// Whether the saved device is present AND usable.
+        ///
+        /// Present is no longer the same question: the lists now carry devices Windows
+        /// has unplugged or disabled, so a device can be listed and still be impossible
+        /// to capture from. The warning label is about whether captions can use it.
+        /// </summary>
         private static bool DeviceIdPresent(
-            System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> list, string id)
+            System.Collections.Generic.List<Utils.AudioEndpointInfo> list, string id)
         {
-            foreach (var kv in list)
+            foreach (var d in list)
             {
-                if (kv.Key == id) { return true; }
+                if (d.Id == id) { return d.Usable; }
             }
             return false;
+        }
+
+        /// <summary>The saved device's entry, or null when Windows has never heard of it.</summary>
+        private static Utils.AudioEndpointInfo FindDevice(
+            System.Collections.Generic.List<Utils.AudioEndpointInfo> list, string id)
+        {
+            foreach (var d in list)
+            {
+                if (d.Id == id) { return d; }
+            }
+            return null;
         }
 
         // The endpoint ids behind the picker rows (index 0 = "" = Windows default).
@@ -2173,9 +2336,14 @@ namespace AutoClicker.UI
 
         private void FillDeviceCombo(ComboBox combo,
             System.Collections.Generic.List<string> ids,
-            System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> devices,
+            System.Collections.Generic.List<Utils.AudioEndpointInfo> devices,
             string savedId)
         {
+            // Never rebuild the list the user is reading. The watcher polls every 2 s and
+            // fires on any change, so a device appearing while the dropdown is open would
+            // clear the items out from under the pointer and reset the highlight.
+            if (combo.DroppedDown) { return; }
+
             combo.BeginUpdate();
             try
             {
@@ -2184,15 +2352,29 @@ namespace AutoClicker.UI
                 combo.Items.Add(Localization.T("Default (follow Windows)"));
                 ids.Add("");
                 int select = 0;
-                foreach (var kv in devices)
+                bool sawSaved = false;
+                foreach (var d in devices)
                 {
-                    combo.Items.Add(kv.Value);
-                    ids.Add(kv.Key);
-                    if (savedId.Length > 0 && kv.Key == savedId)
+                    combo.Items.Add(d.Label);
+                    ids.Add(d.Id);
+                    if (savedId.Length > 0 && d.Id == savedId)
                     {
                         select = ids.Count - 1;
+                        sawSaved = true;
                     }
                 }
+
+                // A saved device Windows no longer reports at all still belongs in the
+                // list. Dropping it left the picker showing "Default (follow Windows)"
+                // while the setting held a different device — the control disagreeing
+                // with what was actually saved, which is the worst of both.
+                if (savedId.Length > 0 && !sawSaved)
+                {
+                    combo.Items.Add(Localization.T("Chosen device — not connected"));
+                    ids.Add(savedId);
+                    select = ids.Count - 1;
+                }
+
                 if (combo.Items.Count == 1)
                 {
                     // Honest emptiness: no device of this class AT ALL.
@@ -2612,20 +2794,78 @@ namespace AutoClicker.UI
                                "Full quality returns when it closes.");
                 }
 
+                // Hotkeys that didn't get a working route. Found when the bindings were
+                // applied, not when this list is opened, so it is right even if the
+                // Keybinds tab has never been looked at.
+                foreach (string line in _hotkeyConflicts)
+                {
+                    issues.Add(line);
+                }
+
                 // The user picked a specific audio device and it's gone.
                 if (_settings != null && _audioWatcher != null)
                 {
                     if (_settings.CaptionSpeakerDeviceId.Length > 0 &&
                         !DeviceIdPresent(_audioWatcher.Speakers, _settings.CaptionSpeakerDeviceId))
                     {
-                        issues.Add("⚠ The chosen caption speaker isn't connected — using the Windows default. " +
-                                   "Re-pick it under Settings → Live Captions.");
+                        var d = FindDevice(_audioWatcher.Speakers, _settings.CaptionSpeakerDeviceId);
+                        issues.Add("⚠ The chosen caption speaker " +
+                                   (d != null ? "(\"" + d.Name + "\") is " + d.StateNote : "isn't connected") +
+                                   " — using the Windows default. Re-pick it under Settings → Live Captions.");
                     }
                     if (_settings.CaptionMicDeviceId.Length > 0 &&
                         !DeviceIdPresent(_audioWatcher.Microphones, _settings.CaptionMicDeviceId))
                     {
-                        issues.Add("⚠ The chosen caption microphone isn't connected — using the Windows default. " +
-                                   "Re-pick it under Settings → Live Captions.");
+                        var d = FindDevice(_audioWatcher.Microphones, _settings.CaptionMicDeviceId);
+                        issues.Add("⚠ The chosen caption microphone " +
+                                   (d != null ? "(\"" + d.Name + "\") is " + d.StateNote : "isn't connected") +
+                                   " — using the Windows default. Re-pick it under Settings → Live Captions.");
+                    }
+                }
+
+                // Start-with-Windows that won't actually start. Both of these leave the
+                // Settings checkbox reading ON, so the failure is invisible until the
+                // next reboot doesn't bring Tempo back.
+                if (_settings != null && _settings.LaunchAtStartup)
+                {
+                    if (Utils.StartupManager.IsDisabledByTaskManager())
+                    {
+                        issues.Add("⚠ Start with Windows is on here, but Task Manager → Startup apps has Tempo "
+                                   + "disabled — Windows will not launch it at sign-in until that is turned back on.");
+                    }
+                    else if (!Utils.StartupManager.IsPresent())
+                    {
+                        issues.Add("⚠ Start with Windows is on, but the sign-in entry is missing (a cleaner or "
+                                   + "antivirus usually removes it). Toggle the setting off and on to rewrite it.");
+                    }
+                    else
+                    {
+                        string reg = Utils.StartupManager.RegisteredExePath();
+                        if (!string.IsNullOrEmpty(reg) && !System.IO.File.Exists(reg))
+                        {
+                            issues.Add("⚠ The sign-in entry points at \"" + reg + "\", which no longer exists — "
+                                       + "Tempo will not start after a reboot. Toggle the setting off and on to fix it.");
+                        }
+                    }
+                }
+
+                // Expired Roblox sessions can't launch until they're signed in again.
+                if (_accounts != null && _accounts.IsUnlocked && _sessionHealth.Count > 0)
+                {
+                    int expired = 0;
+                    foreach (var a in _accounts.Accounts)
+                    {
+                        if (string.IsNullOrEmpty(a.Cookie)) { continue; }
+                        if (_sessionHealth.TryGetValue(a.Name, out SessionHealth h) && h == SessionHealth.Expired)
+                        {
+                            expired++;
+                        }
+                    }
+                    if (expired > 0)
+                    {
+                        issues.Add("⚠ " + expired + (expired == 1 ? " Roblox account has" : " Roblox accounts have")
+                                   + " an expired session and cannot launch — use Re-login on "
+                                   + (expired == 1 ? "it" : "them") + " in the Accounts tab.");
                     }
                 }
             }
@@ -3000,6 +3240,27 @@ namespace AutoClicker.UI
 
                 string src = _mediaDetector != null ? _mediaDetector.CurrentAudioSource : "";
                 sb.Append("Audio source: ").Append(string.IsNullOrEmpty(src) ? "(quiet)" : src);
+
+                // Name the output being captured, and call out sound arriving on a
+                // DIFFERENT one. "(quiet)" reads identically whether nothing is playing or
+                // the audio is going somewhere Tempo isn't listening, and only this line
+                // can tell those apart.
+                try
+                {
+                    var tr = _captionTranscriber;
+                    if (tr != null && tr.IsRunning)
+                    {
+                        string cap = tr.CaptureDeviceName;
+                        if (!string.IsNullOrEmpty(cap)) { sb.Append(" · capturing ").Append(cap); }
+                        string other = tr.AudioElsewhereOn;
+                        if (!string.IsNullOrEmpty(other))
+                        {
+                            sb.Append("  ⚠ sound is playing on ").Append(other)
+                              .Append(" — Tempo is not listening to that device");
+                        }
+                    }
+                }
+                catch { }
                 int voice = _voiceProfiler != null ? _voiceProfiler.CurrentSpeaker : 0;
                 int face = _faceAnalyzer != null ? _faceAnalyzer.CurrentVisualSpeaker : 0;
                 int faces = _faceAnalyzer != null ? _faceAnalyzer.FaceCount : 0;
@@ -3026,6 +3287,20 @@ namespace AutoClicker.UI
                       .Append(_faceAnalyzer.FramesSkipped)
                       .Append("  · scene cuts ").Append(_faceAnalyzer.SceneCutCount)
                       .Append("  · frame motion ").Append(_faceAnalyzer.GlobalMotion.ToString("0.0"))
+                      .AppendLine();
+
+                    // Does the chosen face's mouth actually track the sound? A confident
+                    // label sitting on a NEGATIVE correlation is the signature of the
+                    // analyzer following the wrong face — the one thing this panel could
+                    // not show before, because the verdict was made from motion alone.
+                    double corr = _faceAnalyzer.SpeakerAudioCorrelation;
+                    sb.Append("  Mouth/audio correlation: ")
+                      .Append(double.IsNaN(corr)
+                          ? "n/a (too little audio variation yet)"
+                          : corr.ToString("+0.00;-0.00;0.00") +
+                            (corr >= 0.35 ? "  — mouth tracks the sound"
+                           : corr <= -0.10 ? "  ⚠ moves AGAINST the sound"
+                           : "  — weak agreement"))
                       .AppendLine();
                     // Say the blank case out loud. Without this it reads as "0 faces,
                     // forever" and looks like the feature is broken, when in fact there
@@ -3429,7 +3704,7 @@ namespace AutoClicker.UI
 
                     sb.Append("  colours: title bar ").Append(HexOf(_theme != null ? _theme.Surface : Color.Black))
                       .Append(" · text ").Append(HexOf(_theme != null ? _theme.Text : Color.White))
-                      .Append(Environment.OSVersion.Version.Build >= 22000
+                      .Append(Utils.WindowsVersion.IsWindows11OrNewer
                           ? " (themed)"
                           : " (Windows 10 — dark/light only)")
                       .AppendLine();
@@ -3663,6 +3938,19 @@ namespace AutoClicker.UI
                     sb.Append("Logo: (probe error: ").Append(lex.Message).Append(')').AppendLine();
                 }
 
+                // Which Windows, said once, near the top of what people paste into a bug
+                // report. The rest of this panel described Tempo in detail and never
+                // named the platform it was running on.
+                sb.Append("OS: ").Append(Utils.WindowsVersion.Describe());
+                if (Utils.WindowsVersion.Status != Utils.WindowsVersion.Support.Supported)
+                {
+                    sb.Append("  ⚠ ").Append(Utils.WindowsVersion.SupportNote());
+                }
+                sb.AppendLine();
+
+                AppendStartupStats(sb);
+                AppendAccountsStats(sb);
+
                 sb.Append("Session: v").Append(Application.ProductVersion)
                   .Append(" · clicker ").Append(_engine != null && _engine.IsRunning ? "RUNNING" : "idle")
                   .Append(" · events: ").Append(Utils.Logger.WarnCount).Append(" warn / ")
@@ -3701,6 +3989,155 @@ namespace AutoClicker.UI
                 catch { /* give back whatever we have */ }
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// "Will Tempo actually come back after a reboot?" — every input to that answer,
+        /// in one place.
+        ///
+        /// The Settings checkbox alone has never been able to tell the truth here, because
+        /// Windows can override it in two ways that leave the checkbox looking fine:
+        /// Task Manager's Startup-apps tab can disable the entry without deleting it, and
+        /// the entry can survive while the executable it names is gone. Both present as
+        /// "I turned start-with-Windows on and it doesn't start", and neither was visible
+        /// anywhere in the app until now.
+        /// </summary>
+        private void AppendStartupStats(System.Text.StringBuilder sb)
+        {
+            try
+            {
+                bool want = _settings != null && _settings.LaunchAtStartup;
+                bool present = Utils.StartupManager.IsPresent();
+                bool tmDisabled = Utils.StartupManager.IsDisabledByTaskManager();
+                bool effective = present && !tmDisabled;
+
+                sb.Append("Startup: setting ").Append(want ? "ON" : "off")
+                  .Append(" · Windows will ").Append(effective ? "launch Tempo" : "NOT launch Tempo")
+                  .Append(" at sign-in");
+                if (Utils.StartupManager.LaunchedAtStartup())
+                {
+                    sb.Append(" · this run was started by Windows");
+                }
+                sb.AppendLine();
+
+                if (want && !effective)
+                {
+                    sb.Append(tmDisabled
+                        ? "  ⚠ Task Manager > Startup apps has Tempo DISABLED — that overrides the setting here"
+                        : "  ⚠ the sign-in entry is missing — a cleaner or antivirus usually removed it")
+                      .AppendLine();
+                }
+                else if (!want && present)
+                {
+                    sb.Append("  ⚠ the setting is off but a sign-in entry still exists").AppendLine();
+                }
+
+                string registered = Utils.StartupManager.RegisteredExePath();
+                if (!string.IsNullOrEmpty(registered))
+                {
+                    bool exists = System.IO.File.Exists(registered);
+                    string running = Utils.StartupManager.CurrentExePath();
+                    bool same = !string.IsNullOrEmpty(running)
+                                && string.Equals(System.IO.Path.GetFullPath(registered),
+                                                 System.IO.Path.GetFullPath(running),
+                                                 StringComparison.OrdinalIgnoreCase);
+                    sb.Append("  registered: ").Append(registered);
+                    if (!exists)
+                    {
+                        sb.Append("   ⚠ THAT FILE NO LONGER EXISTS — sign-in will silently do nothing");
+                    }
+                    else if (!same)
+                    {
+                        sb.Append("   (a different copy from the one running now)");
+                    }
+                    sb.AppendLine();
+                }
+            }
+            catch (Exception ex)
+            {
+                sb.Append("Startup: (probe error: ").Append(ex.Message).Append(')').AppendLine();
+            }
+        }
+
+        /// <summary>
+        /// The Roblox account manager, which had no representation in Live debug at all —
+        /// so "it won't launch" or "it only started one client" had nothing to read.
+        /// Reports the vault state, the session-health split behind the coloured dots
+        /// (a red dot means that account needs Re-login before it can launch), and what
+        /// the multi-instance singleton closer is actually doing as opposed to what the
+        /// checkbox says.
+        /// </summary>
+        private void AppendAccountsStats(System.Text.StringBuilder sb)
+        {
+            try
+            {
+                var killer = Utils.RobloxSingletonKiller.Status;
+                bool multiOn = _settings != null && _settings.RobloxMultiInstance;
+
+                // Stay silent for the many users who never opened the Accounts tab: no
+                // vault, no multi-instance, nothing running.
+                if (_accounts == null && !multiOn
+                    && killer == Utils.RobloxSingletonKiller.KillerStatus.Off)
+                {
+                    return;
+                }
+
+                sb.Append("Accounts: ");
+                if (_accounts == null)
+                {
+                    sb.Append("vault not loaded");
+                }
+                else if (!_accounts.IsUnlocked)
+                {
+                    sb.Append("vault LOCKED (accounts and sessions are unreadable until it's unlocked)");
+                }
+                else
+                {
+                    int total = _accounts.Accounts.Count;
+                    int withCookie = 0, valid = 0, expired = 0, unknown = 0;
+                    foreach (var a in _accounts.Accounts)
+                    {
+                        if (string.IsNullOrEmpty(a.Cookie)) { continue; }
+                        withCookie++;
+                        if (!_sessionHealth.TryGetValue(a.Name, out SessionHealth h)) { h = SessionHealth.Unknown; }
+                        if (h == SessionHealth.Valid) { valid++; }
+                        else if (h == SessionHealth.Expired) { expired++; }
+                        else { unknown++; }
+                    }
+                    sb.Append("vault unlocked · ").Append(total).Append(total == 1 ? " account" : " accounts")
+                      .Append(" · ").Append(withCookie).Append(" with a saved session").AppendLine();
+                    sb.Append("  sessions: ").Append(valid).Append(" valid · ")
+                      .Append(expired).Append(" expired · ").Append(unknown).Append(" unchecked");
+                    if (_checkingSessions) { sb.Append("   · scanning now"); }
+                    if (expired > 0)
+                    {
+                        sb.Append("   ⚠ ").Append(expired == 1 ? "that account needs" : "those need")
+                          .Append(" Re-login before launching");
+                    }
+                }
+                sb.AppendLine();
+
+                sb.Append("  multi-instance: ").Append(multiOn ? "ON" : "off")
+                  .Append(" · singleton closer ").Append(killer);
+                int clients = Utils.RobloxSingletonKiller.ActiveClientCount;
+                if (clients > 0)
+                {
+                    sb.Append(" · ").Append(clients).Append(clients == 1 ? " client live" : " clients live");
+                }
+                if (killer == Utils.RobloxSingletonKiller.KillerStatus.Blocked)
+                {
+                    sb.Append("   ⚠ can't open the Roblox process — multi-instance cannot work here");
+                }
+                if (!string.IsNullOrEmpty(_lastLaunchedAccountName))
+                {
+                    sb.Append(" · last launched: ").Append(_lastLaunchedAccountName);
+                }
+                sb.AppendLine();
+            }
+            catch (Exception ex)
+            {
+                sb.Append("Accounts: (probe error: ").Append(ex.Message).Append(')').AppendLine();
+            }
         }
 
         /// <summary>
@@ -4216,6 +4653,9 @@ namespace AutoClicker.UI
                 UpdateBackdropActivePage();
                 RefreshSidebarSelection();
 
+                // If the user opted in, lock the account vault the moment they leave the Accounts tab.
+                AutoLockAccountsOnTabSwitch();
+
                 // Force a clean, complete re-layout of the tab now that it's the active
                 // one (sized to the real viewport). Forcing past the scroll skip-guard
                 // is what fixes a tab coming back blank when you return to it: positions
@@ -4586,6 +5026,9 @@ namespace AutoClicker.UI
                 Width = 188,
                 Padding = new Padding(12, 14, 12, 12)
             };
+            // The bottom-pinned nav button has to follow the panel's real height, which is
+            // not known while the sidebar is first built. See LayoutBottomNav.
+            _sidebar.SizeChanged += (s, e) => LayoutBottomNav();
             // A thin divider down the sidebar's right edge to separate it cleanly from
             // the page content, plus a subtle version stamp footer. Drawn directly with
             // the live theme so it recolours automatically on a theme change.
@@ -5150,7 +5593,8 @@ namespace AutoClicker.UI
         {
             NavIconKind.Cursor, NavIconKind.Profile, NavIconKind.Points,
             NavIconKind.Macro, NavIconKind.Chart, NavIconKind.Keyboard,
-            NavIconKind.Caption, NavIconKind.Gear
+            NavIconKind.Caption, NavIconKind.Gear,
+            NavIconKind.Account
         };
 
         /// <summary>Icon hues for a light theme — saturated darks, so they don't wash out.</summary>
@@ -5163,7 +5607,8 @@ namespace AutoClicker.UI
             Color.FromArgb(0, 100, 190),    // Statistics — deep sky blue
             Color.FromArgb(150, 108, 0),    // Keybinds — dark gold
             Color.FromArgb(24, 116, 130),   // Captions — deep teal
-            Color.FromArgb(160, 44, 128)    // Settings — orchid
+            Color.FromArgb(160, 44, 128),   // Settings — orchid
+            Color.FromArgb(28, 86, 168)     // Accounts — deep indigo
         };
 
         /// <summary>Icon hues for a dark theme. Hues match the Live-debug category palette.</summary>
@@ -5176,7 +5621,8 @@ namespace AutoClicker.UI
             Color.FromArgb(120, 200, 255),  // Statistics — sky blue
             Color.FromArgb(240, 205, 120),  // Keybinds — gold
             Color.FromArgb(125, 220, 225),  // Captions — teal
-            Color.FromArgb(235, 150, 210)   // Settings — orchid
+            Color.FromArgb(235, 150, 210),  // Settings — orchid
+            Color.FromArgb(150, 185, 255)   // Accounts — periwinkle
         };
 
         /// <summary>
@@ -5266,10 +5712,74 @@ namespace AutoClicker.UI
                 };
                 _navButtons.Add(nav);
                 _sidebar.Controls.Add(nav);
-                top += btnHeight + gap;
+                // The Accounts row does not take a slot in the stack — it is pinned to the
+                // bottom by LayoutBottomNav below. Everything else advances normally.
+                if (!IsBottomNav(i)) { top += btnHeight + gap; }
             }
 
+            LayoutBottomNav();
             RefreshSidebarSelection();
+        }
+
+        /// <summary>
+        /// True for the tab that hangs at the BOTTOM of the sidebar instead of taking a
+        /// numbered slot in the stack — currently just Accounts, which is a different kind
+        /// of thing from Clicker / Macros / Captions and reads better set apart.
+        /// </summary>
+        private bool IsBottomNav(int tabIndex)
+        {
+            return _tabs != null
+                && tabIndex >= 0 && tabIndex < _tabs.TabPages.Count
+                && string.Equals(_tabs.TabPages[tabIndex].Name, "accounts", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Parks the bottom nav button above the sidebar footer.
+        ///
+        /// Re-run on every sidebar resize rather than anchored: BuildSidebar is a startup
+        /// step, and at that point the form has not been laid out, so the panel's height is
+        /// not yet its real one. Anchoring to a wrong initial height puts the button in the
+        /// wrong place for the life of the window.
+        /// </summary>
+        private void LayoutBottomNav()
+        {
+            if (_sidebar == null || _tabs == null || _navButtons.Count == 0)
+            {
+                return;
+            }
+            for (int i = 0; i < _navButtons.Count && i < _tabs.TabPages.Count; i++)
+            {
+                if (!IsBottomNav(i)) { continue; }
+                RoundedButton nav = _navButtons[i];
+                // FooterReserve clears the version stamp, the build-ID line and the hairline
+                // the sidebar paints above them (see the Paint handler on _sidebar).
+                const int FooterReserve = 78;
+                int top = _sidebar.ClientSize.Height - FooterReserve - nav.Height;
+                if (top < _sidebar.Padding.Top) { top = _sidebar.Padding.Top; }
+                nav.Top = top;
+            }
+        }
+
+        /// <summary>
+        /// Selects a page by its stable <c>page.Name</c> key. Returns false when there is
+        /// no such page, rather than guessing at an index.
+        /// </summary>
+        private bool SelectTabByKey(string key)
+        {
+            if (_tabs == null || string.IsNullOrEmpty(key))
+            {
+                return false;
+            }
+            for (int i = 0; i < _tabs.TabPages.Count; i++)
+            {
+                if (string.Equals(_tabs.TabPages[i].Name, key, StringComparison.Ordinal))
+                {
+                    SaveActiveTabScroll();
+                    _tabs.SelectedIndex = i;
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>Highlights the sidebar button for the currently selected tab.</summary>
@@ -5526,6 +6036,30 @@ namespace AutoClicker.UI
                 else
                 {
                     scrollable.AutoScrollMinSize = Size.Empty;
+
+                    // A page can end up with a scroll range far wider than its content, and
+                    // nothing above notices. Restoring the window from maximised resizes the
+                    // page FIRST — WinForms measures the scroll range while the cards are
+                    // still centred out at x≈507, so it records a 1207px range — and only
+                    // then does this method run and pull them back to x≈49. The range is
+                    // never remeasured downwards, so an 815px page keeps a 1207px range and
+                    // grows a HORIZONTAL scrollbar over content that fits. Drag it and the
+                    // cards slide off the left edge, cut in half: that is the reported
+                    // "every tab mess" after accidentally full-screening.
+                    //
+                    // Repairing it here does not work, and it took an instrumented build to
+                    // see why: everything between the freeze and the thaw runs with
+                    // WM_SETREDRAW off, and while it is off DisplayRectangle still reads the
+                    // OLD 1715px viewport and none of PerformLayout, AutoScrollMinSize or an
+                    // AutoScroll toggle makes the native scrollbar change. Measured, in that
+                    // order, all six left it at 1715. The same toggle one message later —
+                    // after the thaw — reads the real 1207 and takes: 1207 → 815, scrollbar
+                    // gone. So the repair is deferred rather than done inline.
+                    if (scrollable.DisplayRectangle.Width > scrollable.ClientSize.Width
+                        && maxRight + offset <= available)
+                    {
+                        ScheduleScrollRangeRepair(page, scrollable);
+                    }
                 }
 
                 if (force && !_isFullScreen)
@@ -5598,6 +6132,64 @@ namespace AutoClicker.UI
                     }
                 }
                 _centeringBusy = false;
+            }
+        }
+
+        /// <summary>Pages with a scroll-range repair already queued for the next message.</summary>
+        private readonly System.Collections.Generic.HashSet<Control> _scrollRepairQueued
+            = new System.Collections.Generic.HashSet<Control>();
+
+        /// <summary>
+        /// Drops a scroll range that is wider than the page it belongs to, once the current
+        /// message has finished. See the note at the call site for why it cannot be done
+        /// inline: with redraw frozen, nothing moves the range.
+        ///
+        /// Only ever shrinks — it re-measures against the children's real positions — so if
+        /// the page genuinely needs to scroll sideways it will simply measure that again and
+        /// keep the bar. The vertical position is put back; the horizontal is not, because
+        /// nothing in this app is meant to scroll sideways and any offset it had was part of
+        /// the fault being repaired.
+        /// </summary>
+        private void ScheduleScrollRangeRepair(TabPage page, ScrollableControl scrollable)
+        {
+            if (scrollable == null || scrollable.IsDisposed || !IsHandleCreated)
+            {
+                return;
+            }
+            // A single restore fires SizeChanged and ClientSizeChanged several times over;
+            // queueing one repair per event would toggle AutoScroll a dozen times.
+            if (!_scrollRepairQueued.Add(scrollable))
+            {
+                return;
+            }
+            try
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    _scrollRepairQueued.Remove(scrollable);
+                    try
+                    {
+                        if (scrollable.IsDisposed || !scrollable.IsHandleCreated) { return; }
+                        int before = scrollable.DisplayRectangle.Width;
+                        if (before <= scrollable.ClientSize.Width) { return; }
+
+                        Point keep = scrollable.AutoScrollPosition;
+                        scrollable.AutoScroll = false;
+                        scrollable.AutoScroll = true;
+                        scrollable.PerformLayout();
+                        scrollable.AutoScrollPosition = new Point(0, -keep.Y);
+
+                        Logger.Info("[layout] " + (page != null ? page.Text : "page")
+                            + ": dropped a stale " + before + "px scroll range for a "
+                            + scrollable.ClientSize.Width + "px viewport (now "
+                            + scrollable.DisplayRectangle.Width + "px).");
+                    }
+                    catch (Exception ex) { Logger.Swallow("CenterPageContent/scrollRange", ex); }
+                }));
+            }
+            catch
+            {
+                _scrollRepairQueued.Remove(scrollable);
             }
         }
 
@@ -5937,6 +6529,9 @@ namespace AutoClicker.UI
 
         private bool _traySleepActive;
 
+        /// <summary>What the last sleep decision was applied FOR; see UpdateTraySleepState.</summary>
+        private string _traySleepSignature = "";
+
         /// <summary>
         /// Tray sleep: while the window is hidden in the tray AND nothing is
         /// running, global hotkeys and the cursor trail are paused so a forgotten
@@ -5956,10 +6551,29 @@ namespace AutoClicker.UI
                         (_player != null && _player.IsPlaying) ||
                         (_recorder != null && _recorder.IsRecording);
             bool shouldSleep = _settings.TraySleepEnabled && !Visible && !busy;
-            if (shouldSleep == _traySleepActive)
+
+            // The signature carries whether captions are running, but only while asleep.
+            //
+            // Sleeping unregisters every hotkey except emergency stop and show/hide, and
+            // that includes the caption toggle — while Whisper carries on transcribing on
+            // its own thread. Emergency stop does not stop captions either (deliberately:
+            // it hands INPUT back, and captions inject none), so with the window hidden
+            // there was no key left that could switch them off. You had to find the tray
+            // icon and reopen the window while the transcriber kept burning CPU.
+            //
+            // SurvivesTraySleep now keeps that one toggle bound while captions are already
+            // running, so its survival depends on a value that can change mid-sleep — and
+            // a caption started from the tray menu while asleep would otherwise never get
+            // its off switch back. Left out of the signature when awake, so an ordinary
+            // caption toggle doesn't re-register every hotkey for nothing.
+            string signature = shouldSleep
+                ? (_captionsActive ? "sleep+captions" : "sleep")
+                : "awake";
+            if (string.Equals(signature, _traySleepSignature, StringComparison.Ordinal))
             {
                 return;
             }
+            _traySleepSignature = signature;
 
             _traySleepActive = shouldSleep;
             try
@@ -5975,8 +6589,9 @@ namespace AutoClicker.UI
                     }
                     if (_trayIcon != null)
                     {
-                        _trayIcon.Text = "Tempo \u2014 sleeping. Start/stop hotkeys are paused; " +
-                                         "emergency stop and show/hide still work.";
+                        _trayIcon.Text = Utils.Localization.T(
+                            "Tempo \u2014 sleeping. Start/stop hotkeys are paused; " +
+                            "emergency stop and show/hide still work.");
                     }
                     Utils.Logger.Info("[Tray] sleep: start/playback hotkeys paused while hidden and idle " +
                                       "(emergency stop and show/hide stay bound).");
@@ -6132,7 +6747,7 @@ namespace AutoClicker.UI
                 if (configured && img == null)
                 {
                     _bgGifNote.Text = Localization.T("file missing");
-                    _bgGifNote.ForeColor = _theme != null ? _theme.Warning : _bgGifNote.ForeColor;
+                    _bgGifNote.ForeColor = _theme != null ? _theme.WarningText : _bgGifNote.ForeColor;
                 }
                 else
                 {
@@ -6412,6 +7027,18 @@ namespace AutoClicker.UI
             _trayCaptionHistoryItem.Click += (s, e) => TrayAction("Caption history", ToggleCaptionHistoryWindow);
             _trayMenu.Items.Add(_trayCaptionHistoryItem);
 
+            // In the tray on purpose: someone who has just come out of a game and
+            // suspects they missed something is looking at the tray icon, not hunting
+            // through Settings for it.
+            _trayNotifyHistoryItem = new ToolStripMenuItem(Utils.Localization.T("Notification history"))
+            {
+                CheckOnClick = false,
+                Tag = new TrayItemStyle(TrayGlyph.Speech)
+            };
+            _trayNotifyHistoryItem.Click += (s, e) => TrayAction("Notification history",
+                () => UI.NotificationHistoryForm.ShowFor(this, _theme));
+            _trayMenu.Items.Add(_trayNotifyHistoryItem);
+
             _trayMoveCaptionsItem = new ToolStripMenuItem(Utils.Localization.T("Move captions (drag to reposition)"))
             {
                 CheckOnClick = false,
@@ -6468,7 +7095,11 @@ namespace AutoClicker.UI
                     ShowFromTrayAndActivate();
                     if (_tabs != null && _tabs.TabPages.Count > 0)
                     {
-                        _tabs.SelectedIndex = _tabs.TabPages.Count - 1;   // Settings is last
+                        // BY NAME, not "the last tab". That assumption held only while
+                        // Settings happened to be built last, and it made appending any
+                        // page silently steal this menu item — which is exactly what
+                        // adding Accounts would have done.
+                        SelectTabByKey("settings");
                     }
                 }
                 catch (Exception ex) { Utils.Logger.Swallow("TraySettings", ex); }
@@ -6543,6 +7174,15 @@ namespace AutoClicker.UI
         {
             if (_shuttingDown || IsDisposed) { return; }
 
+            // Nothing while the window is being dragged or resized. Each frame sets an
+            // Icon on every open form and invalidates the header — and with a wallpaper
+            // the header repaint blits a backdrop slice — all so a logo can animate in a
+            // window the user is currently throwing across the screen. The move loop has
+            // to paint through that work, which is exactly where a drag loses frames.
+            // The animation keeps running; only the pushing stops, so it carries on from
+            // the right frame the moment the drag ends.
+            if (_inMoveLoop) { return; }
+
             Icon frame = Utils.AnimatedLogo.CurrentIcon;
             if (frame == null) { return; }
 
@@ -6554,10 +7194,21 @@ namespace AutoClicker.UI
 
             try
             {
+                // Application.OpenForms is a LIVE collection, and this runs at the
+                // animation frame rate. A form closing between the Count check and the
+                // indexer threw IndexOutOfRange — caught, but it aborted the whole loop,
+                // so every form after the one that vanished kept the previous frame.
+                // Observed in the log: "[OnLogoFrame(forms)] handled: Index was out of
+                // range". Snapshot first, and let a single bad entry skip rather than end
+                // the loop; a toast closing mid-frame is completely routine.
                 FormCollection open = Application.OpenForms;
-                for (int i = 0; i < open.Count; i++)
+                int count = open.Count;
+                for (int i = 0; i < count; i++)
                 {
-                    Form f = open[i];
+                    Form f;
+                    try { f = i < open.Count ? open[i] : null; }
+                    catch { continue; }
+
                     // ShowIcon false means the form deliberately has no title-bar icon
                     // (the splash, the toasts); setting one would put it back.
                     if (f == null || f.IsDisposed || !f.ShowIcon) { continue; }
@@ -6574,9 +7225,15 @@ namespace AutoClicker.UI
             // frame rate, and a label nobody is looking at is not worth a text compare.
             try
             {
+                // Compare against the status we last acted on, not against the label. At
+                // any speed but 1x the label carries a "→ 0.4s at 400%" suffix, so it can
+                // never equal Status — which made this rebuild the note, and stat the logo
+                // file, on every single frame.
+                string status = Utils.AnimatedLogo.Status;
                 if (_animateLogoNote != null && _animateLogoNote.IsHandleCreated
-                    && _animateLogoNote.Text != Utils.AnimatedLogo.Status)
+                    && !string.Equals(_lastLogoNoteStatus, status, StringComparison.Ordinal))
                 {
+                    _lastLogoNoteStatus = status;
                     UpdateAnimateLogoNote();
                 }
             }
@@ -6678,6 +7335,120 @@ namespace AutoClicker.UI
         /// they enabled cannot work, and the first-run "Tempo is still running in the
         /// tray" notice, without which closing the window looks like the app quit.
         /// </summary>
+        /// <summary>
+        /// Tells the user about crash reports they have never been shown, once each.
+        ///
+        /// Tempo has always WRITTEN these — but only a UI-thread crash raised a dialog. A
+        /// background-thread one is handled by OnDomainException, which deliberately shows
+        /// no UI because the process is usually already dying, so the file was written in
+        /// silence and nothing ever mentioned it again. The result is a folder quietly
+        /// filling with evidence of bugs nobody can act on: six real reports had built up
+        /// unnoticed on the machine this was written for, the oldest from June.
+        ///
+        /// So: on the next launch, say it happened. Once per report — the watermark in
+        /// settings means a crash is announced exactly once, not never and not on every
+        /// start until the user deletes the file.
+        ///
+        /// Runs off the UI thread (it touches the disk) and notifies back on it.
+        /// </summary>
+        private void ReportUnseenCrashes()
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    string dir = System.IO.Path.GetDirectoryName(Utils.Logger.GetLogPath());
+                    if (string.IsNullOrEmpty(dir) || !System.IO.Directory.Exists(dir)) { return; }
+
+                    DateTime seen = DateTime.MinValue;
+                    if (_settings != null && !string.IsNullOrEmpty(_settings.LastCrashAcknowledgedUtc))
+                    {
+                        DateTime.TryParse(_settings.LastCrashAcknowledgedUtc,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AdjustToUniversal |
+                            System.Globalization.DateTimeStyles.AssumeUniversal, out seen);
+                    }
+
+                    // The file's own write time, not the name: the name's format is a
+                    // detail this should not be coupled to.
+                    var fresh = new System.Collections.Generic.List<System.IO.FileInfo>();
+                    DateTime newest = seen;
+                    foreach (string f in System.IO.Directory.GetFiles(dir, "crash-*.log"))
+                    {
+                        var fi = new System.IO.FileInfo(f);
+                        if (fi.LastWriteTimeUtc > seen)
+                        {
+                            fresh.Add(fi);
+                            if (fi.LastWriteTimeUtc > newest) { newest = fi.LastWriteTimeUtc; }
+                        }
+                    }
+                    if (fresh.Count == 0) { return; }
+
+                    fresh.Sort((a, b) => b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc));
+                    System.IO.FileInfo latest = fresh[0];
+                    int count = fresh.Count;
+                    DateTime mark = newest;
+
+                    UiInvoke(() =>
+                    {
+                        try
+                        {
+                            // Recorded BEFORE the notification is shown. If the user closes
+                            // Tempo without touching it, the report has still been raised
+                            // once — nagging every launch would train them to ignore it,
+                            // which is the failure mode this is trying to fix.
+                            if (_settings != null)
+                            {
+                                _settings.LastCrashAcknowledgedUtc =
+                                    mark.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+                                try { Persistence.SettingsManager.Save(_settings); } catch { }
+                            }
+
+                            string when = latest.LastWriteTime.ToString("d MMM, HH:mm");
+                            string body = count == 1
+                                ? Utils.Localization.F(
+                                    "Tempo hit an unexpected error on {0}. The report is saved on this PC — "
+                                    + "click to open it, and please send it in so it can be fixed.", when)
+                                : Utils.Localization.F(
+                                    "Tempo hit {0} unexpected errors, the most recent on {1}. The reports are "
+                                    + "saved on this PC — click to open them, and please send them in.",
+                                    count, when);
+
+                            if (_notifications != null)
+                            {
+                                _notifications.NotifyCard("Tempo",
+                                    Utils.Localization.T("An error was recorded"), body,
+                                    ToastKind.Warning, TempoNotifyIcon(), null,
+                                    () => OpenCrashReportFolder(latest.FullName));
+                            }
+                            Utils.Logger.Warn("[crash] " + count +
+                                " unreported crash report(s) on disk; newest " + latest.Name);
+                        }
+                        catch (Exception ex) { Utils.Logger.Swallow("ReportUnseenCrashes(ui)", ex); }
+                    });
+                }
+                catch (Exception ex) { Utils.Logger.Swallow("ReportUnseenCrashes", ex); }
+            });
+        }
+
+        /// <summary>Opens Explorer with the newest crash report selected.</summary>
+        private void OpenCrashReportFolder(string reportPath)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(reportPath) && System.IO.File.Exists(reportPath))
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = "/select,\"" + reportPath + "\"",
+                        UseShellExecute = true
+                    });
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("OpenCrashReportFolder", ex); }
+        }
+
         private void TempoNotify(int timeoutMs, string title, string text, ToolTipIcon icon,
                                  bool always = false)
         {
@@ -7138,9 +7909,9 @@ namespace AutoClicker.UI
             {
                 case EngineState.Running:
                     _bigStatusLabel.Text = Localization.T("RUNNING");
-                    _bigStatusLabel.ForeColor = _theme.Success;
+                    _bigStatusLabel.ForeColor = _theme.SuccessText;
                     _statusState.Text = "\u25CF  " + Localization.T("Running");
-                    _statusState.ForeColor = _theme.Success;
+                    _statusState.ForeColor = _theme.SuccessText;
                     _stopBtn.Enabled = true;
                     ShowClickingIndicator(true);
                     if (_soundOnStartCheck != null && _soundOnStartCheck.Checked) { PlayRunTone(true); }
@@ -7158,9 +7929,9 @@ namespace AutoClicker.UI
 
                 case EngineState.Paused:
                     _bigStatusLabel.Text = Localization.T("PAUSED");
-                    _bigStatusLabel.ForeColor = _theme.Warning;
+                    _bigStatusLabel.ForeColor = _theme.WarningText;
                     _statusState.Text = "\u25CF  " + Localization.T("Paused");
-                    _statusState.ForeColor = _theme.Warning;
+                    _statusState.ForeColor = _theme.WarningText;
                     _stopBtn.Enabled = true;
                     ShowClickingIndicator(false);
                     break;
@@ -7464,6 +8235,7 @@ namespace AutoClicker.UI
             if (!_settings.RecordSessionHistory)
             {
                 _lifetimeBaseline -= (_statistics.TotalClicks - _runStartClicks);
+                ClearRunProfileTag();
                 return;
             }
 
@@ -7481,9 +8253,14 @@ namespace AutoClicker.UI
             // profile's TotalRuntimeSeconds was permanently zero and the Profiles
             // tab would have shown a column of noughts. Placed after the privacy
             // return above, so "don't record history" covers this too.
-            if (_profiles != null && !string.IsNullOrEmpty(_currentProfileName))
+            // _runProfileName, not _currentProfileName: the run belongs to the profile it
+            // STARTED under, whatever the dropdown says now. See where it is captured.
+            string ranAs = !string.IsNullOrEmpty(_runProfileName)
+                ? _runProfileName
+                : (_currentProfileName ?? "");
+            if (_profiles != null && !string.IsNullOrEmpty(ranAs))
             {
-                _profiles.AddRuntime(_currentProfileName, (long)runSeconds);
+                _profiles.AddRuntime(ranAs, (long)runSeconds);
                 _profiles.Save();
                 RefreshProfileGrid();
             }
@@ -7499,7 +8276,7 @@ namespace AutoClicker.UI
                     DurationSeconds = runSeconds,
                     AverageCps = runSeconds > 0.01 ? runClicks / runSeconds : 0,
                     PeakCps = _statistics.PeakClicksPerSecond,
-                    Profile = _currentProfileName ?? ""
+                    Profile = ranAs
                 };
                 _history.Add(record);
                 // Fold into the rolling lifetime aggregates so the all-time insight cards
@@ -7518,6 +8295,26 @@ namespace AutoClicker.UI
             }
 
             PersistLifetimeStats();
+            ClearRunProfileTag();
+        }
+
+        /// <summary>
+        /// The run is over, so the "(run started on X)" qualifier in the status bar has
+        /// nothing left to qualify. Called from BOTH exits of the run-completed handler —
+        /// the privacy early-return takes one of them, and leaving the tag up there would
+        /// strand it until the next run.
+        /// </summary>
+        private void ClearRunProfileTag()
+        {
+            if (string.IsNullOrEmpty(_runProfileName))
+            {
+                return;
+            }
+            _runProfileName = string.Empty;
+            if (_statusProfile != null && !string.IsNullOrEmpty(_currentProfileName))
+            {
+                _statusProfile.Text = Localization.T("Profile: ") + _currentProfileName;
+            }
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -7844,6 +8641,12 @@ namespace AutoClicker.UI
                             // to the foreground window when that's unknown.
                             _faceAnalyzer.PreferredWindow =
                                 () => _mediaDetector != null ? _mediaDetector.CurrentAudioWindow : IntPtr.Zero;
+                            // Let the analyzer correlate each face's mouth motion against
+                            // the sound. Without it, it can only ask which mouth moves
+                            // MOST — which chewing and idle animations win as easily as
+                            // speech does.
+                            _faceAnalyzer.AudioLevelDbProvider =
+                                () => _captionTranscriber != null ? _captionTranscriber.LevelDb : -100;
                             _faceAnalyzer.Start();
                         }
                         catch { }
@@ -8839,6 +9642,8 @@ namespace AutoClicker.UI
                                 if (_faceAnalyzer == null) { _faceAnalyzer = new Utils.FaceSpeakerAnalyzer(); }
                                 _faceAnalyzer.PreferredWindow =
                                     () => _mediaDetector != null ? _mediaDetector.CurrentAudioWindow : IntPtr.Zero;
+                                _faceAnalyzer.AudioLevelDbProvider =
+                                    () => _captionTranscriber != null ? _captionTranscriber.LevelDb : -100;
                                 _faceAnalyzer.Start();
                             }
                             catch { }
@@ -10107,11 +10912,123 @@ namespace AutoClicker.UI
         /// Keeping just these two preserves the property that matters — nothing that can
         /// BEGIN clicking, playback or recording stays bound — while leaving the user a
         /// key to wake it and a working panic button.
+        ///
+        /// The caption toggle is a third, but only while captions are ALREADY running:
+        /// then the key can only switch them off, so it takes nothing away from the rule
+        /// above and restores the off switch that sleeping had removed. Captions run on
+        /// their own thread and neither sleeping nor emergency stop stops them, so
+        /// without this the only way to end a transcription with the window hidden was to
+        /// hunt for the tray icon. Once they are off the key is dropped again, so a
+        /// sleeping Tempo still cannot be made to start anything from the keyboard.
         /// </summary>
-        private static bool SurvivesTraySleep(HotkeyAction action)
+        private bool SurvivesTraySleep(HotkeyAction action)
         {
-            return action == HotkeyAction.EmergencyStop
-                || action == HotkeyAction.ShowHideWindow;
+            if (action == HotkeyAction.EmergencyStop || action == HotkeyAction.ShowHideWindow)
+            {
+                return true;
+            }
+            return action == HotkeyAction.ToggleLiveCaptions && _captionsActive;
+        }
+
+        /// <summary>
+        /// Hotkey problems found the last time bindings were applied, ready for the
+        /// diagnostics list. Empty when every attempted binding got a working route.
+        /// </summary>
+        private readonly System.Collections.Generic.List<string> _hotkeyConflicts =
+            new System.Collections.Generic.List<string>();
+
+        /// <summary>
+        /// The subset of the above that got NO route at all — "combo (Action)" per entry.
+        /// Read by the Keybinds tab, which cannot derive it safely on its own; see the
+        /// note where it is filled in.
+        /// </summary>
+        private readonly System.Collections.Generic.List<string> _hotkeyDead =
+            new System.Collections.Generic.List<string>();
+
+        /// <summary>
+        /// Judges every binding Tempo just TRIED to register, and says so immediately.
+        ///
+        /// Until now the three ways a hotkey can fail were only visible on the Keybinds
+        /// tab, and only once it had been built and looked at. Someone who binds a key,
+        /// never opens that tab again and finds the key does nothing had no way to learn
+        /// why — the information existed, in a control nobody was looking at. This runs
+        /// at startup and on every re-apply, so the answer is in the log and the
+        /// diagnostics list from the first second.
+        ///
+        /// The three outcomes are genuinely different problems and get different words:
+        ///   * self-collision — two Tempo actions on one combination; ONE is unbound.
+        ///   * hook fallback  — another program owns it; the action fires, but the key
+        ///                      also keeps doing its job in that program.
+        ///   * no route       — neither worked; the key does nothing at all.
+        /// </summary>
+        private void ReportHotkeyConflicts(
+            System.Collections.Generic.List<Models.HotkeyBinding> attempted)
+        {
+            _hotkeyConflicts.Clear();
+            _hotkeyDead.Clear();
+            if (attempted == null || _hotkeys == null) { return; }
+
+            try
+            {
+                int shared = 0, borrowed = 0, dead = 0;
+                foreach (var b in attempted)
+                {
+                    if (b?.Hotkey == null) { continue; }
+                    string name = b.Action.ToString();
+                    string combo = b.Hotkey.ToDisplayString();
+                    string label = HotkeyActions.LabelFor(b.Action);
+
+                    string owner = _hotkeys.SelfCollisionOwner(name);
+                    if (owner != null)
+                    {
+                        shared++;
+                        HotkeyAction ownerAction;
+                        string ownerLabel = Enum.TryParse(owner, out ownerAction)
+                            ? HotkeyActions.LabelFor(ownerAction) : owner;
+                        _hotkeyConflicts.Add("⚠ " + combo + " is set for both \"" + ownerLabel +
+                            "\" and \"" + label + "\" — only \"" + ownerLabel +
+                            "\" is bound. Give one of them a different key.");
+                        continue;
+                    }
+
+                    switch (_hotkeys.RouteOf(name))
+                    {
+                        case Native.GlobalHotkeyManager.BindRoute.HookFallback:
+                            borrowed++;
+                            _hotkeyConflicts.Add("⚠ " + combo + " (\"" + label +
+                                "\") is already owned by another program. Tempo still catches it, " +
+                                "but the key keeps doing its other job too.");
+                            break;
+                        case Native.GlobalHotkeyManager.BindRoute.None:
+                            dead++;
+                            _hotkeyConflicts.Add("⚠ " + combo + " (\"" + label +
+                                "\") could not be bound at all — that key currently does nothing.");
+                            // Also handed to the Keybinds tab. It cannot work this out for
+                            // itself: only the bindings this pass actually ATTEMPTED can be
+                            // judged, and the skips above (hold mode, tray sleep, an action
+                            // this build does not have) are all deliberate — a sweep that
+                            // re-derived them would start calling them dead.
+                            _hotkeyDead.Add(combo + " (" + label + ")");
+                            break;
+                    }
+                }
+
+                if (_hotkeyConflicts.Count == 0)
+                {
+                    Utils.Logger.Info("[Hotkeys] conflict check: " + attempted.Count +
+                                      " binding(s) attempted, all bound cleanly.");
+                    return;
+                }
+
+                Utils.Logger.Warn("[Hotkeys] conflict check: " + attempted.Count +
+                                  " attempted — " + shared + " shared with another Tempo action, " +
+                                  borrowed + " owned by another program, " + dead + " dead.");
+                foreach (string line in _hotkeyConflicts)
+                {
+                    Utils.Logger.Warn("[Hotkeys]   " + line);
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("ReportHotkeyConflicts", ex); }
         }
 
         private void ApplyHotkeysFromSettings()
@@ -10125,6 +11042,7 @@ namespace AutoClicker.UI
 
             bool holdMode = GetSelectedMode() == ClickMode.HoldToClick;
             _settings.EnsureBindings();
+            var attempted = new System.Collections.Generic.List<Models.HotkeyBinding>();
 
             foreach (var binding in _settings.Bindings)
             {
@@ -10162,6 +11080,12 @@ namespace AutoClicker.UI
                     continue;
                 }
 
+                // Only what we actually TRY to bind can be judged afterwards. The skips
+                // above are all deliberate — hold mode, tray sleep, an action this build
+                // does not have — and a sweep that re-derived them would drift out of
+                // step with this loop and start calling deliberate skips "dead".
+                attempted.Add(binding);
+
                 if (binding.Hotkey.IsMouse)
                 {
                     _hotkeys.RegisterMouse(binding.Action.ToString(), binding.Hotkey);
@@ -10174,16 +11098,27 @@ namespace AutoClicker.UI
                 }
             }
 
+            ReportHotkeyConflicts(attempted);
+
             // Enable hold polling only in hold mode.
             _holdPollTimer.Enabled = holdMode;
 
             // Tell the splash what actually got bound (the last startup stage).
             try
             {
+                // Count ROUTES, not settings rows. The old count walked the whole
+                // Bindings list and counted anything with a valid-looking hotkey, so it
+                // said "5 hotkeys" whether or not Windows had accepted a single one —
+                // the splash reporting the intention rather than the result.
                 int bound = 0;
-                foreach (var b in _settings.Bindings)
+                foreach (var b in attempted)
                 {
-                    if (b?.Hotkey != null && b.Hotkey.IsValid) { bound++; }
+                    if (b?.Hotkey == null) { continue; }
+                    if (_hotkeys.RouteOf(b.Action.ToString()) !=
+                        Native.GlobalHotkeyManager.BindRoute.None)
+                    {
+                        bound++;
+                    }
                 }
                 SplashForm.Report(4, bound + " " +
                     Localization.T(bound == 1 ? "hotkey" : "hotkeys"));
@@ -10259,7 +11194,7 @@ namespace AutoClicker.UI
                 }
                 _startBtn.BackColor = _theme.Success;
             }
-            _startBtn.ForeColor = Color.White;
+            _startBtn.ForeColor = Theme.ReadableOn(_startBtn.BackColor);
         }
 
         /// <summary>
@@ -10425,6 +11360,40 @@ namespace AutoClicker.UI
             {
                 BeginStartWithCountdown();
             }
+        }
+
+        /// <summary>
+        /// Stops the auto-clicker because a macro is about to take the input devices,
+        /// and says so. Returns true if something was actually running.
+        ///
+        /// The same conflict the movement engine already yields for
+        /// (<see cref="DisarmMovementBecause"/>), from a third direction — and this one
+        /// was never handled. The clicker keeps firing REAL clicks at whatever the
+        /// pointer is over, and a macro's whole job is to move that pointer, so the
+        /// clicks land wherever the macro happens to be passing.
+        ///
+        /// Measured on build 260906-1141: with a 50 ms clicker running in "current cursor
+        /// position" mode, a macro that parks the pointer on a probe window for 2.5 s
+        /// delivered 26 left-clicks into it. The same macro played alone: none. Nothing
+        /// in the log or the UI connected the two.
+        ///
+        /// Recording has the mirror-image problem. The recorder correctly drops injected
+        /// input, so Tempo's own clicks are never written into the take — but they still
+        /// reach the app being recorded, so the recording captures their consequences
+        /// without the clicks that caused them, and replays into a window that has moved
+        /// on. The macro is the explicit request in both directions, so the clicker
+        /// yields to it, exactly as movement does.
+        /// </summary>
+        private bool StopClickerBecause(string reason)
+        {
+            if (_engine == null || !_engine.IsRunning)
+            {
+                return false;
+            }
+
+            try { _engine.Stop(); } catch { }
+            Utils.Logger.Info("[Clicker] stopped: " + reason + ".");
+            return true;
         }
 
         /// <summary>
@@ -10601,6 +11570,22 @@ namespace AutoClicker.UI
                 _settings.LifetimeSessions++;
                 _runStartClicks = _statistics.TotalClicks;
                 _runCompletedHandled = false;
+
+                // Whose run this is, decided HERE and not read back at the end.
+                //
+                // The engine clones the profile at Start, but the UI's idea of "current
+                // profile" keeps moving: switching the dropdown — or pressing the
+                // Next/Previous-profile hotkey, which is the same path — changes
+                // _currentProfileName mid-run. The runtime credit and the history row were
+                // both read from it at STOP, so the whole run was filed under whichever
+                // profile happened to be selected when it ended.
+                //
+                // Measured on build 260906-1211: a run started on "Default" (20 ms), with
+                // Next-profile pressed two seconds in, gave "ZZ probe B" all 4 seconds of
+                // runtime and the history row, while "Default" — which started the run and
+                // did 100 of its 108 clicks — got nothing. The same run without the switch
+                // was credited correctly.
+                _runProfileName = _currentProfileName ?? "";
             }
 
             if (_settings.ShowTrayNotifications && !Visible)
@@ -10660,7 +11645,7 @@ namespace AutoClicker.UI
             }
 
             _statusState.Text = "\u25CF  " + Localization.T("Stopped (emergency)");
-            _statusState.ForeColor = _theme.Danger;
+            _statusState.ForeColor = _theme.DangerText;
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -10911,7 +11896,7 @@ namespace AutoClicker.UI
                 }
                 else
                 {
-                    _statusProgress.ForeColor = _theme.Accent;
+                    _statusProgress.ForeColor = _theme.AccentText;
                     if (!_statusProgress.Visible) _statusProgress.Visible = true;
                     if (_statusProgress.Text != text) _statusProgress.Text = text;
                 }
@@ -11051,7 +12036,7 @@ namespace AutoClicker.UI
                 }
                 if (throttling)
                 {
-                    _statusThrottle.ForeColor = _theme.Warning;
+                    _statusThrottle.ForeColor = _theme.WarningText;
                 }
             }
 
@@ -11146,13 +12131,13 @@ namespace AutoClicker.UI
             {
                 _antiFreezeStatusLabel.Text = Localization.F(
                     "⚠ Throttling — CPU {0:0}%  •  holding {1:0.0} CPS", cpu, cps);
-                _antiFreezeStatusLabel.ForeColor = _theme.Warning;
+                _antiFreezeStatusLabel.ForeColor = _theme.WarningText;
             }
             else
             {
                 _antiFreezeStatusLabel.Text = Localization.F(
                     "✓ Protected — CPU {0:0}%  •  {1:0.0} CPS", cpu, cps);
-                _antiFreezeStatusLabel.ForeColor = _theme.Success;
+                _antiFreezeStatusLabel.ForeColor = _theme.SuccessText;
             }
         }
 
@@ -11213,14 +12198,14 @@ namespace AutoClicker.UI
             if (_startBtn != null)
             {
                 _startBtn.BackColor = _theme.Success;
-                _startBtn.ForeColor = Color.White;
+                _startBtn.ForeColor = Theme.ReadableOn(_theme.Success);
                 _startBtn.FlatAppearance.BorderSize = 0;
             }
 
             if (_stopBtn != null)
             {
                 _stopBtn.BackColor = _theme.Danger;
-                _stopBtn.ForeColor = Color.White;
+                _stopBtn.ForeColor = Theme.ReadableOn(_theme.Danger);
                 _stopBtn.FlatAppearance.BorderSize = 0;
             }
 
@@ -11689,8 +12674,106 @@ HookSystemEvents();
             {
                 Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
                 Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+                // Windows shutting down / restarting / signing out. Tempo gets only a few
+                // seconds here before it is force-terminated, and the full teardown in
+                // OnFormClosing is far longer than that — so this is where the state that
+                // must survive a reboot actually gets written.
+                Microsoft.Win32.SystemEvents.SessionEnding += OnSessionEnding;
             }
             catch (Exception ex) { Utils.Logger.Swallow("HookSystemEvents", ex); }
+        }
+
+        /// <summary>
+        /// Windows is ending the session (shutdown, restart, or sign-out).
+        ///
+        /// Nothing here may block: Windows gives an app roughly five seconds to answer
+        /// before it puts up the "this app is preventing you from shutting down" screen
+        /// and then kills it. Tempo's normal exit path is much longer than that (engine
+        /// stop, caption transcript save, mirror teardown, device restore), so an
+        /// overnight Windows-Update reboot could take the process down before a single
+        /// setting reached disk. This writes the durable state immediately and lets the
+        /// ordinary teardown carry on if we do get the time.
+        ///
+        /// It deliberately does NOT stop a running clicker: a session-end can still be
+        /// cancelled by another app, and killing the user's run for a shutdown that
+        /// never happens would be worse than the delayed stop OnFormClosing does.
+        /// </summary>
+        private void OnSessionEnding(object sender, Microsoft.Win32.SessionEndingEventArgs e)
+        {
+            _systemSessionEnding = true;
+            try
+            {
+                Utils.Logger.Info("[Shutdown] Windows is ending the session (" + e.Reason + ") — flushing state.");
+            }
+            catch { }
+
+            // SystemEvents raises this on its OWN thread (the same reason
+            // OnDisplaySettingsChanged marshals), and the flush reads WinForms controls —
+            // so it has to run on the UI thread. It is marshalled with a BOUNDED wait
+            // rather than a plain Invoke: if the UI thread is stuck behind a modal dialog
+            // this must not hold the whole shutdown open until Windows kills us. Timing
+            // out costs nothing that wasn't already lost before this existed.
+            try
+            {
+                if (IsDisposed || !IsHandleCreated)
+                {
+                    return;
+                }
+                if (!InvokeRequired)
+                {
+                    FlushStateForShutdown();
+                    return;
+                }
+                IAsyncResult ar = BeginInvoke((Action)FlushStateForShutdown);
+                if (!ar.AsyncWaitHandle.WaitOne(2000))
+                {
+                    Utils.Logger.Warn("[Shutdown] state flush didn't finish in time — the UI thread was busy.");
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("OnSessionEnding", ex); }
+        }
+
+        /// <summary>
+        /// Writes everything that must survive a reboot, in one pass, with no blocking
+        /// work. Safe to run more than once and safe to run alongside the normal exit
+        /// path — it only refreshes _settings from live state and performs a single
+        /// save, so a later OnFormClosing simply writes the same values again.
+        /// </summary>
+        private void FlushStateForShutdown()
+        {
+            // A debounced "last tab" write could still be counting down; commit it now.
+            try
+            {
+                if (_lastTabSaveTimer != null && _lastTabSaveTimer.Enabled)
+                {
+                    _lastTabSaveTimer.Stop();
+                    SaveLastTabNow();
+                }
+            }
+            catch { }
+
+            try { SaveWindowPosition(); } catch { }
+            try { CaptureSettingsFromUi(); } catch { /* controls may be mid-teardown */ }
+            // Clicks counted so far are banked even though the run itself is still going,
+            // so a reboot mid-run doesn't erase them from the lifetime total.
+            try { _settings.LifetimeClicks = _lifetimeBaseline + _statistics.TotalClicks; } catch { }
+            try { Persistence.SettingsManager.Save(_settings); } catch (Exception ex) { Utils.Logger.Swallow("FlushStateForShutdown", ex); }
+        }
+
+        /// <summary>
+        /// True when WINDOWS is ending the process rather than the user choosing to quit:
+        /// a shutdown, restart, sign-out, or Task Manager "End task".
+        ///
+        /// None of those can be refused, so Tempo must never answer them with a question.
+        /// A modal dialog raised while Windows is closing the session stalls the whole
+        /// shutdown, puts Tempo on the "app preventing shutdown" screen, and ends with the
+        /// process being killed anyway — losing the very settings the dialog delayed.
+        /// </summary>
+        private bool IsSystemEndingSession(CloseReason reason)
+        {
+            return _systemSessionEnding
+                || reason == CloseReason.WindowsShutDown
+                || reason == CloseReason.TaskManagerClosing;
         }
 
         /// <summary>
@@ -11742,21 +12825,84 @@ HookSystemEvents();
         {
             base.OnShown(e);
 
-            // Now that the window and its tab-page handles exist, apply the dark/light
-            // scroll bars and title bar (the construction-time pass ran before handles
-            // were created, so the OS chrome couldn't be themed yet).
-            ApplyNativeChrome();
+            try
+            {
+                ShowStartupSteps();
+            }
+            finally
+            {
+                // The window MUST end up visible, and a finally is the construct that
+                // guarantees it: it runs even while the exception is on its way out to
+                // Application.ThreadException, and unlike a timer it needs nothing from
+                // the message loop at a moment when the loop's state is exactly what is
+                // in doubt.
+                //
+                // Verified by injecting a throw into the steps above: without this, the
+                // window sat at layered alpha 0 — IsWindowVisible true, titled "Tempo",
+                // a taskbar button, and nothing on screen, unrecoverable. With it, the
+                // same throw leaves an opaque window the user can click back to.
+                if (!_revealArmed)
+                {
+                    Utils.Logger.Warn("[startup] the reveal was never armed — a startup " +
+                        "step failed before it. Showing the window anyway.");
+                    try { StartFadeIn(); }
+                    catch (Exception ex)
+                    {
+                        Utils.Logger.Warn("[startup] StartFadeIn failed: " + ex.Message);
+                        try { Opacity = 1.0; } catch { }
+                    }
+                }
+            }
+        }
+
+        /// <summary>True once the splash-wait that reveals the window has been started.</summary>
+        private bool _revealArmed;
+
+        /// <summary>
+        /// The optional work that happens once the window is on screen, plus the splash
+        /// hand-off that reveals it. Split out of OnShown so the whole lot sits inside one
+        /// try/finally — see the note there.
+        /// </summary>
+        private void ShowStartupSteps()
+        {
+            // EVERY step below is guarded on its own, and that is the whole point.
+            //
+            // OnLoad leaves this form at Opacity 0 so it can be revealed smoothly, and the
+            // ONLY call to StartFadeIn is at the bottom of this method. Program installs a
+            // ThreadException handler in CatchException mode, so a throw up here does not
+            // crash Tempo — it is caught, the message loop carries on, and the rest of
+            // OnShown never runs. The window then sits at Opacity 0 forever: the process
+            // alive, a taskbar button, an Alt-Tab entry, and NOTHING on screen. That is
+            // "Tempo won't open", and every one of these steps could cause it.
+            //
+            // They are all optional decoration — themed chrome, a cursor trail,
+            // notification plumbing, a clipboard listener. None is worth the window.
+            RunStartupStep("native chrome", ApplyNativeChrome);
 
             if (_settings != null && _settings.CursorTrailEnabled)
             {
-                ApplyCursorTrail(true);
+                RunStartupStep("cursor trail", () => ApplyCursorTrail(true));
             }
 
             // Start the Windows-notification mirror if the user has opted in. Done here
             // (not during construction) because RequestAccessAsync wants a live window,
             // and the setting may enable it silently on a normal launch.
-            ApplyNotificationSettings();
-            ApplyClipboardImageWatcher();   // screenshot/clipboard-image alert
+            RunStartupStep("notifications", ApplyNotificationSettings);
+            RunStartupStep("clipboard watcher", ApplyClipboardImageWatcher);
+            RunStartupStep("unreported crashes", ReportUnseenCrashes);
+
+            // Launched by the Uninstall button in Settings → Apps: go straight to the
+            // uninstall flow. Queued rather than called inline so this window finishes
+            // showing first — the confirm dialog needs a live owner, and appearing over a
+            // half-drawn window looks like a crash.
+            if (Program.StartedForUninstall())
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    try { OnUninstallClicked(this, EventArgs.Empty); }
+                    catch (Exception ex) { Utils.Logger.Swallow("StartedForUninstall", ex); }
+                }));
+            }
 
             // Tell the startup splash (running on its own thread) to fade out, then WAIT
             // for it to actually close before showing the welcome notice and fading this
@@ -11767,6 +12913,7 @@ HookSystemEvents();
             // ever visible. A hard timeout means startup proceeds even if the splash never
             // reported closed.
             try { SplashForm.RequestClose(); } catch { }
+
             var splashWait = new System.Windows.Forms.Timer { Interval = 40 };
             var waited = System.Diagnostics.Stopwatch.StartNew();
             splashWait.Tick += (s, ev) =>
@@ -11785,6 +12932,7 @@ HookSystemEvents();
                 }
             };
             splashWait.Start();
+            _revealArmed = true;   // the reveal now has an owner; see OnShown's finally
         }
 
         private bool _officialNoticeAttempted;
@@ -11879,6 +13027,22 @@ HookSystemEvents();
             catch
             {
                 // Cosmetic only — never let it disrupt the app.
+            }
+        }
+
+        /// <summary>
+        /// Runs one optional startup step, and never lets it take the window down with it.
+        /// See the note at the top of OnShown for why this is not merely tidy.
+        /// </summary>
+        private void RunStartupStep(string what, Action step)
+        {
+            try
+            {
+                step();
+            }
+            catch (Exception ex)
+            {
+                Utils.Logger.Warn("[startup] '" + what + "' failed, continuing: " + ex.Message);
             }
         }
 
@@ -11996,6 +13160,10 @@ HookSystemEvents();
         private void FadeOutThenRestart(string whatFailed = "the new language")
         {
             _reallyClosing = true;
+            // A restart has already asked its own question (see DescribeRestartInterruption),
+            // so it — and ONLY it — skips the exit confirmation below. This used to be
+            // keyed off _reallyClosing, which the tray's Exit item sets too.
+            _restartingApp = true;
 
             // Captions come back on the other side. Restarting is how a caption-engine
             // change (CPU ⇄ GPU) is applied at all, so landing in a fresh Tempo with
@@ -12103,6 +13271,7 @@ HookSystemEvents();
                     // instead of sending it to the tray — a second surprise caused by the
                     // first one.
                     _reallyClosing = false;
+                    _restartingApp = false;
 
                     // Undo the resume flag: nothing restarted, so there is no next launch
                     // to hand it to, and leaving it set would start captions unbidden
@@ -12269,6 +13438,14 @@ HookSystemEvents();
         private readonly bool _launchedForRestart = AutoClicker.Program.StartedForRestart();
 
         /// <summary>
+        /// Launched by the Uninstall button in Settings → Apps. Like a restart, this must
+        /// ignore "start minimised to tray": OnShown never fires for a suppressed tray
+        /// start (see SetVisibleCore below), so the uninstall confirmation would never
+        /// appear and clicking Uninstall would silently start Tempo in the tray instead.
+        /// </summary>
+        private readonly bool _launchedForUninstall = AutoClicker.Program.StartedForUninstall();
+
+        /// <summary>
         /// Honours the "start minimised to tray" option without a visible flash by
         /// suppressing the very first show. The handle is still created so timers
         /// and global hotkeys work while the window sits in the tray.
@@ -12283,7 +13460,7 @@ HookSystemEvents();
             // started straight into the tray, and from the user's side the app simply quit
             // when they clicked a button labelled "Restart". The preference is about how
             // Tempo comes up at SIGN-IN, which this is not.
-            if (!_startMinimizedApplied && value && !_launchedForRestart &&
+            if (!_startMinimizedApplied && value && !_launchedForRestart && !_launchedForUninstall &&
                 ((_settings != null && _settings.StartMinimizedToTray) || _launchedAtStartup))
             {
                 _startMinimizedApplied = true;
@@ -12680,6 +13857,29 @@ HookSystemEvents();
             catch { /* handle not ready yet */ }
         }
 
+        /// <summary>
+        /// Never leave a mouse button logically held down. Hold-to-click and macro
+        /// playback both press a button and release it later; if Tempo goes away in
+        /// between, Windows still believes the button is down and the user is left
+        /// dragging everything they touch until they click that button themselves.
+        ///
+        /// This lived inline in the normal shutdown path only — which the two
+        /// Environment.Exit(0) routes (the update swap and the uninstall hand-off) skip
+        /// entirely, because a hard exit runs no FormClosing and no ShutdownStep. So
+        /// pressing "Update now" mid hold-click exited with the button still down.
+        /// Extracted so every exit can call it.
+        /// </summary>
+        internal void ReleaseHeldButtons()
+        {
+            try
+            {
+                InputSimulator.ButtonUp(MouseButtonType.Left);
+                InputSimulator.ButtonUp(MouseButtonType.Right);
+                InputSimulator.ButtonUp(MouseButtonType.Middle);
+            }
+            catch { }
+        }
+
         private void ExitApplication()
         {
             _reallyClosing = true;
@@ -12742,10 +13942,48 @@ HookSystemEvents();
                 return;
             }
 
-            if (_engine.IsRunning && _settings.ConfirmBeforeExitWhileRunning && !_reallyClosing)
+            // !_restartingApp, not !_reallyClosing.
+            //
+            // "Confirm before exit while running" had almost no reach. _reallyClosing is
+            // set by the tray's Exit item as well as by the restart path, so the ONE route
+            // that deliberately quits Tempo skipped the confirmation — and with
+            // "Minimise to tray instead of closing" on (the default) the window's ✕ never
+            // exits at all. So on a default install the checkbox could not fire from any
+            // route: closing minimised, and Exit bypassed it.
+            //
+            // The restart blind spot from the same guard was found and given its own
+            // prompt (see DescribeRestartInterruption, which says "every other route out
+            // of Tempo honours" this — it did not; the tray Exit was the other one).
+            // Keying on a restart-specific flag leaves that prompt as the only exemption.
+            // Covers all three, like the restart prompt beside it — quitting mid-recording
+            // throws away a take that was never saved, which is the costliest of them, and
+            // it was not asked about at all.
+            string busyNote = null;
+            if (_engine != null && _engine.IsRunning)
+            {
+                busyNote = Localization.T("Clicking is still running.");
+            }
+            else if (_player != null && _player.IsPlaying)
+            {
+                busyNote = Localization.T("A macro is still playing.");
+            }
+            else if (_recorder != null && _recorder.IsRecording)
+            {
+                busyNote = Localization.T("A macro is still being recorded — it hasn't been saved.");
+            }
+
+            // ...and never when WINDOWS is the one closing us. A shutdown, restart,
+            // sign-out or Task Manager "End task" cannot be refused, so asking "exit
+            // anyway?" there stalls the whole shutdown behind a dialog nobody is present
+            // to answer (a Windows Update reboot at 3am is the normal case), earns Tempo
+            // a place on the "app preventing shutdown" screen, and still ends in the
+            // process being killed — with the settings the prompt was delaying now lost.
+            // OnSessionEnding has already flushed state by this point; just go quietly.
+            if (busyNote != null && _settings.ConfirmBeforeExitWhileRunning && !_restartingApp
+                && !IsSystemEndingSession(e.CloseReason))
             {
                 var result = MessageBox.Show(
-                    "Clicking is still running. Exit anyway?",
+                    busyNote + " " + Localization.T("Exit anyway?"),
                     "Tempo",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question);
@@ -12814,7 +14052,11 @@ HookSystemEvents();
                     // poll has nothing to strand, so dispose without waiting and keep the
                     // exit instant. 500ms is plenty for a poll that only does UIA reads;
                     // the old 2000ms was a worst case nothing here reaches.
-                    if (_captionReader != null && _captionReader.WindowsBarMovedOffscreen)
+                    // ...and not when Windows is ending the session: the whole shutdown
+                    // budget is about five seconds, and where Windows' own caption bar
+                    // sits is meaningless on a machine that is powering off.
+                    if (_captionReader != null && _captionReader.WindowsBarMovedOffscreen
+                        && !IsSystemEndingSession(e.CloseReason))
                     {
                         using (var done = new System.Threading.ManualResetEvent(false))
                         {
@@ -12848,14 +14090,7 @@ HookSystemEvents();
             try { _captionOverlay?.Dispose(); } catch { }
             if (wasActive)
             {
-                // Safety net for hold-clicks / held playback: never exit with a button down.
-                try
-                {
-                    InputSimulator.ButtonUp(MouseButtonType.Left);
-                    InputSimulator.ButtonUp(MouseButtonType.Right);
-                    InputSimulator.ButtonUp(MouseButtonType.Middle);
-                }
-                catch { }
+                ReleaseHeldButtons();
             }
 
             // Persist any Settings-tab control changes the user made without pressing
@@ -12874,6 +14109,7 @@ HookSystemEvents();
         {
             try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
             try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged; } catch { }
+            try { Microsoft.Win32.SystemEvents.SessionEnding -= OnSessionEnding; } catch { }
             CleanUp();
             base.OnFormClosed(e);
         }
@@ -13001,11 +14237,26 @@ HookSystemEvents();
             }
 
             long took = (_startupClock?.ElapsedMilliseconds ?? 0) - before;
+            _startupStepMs += took;
+            _startupStepCount++;
             if (took >= 40)
             {
                 Logger.Info("[startup] " + name + " took " + took + " ms.");
             }
         }
+
+        /// <summary>
+        /// Total time inside StartupStep, and how many steps that was.
+        ///
+        /// Only steps of 40 ms or more are logged individually, which is right for noise
+        /// but means the log accounts for less of startup than it appears to — the
+        /// question "where did the other 280 ms go?" could not be answered from it at
+        /// all. Summing every step, logged or not, makes the unaccounted remainder
+        /// visible, so it is clear whether the cost is in the tabs or somewhere the
+        /// timers never covered.
+        /// </summary>
+        private long _startupStepMs;
+        private int _startupStepCount;
 
         private void ShutdownStep(string name, Action step)
         {

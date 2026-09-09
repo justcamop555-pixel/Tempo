@@ -22,6 +22,21 @@ namespace AutoClicker.Models
         public DateTime? RunStoppedUtc { get; private set; }
         public double PeakClicksPerSecond { get; private set; }
 
+        // Paused time, subtracted from the run's elapsed time.
+        //
+        // Without this, "elapsed" was wall-clock from BeginRun to EndRun, so a pause
+        // counted as time spent clicking. Everything downstream inherited it: the
+        // Average CPS card, the saved SessionRecord's DurationSeconds and AverageCps,
+        // LifetimeRuntimeSeconds, the per-profile runtime and LifetimeLongestRunSeconds.
+        //
+        // Measured on build 260906-1200 — the same four seconds of clicking, twice:
+        //     4s clicking, no pause      : 203 clicks, 4.07 s, 49.9 CPS   (correct)
+        //     4s clicking, 5s paused     : 205 clicks, 9.19 s, 22.3 CPS   (wrong)
+        // The engine already had the right number in its own _runClock, which stops
+        // while paused; only the statistics kept a second, naive clock.
+        private DateTime? _pausedAtUtc;
+        private TimeSpan _pausedTotal;
+
         /// <summary>Marks the beginning of a run.</summary>
         public void BeginRun()
         {
@@ -45,6 +60,8 @@ namespace AutoClicker.Models
                 // Safe for the lifetime figure: LifetimePeakCps is folded in when the run
                 // is SAVED, which happens on stop — always before the next BeginRun.
                 PeakClicksPerSecond = 0;
+                _pausedTotal = TimeSpan.Zero;
+                _pausedAtUtc = null;
             }
         }
 
@@ -54,6 +71,31 @@ namespace AutoClicker.Models
             lock (_sync)
             {
                 RunStoppedUtc = DateTime.UtcNow;
+            }
+        }
+
+        /// <summary>The run was paused: stop counting elapsed time.</summary>
+        public void PauseRun()
+        {
+            lock (_sync)
+            {
+                if (RunStartedUtc != null && _pausedAtUtc == null)
+                {
+                    _pausedAtUtc = DateTime.UtcNow;
+                }
+            }
+        }
+
+        /// <summary>The run resumed: bank the pause and start counting again.</summary>
+        public void ResumeRun()
+        {
+            lock (_sync)
+            {
+                if (_pausedAtUtc != null)
+                {
+                    _pausedTotal += DateTime.UtcNow - _pausedAtUtc.Value;
+                    _pausedAtUtc = null;
+                }
             }
         }
 
@@ -137,7 +179,17 @@ namespace AutoClicker.Models
                 }
 
                 DateTime end = RunStoppedUtc ?? DateTime.UtcNow;
-                return end - RunStartedUtc.Value;
+
+                // Any pause still open at `end` counts too — a run stopped while paused
+                // must not bank the pause it was sitting in.
+                TimeSpan paused = _pausedTotal;
+                if (_pausedAtUtc != null && end > _pausedAtUtc.Value)
+                {
+                    paused += end - _pausedAtUtc.Value;
+                }
+
+                TimeSpan active = end - RunStartedUtc.Value - paused;
+                return active > TimeSpan.Zero ? active : TimeSpan.Zero;
             }
         }
 
@@ -185,6 +237,8 @@ namespace AutoClicker.Models
                 PeakClicksPerSecond = 0;
                 RunStartedUtc = null;
                 RunStoppedUtc = null;
+                _pausedTotal = TimeSpan.Zero;
+                _pausedAtUtc = null;
                 _recentClicks.Clear();
             }
         }

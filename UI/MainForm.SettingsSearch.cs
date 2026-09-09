@@ -201,7 +201,7 @@ namespace AutoClicker.UI
             // would recolour the user's own value, which is not a search hit.
             if (!(c is Label || c is CheckBox || c is RadioButton)) { return; }
             if (!_settingsHighlightWas.ContainsKey(c)) { _settingsHighlightWas[c] = c.ForeColor; }
-            c.ForeColor = _theme.Accent;
+            c.ForeColor = _theme.AccentText;
         }
 
         private void ClearSettingsHighlight()
@@ -264,7 +264,7 @@ namespace AutoClicker.UI
                     ? Localization.T("Nothing matches that.")
                     : Localization.F("{0} match(es) in {1} section(s)", hits, cards)
                       + "   ·   " + Localization.T("Enter to jump");
-                _settingsSearchInfo.ForeColor = hits == 0 ? _theme.Warning : _theme.TextMuted;
+                _settingsSearchInfo.ForeColor = hits == 0 ? _theme.WarningText : _theme.TextMuted;
             }
         }
 

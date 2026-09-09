@@ -36,18 +36,32 @@ if ($Show -gt 0) {
     if ($rows.Count -eq 0) { Write-Host 'No builds recorded yet.'; exit 0 }
 
     Write-Host ''
-    Write-Host ('  {0,-14} {1,-8} {2,-9} {3,-12} {4}' -f 'BUILD', 'CHANNEL', 'VERSION', 'SIZE', 'SHA-256')
-    Write-Host ('  ' + ('-' * 74))
+    Write-Host ('  {0,-16} {1,-14} {2,-8} {3,-9} {4,-11} {5}' -f 'WHEN (local)', 'BUILD', 'CHANNEL', 'VERSION', 'SIZE', 'SHA-256')
+    Write-Host ('  ' + ('-' * 92))
     foreach ($r in ($rows | Select-Object -Last $Show)) {
         $c = $r -split "`t"
         $size = if ($c.Count -ge 6 -and $c[5]) { '{0:N1} MB' -f ($c[5] / 1MB) } else { '(no exe)' }
         # ASCII "..." rather than an ellipsis: this prints into a cmd console whose
         # codepage is not UTF-8, where the single character came out as "aEUR|".
         $sha  = if ($c.Count -ge 5 -and $c[4]) { $c[4].Substring(0, [Math]::Min(16, $c[4].Length)) + '...' } else { '' }
-        Write-Host ('  {0,-14} {1,-8} {2,-9} {3,-12} {4}' -f $c[1], $c[2], $c[3], $size, $sha)
+
+        # The stamped_utc column was recorded from the first build and never shown.
+        # The build id encodes the same instant, but "260904-1506" is not something
+        # you read a date out of at a glance — and answering "when did I make that
+        # build" is the whole reason this list exists. Rendered in LOCAL time, since
+        # that is the clock the developer was working against.
+        $when = ''
+        if ($c.Count -ge 1 -and $c[0]) {
+            try { $when = ([datetime]::Parse($c[0])).ToLocalTime().ToString('MMM dd HH:mm') } catch { $when = '' }
+        }
+        Write-Host ('  {0,-16} {1,-14} {2,-8} {3,-9} {4,-11} {5}' -f $when, $c[1], $c[2], $c[3], $size, $sha)
     }
     Write-Host ''
-    Write-Host ("  {0} build(s) recorded in {1}" -f $rows.Count, $hist)
+    # Said out loud because the two columns disagree on purpose: a build id is stamped
+    # in UTC (that is what makes it sort and never repeat), while WHEN is the clock the
+    # developer was actually working against. "Sep 04 11:06 / 260904-1506" is correct.
+    Write-Host ('  {0} build(s) in {1}' -f $rows.Count, $hist)
+    Write-Host '  Build ids are UTC; WHEN is your local time.'
     exit 0
 }
 

@@ -267,7 +267,7 @@ namespace AutoClicker.UI
             MacroAction a = _working.Actions[index];
             if (a.Type != MacroActionType.Delay)
             {
-                MessageBox.Show(this, "Select a delay step to edit its duration.",
+                MessageBox.Show(this, Utils.Localization.T("Select a delay step to edit its duration."),
                     "Tempo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -471,7 +471,7 @@ namespace AutoClicker.UI
 
             if (!hasPosition)
             {
-                MessageBox.Show(this, "Select a move or click step to edit its position.",
+                MessageBox.Show(this, Utils.Localization.T("Select a move or click step to edit its position."),
                     "Tempo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }

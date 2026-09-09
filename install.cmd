@@ -309,7 +309,17 @@ reg add "%REGKEY%" /v DisplayVersion /t REG_SZ /d "!VER!" /f >nul
 reg add "%REGKEY%" /v Publisher /t REG_SZ /d "Tempo" /f >nul
 reg add "%REGKEY%" /v InstallLocation /t REG_SZ /d "%INSTALL_DIR%" /f >nul
 reg add "%REGKEY%" /v DisplayIcon /t REG_SZ /d "%EXE%" /f >nul
-reg add "%REGKEY%" /v UninstallString /t REG_SZ /d "\"%UNINST%\"" /f >nul
+REM  Point the Uninstall button at uninstall.cmd ONLY if it was really copied above —
+REM  that copy is conditional on finding one, and this write was not, so any package
+REM  shipped without uninstall.cmd left a dead Uninstall button in Settings > Apps.
+REM  Tempo.exe cannot go missing: it is the thing being uninstalled.
+if exist "%UNINST%" (
+  reg add "%REGKEY%" /v UninstallString /t REG_SZ /d "\"%UNINST%\"" /f >nul
+  reg add "%REGKEY%" /v QuietUninstallString /t REG_SZ /d "\"%UNINST%\"" /f >nul
+) else (
+  reg add "%REGKEY%" /v UninstallString /t REG_SZ /d "\"%EXE%\" --uninstall" /f >nul
+  reg add "%REGKEY%" /v QuietUninstallString /t REG_SZ /d "\"%EXE%\" --uninstall" /f >nul
+)
 reg add "%REGKEY%" /v URLInfoAbout /t REG_SZ /d "https://justcamop555-pixel.github.io/Tempo/" /f >nul
 reg add "%REGKEY%" /v NoModify /t REG_DWORD /d 1 /f >nul
 reg add "%REGKEY%" /v NoRepair /t REG_DWORD /d 1 /f >nul

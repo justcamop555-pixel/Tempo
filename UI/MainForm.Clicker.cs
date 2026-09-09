@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Windows.Forms;
 using AutoClicker.Models;
@@ -86,7 +86,7 @@ namespace AutoClicker.UI
                 AutoSize = true,
                 Location = new Point(300, 51),
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                ForeColor = _theme.Accent,
+                ForeColor = _theme.AccentText,
                 Visible = false
             };
             page.Controls.Add(_profileDirtyLabel);
@@ -289,7 +289,7 @@ namespace AutoClicker.UI
                 Width = 138,
                 Height = 28,
                 Font = new Font("Segoe UI", 11f, FontStyle.Bold),
-                ForeColor = _theme.Accent,
+                ForeColor = _theme.AccentText,
                 TextAlign = ContentAlignment.MiddleLeft,
                 BackColor = Color.Transparent
             };
@@ -297,14 +297,17 @@ namespace AutoClicker.UI
             _startBtn = UiFactory.Button("▶  Start", 356, 472, 124, 48);
             _startBtn.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
             _startBtn.BackColor = _theme.Success;
-            _startBtn.ForeColor = Color.White;
+            // Not Color.White: Success is a mid-to-light green in most palettes, so a
+            // white label came out at 1.31:1 in the worst theme and below AA in ALL 38.
+            // ReadableOn picks black or white against the actual fill.
+            _startBtn.ForeColor = Theme.ReadableOn(_theme.Success);
             _startBtn.FlatAppearance.BorderSize = 0;
             _startBtn.Click += (s, e) => OnStartOrPauseClicked();
 
             _stopBtn = UiFactory.Button("■  Stop", 488, 472, 124, 48);
             _stopBtn.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
             _stopBtn.BackColor = _theme.Danger;
-            _stopBtn.ForeColor = Color.White;
+            _stopBtn.ForeColor = Theme.ReadableOn(_theme.Danger);
             _stopBtn.FlatAppearance.BorderSize = 0;
             _stopBtn.Enabled = false;
             _stopBtn.Click += (s, e) => { _engine.Stop(); try { _secondCursor?.StopSpam(); } catch { } };
@@ -551,7 +554,7 @@ namespace AutoClicker.UI
                 if (on)
                 {
                     _humanizeBtn.BackColor = HumanizePurple;
-                    _humanizeBtn.ForeColor = Color.White;
+                    _humanizeBtn.ForeColor = Theme.ReadableOn(HumanizePurple);
                     _humanizeBtn.FlatAppearance.BorderSize = 0;
                 }
                 else
@@ -618,6 +621,10 @@ namespace AutoClicker.UI
             string text;
             ClickMode mode = GetSelectedMode();
 
+            // The fastest rate this line is about to claim, for the Anti-Freeze check
+            // below. Set in every branch so the check can never read a stale zero.
+            double claimedCps;
+
             if (mode == ClickMode.Burst)
             {
                 // Average rate over a whole burst-plus-pause cycle.
@@ -627,10 +634,14 @@ namespace AutoClicker.UI
                 double cycleMs = burst * ms + pause;
                 double avgCps = cycleMs > 0 ? burst * styleFactor * 1000.0 / cycleMs : 0;
                 text = $"≈ {avgCps:0.0} CPS avg   ·   burst {burst:N0} / {pause:N0} ms";
+                // Inside a burst the clicks come at the interval, and that is what the
+                // cap acts on — not the average across the pause.
+                claimedCps = 1000.0 / ms * styleFactor;
             }
             else
             {
                 double cps = 1000.0 / ms * styleFactor;
+                claimedCps = cps;
 
                 bool rand = _randIntervalCheck != null && _randIntervalCheck.Checked;
                 long jitter = (_intervalJitterNum != null) ? (long)_intervalJitterNum.Value : 0;
@@ -642,6 +653,7 @@ namespace AutoClicker.UI
                     double cpsHi = 1000.0 / lo * styleFactor;   // shortest delay = fastest
                     double cpsLo = 1000.0 / hi * styleFactor;   // longest delay = slowest
                     text = $"≈ {cpsLo:0.0}–{cpsHi:0.0} CPS   ·   {ms:N0} ± {jitter:N0} ms";
+                    claimedCps = cpsHi;                          // the cap bites at the top
                 }
                 else if (cps >= 1)
                 {
@@ -656,6 +668,20 @@ namespace AutoClicker.UI
                 {
                     text = $"1 click every {ms / 1000.0:0.0} s   ·   {ms:N0} ms";
                 }
+            }
+
+            // Anti-Freeze will clamp anything above its cap. The Manual Speed "Target:"
+            // label has always said so; THIS line — the primary way a rate gets set —
+            // never did, so the two sat on the same page contradicting each other, and
+            // the one people type into was the one that lied.
+            // Kept SHORT. This line lives inside a 360px card and already carries the rate
+            // and the interval; the long form ("capped to 300 CPS by Anti-Freeze") was cut
+            // off at the card edge, which is how the Manual Speed label had been failing
+            // unnoticed. The Anti-Freeze card beside it spells the rest out.
+            int afCap = EffectiveCap();
+            if (claimedCps > afCap)
+            {
+                text += Localization.F("   ·   max {0}", afCap);
             }
 
             // If each click is held down, note it — and warn if the hold is long
@@ -901,10 +927,17 @@ namespace AutoClicker.UI
                 detail += $"  \u00b7  \u00d7{styleMul} = {cps * styleMul:N0} clicks/s";
             }
 
+            // REPLACES the ms/per-minute detail rather than following it. This label is
+            // ~330px inside a 360px card and the base text already fills it, so the old
+            // appended "\u2014 capped to N by Anti-Freeze" was cut off mid-word ("capped t")
+            // \u2014 it had never actually been readable. The cap is the more useful of the
+            // two facts when it is in force, and the per-minute figure it displaces is a
+            // restatement of the CPS beside it. Also now translated: it was a raw
+            // interpolated literal, so this warning stayed English everywhere.
             int cap = EffectiveCap();
             if (cps > cap)
             {
-                detail += $"  \u2014 capped to {cap} by Anti-Freeze";
+                detail = Localization.F("  (max {0} CPS \u00b7 Anti-Freeze)", cap);
             }
             _speedLabel.AccentColor = _theme.Accent;
             _speedLabel.MutedColor = _theme.TextMuted;
@@ -952,7 +985,7 @@ namespace AutoClicker.UI
         {
             if (b == null) return;
             b.BackColor = _theme.Accent;
-            b.ForeColor = Color.White;
+            b.ForeColor = _theme.OnAccent;   // readable on ANY accent - see Theme.OnAccent
             b.FlatAppearance.BorderSize = 0;
             b.FlatAppearance.MouseOverBackColor = _theme.AccentHover;
         }
@@ -977,7 +1010,7 @@ namespace AutoClicker.UI
                 if (active)
                 {
                     b.BackColor = _theme.Accent;
-                    b.ForeColor = Color.White;
+                    b.ForeColor = _theme.OnAccent;
                     b.FlatAppearance.BorderSize = 0;
                 }
                 else
@@ -995,7 +1028,7 @@ namespace AutoClicker.UI
         {
             if (b == null) return;
             b.BackColor = _theme.Danger;
-            b.ForeColor = Color.White;
+            b.ForeColor = Theme.ReadableOn(_theme.Danger);
             b.FlatAppearance.BorderSize = 0;
         }
 
@@ -1007,7 +1040,7 @@ namespace AutoClicker.UI
         {
             if (b == null) return;
             b.BackColor = HumanizePurple;
-            b.ForeColor = Color.White;
+            b.ForeColor = Theme.ReadableOn(HumanizePurple);
             b.FlatAppearance.BorderSize = 0;
             b.FlatAppearance.MouseOverBackColor = Color.FromArgb(160, 120, 250);
         }
@@ -1077,7 +1110,7 @@ namespace AutoClicker.UI
             int cap = EffectiveCap();
             if (cps > cap)
             {
-                detailText += $"  — capped to {cap} by Anti-Freeze";
+                detailText = Localization.F("  (max {0} CPS · Anti-Freeze)", cap);
             }
             _speedLabel.AccentColor = _theme.Accent;
             _speedLabel.MutedColor = _theme.TextMuted;
@@ -1181,7 +1214,35 @@ namespace AutoClicker.UI
             _setKeyBtn.Text = keyMode && _selectedKeyVk != 0
                 ? "⌨ " + KeyLabel(_selectedKeyVk)          // a key name, not prose
                 : Localization.T("⌨ Set key…");
+
+            // Pick the Start/Stop key here and the clicker stops itself on its first press
+            // (measured: started and stopped 6 ms apart). The Keybinds tab carries the full
+            // notice; this card has no room for a line of its own, so the warning rides on
+            // the button's tooltip — where the key is actually chosen.
+            if (_keyClashTip != null)
+            {
+                HotkeyAction? clash = keyMode && _selectedKeyVk != 0
+                    ? ActionFiredBy(_selectedKeyVk, false, false, false, false)
+                    : null;
+                _keyClashTip.SetToolTip(_setKeyBtn, clash.HasValue
+                    ? Localization.F(
+                        "⚠ {0} is also bound to “{1}”. Tempo's own key presses fire its own hotkeys, "
+                        + "so every press would run that action too. Pick another key, or rebind it "
+                        + "on the Keybinds tab.",
+                        KeyLabel(_selectedKeyVk), HotkeyActions.LabelFor(clash.Value))
+                    : "");
+            }
+            RefreshSelfPressedKeyNotice();
         }
+
+        /// <summary>Carries the "this key is also a hotkey" warning on the Set-key button.</summary>
+        private readonly ToolTip _keyClashTip = new ToolTip
+        {
+            AutoPopDelay = 20000,
+            InitialDelay = 350,
+            ReshowDelay = 150,
+            ShowAlways = true
+        };
 
         private static string KeyLabel(int vk)
         {
@@ -1371,7 +1432,7 @@ namespace AutoClicker.UI
             // Keep the accent colour after theme switches (ThemeManager resets labels).
             if (dirty && _theme != null && _profileDirtyLabel.ForeColor != _theme.Accent)
             {
-                _profileDirtyLabel.ForeColor = _theme.Accent;
+                _profileDirtyLabel.ForeColor = Theme.Readable(_theme.Accent, _theme.Surface);
             }
         }
 
@@ -1598,6 +1659,24 @@ namespace AutoClicker.UI
                 // user switch or that hotkey cycle.
                 ApplyProfileExtras(profile);
 
+                // Switching WHILE A RUN IS IN PROGRESS is not a no-op, and it looks like
+                // one. The engine picks the new interval up live, so the run becomes a
+                // hybrid — measured: two seconds at Default's 20 ms then two at another
+                // profile's 500 ms, 108 clicks where 206 were expected, with nothing on
+                // screen to explain the drop. The run stays credited to the profile it
+                // started under (see _runProfileName); this says so while it happens,
+                // in the one place that is visible with the window in the tray.
+                if (_engine != null && _engine.IsRunning &&
+                    !string.IsNullOrEmpty(_runProfileName) &&
+                    !string.Equals(_runProfileName, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    _statusProfile.Text = Localization.F("Profile: {0}  (run started on {1})",
+                        name, _runProfileName);
+                    Utils.Logger.Warn("[Profiles] switched to '" + name + "' while a run started on '" +
+                        _runProfileName + "' is going — the running clicker now uses '" + name +
+                        "' settings; the run stays credited to '" + _runProfileName + "'.");
+                }
+
                 // ApplyProfileExtras writes the bindings into _settings and LastProfileName
                 // changed above; neither survives a restart unless it is written down.
                 try { SettingsManager.Save(_settings); } catch { }
@@ -1732,6 +1811,9 @@ namespace AutoClicker.UI
         private void OnPositionModeChanged(object sender, EventArgs e)
         {
             UpdatePositionControlsEnabled();
+            // The Multi-Point tab's summary line reports whether this mode is the one
+            // selected, so it has to be re-read when the radio moves.
+            UpdateCycleInfo();
         }
 
         private void OnRepeatModeChanged(object sender, EventArgs e)
@@ -1765,10 +1847,21 @@ namespace AutoClicker.UI
         /// </summary>
         private Control BuildBackgroundClickGroup()
         {
-            var g = UiFactory.Group(Localization.T("Background Clicking"), 12, 938, 360, 122, CardIcon.Cursor);
+            // 136 tall, not 122: the description wraps to three lines in every language
+            // but English, putting its last line 10px below the card's own bottom edge.
+            // Nothing sits under this row, so the card grows rather than the text losing
+            // a line.
+            var g = UiFactory.Group(Localization.T("Background Clicking"), 12, 938, 360, 136, CardIcon.Cursor);
 
             _backgroundClickCheck = UiFactory.Check("Click without moving my cursor", 16, 28);
             g.Controls.Add(_backgroundClickCheck);
+
+            // Filled in by UpdatePositionControlsEnabled when the current position mode
+            // cannot post clicks; empty the rest of the time.
+            _backgroundClickNote = UiFactory.Caption("", 224, 30);
+            _backgroundClickNote.MaximumSize = new Size(124, 0);
+            _backgroundClickNote.AutoSize = true;
+            g.Controls.Add(_backgroundClickNote);
 
             var note = UiFactory.Caption(
                 "Sends each click straight to the window under the target point, so your " +
@@ -1795,7 +1888,8 @@ namespace AutoClicker.UI
         /// </summary>
         private Control BuildClickSoundGroup()
         {
-            var g = UiFactory.Group(Localization.T("Sound"), 384, 938, 324, 122, CardIcon.Bolt);
+            // Same row, same overflow in Italian; kept the same height as its neighbour.
+            var g = UiFactory.Group(Localization.T("Sound"), 384, 938, 324, 136, CardIcon.Bolt);
 
             _soundOnStartCheck = UiFactory.Check("Beep when clicking starts", 16, 28);
             g.Controls.Add(_soundOnStartCheck);
@@ -2188,6 +2282,30 @@ namespace AutoClicker.UI
             speedItem.Text = Localization.F("Spam speed  ·  {0} CPS", _settings.SecondCursorSpamCps);
             menu.Items.Add(speedItem);
 
+            // Spam BUTTON. The setting has always existed and always been read — the
+            // controller clamps it to Left/Right/Middle on every apply — but nothing
+            // anywhere could change it, so the second cursor could only ever spam left
+            // clicks. Every one of its siblings (shape, size, speed) had a submenu here;
+            // this one was simply missed.
+            var buttonItem = new ToolStripMenuItem(Localization.T("Spam button"));
+            string[] buttonNames = { "Left", "Right", "Middle" };   // MouseButtonType order
+            for (int i = 0; i < buttonNames.Length; i++)
+            {
+                int idx = i;
+                var it = new ToolStripMenuItem(Localization.T(buttonNames[i]))
+                { Checked = _settings.SecondCursorSpamButton == idx, CheckOnClick = false };
+                it.Click += (s, ev) =>
+                {
+                    _settings.SecondCursorSpamButton = idx;
+                    Persistence.SettingsManager.Save(_settings);
+                    ApplySecondCursorSettings();
+                };
+                buttonItem.DropDownItems.Add(it);
+            }
+            int btnNow = Math.Max(0, Math.Min(buttonNames.Length - 1, _settings.SecondCursorSpamButton));
+            buttonItem.Text = Localization.F("Spam button  ·  {0}", Localization.T(buttonNames[btnNow]));
+            menu.Items.Add(buttonItem);
+
             // ── second physical mouse ──
             menu.Items.Add(new ToolStripSeparator());
             int miceCount = Engine.SecondCursorController.DetectedMouseCount();
@@ -2352,6 +2470,28 @@ namespace AutoClicker.UI
             _fixedXNum.Enabled = fixedPos;
             _fixedYNum.Enabled = fixedPos;
             _pickFixedBtn.Enabled = fixedPos;
+
+            // Background clicking needs a TARGET POINT to post the click to. The engine
+            // only honours it in the fixed-position and multi-point branches; in
+            // "current cursor position" — the default — the flag is read and silently
+            // ignored, so ticking the box did nothing whatsoever and said nothing about
+            // it. The card's own text has always carried the condition ("Needs a fixed
+            // or multi-point target"), which is no use at the moment it stops applying.
+            //
+            // Greyed with the reason beside it, rather than hidden: the feature still
+            // exists, it just needs a different position mode first.
+            if (_backgroundClickCheck != null)
+            {
+                bool canPost = _posFixedRadio.Checked || _posMultiRadio.Checked;
+                _backgroundClickCheck.Enabled = canPost;
+                if (_backgroundClickNote != null)
+                {
+                    _backgroundClickNote.Text = canPost
+                        ? ""
+                        : Utils.Localization.T("Pick a fixed or multi-point target to use this.");
+                    _backgroundClickNote.ForeColor = _theme.WarningText;
+                }
+            }
         }
 
         private void UpdateRepeatControlsEnabled()

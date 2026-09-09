@@ -22,6 +22,14 @@ namespace AutoClicker.Utils
         public sealed class Result
         {
             public List<string> Problems { get; } = new List<string>();
+
+            /// <summary>
+            /// Things worth saying but not worth refusing to start over — an outdated but
+            /// probably-workable Windows, for instance. Kept separate from Problems so
+            /// Satisfied stays "can Tempo run at all".
+            /// </summary>
+            public List<string> Warnings { get; } = new List<string>();
+
             public bool Satisfied => Problems.Count == 0;
         }
 
@@ -48,7 +56,27 @@ namespace AutoClicker.Utils
                         "Tempo requires Windows 10 or Windows 11. Older versions such as " +
                         "Windows 7 and Windows 8.1 are not supported, because Tempo runs on " +
                         ".NET 8, which itself requires Windows 10 (version 1607) or newer. " +
-                        $"(This PC reports Windows version {os.Version}.)");
+                        $"(This PC is {WindowsVersion.Describe()}.)");
+                }
+                else if (WindowsVersion.Status == WindowsVersion.Support.Outdated)
+                {
+                    // A WARNING, not a problem: it is recorded and shown, but it does not
+                    // stop Tempo starting.
+                    //
+                    // This gap was silent. The check only ever refused Major < 10, so every
+                    // Windows 10 back to 1507 walked straight past it — while the app's own
+                    // manifest declares a floor of 10.0.17763. Those builds start and then
+                    // fail at whichever API they lack, which the user reads as "Tempo is
+                    // broken" rather than "this Windows is too old". Blocking them instead
+                    // would be worse: they may well work, and refusing to run on a machine
+                    // that could is not ours to decide.
+                    Logger.Warn("[OS] " + WindowsVersion.Describe() + " — " +
+                                WindowsVersion.SupportNote());
+                    result.Warnings.Add(WindowsVersion.SupportNote());
+                }
+                else
+                {
+                    Logger.Info("[OS] " + WindowsVersion.Describe());
                 }
             }
             catch (Exception ex)

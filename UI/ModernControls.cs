@@ -198,8 +198,11 @@ namespace AutoClicker.UI
                 {
                     using (var fill = new SolidBrush(Enabled ? accent : muted))
                         g.FillPath(fill, path);
-                    // White check mark (sized for the 16px box).
-                    using (var pen = new Pen(Color.White, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                    // Check mark sized for the 16px box, in whichever of black/white reads
+                    // on the fill behind it. It was hardcoded white, and white on Accent is
+                    // below 4.5:1 in 36 of the 38 palettes (1.48:1 on Carbon) — the one
+                    // mark that says whether a box is ticked, invisible on a light accent.
+                    using (var pen = new Pen(Theme.ReadableOn(Enabled ? accent : muted), 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                         g.DrawLines(pen, new[]
                         {
                             new Point(box.Left + 4, box.Top + 8),
@@ -341,7 +344,9 @@ namespace AutoClicker.UI
             if (Checked)
             {
                 var dot = Rectangle.Inflate(circle, -5, -5);
-                using (var fill = new SolidBrush(Color.White))
+                // Same as the checkbox tick: the dot sits ON the accent fill, so it takes
+                // whichever of black/white reads there rather than always white.
+                using (var fill = new SolidBrush(Theme.ReadableOn(Enabled ? accent : muted)))
                     g.FillEllipse(fill, dot);
             }
 
@@ -373,6 +378,7 @@ namespace AutoClicker.UI
         private void RoundRegion()
         {
             if (Width <= 1 || Height <= 1) return;
+
             using (var p = ModernPaint.Rounded(new Rectangle(0, 0, Width, Height), 7))
             {
                 Region = new Region(p);
@@ -408,7 +414,10 @@ namespace AutoClicker.UI
             bool selected = (e.State & DrawItemState.Selected) != 0;
             bool isEditField = (e.State & DrawItemState.ComboBoxEdit) != 0;
             Color bg = (selected && !isEditField) ? accent : input;
-            Color fg = (selected && !isEditField) ? Color.White : text;
+            // The highlighted row is filled with Accent and its text was always white —
+            // below 4.5:1 in 36 of the 38 palettes. That is the row you are looking at
+            // when a dropdown is open, so it is the worst place to lose the text.
+            Color fg = (selected && !isEditField) ? Theme.ReadableOn(accent) : text;
 
             using (var b = new SolidBrush(bg))
                 e.Graphics.FillRectangle(b, e.Bounds);
@@ -959,6 +968,7 @@ namespace AutoClicker.UI
         private void RoundRegion()
         {
             if (Width <= 1 || Height <= 1) return;
+
             using (var p = ModernPaint.Rounded(new Rectangle(0, 0, Width, Height), 6))
             {
                 Region = new Region(p);
@@ -1038,6 +1048,7 @@ namespace AutoClicker.UI
         private void RoundRegion()
         {
             if (Width <= 1 || Height <= 1) return;
+
             using (var p = ModernPaint.Rounded(new Rectangle(0, 0, Width, Height), 7))
             {
                 Region = new Region(p);

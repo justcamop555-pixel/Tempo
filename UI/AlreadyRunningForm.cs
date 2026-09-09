@@ -112,7 +112,7 @@ namespace AutoClicker.UI
                 Top = y + 8,
                 FlatStyle = FlatStyle.Flat,
                 BackColor = t.Accent,
-                ForeColor = Color.White,
+                ForeColor = t.OnAccent,
                 Font = new Font("Segoe UI", 9.75f)
             };
             ok.FlatAppearance.BorderColor = t.Accent;

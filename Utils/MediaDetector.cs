@@ -421,13 +421,17 @@ namespace AutoClicker.Utils
             return t;
         }
 
-        // Browser-profile segments that can trail a title before the browser's own
-        // name ("Video - YouTube - Personal - Microsoft Edge") — never the site name.
-        private static readonly string[] ProfileWords =
-        {
-            "personal", "work", "school", "family", "default", "guest",
-            "inprivate", "incognito", "private browsing"
-        };
+        // A ProfileWords table used to sit here — browser-profile segments ("Personal",
+        // "Work", "Incognito") to strip out of a window title before reading a site name
+        // from it. It was left behind when the title segment-splitting was REMOVED on
+        // purpose, and had no callers in any shipped build.
+        //
+        // Deliberately not revived. IdentifySource explains why the splitting went: the
+        // source name is painted on an always-on-top caption bar, which is on screen
+        // exactly when other people are looking — screen shares, calls, recordings — and
+        // anything parsed out of a window title beyond a recognised service is page
+        // content. Re-adding this table is the first step back toward broadcasting what
+        // the user is reading.
 
         /// <summary>Human name for the playing source — site for browsers, app/game otherwise.</summary>
         private static string IdentifySource(string procName, string title)

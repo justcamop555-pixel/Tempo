@@ -49,11 +49,20 @@ namespace AutoClicker.UI
         // than a single "loading\u2026" line). Cosmetic timing \u2014 the splash runs on its own
         // thread and doesn't instrument the actual steps \u2014 but these ARE the stages the
         // main window builds through, and the list completes as the window appears.
+        // EVERY entry here must be a stage that really runs and really reports. Step 2
+        // used to read "Warming the speech-caption engine", which nothing ever reported
+        // and which does not happen at all on a normal launch — captions only start
+        // themselves when the user has switched that on, and it is off by default. The
+        // timer below then ticked it off as done on every start, so the splash spent a
+        // line of a five-line checklist claiming work Tempo was not doing.
+        //
+        // It is now the stage that actually dominates startup: building the window is
+        // ~940 ms of the ~950 ms, and it was the one thing the checklist never mentioned.
         private static readonly string[] LoadingSteps =
         {
             "Loading settings & profiles",
             "Restoring your saved macros",
-            "Warming the speech-caption engine",
+            "Building the window",
             "Detecting audio devices",
             "Registering global hotkeys",
         };
@@ -301,10 +310,14 @@ namespace AutoClicker.UI
             // ── Checklist: real startup stages, ticked off as the window builds ──
             // Prefer what the app actually reported; the timer only carries the list
             // forward when nothing has reported yet (so it never sits frozen at zero).
+            // The timer may only carry the list while NOTHING has reported yet, so the
+            // splash is never frozen at zero on a slow start. Once reports are arriving
+            // they alone decide: it used to allow _reportedStep + 2, which drew a stage
+            // as finished before anything said it had started.
             int timed = Math.Min(LoadingSteps.Length - 1, (int)(_shown.ElapsedMilliseconds / StepMs));
             int activeStep = _progress >= 1f
                 ? LoadingSteps.Length
-                : Math.Max(_reportedStep + 1, Math.Min(timed, _reportedStep + 2));
+                : (_reportedStep < 0 ? timed : _reportedStep + 1);
             int listX = 74;
             int rowH = 25;
             int listY = 140;
@@ -325,7 +338,9 @@ namespace AutoClicker.UI
                         {
                             g.FillEllipse(fill, glyphBox);
                         }
-                        using (var chk = new Pen(Color.White, 1.7f)
+                        // Not white: the tick sits on an Accent-filled disc, and white on
+                        // Accent is below 4.5:1 in 36 of the 38 palettes.
+                        using (var chk = new Pen(Theme.ReadableOn(_accent), 1.7f)
                         { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                         {
                             g.DrawLines(chk, new[]

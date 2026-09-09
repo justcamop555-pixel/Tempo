@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
 using AutoClicker.Engine;
@@ -46,9 +46,20 @@ namespace AutoClicker.UI
         /// <summary>The measured degrees-per-count, valid only when ShowDialog returns OK.</summary>
         public double DegreesPerCount => _degPerCount;
 
+        /// <summary>
+        /// Kept so the live status line can colour itself from the palette.
+        ///
+        /// It used to use four fixed colours — a pale blue, amber, mint and grey chosen
+        /// against this dialog's dark default. On a light theme they sit on a near-white
+        /// Background at between 1.2:1 and 2.5:1, i.e. the status text this dialog exists
+        /// to show is the part you cannot read.
+        /// </summary>
+        private readonly Theme _theme;
+
         public CameraCalibrationForm(Theme theme, double current)
         {
             theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
+            _theme = theme;
 
             Text = Utils.Localization.T("Tempo — calibrate camera sensitivity");
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -179,7 +190,7 @@ namespace AutoClicker.UI
                 // not matter whether the user turns left or right.
                 _counts += Math.Abs(dx);
                 _liveCount.Text = Utils.Localization.F("Counting…  {0} counts", _counts);
-                _liveCount.ForeColor = Color.FromArgb(120, 200, 255);
+                _liveCount.ForeColor = _theme.AccentText;
                 _acceptBtn.Enabled = false;
                 _haveResult = false;
                 return;
@@ -199,7 +210,7 @@ namespace AutoClicker.UI
             if (_counts < 50)
             {
                 _liveCount.Text = Utils.Localization.F("Only {0} counts — too small to trust.", _counts);
-                _liveCount.ForeColor = Color.FromArgb(255, 190, 90);
+                _liveCount.ForeColor = _theme.WarningText;
                 _result.Text = Utils.Localization.F(
                     "That barely moved. Hold {0} and sweep a full 360° turn, then release.", HoldKeyName);
                 _counts = 0;
@@ -209,7 +220,7 @@ namespace AutoClicker.UI
 
             _degPerCount = CameraRelativeMovement.CalibrateFromFullTurn(_counts);
             _liveCount.Text = Utils.Localization.F("{0} counts for 360°", _counts);
-            _liveCount.ForeColor = Color.FromArgb(120, 230, 160);
+            _liveCount.ForeColor = _theme.SuccessText;
             _result.Text = Utils.Localization.F("Measured: {0} °/count.\n"
                            + "If the character drifts off-heading as you turn, run this again — "
                            + "and make sure in-game mouse acceleration is OFF.",
@@ -225,7 +236,7 @@ namespace AutoClicker.UI
             _acceptBtn.Enabled = false;
             _mouse.Drain(out _, out _);
             _liveCount.Text = Utils.Localization.F("Hold {0} and turn…", HoldKeyName);
-            _liveCount.ForeColor = Color.FromArgb(150, 160, 180);
+            _liveCount.ForeColor = _theme.TextMuted;
         }
     }
 }

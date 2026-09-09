@@ -72,7 +72,19 @@ namespace AutoClicker.UI
                 g.FillPath(fill, path);
             }
 
-            using (var brush = new SolidBrush(Color.White))
+            // Black or white, whichever reads on THIS pill's fill — not always white.
+            //
+            // The pill is filled with a theme status colour (Success for RUNNING, Warning
+            // for paused, and so on) and its text was hardcoded to white. Measured over
+            // the 38 palettes: white on Success is below 4.5:1 in ALL 38 themes and
+            // bottoms out at 1.31:1 on Synthwave; white on Warning is worse still, 1.12:1
+            // on Dracula — white on amber, effectively invisible. Danger fails in 30 of
+            // 38, Accent in 36. Picking the better of black and white reaches at least
+            // 4.63:1 in every theme for every one of those fills.
+            //
+            // Neither contrast scanner could see this: it is not a ForeColor assignment
+            // with a resolvable background, it is a brush inside a custom control's paint.
+            using (var brush = new SolidBrush(Theme.ReadableOn(_pillColor)))
             using (var format = new StringFormat
             {
                 Alignment = StringAlignment.Center,

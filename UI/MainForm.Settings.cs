@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
@@ -46,6 +46,17 @@ namespace AutoClicker.UI
             var page = new BackdropTabPage(Utils.Localization.T("Settings")) { AutoScroll = true };
             page.Name = "settings";   // stable key for LastTabKey
 
+            // SPIKE: see the end of this method, where the HTML page is laid OVER the
+            // finished tab when the hidden flag is set.
+            //
+            // The first attempt returned from here instead, so none of the Settings
+            // controls were ever created — and LoadSettingsIntoUi, which reads about
+            // sixty of them without null-guards, crashed the app on the next line
+            // (NullReferenceException, caught by the crash reporter). Building the tab
+            // and covering it costs the ~300 ms the tab takes, which is a number we
+            // already have and can subtract; it does not distort what the spike is
+            // actually measuring, which is what WebView2 costs.
+
             // Sixty-odd settings over a 2,100px scroll is too many to hunt through.
             AddSettingsSearchRow(page);
 
@@ -58,7 +69,9 @@ namespace AutoClicker.UI
 
             // ── Appearance ─────────────────────────────────────────────────────
             // 200, not 168: the logo row below was added under the background-image row.
-            var appearance = UiFactory.Group(Localization.T("Appearance"), 12, 12, 696, 200, CardIcon.Star);
+            // 264, not 200: the HDR row and the display-colour line were added below the
+            // logo row.
+            var appearance = UiFactory.Group(Localization.T("Appearance"), 12, 12, 696, 272, CardIcon.Star);
             appearance.Controls.Add(UiFactory.Label("Theme", 16, 32));
             _themeCombo = UiFactory.Combo(120, 29, 150,
                 "Dark", "Light", "Midnight", "Ocean", "Forest", "Crimson",
@@ -73,7 +86,12 @@ namespace AutoClicker.UI
 
             // Follow the OS light/dark mode. When on, the manual theme picker is
             // ignored (and greyed) and Tempo re-themes live as Windows switches.
-            _followSystemThemeCheck = UiFactory.Check("Match Windows", 512, 66);
+            // Row 1, beside the Language combo (which ends at 496) — NOT row 2 where it
+            // used to sit. It follows the OS light/dark setting, so it belongs with the
+            // theme picker rather than in the middle of the accent controls; moving it up
+            // also gives the accent row back the width its details need. The layout suite
+            // caught the collision when the details arrived, in all six languages.
+            _followSystemThemeCheck = UiFactory.Check("Match Windows", 512, 32);
             _followSystemThemeCheck.AutoSize = true;
             _followSystemThemeCheck.CheckedChanged += OnFollowSystemThemeToggled;
             appearance.Controls.Add(_followSystemThemeCheck);
@@ -99,8 +117,56 @@ namespace AutoClicker.UI
             _chooseAccentBtn.Click += OnChooseAccentClicked;
             appearance.Controls.Add(_chooseAccentBtn);
 
+            // ── Accent details ──────────────────────────────────────────────
+            //
+            // The row used to be a checkbox, a "Choose colour…" button and a swatch, and
+            // that was everything Tempo would tell you about a colour it paints across
+            // the whole app. Three things were missing and all three matter:
+            //
+            //  • the VALUE. A swatch cannot be written down, pasted from a brand palette,
+            //    or matched to anything. The hex box reads and writes it.
+            //  • the HOVER colour, which is derived from the accent (Lighten 0.14) and
+            //    shown on every primary button the moment the pointer touches it — but
+            //    was never previewed, so a choice that looked fine could hover badly.
+            //  • whether the accent is READABLE. Primary buttons paint their label onto
+            //    it, and while the 38 built-in themes are audited to WCAG AA, a custom
+            //    accent skips that entirely. The contrast figure is the only warning a
+            //    user gets before shipping themselves an unreadable button.
             _accentSwatch = new Panel { Left = 390, Top = 63, Width = 44, Height = 22, BorderStyle = BorderStyle.FixedSingle };
             appearance.Controls.Add(_accentSwatch);
+
+            _accentHoverSwatch = new Panel
+            {
+                Left = 436, Top = 63, Width = 22, Height = 22,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            appearance.Controls.Add(_accentHoverSwatch);
+
+            _accentHexBox = new FlatTextBox
+            {
+                Left = 464, Top = 62, Width = 78,
+                Font = UiFactory.BodyFont,
+                MaxLength = 7,
+                TextAlign = HorizontalAlignment.Center
+            };
+            // Commit on Enter or on leaving the field, never per keystroke: repainting the
+            // entire app on the way through "#1", "#12", "#123" would be a light show.
+            _accentHexBox.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    e.SuppressKeyPress = true;   // no ding from the default button
+                    CommitAccentHex();
+                }
+            };
+            _accentHexBox.Leave += (s, e) => CommitAccentHex();
+            appearance.Controls.Add(_accentHexBox);
+
+            _accentContrastLabel = UiFactory.Caption("", 550, 66);
+            _accentContrastLabel.AutoSize = false;
+            _accentContrastLabel.Width = 132;
+            _accentContrastLabel.Height = 18;
+            appearance.Controls.Add(_accentContrastLabel);
 
             // Live preview.
             appearance.Controls.Add(UiFactory.Label("Preview", 16, 104));
@@ -195,6 +261,39 @@ namespace AutoClicker.UI
             _animateLogoCheck.CheckedChanged += OnAnimateLogoToggled;
             appearance.Controls.Add(_animateLogoCheck);
 
+            // Playback speed. A logo GIF is authored for a web page, not for a 16px tray
+            // icon — timing that reads well at 400px is often a blur at icon size, and an
+            // ambient loop can be too sleepy to notice. The values are ratios of the
+            // file's own delays, so "1×" always means "exactly as the author made it".
+            _logoSpeedLabel = UiFactory.Caption("Speed:", 16, 206);
+            _logoSpeedLabel.AutoSize = true;
+            appearance.Controls.Add(_logoSpeedLabel);
+
+            _logoSpeedCombo = UiFactory.Combo(100, 202, 76,
+                "0.25×", "0.5×", "1×", "1.5×", "2×", "4×");
+            _logoSpeedCombo.SelectedIndexChanged += OnLogoSpeedChanged;
+            appearance.Controls.Add(_logoSpeedCombo);
+
+            // What the DISPLAY is doing to these colours.
+            //
+            // "The theme doesn't look like the colours you picked" has causes that live
+            // entirely outside Tempo, and this card — where the user is standing when they
+            // notice — said nothing about any of them. Windows HDR is the big one: Tempo
+            // is an SDR app, so the compositor tone-maps everything it paints, dark themes
+            // come out milky and greys lift. Nothing inside the process can see that; the
+            // pixels we drew are the pixels we asked for.
+            _hdrCompensateCheck = UiFactory.Check("Correct colours for HDR", 200, 204);
+            _hdrCompensateCheck.AutoSize = true;
+            _hdrCompensateCheck.CheckedChanged += OnHdrCompensationToggled;
+            appearance.Controls.Add(_hdrCompensateCheck);
+
+            _displayColourNote = UiFactory.Caption("", 16, 230);
+            _displayColourNote.AutoSize = false;
+            _displayColourNote.Width = 670;
+            _displayColourNote.Height = 30;
+            appearance.Controls.Add(_displayColourNote);
+            RefreshDisplayColourNote();
+
             _animateLogoNote = UiFactory.Caption("", 190, 178);
             _animateLogoNote.AutoSize = false;
             _animateLogoNote.Width = 496;
@@ -239,7 +338,9 @@ namespace AutoClicker.UI
             // see the note in Appearance above.
 
             // ── Behaviour ──────────────────────────────────────────────────────
-            var behaviour = UiFactory.Group(Localization.T("Behaviour"), 12, 316, 696, 228, CardIcon.Gear);
+            // 256, not 228: one more row for the cursor trail, moved here from the
+            // Macros tab where it never belonged.
+            var behaviour = UiFactory.Group(Localization.T("Behaviour"), 12, 316, 696, 256, CardIcon.Gear);
 
             _minimizeToTrayCheck = UiFactory.Check("Minimise to tray instead of closing", 16, 30);
             _startMinimizedCheck = UiFactory.Check("Start minimised to tray", 16, 58);
@@ -325,10 +426,19 @@ namespace AutoClicker.UI
             };
             behaviour.Controls.Add(_ignoreOwnWindowCheck);
 
+            // Moved here from the Macros tab: an app-wide preference belongs with the
+            // other app-wide preferences. Its state is loaded in LoadSettingsIntoUi's
+            // tail, which already handled it and needs no change.
+            _cursorTrailCheck = UiFactory.Check("Colorful cursor trail (just for fun)", 16, 226);
+            _cursorTrailCheck.Checked = _settings != null && _settings.CursorTrailEnabled;
+            _cursorTrailCheck.CheckedChanged += OnCursorTrailChanged;
+            behaviour.Controls.Add(_cursorTrailCheck);
+
             // (Live Captions controls moved to their own dedicated group below.)
 
             // ── Notifications ──────────────────────────────────────────────────
-            var notify = UiFactory.Group(Localization.T("Notifications"), 12, 556, 696, 184, CardIcon.Gear);
+            // 220, not 184: one more row for the history button below the checkboxes.
+            var notify = UiFactory.Group(Localization.T("Notifications"), 12, 556, 696, 220, CardIcon.Gear);
 
             _customNotifyCheck = UiFactory.Check("Use Tempo's animated pop-up notifications", 16, 30);
             _customNotifyCheck.AutoSize = true;
@@ -414,6 +524,26 @@ namespace AutoClicker.UI
             };
             notify.Controls.Add(notifyWinBtn);
 
+            // Only appears when Windows has actually refused the listener. It opens the
+            // GLOBAL notifications-access page, not the per-app list: Tempo is unpackaged
+            // and so has no row of its own there — see WindowsNotificationMirror.
+            // 430,182 and not beside the mirror status at 388,118: the overlap check
+            // caught it sitting on top of that label by 104x20px. Hidden most of the
+            // time, which is exactly why it needed catching — a collision nobody sees
+            // until the one moment the control appears.
+            _notifyPermissionBtn = UiFactory.Button(Localization.T("Allow notification access…"), 430, 182, 200, 28);
+            _notifyPermissionBtn.Visible = false;
+            _notifyPermissionBtn.Click += (s, e) =>
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    { FileName = "ms-settings:privacy-notifications", UseShellExecute = true });
+                }
+                catch (Exception ex) { Utils.Logger.Swallow("OpenNotifyPrivacySettings", ex); }
+            };
+            notify.Controls.Add(_notifyPermissionBtn);
+
             // Photo notifications: pop a card with the picture the instant you copy a
             // screenshot / image to the clipboard (a real photo alert).
             _notifyScreenshotCheck = UiFactory.Check("Show a preview pop-up when I copy a screenshot or image", 16, 150);
@@ -440,6 +570,16 @@ namespace AutoClicker.UI
                 PersistNotificationSettings();
             };
             notify.Controls.Add(_notifyCloseCheck);
+
+            // Reachable from the tray too — that is where someone coming out of a game
+            // will look — but it belongs here as well, beside the settings that decide
+            // what gets shown in the first place.
+            var notifyHistoryBtn = UiFactory.Button(Localization.T("Notification history…"), 16, 182, 190, 28);
+            notifyHistoryBtn.Click += (s, e) => UI.NotificationHistoryForm.ShowFor(this, _theme);
+            notify.Controls.Add(notifyHistoryBtn);
+
+            _notifyMissedLabel = UiFactory.Caption("", 214, 188);
+            notify.Controls.Add(_notifyMissedLabel);
 
             _notifyStatusLabel = UiFactory.Caption("", 388, 118);
             _notifyStatusLabel.AutoSize = false;
@@ -989,7 +1129,7 @@ namespace AutoClicker.UI
             if (portableNote != null)
             {
                 var portable = UiFactory.Caption(portableNote, 12, 1932);
-                portable.ForeColor = _theme.Warning;
+                portable.ForeColor = Theme.Readable(_theme.Warning, _theme.InputBackground);
                 portable.AutoSize = false;
                 portable.Width = 700;
                 portable.Height = 64;
@@ -1034,6 +1174,25 @@ namespace AutoClicker.UI
             AssertNoCardOverlap(page);
 
             _tabs.TabPages.Add(page);
+
+            // SPIKE: lay the HTML page over the finished tab. Everything underneath still
+            // exists, so LoadSettingsIntoUi and the rest of the app find the controls
+            // they expect and nothing else has to learn about this.
+            if (_settings != null && _settings.ExperimentalWebUi)
+            {
+                var host = new WebSettingsHost(_theme, _settings, () =>
+                {
+                    // Put whatever the page changed into effect, as the WinForms
+                    // handlers would have.
+                    try { ReassertTopMost(); } catch { }
+                    try { Opacity = (double)Clamp(_settings.WindowOpacity, 50, 100) / 100.0; } catch { }
+                    try { Utils.AnimatedLogo.SetEnabled(_settings.AnimateCustomLogo); } catch { }
+                });
+                page.Controls.Add(host);
+                host.BringToFront();
+                host.Start();
+                Utils.Logger.Info("[WebUI] Settings tab is rendering from HTML (ExperimentalWebUi).");
+            }
         }
 
         private void LoadSettingsIntoUi()
@@ -1052,7 +1211,15 @@ namespace AutoClicker.UI
                 _alwaysOnTopCheck.Checked = _settings.AlwaysOnTop;
                 _customAccentCheck.Checked = _settings.CustomAccentEnabled;
                 _animateLogoCheck.Checked = _settings.AnimateCustomLogo;
+                _logoSpeedCombo.SelectedIndex = LogoSpeedIndexFor(_settings.LogoAnimationSpeed);
+                _logoSpeedCombo.Enabled = _settings.AnimateCustomLogo;
                 UpdateAnimateLogoNote();
+
+                _hdrCompensateCheck.Checked = _settings.CompensateForHdr;
+                // Inert on an SDR machine — say so by greying it rather than offering a
+                // switch that changes nothing.
+                _hdrCompensateCheck.Enabled = Utils.DisplayColorInfo.SdrIsToneMapped;
+                RefreshDisplayColourNote();
 
                 int langIndex = (int)_settings.Language;
                 if (langIndex < 0 || langIndex >= _languageCombo.Items.Count) langIndex = 0;
@@ -1176,7 +1343,17 @@ namespace AutoClicker.UI
                     // the cap (default 200 CPS) silently clamps the unlocked rate and
                     // the feature appears to do nothing. Heals an older saved state
                     // where unlock was on but the cap was left at the default.
-                    if (unlocked && _settings.MaxClicksPerSecond < UnlockedMaxCps)
+                    //
+                    // ONLY when the cap is still that untouched default. This runs on
+                    // every LoadSettingsIntoUi — startup, Reset, Import — and the old
+                    // "< UnlockedMaxCps" test matched every value below 2000, so with
+                    // unlock on the Anti-Freeze box could not hold ANY cap the user
+                    // chose: measured, a saved 20 came back as 2000 on the next launch,
+                    // and the run that followed went at 194 CPS. The sibling code in the
+                    // unlock handler already gets this right in the other direction ("only
+                    // if the cap is still the auto-raised value so a custom cap is kept");
+                    // this is the same rule going the other way.
+                    if (unlocked && _settings.MaxClicksPerSecond == NormalMaxCps)
                     {
                         _settings.MaxClicksPerSecond = UnlockedMaxCps;
                     }
@@ -1211,6 +1388,11 @@ namespace AutoClicker.UI
             if (_cursorTrailCheck != null) _cursorTrailCheck.Checked = _settings.CursorTrailEnabled;
             if (_recordMovesCheck != null) _recordMovesCheck.Checked = _settings.RecordMacroMovements;
             if (_recordKeysCheck != null) _recordKeysCheck.Checked = _settings.RecordMacroKeyboard;
+            // Same page, same reason — this one was missed when the three above were fixed.
+            if (_recordCountdownNum != null)
+            {
+                _recordCountdownNum.Value = Clamp(_settings.RecordCountdownSeconds, 0, 10);
+            }
 
             // Keep the Anti-Freeze cap numeric and the engine in sync with any cap
             // raised by the unlock-speed reconciliation above (guarded so it doesn't
@@ -1225,6 +1407,28 @@ namespace AutoClicker.UI
 
             UpdateAccentControlsEnabled();
             RefreshThemePreview();
+            RefreshMissedNotificationsLabel();
+        }
+
+        /// <summary>
+        /// "N you didn't see" beside the history button.
+        ///
+        /// Worth showing without opening anything: a notification dropped during a
+        /// fullscreen game leaves no other trace, so a user who never opens the history
+        /// would never learn there was one.
+        /// </summary>
+        private void RefreshMissedNotificationsLabel()
+        {
+            if (_notifyMissedLabel == null) { return; }
+            try
+            {
+                int missed = Utils.NotificationHistory.MissedCount();
+                _notifyMissedLabel.Text = missed == 0
+                    ? ""
+                    : Utils.Localization.F("{0} you didn't see", missed);
+                _notifyMissedLabel.ForeColor = missed > 0 ? _theme.WarningText : _theme.TextMuted;
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RefreshMissedNotificationsLabel", ex); }
         }
 
         private void OnThemeChanged(object sender, EventArgs e)
@@ -1346,6 +1550,86 @@ namespace AutoClicker.UI
             catch { }
         }
 
+        /// <summary>
+        /// Fills in the display-colour line: what the panel is, and what Windows is doing
+        /// to Tempo's colours before they reach it.
+        ///
+        /// Deliberately stated, not corrected. An SDR application cannot undo the
+        /// compositor's HDR tone-mapping from inside itself, and guessing a counter-shift
+        /// would make the colours wrong in a second, less predictable way. Saying WHY the
+        /// theme looks off is the honest fix.
+        /// </summary>
+        /// <summary>
+        /// Gates the palette compensation on BOTH the user's preference and a display that
+        /// is actually tone-mapping. On an SDR machine there is nothing to compensate for,
+        /// and shifting the palette anyway would be the bug this feature exists to fix,
+        /// pointed the other way.
+        /// </summary>
+        private void ApplyHdrCompensationSetting()
+        {
+            try
+            {
+                Theme.CompensateForHdr =
+                    _settings != null && _settings.CompensateForHdr &&
+                    Utils.DisplayColorInfo.SdrIsToneMapped;
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("ApplyHdrCompensationSetting", ex); }
+        }
+
+        private void OnHdrCompensationToggled(object sender, EventArgs e)
+        {
+            if (_suppressSettingsEvents || _settings == null) { return; }
+            _settings.CompensateForHdr = _hdrCompensateCheck.Checked;
+            ApplyHdrCompensationSetting();
+            ApplyThemeToEverything();     // live: rebuild every surface with the new palette
+            RefreshThemePreview();
+            RefreshDisplayColourNote();
+        }
+
+        private void RefreshDisplayColourNote()
+        {
+            if (_displayColourNote == null) { return; }
+            try
+            {
+                string facts = Utils.DisplayColorInfo.Describe();
+                string note = Utils.DisplayColorInfo.ColourAccuracyNote();
+
+                _displayColourNote.Text = note.Length > 0
+                    ? Utils.Localization.T("Display:") + " " + facts + "\n⚠ " + note
+                    : Utils.Localization.T("Display:") + " " + facts;
+                _displayColourNote.ForeColor = note.Length > 0 ? _theme.Warning : _theme.TextMuted;
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RefreshDisplayColourNote", ex); }
+        }
+
+        /// <summary>The speeds the combo offers, in the same order, as percentages.</summary>
+        private static readonly int[] LogoSpeedPercents = { 25, 50, 100, 150, 200, 400 };
+
+        private void OnLogoSpeedChanged(object sender, EventArgs e)
+        {
+            if (_suppressSettingsEvents || _settings == null) { return; }
+            int i = _logoSpeedCombo.SelectedIndex;
+            if (i < 0 || i >= LogoSpeedPercents.Length) { return; }
+
+            _settings.LogoAnimationSpeed = LogoSpeedPercents[i];
+            Utils.AnimatedLogo.SpeedPercent = _settings.LogoAnimationSpeed;
+            UpdateAnimateLogoNote();     // the note quotes the loop length, which just changed
+        }
+
+        /// <summary>
+        /// Picks the combo entry for a stored speed, falling back to 1× for a value that
+        /// is not one of the offered ratios — a hand-edited settings file, or a speed from
+        /// a build that offered different steps.
+        /// </summary>
+        private static int LogoSpeedIndexFor(int percent)
+        {
+            for (int i = 0; i < LogoSpeedPercents.Length; i++)
+            {
+                if (LogoSpeedPercents[i] == percent) { return i; }
+            }
+            return 2;   // 100%
+        }
+
         private void OnAnimateLogoToggled(object sender, EventArgs e)
         {
             if (_suppressSettingsEvents || _settings == null)
@@ -1358,6 +1642,7 @@ namespace AutoClicker.UI
             // Live, not on restart: SetEnabled rebuilds or tears down the animation, and
             // the frame event puts the result on the window and the tray immediately.
             Utils.AnimatedLogo.SetEnabled(_settings.AnimateCustomLogo);
+            if (_logoSpeedCombo != null) { _logoSpeedCombo.Enabled = _settings.AnimateCustomLogo; }
             RefreshAppIconEverywhere();
             UpdateAnimateLogoNote();
         }
@@ -1385,9 +1670,25 @@ namespace AutoClicker.UI
                 // reason beside it says the feature exists and where to feed it, instead
                 // of offering a switch that would visibly do nothing.
                 _animateLogoCheck.Enabled = haveLogo;
-                _animateLogoNote.Text = haveLogo
+
+                string note = haveLogo
                     ? Utils.AnimatedLogo.Status
                     : Utils.Localization.T("No custom logo — set one in About.");
+
+                // Status quotes the loop as AUTHORED, because it is built once when the
+                // frames are rendered. At any speed but 1× that number is no longer what
+                // the user is watching, so say what it actually is now.
+                if (haveLogo && _settings != null && _settings.LogoAnimationSpeed != 100)
+                {
+                    double secs = Utils.AnimatedLogo.EffectiveLoopSeconds;
+                    if (secs > 0)
+                    {
+                        note += Utils.Localization.F("  →  {0}s at {1}%",
+                            secs.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
+                            _settings.LogoAnimationSpeed);
+                    }
+                }
+                _animateLogoNote.Text = note;
             }
             catch (Exception ex) { Utils.Logger.Swallow("UpdateAnimateLogoNote", ex); }
         }
@@ -1437,10 +1738,55 @@ namespace AutoClicker.UI
 
         private void UpdateAccentControlsEnabled()
         {
-            if (_chooseAccentBtn != null)
+            bool on = _customAccentCheck.Checked;
+            if (_chooseAccentBtn != null) { _chooseAccentBtn.Enabled = on; }
+            // The hex box edits the CUSTOM accent, so it is only meaningful while the
+            // custom accent is the one in use; the swatches and the contrast figure stay
+            // readable either way, because they describe whatever accent is live.
+            if (_accentHexBox != null) { _accentHexBox.Enabled = on; }
+        }
+
+        /// <summary>
+        /// Accepts a hex colour typed or pasted into the accent box.
+        ///
+        /// Tolerant on input, strict on output: "#RRGGBB", "RRGGBB" and the three-digit
+        /// "#RGB" shorthand all work, because those are what people copy out of design
+        /// tools and brand guides. Anything unparseable simply restores the current value
+        /// rather than complaining — a half-typed colour is not an error worth a dialog.
+        /// </summary>
+        private void CommitAccentHex()
+        {
+            if (_accentHexBox == null || _settings == null || _suppressSettingsEvents) { return; }
+            try
             {
-                _chooseAccentBtn.Enabled = _customAccentCheck.Checked;
+                string t = (_accentHexBox.Text ?? "").Trim().TrimStart('#');
+                if (t.Length == 3)
+                {
+                    t = string.Concat(t[0], t[0], t[1], t[1], t[2], t[2]);
+                }
+
+                if (t.Length == 6 &&
+                    int.TryParse(t, System.Globalization.NumberStyles.HexNumber,
+                                 System.Globalization.CultureInfo.InvariantCulture, out int rgb))
+                {
+                    int argb = unchecked((int)(0xFF000000u | (uint)rgb));
+                    if (argb != _settings.CustomAccentArgb)
+                    {
+                        _settings.CustomAccentArgb = argb;
+                        if (!_customAccentCheck.Checked)
+                        {
+                            _customAccentCheck.Checked = true;   // fires the toggle handler
+                        }
+                        else
+                        {
+                            ApplyThemeToEverything();
+                        }
+                    }
+                }
             }
+            catch (Exception ex) { Utils.Logger.Swallow("CommitAccentHex", ex); }
+
+            RefreshThemePreview();   // always resync the box to the accent actually in use
         }
 
         /// <summary>Repaints the live theme-preview swatches and sample controls.</summary>
@@ -1461,17 +1807,47 @@ namespace AutoClicker.UI
                 _previewSwatches[i].BackColor = palette[i];
             }
 
-            if (_accentSwatch != null)
+            // The accent actually in force — the custom one when it is on, the theme's
+            // otherwise. Everything below describes THAT colour, so the details never
+            // disagree with what the app is painting.
+            Color liveAccent = _settings.CustomAccentEnabled
+                ? Color.FromArgb(_settings.CustomAccentArgb)
+                : _theme.Accent;
+
+            if (_accentSwatch != null) { _accentSwatch.BackColor = liveAccent; }
+            if (_accentHoverSwatch != null) { _accentHoverSwatch.BackColor = _theme.AccentHover; }
+
+            if (_accentHexBox != null && !_accentHexBox.Focused)
             {
-                _accentSwatch.BackColor = _settings.CustomAccentEnabled
-                    ? Color.FromArgb(_settings.CustomAccentArgb)
-                    : _theme.Accent;
+                // Never while the user is typing in it — rewriting the box mid-edit would
+                // fight them for the caret.
+                string hex = "#" + liveAccent.R.ToString("X2") + liveAccent.G.ToString("X2")
+                           + liveAccent.B.ToString("X2");
+                if (!string.Equals(_accentHexBox.Text, hex, StringComparison.OrdinalIgnoreCase))
+                {
+                    _accentHexBox.Text = hex;
+                }
+                _accentHexBox.BackColor = _theme.InputBackground;
+                _accentHexBox.ForeColor = _theme.Text;
+            }
+
+            if (_accentContrastLabel != null)
+            {
+                // Contrast of a primary button's LABEL against the accent it sits on.
+                // 4.5:1 is the WCAG AA bar for normal text, and these labels are bold
+                // 10pt, which qualifies as large text at 3:1 — so both marks are shown
+                // rather than failing a colour that is genuinely fine on a button.
+                double ratio = Theme.ContrastRatio(Theme.ReadableOn(liveAccent), liveAccent);
+                string verdict = ratio >= 4.5 ? "AA" : (ratio >= 3.0 ? "AA large" : "low");
+                _accentContrastLabel.Text = ratio.ToString("0.0",
+                    System.Globalization.CultureInfo.InvariantCulture) + ":1  " + verdict;
+                _accentContrastLabel.ForeColor = ratio >= 3.0 ? _theme.TextMuted : _theme.Warning;
             }
 
             if (_previewButton != null)
             {
                 _previewButton.BackColor = _theme.Accent;
-                _previewButton.ForeColor = Color.White;
+                _previewButton.ForeColor = _theme.OnAccent;
                 _previewButton.FlatAppearance.BorderSize = 0;
             }
 
@@ -1599,7 +1975,7 @@ namespace AutoClicker.UI
                         cf.Headline, cf.FileName)
                     : Localization.F("⚠ {0} can't be used — {1}"
                         + " Captions will fall back to the models above.", cf.FileName, cf.Problem);
-                _captionModelStatus.ForeColor = cf.Valid ? _theme.Success : _theme.Warning;
+                _captionModelStatus.ForeColor = cf.Valid ? _theme.SuccessText : _theme.WarningText;
                 return;
             }
 
@@ -1618,14 +1994,14 @@ namespace AutoClicker.UI
                 _captionModelStatus.Text = "\u2713 " + Localization.T(model.Label) + " " + Localization.T("is installed and ready") +
                     (size.Length > 0 ? " \u00b7 " + size + " " + Localization.T("on disk") : "") +
                     " \u00b7 " + language + ".";
-                _captionModelStatus.ForeColor = _theme.Success;
+                _captionModelStatus.ForeColor = Theme.Readable(_theme.Success, _theme.InputBackground);
             }
             else
             {
                 _captionModelStatus.Text = "\u2b07 " + Localization.T(model.Label) + " " +
                     Localization.T("isn't downloaded yet \u2014 click \u201cDownload model\u201d.") + " " +
                     Localization.T(model.Note);
-                _captionModelStatus.ForeColor = _theme.Warning;
+                _captionModelStatus.ForeColor = Theme.Readable(_theme.Warning, _theme.InputBackground);
             }
         }
 
@@ -1782,7 +2158,16 @@ namespace AutoClicker.UI
                 _notifyStatusLabel.Text = ok
                     ? Localization.T("● On — turn on Do Not Disturb to hide Windows' own pop-ups")
                     : Localization.F("▲ Mirror: {0}", s);
-                _notifyStatusLabel.ForeColor = ok ? _theme.Success : _theme.Warning;
+                _notifyStatusLabel.ForeColor = ok ? _theme.SuccessText : _theme.WarningText;
+
+                // The route to the only switch that governs this, offered exactly when
+                // Windows has refused — and hidden the rest of the time, because sending
+                // someone to a privacy page that already says Allow explains nothing.
+                if (_notifyPermissionBtn != null)
+                {
+                    _notifyPermissionBtn.Visible = _notifyMirror != null
+                                                   && _notifyMirror.NeedsWindowsPermission;
+                }
             }
             catch { /* status is best-effort */ }
         }
@@ -1923,7 +2308,7 @@ namespace AutoClicker.UI
                 "camera — it estimates it from mouse movement, so calibrate below and turn OFF in-game " +
                 "mouse acceleration. Many online games forbid input automation.",
                 16, 54);
-            warn.ForeColor = _theme.Warning;
+            warn.ForeColor = Theme.Readable(_theme.Warning, _theme.InputBackground);
             warn.AutoSize = false;
             warn.Width = 664;
             warn.Height = 32;
@@ -2322,65 +2707,11 @@ namespace AutoClicker.UI
             _saveBtnText = null;
         }
 
-        private void OnChooseBackgroundGif(object sender, EventArgs e)
-        {
-            using (var dlg = new OpenFileDialog
-            {
-                Title = Localization.T("Choose a background image (GIF animates)"),
-                Filter = Localization.T("Images (*.gif;*.png;*.jpg;*.jpeg)|*.gif;*.png;*.jpg;*.jpeg|All files (*.*)|*.*")
-            })
-            {
-                if (dlg.ShowDialog(this) != DialogResult.OK)
-                {
-                    return;
-                }
-                if (!CanLoadImageFile(dlg.FileName))
-                {
-                    ShowInfo(Localization.F("That file couldn't be loaded as an image, so it wasn't applied.\n\n{0}", dlg.FileName));
-                    return;
-                }
-                _settings.BackgroundGifPath = dlg.FileName;
-                try { Persistence.SettingsManager.Save(_settings); } catch { }
-                ApplyBackgroundGif();
-            }
-        }
-
-        private void OnClearBackgroundGif(object sender, EventArgs e)
-        {
-            _settings.BackgroundGifPath = "";
-            try { Persistence.SettingsManager.Save(_settings); } catch { }
-            ApplyBackgroundGif();
-        }
-
-        private void OnChooseBackgroundGif2(object sender, EventArgs e)
-        {
-            using (var dlg = new OpenFileDialog
-            {
-                Title = Localization.T("Choose a second background image (GIF animates)"),
-                Filter = Localization.T("Images (*.gif;*.png;*.jpg;*.jpeg)|*.gif;*.png;*.jpg;*.jpeg|All files (*.*)|*.*")
-            })
-            {
-                if (dlg.ShowDialog(this) != DialogResult.OK)
-                {
-                    return;
-                }
-                if (!CanLoadImageFile(dlg.FileName))
-                {
-                    ShowInfo(Localization.F("That file couldn't be loaded as an image, so it wasn't applied.\n\n{0}", dlg.FileName));
-                    return;
-                }
-                _settings.BackgroundGifPath2 = dlg.FileName;
-                try { Persistence.SettingsManager.Save(_settings); } catch { }
-                ApplyBackgroundGif();
-            }
-        }
-
-        private void OnClearBackgroundGif2(object sender, EventArgs e)
-        {
-            _settings.BackgroundGifPath2 = "";
-            try { Persistence.SettingsManager.Save(_settings); } catch { }
-            ApplyBackgroundGif();
-        }
+        // The four per-surface background handlers that used to live here (OnChooseBackgroundGif
+        // / OnClearBackgroundGif and their "2" variants) are gone. The background became
+        // ONE full-window wallpaper, OnChooseFullGif / OnClearFullGif replaced them, and
+        // nothing had wired the old four to a control since — they compiled and shipped
+        // in every release doing nothing, while reading like working code.
 
         private void OnChooseFullGif(object sender, EventArgs e)
         {
@@ -2506,6 +2837,51 @@ namespace AutoClicker.UI
             ApplyBackgroundGif();
         }
 
+        /// <summary>
+        /// Puts a wholesale replacement of <c>_settings</c> into effect everywhere.
+        ///
+        /// Reset-to-defaults and Import both swap the whole object out, and each used to
+        /// carry its own hand-written list of what to re-apply afterwards. The two lists
+        /// had drifted apart, and each had gaps the other did not: Reset never updated the
+        /// Windows startup entry, Import never reloaded the background, and NEITHER
+        /// re-ran the parts of the UI that are filled in once while their page is built,
+        /// or the statics that no control event can reach.
+        ///
+        /// Anything that must be PUSHED rather than observed belongs here, so the two
+        /// paths cannot disagree again.
+        /// </summary>
+        private void ApplyReplacedSettings()
+        {
+            _settings.EnsureConsistency();
+            _lifetimeBaseline = _settings.LifetimeClicks;
+            SettingsManager.Save(_settings);
+
+            LoadSettingsIntoUi();
+            LoadKeybindsIntoUi();
+
+            // Populated when the Clicker page is built and never again, so without this
+            // the anti-freeze tick, its CPU threshold and the repeat-finished alert all
+            // keep showing the settings that were just replaced.
+            LoadAntiFreezeIntoUi();
+
+            // Statics and OS state. LoadSettingsIntoUi runs with events suppressed, so
+            // nothing downstream of a control event happens on its own.
+            Utils.AnimatedLogo.SetEnabled(_settings.AnimateCustomLogo);
+            Utils.AnimatedLogo.SpeedPercent = _settings.LogoAnimationSpeed;
+            ApplyHdrCompensationSetting();
+            try { StartupManager.SetEnabled(_settings.LaunchAtStartup); }
+            catch (Exception ex) { Utils.Logger.Swallow("StartupManager.SetEnabled", ex); }
+
+            ApplyThemeToEverything();
+            ApplyHotkeysFromSettings();
+            ReassertTopMost();
+            ApplyBackgroundGif();
+            if (_trayAlwaysOnTopItem != null)
+            {
+                _trayAlwaysOnTopItem.Checked = _settings.AlwaysOnTop;
+            }
+        }
+
         private void OnResetSettings(object sender, EventArgs e)
         {
             var confirm = MessageBox.Show(this,
@@ -2520,19 +2896,7 @@ namespace AutoClicker.UI
             }
 
             _settings = AppSettings.CreateDefault();
-            _settings.EnsureConsistency();
-            _lifetimeBaseline = _settings.LifetimeClicks;
-            SettingsManager.Save(_settings);
-            LoadSettingsIntoUi();
-            LoadKeybindsIntoUi();
-            ApplyThemeToEverything();
-            ApplyHotkeysFromSettings();
-            ReassertTopMost();
-            ApplyBackgroundGif();
-            if (_trayAlwaysOnTopItem != null)
-            {
-                _trayAlwaysOnTopItem.Checked = _settings.AlwaysOnTop;
-            }
+            ApplyReplacedSettings();
         }
 
         private void UpdateLastCheckedLabel()
@@ -2803,6 +3167,23 @@ namespace AutoClicker.UI
             {
                 // Remove the tray icon so it doesn't linger after we force-exit.
                 try { _trayIcon?.Dispose(); } catch { }
+
+                // Environment.Exit runs no FormClosing and no ShutdownStep, so everything
+                // the normal close does has to be done by hand here. Two things actually
+                // matter and neither was happening:
+                //
+                //  • A held mouse button. Hold-to-click and macro playback press a button
+                //    and release it later; exiting in between leaves Windows believing it
+                //    is still down, and the user drags everything they touch afterwards.
+                //    Updating mid-click is not a strange thing to do — the prompt appears
+                //    on its own schedule, not the user's.
+                //  • Unsaved Settings-tab edits. CaptureSettingsFromUi + Save happen on
+                //    close, so a checkbox toggled just before "Update now" was discarded
+                //    by the very act of updating.
+                ReleaseHeldButtons();
+                try { CaptureSettingsFromUi(); } catch { }
+                try { Persistence.SettingsManager.Save(_settings); } catch { }
+
                 Logger.Info("[shutdown] exiting to let the updater replace Tempo.exe.");
                 Environment.Exit(0);
             }
@@ -3249,6 +3630,17 @@ namespace AutoClicker.UI
                             + "not the official Tempo build.");
                         colour = _theme.Danger;
                         break;
+                    case Utils.IntegrityVerdict.TestBuild:
+                        // Deliberately not green. A test build is not a problem, but it
+                        // has not been vouched for by anything either, and saying "✓" for
+                        // a file nothing outside this PC has confirmed would be the check
+                        // telling a comfortable lie.
+                        text = Localization.F(
+                            "⚠ This is a test build ({0}), not a published release — nothing "
+                            + "outside this PC has confirmed it. Install an official release if you "
+                            + "did not build this yourself.", Utils.BuildInfo.Id);
+                        colour = _theme.WarningText;
+                        break;
                     case Utils.IntegrityVerdict.Unknown:
                         text = Localization.T("Not checked yet.");
                         break;
@@ -3380,6 +3772,11 @@ namespace AutoClicker.UI
             if (Uninstaller.LaunchCleanupAndExitHelper(deleteExe, out string err))
             {
                 try { _trayIcon?.Dispose(); } catch { }
+
+                // Same hard exit, same missing release. Settings are deliberately NOT
+                // saved here — the folder they live in is being deleted.
+                ReleaseHeldButtons();
+
                 Logger.Info("[shutdown] exiting for uninstall cleanup.");
                 Environment.Exit(0);
             }
@@ -3446,16 +3843,7 @@ namespace AutoClicker.UI
                 }
 
                 _settings = imported;
-                _settings.EnsureConsistency();
-                _lifetimeBaseline = _settings.LifetimeClicks;
-                SettingsManager.Save(_settings);
-
-                LoadSettingsIntoUi();
-                LoadKeybindsIntoUi();
-                StartupManager.SetEnabled(_settings.LaunchAtStartup);
-                ApplyThemeToEverything();
-                ApplyHotkeysFromSettings();
-                ReassertTopMost();
+                ApplyReplacedSettings();
 
                 ShowInfo("Settings imported.");
             }

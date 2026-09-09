@@ -169,6 +169,27 @@ namespace AutoClicker.UI
             Invalidate();
         }
 
+        /// <summary>
+        /// When true, the REAL selection (SelectedItems) is drawn highlighted in the accent colour,
+        /// not just <see cref="HighlightIndex"/>. Off by default so the single-select lists that
+        /// drive their own highlight are unchanged; the multi-select accounts list turns it on so
+        /// picking one or several rows shows blue.
+        /// </summary>
+        public bool HighlightSelection { get; set; }
+
+        /// <summary>A row reads as "active" (accent-highlighted) if it's the highlight or selected.</summary>
+        private bool IsActive(int index)
+        {
+            if (index == _highlightIndex) { return true; }
+            return HighlightSelection && index >= 0 && index < Items.Count && Items[index].Selected;
+        }
+
+        protected override void OnItemSelectionChanged(ListViewItemSelectionChangedEventArgs e)
+        {
+            base.OnItemSelectionChanged(e);
+            if (HighlightSelection) { Invalidate(); }
+        }
+
         public virtual void ApplyTheme(Theme theme)
         {
             _theme = theme ?? _theme;
@@ -323,7 +344,7 @@ namespace AutoClicker.UI
 
         protected Color RowBackground(int index)
         {
-            if (index == _highlightIndex)
+            if (IsActive(index))
             {
                 return _theme.Accent;
             }
@@ -369,7 +390,7 @@ namespace AutoClicker.UI
                 g.FillRectangle(back, e.Bounds);
             }
 
-            if (e.ItemIndex == _highlightIndex)
+            if (IsActive(e.ItemIndex))
             {
                 using (var bar = new SolidBrush(Color.FromArgb(235, 255, 255, 255)))
                 {
@@ -396,7 +417,7 @@ namespace AutoClicker.UI
         private void DrawCell(Graphics g, ListViewItem item, int itemIndex, int column, Rectangle r)
         {
             string text = column < item.SubItems.Count ? item.SubItems[column].Text : string.Empty;
-            bool active = itemIndex == _highlightIndex;
+            bool active = IsActive(itemIndex);
             Color rowBack = RowBackground(itemIndex);
             Color accent = Readable(RowAccent(item), rowBack);
 
@@ -435,14 +456,17 @@ namespace AutoClicker.UI
                 var box = new Rectangle(r.Left + 5, r.Top + (r.Height - side) / 2, side, side);
                 bool ticked = item.Checked;
 
+                // Named once so the tick below can be derived from the box it lands on.
+                Color boxFill = active ? Color.White : _theme.Accent;
+
                 using (var fill = new SolidBrush(ticked
-                           ? (active ? Color.White : _theme.Accent)
+                           ? boxFill
                            : Blend(rowBack, Luminance(rowBack) > 0.35 ? Color.Black : Color.White, 0.12)))
                 {
                     g.FillRectangle(fill, box);
                 }
                 using (var edge = new Pen(ticked
-                           ? (active ? Color.White : _theme.Accent)
+                           ? boxFill
                            : Readable(_theme.TextMuted, rowBack)))
                 {
                     g.DrawRectangle(edge, box);
@@ -452,7 +476,14 @@ namespace AutoClicker.UI
                 {
                     // Tick drawn as two strokes rather than a glyph font, so it lands
                     // identically at every DPI.
-                    Color mark = active ? _theme.Accent : Color.White;
+                    //
+                    // The pair used to be fixed: Accent tick on a white box when the row
+                    // is selected, white tick on an Accent box when it is not. Both are the
+                    // same comparison — Accent against white — and it is below the 3:1 bar
+                    // for a graphical indicator in 22 of the 38 palettes, bottoming out at
+                    // 1.48:1 on Carbon. That is the mark that says whether a point or a
+                    // macro row is enabled, invisible in more than half the themes.
+                    Color mark = Theme.ReadableOn(boxFill);
                     using (var pen = new Pen(mark, 2f))
                     {
                         SmoothingMode old = g.SmoothingMode;

@@ -55,6 +55,17 @@ namespace AutoClicker.Utils
 
         public bool Running => _running;
         public string StatusText => _statusText;
+
+        /// <summary>
+        /// True when Windows refused the listener, so the UI can offer the one switch
+        /// that governs it. Set only by <see cref="Start"/>.
+        ///
+        /// Tempo has no package identity, so it never gets an entry of its own in
+        /// Settings › Privacy › Notifications — the global "Let apps access my
+        /// notifications" switch is the whole story, and the button has to go there
+        /// rather than to a per-app row that will not be found.
+        /// </summary>
+        public bool NeedsWindowsPermission { get; private set; }
         public int MirroredCount => _mirroredCount;
         public string LastApp => _lastApp;
         /// <summary>Times the instant NotificationChanged fast-path fired (vs. polling).</summary>
@@ -130,12 +141,32 @@ namespace AutoClicker.Utils
 
                 if (status != UserNotificationListenerAccessStatus.Allowed)
                 {
+                    // WHY THE OLD ADVICE WAS WRONG, and worth not repeating.
+                    //
+                    // It said "allow it in Windows Settings › Privacy › Notifications",
+                    // which sends the user hunting for a Tempo entry that does not and
+                    // cannot exist: Windows lists apps there by PACKAGE IDENTITY, and
+                    // Tempo is an unpackaged single-file exe. Measured on this machine,
+                    // the consent store
+                    // (HKCU\...\CapabilityAccessManager\ConsentStore\userNotificationListener)
+                    // holds NO per-app entries at all — only the global default. That
+                    // global switch is the only thing that governs Tempo, which is also
+                    // why no permission prompt ever appears: RequestAccessAsync just
+                    // inherits it and returns.
+                    //
+                    // So name the switch that actually decides this, rather than one the
+                    // user will never find.
                     _statusText = status == UserNotificationListenerAccessStatus.Denied
-                        ? "denied — allow it in Windows Settings › Privacy › Notifications"
-                        : "not decided (permission prompt was dismissed)";
-                    Logger.Info("[Notify] notification access not granted: " + status);
+                        ? "blocked by Windows — turn on \"Let apps access my notifications\""
+                        : "Windows did not grant access (Tempo is not a Store app, so it is "
+                          + "covered by the global notifications-access switch)";
+                    NeedsWindowsPermission = true;
+                    Logger.Warn("[Notify] notification access not granted: " + status +
+                                " — governed by the global 'Let apps access my notifications' " +
+                                "switch, since an unpackaged app has no entry of its own.");
                     return false;
                 }
+                NeedsWindowsPermission = false;
 
                 _primed = false;
                 // Mark running BEFORE arming the timer so the very first poll (and any
@@ -181,7 +212,12 @@ namespace AutoClicker.Utils
                     Logger.Info("[Notify] event fast-path unavailable (using polling): " + hex.Message);
                 }
 
-                Logger.Info("[Notify] Windows notification mirror started.");
+                // Says WHY no consent prompt appeared, because its absence looks like the
+                // feature failing to ask. It did ask; Windows answered from the global
+                // "Let apps access my notifications" switch without showing anything,
+                // which is what it does for an app with no package identity.
+                Logger.Info("[Notify] Windows notification mirror started — access granted by the " +
+                            "global notifications-access setting (no per-app prompt: Tempo is not a Store app).");
                 return true;
             }
             catch (Exception ex)

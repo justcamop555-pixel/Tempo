@@ -180,7 +180,9 @@ namespace AutoClicker.UI
             var b = Button(text, x, y, width, height);
             b.Font = ButtonFont;
             b.BackColor = theme.Accent;
-            b.ForeColor = Color.White;
+            // Not hardcoded white: a pale custom accent made every primary button's label
+            // vanish. See Theme.OnAccent.
+            b.ForeColor = theme.OnAccent;
             b.FlatAppearance.BorderSize = 0;
             b.FlatAppearance.MouseOverBackColor = theme.AccentHover;
             return b;

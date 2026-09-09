@@ -92,8 +92,33 @@ namespace AutoClicker.UI
             y = AddUrl(GitHubUrl, theme, y);
             y = AddUrl(WebsiteUrl, theme, y) + 10;
 
-            y = AddText(Localization.T("If you downloaded this copy anywhere else, it may have been modified by someone other than the developer. You can verify your copy against the SHA-256 checksum published with every official release."),
-                        theme.Text, UiFactory.BodyFont, y) + 16;
+            // The old sentence ended "...verify your copy against the SHA-256 checksum
+            // published with every official release", and that checksum is NOT published:
+            // checked against the live API, v1.0.320 carries exactly two assets, the zip
+            // and Tempo.exe, and no .sha256 among them. Sending someone to look for it
+            // wastes their time — on the one dialog whose whole job is being trustworthy,
+            // which is the worst place to be wrong.
+            //
+            // Tempo already answers the question itself, and better: the integrity check
+            // compares this exact file against the release GitHub published for its
+            // version. Point at that instead of at arithmetic nobody wants to do by hand.
+            y = AddText(Localization.T("If you downloaded this copy anywhere else, it may have been "
+                        + "modified by someone other than the developer. Tempo checks itself — open "
+                        + "Settings to see whether this copy matches the file published on GitHub."),
+                        theme.Text, UiFactory.BodyFont, y) + 10;
+
+            // ...and then say what it found about THIS copy, rather than leaving generic
+            // advice to be applied by hand. A test build reaching this dialog is exactly
+            // the case the note is about: it came from neither official source.
+            string mine = ThisCopyLine(out Color mineColour, theme);
+            if (mine != null)
+            {
+                y = AddText(mine, mineColour, UiFactory.BoldFont, y) + 16;
+            }
+            else
+            {
+                y += 6;
+            }
 
             // ── Buttons, sized to their OWN translated captions ──────────────────
             Button gh = UiFactory.Button(Localization.T("Open GitHub page"), Margin, y, 200, 34);
@@ -157,6 +182,42 @@ namespace AutoClicker.UI
         }
 
         /// <summary>Adds a wrapped label sized to its text. Returns the y below it.</summary>
+        /// <summary>
+        /// One line about the copy the user is actually running, or null when nothing is
+        /// known yet.
+        ///
+        /// The integrity check runs asynchronously at startup, so Unknown is a real and
+        /// common answer here — and inventing reassurance for a file nothing has checked
+        /// would be worse than saying nothing at all.
+        /// </summary>
+        private static string ThisCopyLine(out Color colour, Theme theme)
+        {
+            colour = theme.TextMuted;
+            try
+            {
+                switch (Utils.IntegrityCheck.Verdict)
+                {
+                    case Utils.IntegrityVerdict.Genuine:
+                        colour = theme.SuccessText;
+                        return Localization.T("✓ This copy matches the release published on GitHub.");
+                    case Utils.IntegrityVerdict.TestBuild:
+                        colour = theme.WarningText;
+                        return Localization.F(
+                            "⚠ This copy is a test build ({0}) — it did not come from either of those.",
+                            Utils.BuildInfo.Id);
+                    case Utils.IntegrityVerdict.Modified:
+                    case Utils.IntegrityVerdict.Repackaged:
+                    case Utils.IntegrityVerdict.UnknownRelease:
+                        colour = theme.DangerText;
+                        return Localization.T("✗ This copy does not match the official release. "
+                                              + "Replace it with one of the downloads above.");
+                    default:
+                        return null;    // Unknown / Ok / Baselined / Damaged — say nothing here
+                }
+            }
+            catch { return null; }
+        }
+
         private int AddText(string text, Color colour, Font font, int y)
         {
             int h;

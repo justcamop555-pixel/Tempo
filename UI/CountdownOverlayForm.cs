@@ -51,7 +51,7 @@ namespace AutoClicker.UI
             {
                 Text = _remaining.ToString(),
                 Font = new Font("Segoe UI", 56f, FontStyle.Bold),
-                ForeColor = _theme.Accent,
+                ForeColor = _theme.AccentText,
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Dock = DockStyle.Fill,
@@ -146,7 +146,7 @@ namespace AutoClicker.UI
             else
             {
                 _bigNumber.Text = "GO!";
-                _bigNumber.ForeColor = _theme.Success;
+                _bigNumber.ForeColor = _theme.SuccessText;
                 if (_beep) { Beep(1320, 150); }
                 _tick.Stop();
 

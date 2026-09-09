@@ -12,6 +12,290 @@ namespace AutoClicker.Utils
     /// </summary>
     public static class Uninstaller
     {
+        /// <summary>Where Windows keeps this user's Settings → Apps entries.</summary>
+        private const string UninstallRoot =
+            @"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+
+        /// <summary>Tempo's own entry under <see cref="UninstallRoot"/>.</summary>
+        private const string EntryName = "Tempo";
+
+        /// <summary>
+        /// Brings the version shown in Control Panel / Settings → Apps back in line with
+        /// the exe that is actually installed.
+        ///
+        /// install.cmd writes DisplayVersion once, at install time, from the exe's
+        /// FileVersion — and nothing ever wrote it again. Tempo updates itself by
+        /// replacing Tempo.exe in place, which does not touch the registry, so the number
+        /// Windows shows froze at whichever build was last put through the installer while
+        /// the app moved on without it. On this machine that was 1.0.209.0 against an
+        /// installed 1.0.320.0: a hundred and eleven releases of drift, and the one place
+        /// a user looks to answer "what version do I have?" was the one place that lied.
+        ///
+        /// Deliberately only UPDATES an entry that already exists. Creating one would
+        /// register a portable copy in Settings → Apps behind the user's back, complete
+        /// with an Uninstall button pointing at an uninstall.cmd that was never installed
+        /// — the exact broken state RemoveShellIntegration below exists to clean up.
+        ///
+        /// FileVersion, not Application.ProductVersion: the latter carries the git hash
+        /// ("1.0.320+cc37b4d…"), which is the right thing in the About box and the wrong
+        /// thing in a Windows version column. This matches what install.cmd would write.
+        /// </summary>
+        public static void RefreshRegisteredVersion()
+        {
+            try
+            {
+                DateTime? installedOnUtc = null;
+                string version = FileVersionInfo
+                    .GetVersionInfo(Application.ExecutablePath).FileVersion;
+                if (string.IsNullOrWhiteSpace(version))
+                {
+                    return;
+                }
+
+                using (var root = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(UninstallRoot))
+                {
+                    if (root == null) { return; }
+
+                    // Not installed (portable, or uninstalled) — nothing to correct.
+                    using (var probe = root.OpenSubKey(EntryName))
+                    {
+                        if (probe == null) { return; }   // portable / not installed
+
+                        // Read the key's timestamp HERE, through a read-only handle and
+                        // before a single write below. This is the install date, and the
+                        // first write in this method overwrites it forever.
+                        installedOnUtc = KeyLastWriteUtc(probe);
+                    }
+                }
+
+                using (var entry = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    UninstallRoot + "\\" + EntryName, writable: true))
+                {
+                    if (entry == null) { return; }
+
+                    string was = entry.GetValue("DisplayVersion") as string;
+                    bool versionChanged = !string.Equals(was, version, StringComparison.OrdinalIgnoreCase);
+                    if (versionChanged)
+                    {
+                        entry.SetValue("DisplayVersion", version,
+                                       Microsoft.Win32.RegistryValueKind.String);
+                        Logger.Info("[Install] Settings > Apps version corrected: " +
+                                    (string.IsNullOrEmpty(was) ? "(unset)" : was) + " -> " + version);
+                    }
+
+                    // Deliberately NOT gated on the version having changed. A broken
+                    // Uninstall button on a machine that is already showing the right
+                    // number would otherwise never be repaired — which is most of the
+                    // installs that have one. Only the size walk is gated; everything
+                    // else here is a couple of string compares that write nothing when
+                    // they already agree.
+                    RepairEntry(entry, version, versionChanged, installedOnUtc);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Never worth interrupting startup for a cosmetic registry value.
+                Logger.Swallow("Uninstaller.RefreshRegisteredVersion", ex);
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("advapi32.dll", CharSet =
+            System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern int RegQueryInfoKey(
+            Microsoft.Win32.SafeHandles.SafeRegistryHandle hKey, IntPtr lpClass,
+            IntPtr lpcchClass, IntPtr lpReserved, IntPtr lpcSubKeys,
+            IntPtr lpcbMaxSubKeyLen, IntPtr lpcbMaxClassLen, IntPtr lpcValues,
+            IntPtr lpcbMaxValueNameLen, IntPtr lpcbMaxValueLen,
+            IntPtr lpcbSecurityDescriptor, out System.Runtime.InteropServices.ComTypes.FILETIME lpftLastWriteTime);
+
+        /// <summary>
+        /// When a registry key was last written, in UTC, or null if it cannot be read.
+        ///
+        /// The .NET RegistryKey class does not expose this, and it is the only record of
+        /// when an installer created an entry — which is what Windows shows as
+        /// "Installed on" for any app that never wrote an InstallDate value of its own.
+        /// </summary>
+        private static DateTime? KeyLastWriteUtc(Microsoft.Win32.RegistryKey key)
+        {
+            try
+            {
+                if (key == null) { return null; }
+                if (RegQueryInfoKey(key.Handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero,
+                        IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero,
+                        IntPtr.Zero, IntPtr.Zero, out var ft) != 0)
+                {
+                    return null;
+                }
+                long ticks = ((long)ft.dwHighDateTime << 32) | (uint)ft.dwLowDateTime;
+                if (ticks <= 0) { return null; }
+                return DateTime.FromFileTimeUtc(ticks);
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// Brings the rest of the Settings → Apps entry up to date, alongside the version.
+        ///
+        /// Runs only when the version actually changed, because the size figure means
+        /// walking a 200 MB install folder and that is not something to do on every
+        /// launch for a cosmetic number.
+        ///
+        /// What each value fixes:
+        ///  • UninstallString — the Uninstall button was DEAD. install.cmd copies
+        ///    uninstall.cmd only if it finds one to copy, but wrote the registry value
+        ///    unconditionally, so the button pointed at a file that was never created.
+        ///    Repointed at the exe, which cannot go missing, and only when the .cmd is
+        ///    genuinely absent — an install that has one keeps using it.
+        ///  • QuietUninstallString — Windows 11's Settings → Apps prefers this and
+        ///    uninstalls in place when it exists, instead of throwing up a console window.
+        ///  • EstimatedSize — never written at all, so the size column was blank for a
+        ///    200 MB app. DWORD, in KB, which is the unit Windows expects.
+        ///  • InstallDate — never written, so Windows fell back to the key's own
+        ///    last-write time. That fallback IS the real install date, and the moment
+        ///    this method writes anything the key's timestamp becomes today — so the
+        ///    date is captured before the first write and persisted once. Never from
+        ///    the exe: that file is replaced on every update.
+        ///  • InstallLocation / DisplayIcon — re-pointed at where the exe actually is, so
+        ///    a moved install stops showing a stale path and a blank icon.
+        ///  • VersionMajor / VersionMinor — what inventory and management tools read
+        ///    instead of parsing DisplayVersion.
+        /// </summary>
+        private static void RepairEntry(Microsoft.Win32.RegistryKey entry, string version,
+                                        bool recomputeSize, DateTime? installedOnUtc)
+        {
+            string exe = Application.ExecutablePath;
+            string dir = Path.GetDirectoryName(exe) ?? "";
+
+            SetIfDifferent(entry, "DisplayIcon", exe);
+            if (dir.Length > 0) { SetIfDifferent(entry, "InstallLocation", dir); }
+
+            // Only rescue a dangling uninstaller — never override a working one.
+            string cmd = dir.Length > 0 ? Path.Combine(dir, "uninstall.cmd") : null;
+            bool haveCmd = cmd != null && File.Exists(cmd);
+            string uninstall = haveCmd ? "\"" + cmd + "\"" : "\"" + exe + "\" --uninstall";
+            string existing = entry.GetValue("UninstallString") as string;
+            bool existingWorks = LooksRunnable(existing);
+            if (!existingWorks)
+            {
+                SetIfDifferent(entry, "UninstallString", uninstall);
+                Logger.Info("[Install] repaired a dangling Uninstall button -> " + uninstall);
+            }
+            SetIfDifferent(entry, "QuietUninstallString",
+                           haveCmd ? "\"" + cmd + "\"" : "\"" + exe + "\" --uninstall");
+
+            try
+            {
+                var v = new Version(version);
+                SetDwordIfDifferent(entry, "VersionMajor", v.Major);
+                SetDwordIfDifferent(entry, "VersionMinor", v.Minor);
+            }
+            catch { /* an unparsable version is not worth a failure */ }
+
+            SetIfDifferent(entry, "URLUpdateInfo", "https://justcamop555-pixel.github.io/Tempo/");
+            SetIfDifferent(entry, "HelpLink", "https://justcamop555-pixel.github.io/Tempo/");
+
+            // Written once, and from the only source that is actually the INSTALL date.
+            //
+            // Not the exe's creation time, which is what this used to read: Tempo replaces
+            // Tempo.exe on every update, so that timestamp is the date of the last update
+            // — or of whenever the install folder was last recreated. On the machine this
+            // was found on it said 10 July against a real install date of 27 June, and it
+            // overwrote a date Windows had been displaying correctly.
+            //
+            // Correctly is the word: with no InstallDate value, Windows falls back to the
+            // KEY'S OWN last-write time, which for an untouched entry is exactly when the
+            // installer created it. That is the real date — and this method destroys it,
+            // because writing DisplayVersion updates the key's timestamp. So capture it
+            // BEFORE any write in this method lands, and persist it once.
+            if (entry.GetValue("InstallDate") == null && installedOnUtc.HasValue)
+            {
+                try
+                {
+                    entry.SetValue("InstallDate", installedOnUtc.Value.ToLocalTime()
+                        .ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture),
+                        Microsoft.Win32.RegistryValueKind.String);
+                }
+                catch { }
+            }
+
+            // The one expensive step: walking a 200 MB folder. Only when the version moved
+            // (so the size plausibly did too) or when it was never recorded at all.
+            if (!recomputeSize && entry.GetValue("EstimatedSize") != null)
+            {
+                return;
+            }
+
+            try
+            {
+                long bytes = 0;
+                if (dir.Length > 0 && Directory.Exists(dir))
+                {
+                    foreach (string f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                    {
+                        try { bytes += new FileInfo(f).Length; }
+                        catch { }
+                    }
+                }
+                if (bytes > 0)
+                {
+                    SetDwordIfDifferent(entry, "EstimatedSize", (int)Math.Min(int.MaxValue, bytes / 1024));
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("Uninstaller.EstimatedSize", ex); }
+        }
+
+        /// <summary>
+        /// True when a registry command line names a file that is actually there.
+        /// Handles the quoted form and a trailing switch, which is how these are written.
+        /// </summary>
+        private static bool LooksRunnable(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command)) { return false; }
+            try
+            {
+                string s = command.Trim();
+                string path;
+                if (s.StartsWith("\"", StringComparison.Ordinal))
+                {
+                    int close = s.IndexOf('"', 1);
+                    if (close < 0) { return false; }
+                    path = s.Substring(1, close - 1);
+                }
+                else
+                {
+                    int space = s.IndexOf(' ');
+                    path = space < 0 ? s : s.Substring(0, space);
+                }
+                return File.Exists(path);
+            }
+            catch { return false; }
+        }
+
+        private static void SetIfDifferent(Microsoft.Win32.RegistryKey key, string name, string value)
+        {
+            try
+            {
+                if (!string.Equals(key.GetValue(name) as string, value, StringComparison.Ordinal))
+                {
+                    key.SetValue(name, value, Microsoft.Win32.RegistryValueKind.String);
+                }
+            }
+            catch { }
+        }
+
+        private static void SetDwordIfDifferent(Microsoft.Win32.RegistryKey key, string name, int value)
+        {
+            try
+            {
+                object current = key.GetValue(name);
+                if (!(current is int i) || i != value)
+                {
+                    key.SetValue(name, value, Microsoft.Win32.RegistryValueKind.DWord);
+                }
+            }
+            catch { }
+        }
+
         /// <summary>Removes the "launch at startup" registry entry, if present.</summary>
         public static void RemoveStartupEntry()
         {
@@ -55,11 +339,11 @@ namespace AutoClicker.Utils
             try
             {
                 using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    @"Software\Microsoft\Windows\CurrentVersion\Uninstall", writable: true))
+                    UninstallRoot, writable: true))
                 {
-                    if (key != null && key.OpenSubKey("Tempo") != null)
+                    if (key != null && key.OpenSubKey(EntryName) != null)
                     {
-                        key.DeleteSubKeyTree("Tempo", throwOnMissingSubKey: false);
+                        key.DeleteSubKeyTree(EntryName, throwOnMissingSubKey: false);
                         Logger.Info("[Uninstall] removed the Settings > Apps entry.");
                     }
                 }

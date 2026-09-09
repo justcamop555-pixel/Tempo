@@ -45,6 +45,16 @@ namespace AutoClicker.Utils
             sb.AppendLine("==================");
             sb.AppendLine("When     : " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             sb.AppendLine("Version  : " + CurrentVersion);
+
+            // The version alone cannot tell an official release from a test build — both
+            // say 1.0.320.0, because the assembly version is stamped before the channel
+            // is chosen. These reports get filed on GitHub against a released version, so
+            // without this a crash in a build made ten minutes ago reads as a crash in
+            // the release everyone else is running, and gets investigated as one.
+            // Short, not Badge: Badge is empty for a release, which would leave the line
+            // blank exactly where it is meant to be reassuring. Short always names the
+            // build ("build 260905-0234 · TEST", or "unstamped dev build").
+            sb.AppendLine("Build    : " + Safe(() => BuildInfo.Short));
             sb.AppendLine("Where    : " + (string.IsNullOrEmpty(context) ? "(unspecified)" : context));
             sb.AppendLine("OS       : " + Safe(() => RuntimeInformation.OSDescription));
             sb.AppendLine("Runtime  : " + Safe(() => RuntimeInformation.FrameworkDescription));

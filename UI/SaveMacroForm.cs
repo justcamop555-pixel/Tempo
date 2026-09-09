@@ -122,7 +122,7 @@ namespace AutoClicker.UI
 
             Button keep = UiFactory.Button("Keep default", 284, 258, 132, 40);
             keep.BackColor = theme.Surface2;
-            keep.ForeColor = theme.TextMuted;
+            keep.ForeColor = Theme.Readable(theme.TextMuted, theme.Surface2);
             keep.FlatAppearance.BorderColor = theme.Border;
             keep.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             Controls.Add(keep);

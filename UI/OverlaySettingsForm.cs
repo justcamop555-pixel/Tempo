@@ -114,7 +114,7 @@ namespace AutoClicker.UI
             // Apply() deliberately gives every Button the neutral Surface2 treatment, so
             // the primary action has to be re-asserted afterwards or OK comes back grey.
             ok.BackColor = theme.Accent;
-            ok.ForeColor = Color.White;
+            ok.ForeColor = theme.OnAccent;
             ok.FlatAppearance.BorderSize = 0;
             ok.FlatAppearance.MouseOverBackColor = theme.AccentHover;
 

@@ -1,4 +1,5 @@
-﻿using System.Drawing;
+﻿using System;
+using System.Drawing;
 using AutoClicker.Models;
 
 namespace AutoClicker.UI
@@ -48,6 +49,152 @@ namespace AutoClicker.UI
             };
         }
 
+        /// <summary>
+        /// The readable text colour for anything drawn ON <see cref="Accent"/> — black or
+        /// white, whichever the eye can actually read.
+        ///
+        /// Primary buttons paint their label straight onto the accent, and that label was
+        /// hardcoded to white. For the built-in themes that is fine, because all 38 are
+        /// audited against their own colours. A CUSTOM accent skips that audit entirely,
+        /// so picking a pale one — yellow, mint, light cyan — left white text on a light
+        /// background and made every primary button in the app unreadable, with nothing
+        /// anywhere to say so.
+        ///
+        /// Deciding per-colour rather than per-theme means any accent the user can choose
+        /// stays legible, including ones nobody has thought of.
+        /// </summary>
+        public Color OnAccent => ReadableOn(Accent);
+
+        /// <summary>
+        /// Black or white, whichever contrasts better with <paramref name="bg"/>, by the
+        /// WCAG relative-luminance formula the theme audit uses.
+        /// </summary>
+        public static Color ReadableOn(Color bg)
+        {
+            return ContrastRatio(Color.White, bg) >= ContrastRatio(Color.Black, bg)
+                ? Color.White : Color.Black;
+        }
+
+        /// <summary>WCAG 2.1 contrast ratio between two colours, 1.0 to 21.0.</summary>
+        public static double ContrastRatio(Color a, Color b)
+        {
+            double la = RelativeLuminance(a), lb = RelativeLuminance(b);
+            double hi = Math.Max(la, lb), lo = Math.Min(la, lb);
+            return (hi + 0.05) / (lo + 0.05);
+        }
+
+        private static double RelativeLuminance(Color c)
+        {
+            return 0.2126 * Channel(c.R) + 0.7152 * Channel(c.G) + 0.0722 * Channel(c.B);
+        }
+
+        private static double Channel(int v)
+        {
+            double s = v / 255.0;
+            return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+        }
+
+        /// <summary>
+        /// <paramref name="fg"/> if it already reads against <paramref name="bg"/>,
+        /// otherwise the same colour pushed away from the background until it does.
+        ///
+        /// The status colours are a palette's personality — Success is green, Warning is
+        /// amber — so the fix for "that green is too pale to read" must not be "make it
+        /// black". This keeps the hue and only moves lightness, which is the part that
+        /// carries contrast. Measured across the 38 themes, the status words that needed
+        /// it were sitting at 3.0–3.2:1 as 9pt text: visible, but exactly the kind of
+        /// thing that is fine for the person who chose the palette and not for everyone
+        /// else.
+        ///
+        /// ReadableOn is the last resort, for a hue that cannot reach the bar at all
+        /// (a mid-grey on a mid-grey has nowhere to go).
+        /// </summary>
+        public static Color Readable(Color fg, Color bg, double need = 4.5)
+        {
+            if (ContrastRatio(fg, bg) >= need)
+            {
+                return fg;
+            }
+
+            // Away from the background: darken against a light one, lighten against dark.
+            bool darken = RelativeLuminance(bg) > RelativeLuminance(fg);
+            for (int i = 1; i <= 40; i++)
+            {
+                double amount = i * 0.025;
+                Color c = darken ? Darken(fg, amount) : Lighten(fg, amount);
+                if (ContrastRatio(c, bg) >= need)
+                {
+                    return c;
+                }
+            }
+            return ReadableOn(bg);
+        }
+
+        /// <summary>
+        /// Status colours adjusted to read as text on EVERY ground Tempo puts text on —
+        /// the page, a card, and a nested panel.
+        ///
+        /// These used to be solved against <see cref="Background"/> alone, which is the
+        /// wrong reference for most of the places they are actually used: warnings and
+        /// notices nearly always sit inside a card, i.e. on <see cref="Surface"/>. The
+        /// contrast scanner caught one at 4.01:1 on Gruvbox — passing the check the colour
+        /// was designed for and failing the wall it was painted on.
+        ///
+        /// Solving against the worst single ground is not enough on its own: moving a hue
+        /// away from one ground moves it toward another, so the candidate is tested
+        /// against all three at each step. If no shade of the hue can satisfy all of them
+        /// (a page and a card far apart in luminance), it falls back to the previous
+        /// behaviour — readable on the page — rather than returning something worse.
+        /// </summary>
+        public Color SuccessText => ReadableAnywhere(Success);
+        public Color WarningText => ReadableAnywhere(Warning);
+        public Color DangerText => ReadableAnywhere(Danger);
+        public Color AccentText => ReadableAnywhere(Accent);
+
+        private Color ReadableAnywhere(Color fg, double need = 4.5)
+        {
+            if (ReadsEverywhere(fg, need))
+            {
+                return fg;
+            }
+
+            // Direction is chosen once, from the grounds' average lightness, so the search
+            // does not oscillate between two grounds pulling opposite ways.
+            double groundLum = (RelativeLuminance(Background)
+                              + RelativeLuminance(Surface)
+                              + RelativeLuminance(Surface2)) / 3.0;
+            bool darken = groundLum > RelativeLuminance(fg);
+
+            for (int i = 1; i <= 40; i++)
+            {
+                double amount = i * 0.025;
+                Color c = darken ? Darken(fg, amount) : Lighten(fg, amount);
+                if (ReadsEverywhere(c, need))
+                {
+                    return c;
+                }
+            }
+            return Readable(fg, Background, need);
+        }
+
+        private bool ReadsEverywhere(Color fg, double need)
+        {
+            return ContrastRatio(fg, Background) >= need
+                && ContrastRatio(fg, Surface) >= need
+                && ContrastRatio(fg, Surface2) >= need;
+        }
+
+        private static Color Darken(Color c, double amount)
+        {
+            int r = (int)(c.R * (1 - amount));
+            int g = (int)(c.G * (1 - amount));
+            int b = (int)(c.B * (1 - amount));
+            return Color.FromArgb(c.A,
+                r < 0 ? 0 : r,
+                g < 0 ? 0 : g,
+                b < 0 ? 0 : b);
+        }
+
         private static Color Lighten(Color c, double amount)
         {
             int r = (int)(c.R + (255 - c.R) * amount);
@@ -59,7 +206,80 @@ namespace AutoClicker.UI
                 b > 255 ? 255 : b);
         }
 
+        /// <summary>
+        /// How hard to push surfaces away from mid-grey when Windows HDR is tone-mapping
+        /// Tempo's output. 0.35 is a per-channel gamma exponent, tuned to undo the
+        /// "milky blacks" lift without turning a dark theme into a black hole.
+        /// </summary>
+        private const double HdrSurfaceGamma = 0.35;
+
+        /// <summary>
+        /// Set by the app when the user has HDR compensation switched on AND a display is
+        /// actually tone-mapping. Static because every Theme is built through ForKind, and
+        /// threading a flag through 38 switch arms would be worse than one gate here.
+        /// </summary>
+        public static bool CompensateForHdr { get; set; }
+
         public static Theme ForKind(ThemeKind kind)
+        {
+            Theme t = BaseForKind(kind);
+            return CompensateForHdr ? t.HdrCompensated() : t;
+        }
+
+        /// <summary>
+        /// Pre-distorts the palette so it survives Windows' SDR→HDR tone-mapping.
+        ///
+        /// Windows composites SDR content into the HDR signal against an SDR white level,
+        /// and the visible result is that near-blacks LIFT: dark themes go milky, adjacent
+        /// dark surfaces collapse into one another, and the whole window reads flat. Tempo
+        /// cannot change that mapping — but it can hand the compositor a palette that lands
+        /// where the theme intended after the mapping is applied.
+        ///
+        /// ONLY SURFACES MOVE. Text, muted text, the accent and the status colours are left
+        /// exactly as designed, and that is a correctness property rather than a
+        /// preference: all 38 themes are audited to WCAG AA against their own surfaces, so
+        /// darkening a dark theme's background while holding its text fixed can only
+        /// RAISE contrast. Nothing here can push a theme below the bar it already passes.
+        ///
+        /// Every surface takes the same gamma, so their relationships hold — a border stays
+        /// a step away from the surface it separates instead of merging into it.
+        /// </summary>
+        private Theme HdrCompensated()
+        {
+            // Which way is "away from mid-grey"? Ask the theme, not the name: a light
+            // theme is one whose TEXT is dark, and that holds for every custom accent and
+            // every future theme without a list to maintain.
+            bool darkTheme = Luminance(Text) > Luminance(Background);
+            double g = darkTheme ? 1.0 + HdrSurfaceGamma : 1.0 / (1.0 + HdrSurfaceGamma);
+
+            Background = Push(Background, g);
+            Surface = Push(Surface, g);
+            Surface2 = Push(Surface2, g);
+            Border = Push(Border, g);
+            InputBackground = Push(InputBackground, g);
+            return this;
+        }
+
+        /// <summary>Per-channel gamma. Keeps hue, moves the colour toward black or white.</summary>
+        private static Color Push(Color c, double gamma)
+        {
+            return Color.FromArgb(c.A, Chan(c.R, gamma), Chan(c.G, gamma), Chan(c.B, gamma));
+        }
+
+        private static int Chan(int v, double gamma)
+        {
+            double n = Math.Pow(v / 255.0, gamma);
+            int outv = (int)Math.Round(n * 255.0);
+            return outv < 0 ? 0 : (outv > 255 ? 255 : outv);
+        }
+
+        /// <summary>Relative luminance, the sRGB-weighted kind the contrast audit uses.</summary>
+        private static double Luminance(Color c)
+        {
+            return 0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B;
+        }
+
+        private static Theme BaseForKind(ThemeKind kind)
         {
             switch (kind)
             {
@@ -95,7 +315,10 @@ namespace AutoClicker.UI
                         Danger = Color.FromArgb(251, 113, 133),
                         Warning = Color.FromArgb(251, 191, 36),
                         Text = Color.FromArgb(232, 238, 248),
-                        TextMuted = Color.FromArgb(111, 126, 158),
+                        // 4% lighter than authored: the old value read 4.82:1 on
+                        // Background but only 4.24:1 on the darker InputBackground, where
+                        // eleven of the Settings hints actually sit.
+                        TextMuted = Color.FromArgb(116, 131, 161),
                         InputBackground = Color.FromArgb(20, 26, 46)
                     };
 
@@ -185,7 +408,8 @@ namespace AutoClicker.UI
                         Danger = Color.FromArgb(248, 113, 113),
                         Warning = Color.FromArgb(251, 191, 36),
                         Text = Color.FromArgb(240, 240, 245),
-                        TextMuted = Color.FromArgb(121, 121, 136),
+                        // 2% lighter than authored; same reason as Midnight above.
+                        TextMuted = Color.FromArgb(123, 123, 138),
                         InputBackground = Color.FromArgb(16, 16, 20)
                     };
 

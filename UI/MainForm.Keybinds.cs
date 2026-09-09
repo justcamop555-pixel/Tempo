@@ -46,6 +46,9 @@ namespace AutoClicker.UI
 
         /// <summary>Warns when the hold trigger is the button the clicker itself clicks.</summary>
         private Label _keybindsHoldLabel;
+
+        /// <summary>Warns when a key Tempo PRESSES is also bound as one of its hotkeys.</summary>
+        private Label _keybindsSelfKeyLabel;
         private Button _keybindsSaveBtn;
         private bool _suppressKeybindEvents;
         private NumericUpDown _intervalStepNum;
@@ -155,27 +158,58 @@ namespace AutoClicker.UI
                 }
             }
 
-            if (fallbacks.Count == 0)
+            // Bindings that got NO route at all. Taken from the apply pass rather than
+            // worked out here: only what that pass actually TRIED can be judged, and its
+            // skips (hold mode, tray sleep, an action this build does not have) are all
+            // deliberate — re-deriving them here would report a sleeping hotkey as dead.
+            // This is the worst of the three outcomes and was the only one the tab never
+            // mentioned: the key silently does nothing, and the sole record was a line in
+            // the diagnostics list.
+            var dead = new List<string>(_hotkeyDead);
+
+            if (fallbacks.Count == 0 && dead.Count == 0)
             {
                 _keybindsRouteLabel.Visible = false;
                 return;
             }
 
             fallbacks.Sort(StringComparer.OrdinalIgnoreCase);
-            // Singular and plural as two whole sentences. Splicing "it"/"them" into one
-            // frame cannot work in languages where the pronoun agrees with the noun.
-            string names = string.Join(", ", fallbacks.ToArray());
-            _keybindsRouteLabel.Text = fallbacks.Count == 1
-                ? Utils.Localization.F(
-                    "⚠ Windows wouldn't reserve {0} — another program already owns it. Tempo still "
-                    + "catches it with a keyboard hook, so the action works — but the key ALSO keeps "
-                    + "doing its normal job in the other app. Pick a different combination to avoid that.",
-                    names)
-                : Utils.Localization.F(
-                    "⚠ Windows wouldn't reserve {0} — another program already owns them. Tempo still "
-                    + "catches them with a keyboard hook, so the actions work — but the keys ALSO keep "
-                    + "doing their normal job in the other app. Pick different combinations to avoid that.",
-                    names);
+            dead.Sort(StringComparer.OrdinalIgnoreCase);
+            var parts = new List<string>();
+
+            if (fallbacks.Count > 0)
+            {
+                // Singular and plural as two whole sentences. Splicing "it"/"them" into one
+                // frame cannot work in languages where the pronoun agrees with the noun.
+                string names = string.Join(", ", fallbacks.ToArray());
+                parts.Add(fallbacks.Count == 1
+                    ? Utils.Localization.F(
+                        "⚠ Windows wouldn't reserve {0} — another program already owns it. Tempo still "
+                        + "catches it with a keyboard hook, so the action works — but the key ALSO keeps "
+                        + "doing its normal job in the other app. Pick a different combination to avoid that.",
+                        names)
+                    : Utils.Localization.F(
+                        "⚠ Windows wouldn't reserve {0} — another program already owns them. Tempo still "
+                        + "catches them with a keyboard hook, so the actions work — but the keys ALSO keep "
+                        + "doing their normal job in the other app. Pick different combinations to avoid that.",
+                        names));
+            }
+
+            if (dead.Count > 0)
+            {
+                string names = string.Join(", ", dead.ToArray());
+                parts.Add(dead.Count == 1
+                    ? Utils.Localization.F(
+                        "⛔ {0} could not be bound at all — Windows refused it and the fallback hook "
+                        + "would not install, so that key does nothing. Pick another combination.",
+                        names)
+                    : Utils.Localization.F(
+                        "⛔ {0} could not be bound at all — Windows refused them and the fallback hook "
+                        + "would not install, so those keys do nothing. Pick other combinations.",
+                        names));
+            }
+
+            _keybindsRouteLabel.Text = string.Join("\r\n", parts.ToArray());
             _keybindsRouteLabel.Visible = true;
         }
 
@@ -315,13 +349,21 @@ namespace AutoClicker.UI
             resetBtn.Click += OnResetKeybinds;
 
 
+            // MaximumSize, or this runs off the page. The notice is AutoSize and its width
+            // moves with the translation: at x=448 the French text measures 408px and the
+            // German 405px, so both ended 53px and 43px past the page's own 772px content
+            // edge \u2014 clipped mid-word, with no scrollbar to reach the rest. It is invisible
+            // at rest, which is why it went unnoticed: the layout suite only sees it on a
+            // run where something is actually unsaved. Capped here it wraps to two lines
+            // (30px), still clear of the warning label at rowY+46.
             _keybindsDirtyLabel = new Label
             {
                 Text = Utils.Localization.T("\u25CF Unsaved changes \u2014 click Save Keybinds"),
                 AutoSize = true,
+                MaximumSize = new Size(324, 0),
                 Location = new Point(448, rowY + 8),
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                ForeColor = _theme.Warning,
+                ForeColor = _theme.WarningText,
                 Visible = false
             };
             page.Controls.Add(_keybindsDirtyLabel);
@@ -337,7 +379,7 @@ namespace AutoClicker.UI
                 Location = new Point(12, rowY + 46),
                 Size = new Size(760, 32),
                 Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.Warning,
+                ForeColor = _theme.WarningText,
                 Visible = false
             };
             page.Controls.Add(_keybindsWarnLabel);
@@ -359,13 +401,15 @@ namespace AutoClicker.UI
             // but the key is no longer reserved, so it ALSO keeps doing its normal job
             // in whatever app you're using. That is the classic "my hotkey half works"
             // report, and until now nothing anywhere said it had happened.
+            // 48, not 32: it can now carry a second sentence for bindings that got no
+            // route at all, which is a different problem from "another app owns it".
             _keybindsRouteLabel = new Label
             {
                 AutoSize = false,
                 Location = new Point(12, rowY + 98),
-                Size = new Size(760, 32),
+                Size = new Size(760, 48),
                 Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.Warning,
+                ForeColor = _theme.WarningText,
                 Visible = false
             };
             page.Controls.Add(_keybindsRouteLabel);
@@ -379,14 +423,14 @@ namespace AutoClicker.UI
             // "Start minimised to tray" it never shows a window at all. So you bind F6,
             // send Tempo to the tray, press F6 — and nothing happens, with no clue why.
             // The only hint was buried in the tray icon's tooltip.
-            // Its own reserved band, rowY+132 .. rowY+170, ABOVE the column headers.
+            // Its own reserved band, rowY+148 .. rowY+186, ABOVE the column headers.
             // Space is reserved whether or not it is showing, for the same reason the two
             // notices above it reserve theirs: a label that pops in and shoves every
             // keybind row down the page is worse than the warning it carries.
             _keybindsTraySleepLabel = new Label
             {
                 AutoSize = false,
-                Location = new Point(12, rowY + 132),
+                Location = new Point(12, rowY + 148),
                 Size = new Size(760, 38),
                 Font = new Font("Segoe UI", 8.5f),
                 ForeColor = _theme.TextMuted,
@@ -398,31 +442,45 @@ namespace AutoClicker.UI
             // "That key was taken from another action." Assigning a combination already
             // in use clears the previous owner — the right resolution, but it used to
             // happen in complete silence, and the evidence was one row out of 26 going
-            // blank somewhere off-screen. Its own reserved band, rowY+174 .. rowY+204,
+            // blank somewhere off-screen. Its own reserved band, rowY+190 .. rowY+220,
             // for the same reason as the notices above: a label that appears and shoves
             // every keybind row down the page is worse than the news it carries.
             _keybindsTakenLabel = new Label
             {
                 AutoSize = false,
-                Location = new Point(12, rowY + 174),
+                Location = new Point(12, rowY + 190),
                 Size = new Size(760, 30),
                 Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.Accent,
+                ForeColor = _theme.AccentText,
                 Visible = false
             };
             page.Controls.Add(_keybindsTakenLabel);
 
-            // Its own reserved band, rowY+206 .. rowY+236.
+            // Its own reserved band, rowY+222 .. rowY+252.
             _keybindsHoldLabel = new Label
             {
                 AutoSize = false,
-                Location = new Point(12, rowY + 206),
+                Location = new Point(12, rowY + 222),
                 Size = new Size(760, 30),
                 Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.Warning,
+                ForeColor = _theme.WarningText,
                 Visible = false
             };
             page.Controls.Add(_keybindsHoldLabel);
+
+            // Its own reserved band, rowY+254 .. rowY+302 — three lines, because it names
+            // the key, where Tempo presses it from, and which action it fires, and the
+            // translations of that run longer than the English.
+            _keybindsSelfKeyLabel = new Label
+            {
+                AutoSize = false,
+                Location = new Point(12, rowY + 254),
+                Size = new Size(760, 48),
+                Font = new Font("Segoe UI", 8.5f),
+                ForeColor = _theme.WarningText,
+                Visible = false
+            };
+            page.Controls.Add(_keybindsSelfKeyLabel);
 
             var stepCaption = UiFactory.Caption("Interval step (ms):", 344, rowY + 1);
             stepCaption.AutoSize = false;
@@ -455,9 +513,12 @@ namespace AutoClicker.UI
             //                           a label that pops in and shoves every row down the
             //                           page would be worse than the warning it carries)
             //   rowY+80   .. rowY+96    detected keyboard
-            //   rowY+98   .. rowY+130   "Windows refused this hotkey" notice (also reserved)
-            //   rowY+132  .. rowY+170   "Sleep in tray pauses these" notice (also reserved)
-            int headerY = rowY + 244;   // + the taken-from and hold-conflict bands above
+            //   rowY+98   .. rowY+146   "Windows refused / could not bind this hotkey" (reserved)
+            //   rowY+148  .. rowY+186   "Sleep in tray pauses these" notice (also reserved)
+            //   rowY+190  .. rowY+220   "that key was taken from another action"
+            //   rowY+222  .. rowY+252   hold trigger vs the clicked button
+            //   rowY+254  .. rowY+302   a key Tempo presses itself is bound here
+            int headerY = rowY + 306;
             page.Controls.Add(UiFactory.Label(Utils.Localization.T("Action"), 16, headerY, FontStyle.Bold));
             page.Controls.Add(UiFactory.Label(Utils.Localization.T("Hotkey"), 300, headerY, FontStyle.Bold));
 
@@ -728,6 +789,9 @@ namespace AutoClicker.UI
                 _keybindsHoldLabel.Visible = fights;
             }
 
+            // The keyboard half of the same idea: a key Tempo sends that is bound here.
+            RefreshSelfPressedKeyNotice();
+
             if (_keybindsWarnLabel != null)
             {
                 if (risky.Count == 0)
@@ -752,6 +816,144 @@ namespace AutoClicker.UI
                     _keybindsWarnLabel.Visible = true;
                 }
             }
+        }
+
+        /// <summary>
+        /// Which action a key press with these modifiers would fire, or null. Reads the
+        /// CONTROLS, so it follows unsaved edits like the rest of this page.
+        /// </summary>
+        private HotkeyAction? ActionFiredBy(int vk, bool ctrl, bool alt, bool shift, bool win)
+        {
+            foreach (var pair in _bindingControls)
+            {
+                HotkeyDefinition hk = pair.Value.Hotkey;
+                if (hk == null || !hk.IsValid || hk.IsMouse) { continue; }
+                if ((int)hk.GetVirtualKey() != vk) { continue; }
+                // Exact, not "at least": a Ctrl+F6 hotkey does not fire on a bare F6, and
+                // reporting it would send someone rebinding a key that was never involved.
+                if (hk.Control == ctrl && hk.Alt == alt && hk.Shift == shift && hk.Win == win)
+                {
+                    return pair.Key;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Tracks a modifier key going down or up while walking a macro's steps, so the
+        /// match above is made against the modifiers that will actually be held.
+        /// Returns true when the key IS a modifier (and so is not itself a trigger).
+        /// </summary>
+        private static bool TrackModifier(int vk, bool down,
+            ref bool ctrl, ref bool alt, ref bool shift, ref bool win)
+        {
+            switch (vk)
+            {
+                case 0x11: case 0xA2: case 0xA3: ctrl = down; return true;    // CONTROL / L / R
+                case 0x12: case 0xA4: case 0xA5: alt = down; return true;     // MENU / L / R
+                case 0x10: case 0xA0: case 0xA1: shift = down; return true;   // SHIFT / L / R
+                case 0x5B: case 0x5C: win = down; return true;                // LWIN / RWIN
+                default: return false;
+            }
+        }
+
+        /// <summary>
+        /// Warns when a key TEMPO ITSELF presses is also bound as one of its hotkeys.
+        ///
+        /// This is a real, silent, total failure and nothing anywhere reported it.
+        /// Measured: with the clicker set to auto-press F6 — the DEFAULT Start/Stop key —
+        /// pressing Start logged "engine started" and "engine stopped" 6 ms apart, every
+        /// time. The very first synthetic press fired the toggle and shut the run down.
+        /// A control run on F1 (unbound) ran the full four seconds.
+        ///
+        /// It cannot be fixed by ignoring Tempo's own input the way the mouse path does
+        /// (<c>OnMouseHotkey</c> drops injected clicks): WM_HOTKEY carries no "injected"
+        /// flag, so a RegisterHotKey binding cannot tell Tempo's keystroke from yours, and
+        /// the keyboard-hook fallback deliberately accepts injected keys so remapper-driven
+        /// keyboards keep working. So it is named here instead, on the page that owns one
+        /// half of the clash.
+        ///
+        /// Both producers of self-sent keys are covered: the clicker's auto-press key and
+        /// every macro's key steps — macro playback presses keys through the same
+        /// InputSimulator, so it collides identically.
+        /// </summary>
+        private void RefreshSelfPressedKeyNotice()
+        {
+            if (_keybindsSelfKeyLabel == null || _keybindsSelfKeyLabel.IsDisposed) { return; }
+
+            var hits = new List<string>();
+            try
+            {
+                // 1. The clicker's auto-press key. Sent bare, so only an unmodified
+                //    binding on the same key can catch it.
+                if (_buttonCombo != null && _buttonCombo.SelectedIndex == KeyTargetIndex
+                    && _selectedKeyVk != 0)
+                {
+                    HotkeyAction? a = ActionFiredBy(_selectedKeyVk, false, false, false, false);
+                    if (a.HasValue)
+                    {
+                        hits.Add(Utils.Localization.F("{0} (the clicker's auto-press key) → \"{1}\"",
+                            KeyLabel(_selectedKeyVk), HotkeyActions.LabelFor(a.Value)));
+                    }
+                }
+
+                // 2. Macro key steps, with the modifiers the macro is holding at that point.
+                if (_macros != null && _macros.Macros != null)
+                {
+                    var seen = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (Macro m in _macros.Macros)
+                    {
+                        if (m == null || m.Actions == null) { continue; }
+                        bool ctrl = false, alt = false, shift = false, win = false;
+                        foreach (MacroAction step in m.Actions)
+                        {
+                            if (step == null) { continue; }
+                            if (step.Type == MacroActionType.KeyUp)
+                            {
+                                TrackModifier(step.VirtualKey, false, ref ctrl, ref alt, ref shift, ref win);
+                                continue;
+                            }
+                            if (step.Type != MacroActionType.KeyDown) { continue; }
+                            if (TrackModifier(step.VirtualKey, true, ref ctrl, ref alt, ref shift, ref win))
+                            {
+                                continue;
+                            }
+                            HotkeyAction? a = ActionFiredBy(step.VirtualKey, ctrl, alt, shift, win);
+                            if (!a.HasValue) { continue; }
+                            // One line per macro+key, however many times the macro presses it.
+                            if (!seen.Add(m.Name + " " + step.VirtualKey)) { continue; }
+                            hits.Add(Utils.Localization.F("{0} (macro “{1}”) → “{2}”",
+                                MacroAction.KeyName(step.VirtualKey), m.Name,
+                                HotkeyActions.LabelFor(a.Value)));
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RefreshSelfPressedKeyNotice", ex); }
+
+            if (hits.Count == 0)
+            {
+                _keybindsSelfKeyLabel.Visible = false;
+                return;
+            }
+
+            hits.Sort(StringComparer.CurrentCultureIgnoreCase);
+            // Two lines of band, so cap the list rather than letting a macro-heavy setup
+            // clip the half that says what to do about it.
+            string list = hits.Count <= 3
+                ? string.Join("; ", hits.ToArray())
+                : string.Join("; ", hits.GetRange(0, 3).ToArray()) + "; "
+                  + Utils.Localization.F("and {0} more", hits.Count - 3);
+
+            _keybindsSelfKeyLabel.Text = hits.Count == 1
+                ? Utils.Localization.F(
+                    "⚠ {0} — Tempo presses this key itself, and Windows can't tell its keystroke from "
+                    + "yours, so every press runs that action too. Change the key or the binding.", list)
+                : Utils.Localization.F(
+                    "⚠ {0} — Tempo presses these keys itself, and Windows can't tell its keystrokes "
+                    + "from yours, so every press runs that action too. Change the keys or the bindings.",
+                    list);
+            _keybindsSelfKeyLabel.Visible = true;
         }
 
         private static Color BlendColors(Color a, Color b, double t)

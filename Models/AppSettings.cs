@@ -63,6 +63,38 @@ namespace AutoClicker.Models
         public bool AnimateCustomLogo { get; set; } = true;
 
         /// <summary>
+        /// Playback speed for an animated logo, as a percentage of the file's own frame
+        /// delays. 100 plays it exactly as authored.
+        ///
+        /// Worth having because a logo GIF is authored for a web page, not for a 16px tray
+        /// icon: the same timing that reads well at 400px is often a blur at icon size, and
+        /// a slow ambient loop can be too sleepy to notice. Clamped in AnimatedLogo, which
+        /// also re-applies its frame-rate floor after scaling.
+        /// </summary>
+        public int LogoAnimationSpeed { get; set; } = 100;
+
+        /// <summary>
+        /// Pre-compensate the theme's surface colours when Windows HDR is tone-mapping
+        /// Tempo's output, so dark themes stop looking milky.
+        ///
+        /// On by default, but it only does anything when a display actually has HDR
+        /// switched on — on an SDR machine the setting is inert, so defaulting it on costs
+        /// those users nothing and saves everyone else from hunting for it.
+        /// </summary>
+        public bool CompensateForHdr { get; set; } = true;
+
+        /// <summary>
+        /// The newest crash report the user has already been told about (UTC, ISO 8601).
+        ///
+        /// Crash reports have always been written to disk, but only a UI-thread crash ever
+        /// showed a dialog — a background-thread one wrote the file in silence, and NOTHING
+        /// mentioned it on the next launch. Six real reports had accumulated unnoticed on
+        /// the machine this was written for. This watermark is what lets Tempo say "that
+        /// happened" exactly once per report instead of never, or every launch.
+        /// </summary>
+        public string LastCrashAcknowledgedUtc { get; set; } = "";
+
+        /// <summary>
         /// Capture OTHER apps' Windows notifications and re-show them in Tempo's
         /// style. Requires Windows to grant notification-listener access (asked
         /// once); availability depends on the Windows build. Off by default.
@@ -179,8 +211,28 @@ namespace AutoClicker.Models
         /// cursor trail so a forgotten Tempo can't start clicking invisibly.</summary>
         public bool TraySleepEnabled { get; set; } = true;
 
-        /// <summary>One-time first-run notice about official download sources.</summary>
-        public bool OfficialSourceNoticeShown { get; set; } = false;
+        // OfficialSourceNoticeShown was removed. It gated the official-source notice to
+        // the first run; that notice now shows once per LAUNCH by request (see
+        // MainForm.MaybeShowOfficialSourceNotice), so nothing has read or written the
+        // flag since. Old files keep the key harmlessly — deserialisation ignores what
+        // it does not know.
+
+        /// <summary>
+        /// SPIKE ONLY — renders the Settings tab as HTML in WebView2 instead of WinForms.
+        ///
+        /// Deliberately has no switch in the UI: this is a measurement, not a supported
+        /// way to run Tempo, and a setting people can find is a setting people will turn
+        /// on. Edit settings.json by hand to try it. See UI/WebSettingsHost.cs.
+        /// </summary>
+        public bool ExperimentalWebUi { get; set; } = false;
+
+        /// <summary>
+        /// A specific python.exe to run script steps with; "" decides automatically.
+        ///
+        /// Point this at a virtual environment when a script needs packages that are not
+        /// in the system Python — the usual cause of "my script does nothing".
+        /// </summary>
+        public string PythonInterpreterPath { get; set; } = "";
 
         /// <summary>Show Tempo's own caption overlay bar when Live Captions is toggled on.</summary>
         public bool CaptionOverlayEnabled { get; set; } = true;
@@ -495,6 +547,50 @@ namespace AutoClicker.Models
         public int WindowHeight { get; set; } = -1;
         public bool ConfirmBeforeExitWhileRunning { get; set; } = true;
         public bool SafetyStopOnEscape { get; set; } = true;
+
+        // ── Roblox Account Manager ────────────────────────────────────────────
+        /// <summary>
+        /// The account manager stores real Roblox logins (passwords, cookies) in an encrypted
+        /// vault, so it is OFF until the user turns it on from the Accounts page. Public,
+        /// unsigned downloads should not begin holding credentials on anyone's behalf without
+        /// an explicit, informed opt-in — the page shows an antivirus-flagging warning first.
+        /// This only changes the default; an existing settings file keeps whatever it holds.
+        /// </summary>
+        public bool AccountsEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Hold Roblox's single-instance lock so several accounts can run at once. OFF, and
+        /// deliberately so: it is the most Terms-sensitive part of the account manager and can
+        /// get accounts banned. Only takes effect while the account manager is enabled, and the
+        /// UI warns before turning it on. Persisted so the choice survives a restart.
+        /// </summary>
+        public bool RobloxMultiInstance { get; set; } = false;
+
+        /// <summary>
+        /// A localhost HTTP server that lets other tools on this PC list accounts and trigger
+        /// launches. OFF by default — it is an automation surface, so it is opt-in, loopback-only,
+        /// token-gated, and runs only while the vault is unlocked. It never exposes stored secrets.
+        /// </summary>
+        public bool AccountApiEnabled { get; set; } = false;
+        public int AccountApiPort { get; set; } = 7963;
+        /// <summary>Shared secret required on every API request. Generated on first enable.</summary>
+        public string AccountApiToken { get; set; } = "";
+
+        /// <summary>
+        /// Lock the account vault automatically the moment the user switches AWAY from the Accounts
+        /// tab, so an unlocked vault is never left sitting on a tab they walked away from. OFF by
+        /// default — it's the user's call (they turn it on in the account list).
+        /// </summary>
+        public bool AutoLockOnTabSwitch { get; set; } = false;
+
+        /// <summary>
+        /// Which browser opens for Roblox sign-in: "" = Automatic (pick the best installed), or a
+        /// specific one — "Chrome", "Edge", "Brave" or "Opera". Automatic prefers Chrome (no
+        /// sign-in/sync friction), then Edge, Brave, Opera. A chosen browser that isn't installed
+        /// falls back to Automatic. Only these Chromium browsers can be driven for the capture, so a
+        /// Firefox/Safari-only machine still gets the "install a supported browser" message.
+        /// </summary>
+        public string LoginBrowser { get; set; } = "";
 
         // ── Second cursor ("second mouse") ────────────────────────────────────
         // A visible, Tempo-controlled second pointer the user grabs (hotkey) to aim,

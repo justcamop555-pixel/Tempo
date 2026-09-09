@@ -26,6 +26,21 @@ namespace AutoClicker.Utils
         /// <summary>GitHub confirms this is byte-for-byte the file published for this version.</summary>
         Genuine,
         /// <summary>
+        /// The file says of itself that it is a TEST build, not a release.
+        ///
+        /// A distinct state on purpose, and never a pass. A test build is rebuilt on
+        /// every publish, so it cannot match either the copy recorded on this PC or the
+        /// release GitHub published for its version number — comparing it to those and
+        /// reporting the mismatch produced two ERRORs on every launch saying the file
+        /// "was not built or published by the project", which was false, and which taught
+        /// anyone reading the log to ignore the one message that would have mattered.
+        ///
+        /// It does NOT mean the file is trustworthy: nothing off this machine has
+        /// vouched for it, and the UI has to keep saying so. It means the question the
+        /// other verdicts answer does not apply to this file.
+        /// </summary>
+        TestBuild,
+        /// <summary>
         /// GitHub has never published this version. Not proof of anything on its own —
         /// a build made from source looks exactly like this — but it does mean nothing
         /// off this machine can vouch for the file.
@@ -277,11 +292,23 @@ namespace AutoClicker.Utils
                     detail = " — the file was replaced or edited";
                 }
 
-                // A test build is expected to change on every publish, so say so rather
-                // than letting a developer's own routine read as an attack.
+                // A test build is REBUILT on every publish, so different bytes under the
+                // same version is the expected outcome, not evidence of anything. Calling
+                // that "Modified" logged an ERROR every launch and spent the alarm on the
+                // one case where it can never mean what it says.
                 if (BuildInfo.IsTest && !BuildInfo.IsUnstamped)
                 {
-                    detail += ". This is a test build, which changes on every publish.";
+                    // Only the informative half of the detail. The fallback wording
+                    // ("the file was replaced or edited") is both redundant here — being
+                    // rebuilt is the whole point of a test build — and exactly the
+                    // accusing tone this verdict exists to stop.
+                    string which = !string.IsNullOrEmpty(wasBuild) &&
+                                   !string.Equals(wasBuild, nowBuild, StringComparison.OrdinalIgnoreCase)
+                        ? ", replacing build " + wasBuild
+                        : "";
+                    return Set(IntegrityVerdict.TestBuild,
+                        "this is a test build (" + BuildInfo.Id + ")" + which +
+                        ", rebuilt on every publish — nothing outside this PC has vouched for it");
                 }
 
                 return Set(IntegrityVerdict.Modified,
@@ -329,6 +356,33 @@ namespace AutoClicker.Utils
             {
                 OnlineSummary = "nothing to compare yet";
                 return Verdict;
+            }
+
+            // A test build is not a candidate for any release, so there is nothing here
+            // to compare it WITH. It carries a real version number because the assembly
+            // must, but the file GitHub published under that tag is a different build by
+            // definition — so this used to fetch that release, find the obvious
+            // mismatch, and report "it was not built or published by the project" as an
+            // ERROR on every single launch. That is false about a build the project made
+            // ten minutes ago, and a check that cries wolf on its own developer's routine
+            // is a check nobody reads when it finally means something.
+            //
+            // Skipped rather than softened, and the request is not made at all. The
+            // verdict below is not a pass: it says plainly that nothing has vouched for
+            // this file, which is the honest answer for a test build.
+            //
+            // The stamp is compiled into the file it describes, so anyone able to edit
+            // the bytes could also set this channel — the same is already true of the
+            // build id, and of the check itself. This system is tamper-EVIDENT, not
+            // tamper-proof: it tells the truth to a user who has not been attacked, and
+            // does not pretend to bind one who has.
+            if (BuildInfo.IsTest && !BuildInfo.IsUnstamped)
+            {
+                ConfirmedByGitHub = false;
+                OnlineSummary = "not compared — this is a test build, not a published release";
+                return Set(IntegrityVerdict.TestBuild,
+                    "this is a test build (" + BuildInfo.Id +
+                    "), so there is no published release to compare it against");
             }
 
             // Once a given file has been confirmed there is no reason to ask again:
@@ -479,8 +533,10 @@ namespace AutoClicker.Utils
             {
                 Logger.Error("[Integrity] " + summary);
             }
-            else if (v == IntegrityVerdict.Unverified)
+            else if (v == IntegrityVerdict.Unverified || v == IntegrityVerdict.TestBuild)
             {
+                // Warn, not Error: worth seeing in the log, but it is a statement about
+                // what this build IS, not a report of something wrong with it.
                 Logger.Warn("[Integrity] " + summary);
             }
             else

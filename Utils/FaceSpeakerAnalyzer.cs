@@ -138,10 +138,35 @@ namespace AutoClicker.Utils
         private Bitmap _frameBmp;
         private int _fullW, _fullH, _frameW, _frameH;
 
+        /// <summary>
+        /// How many recent frames the audio/mouth correlation looks at. At the analyzer's
+        /// working cadence this is roughly two to three seconds — long enough to span
+        /// several syllables and a pause, short enough to follow a change of speaker.
+        /// </summary>
+        private const int CorrWindow = 24;
+
+        /// <summary>
+        /// Correlation is only meaningful once the audio has actually VARIED across the
+        /// window. Steady silence and steady noise both correlate with nothing, and
+        /// dividing by their near-zero spread manufactures confident nonsense.
+        /// </summary>
+        private const double MinAudioSpread = 0.04;
+
         private sealed class Slot
         {
             public double X, Y, W, H;                // smoothed face box (analysis coords)
             public double MotionEma;
+
+            /// <summary>
+            /// Recent net mouth-motion samples, paired by index with <see cref="_audioRing"/>.
+            /// Used to ask whether this mouth moves WHEN THE SOUND DOES, rather than just
+            /// whether it moves a lot.
+            /// </summary>
+            public readonly double[] MotionRing = new double[CorrWindow];
+            public int RingCount;
+
+            /// <summary>Last computed audio/mouth correlation, -1..1. NaN until there is enough.</summary>
+            public double AudioCorr = double.NaN;
             public DateTime LastSeenUtc;
             public bool Alive;
             // First motion sample after (re)birth SEEDS the EMA instead of easing in
@@ -178,6 +203,87 @@ namespace AutoClicker.Utils
             public bool IsStatic;
         }
         private readonly List<Slot> _slots = new List<Slot>();
+
+        /// <summary>
+        /// The live capture level, in dB, supplied by the caption engine. Optional: when
+        /// nothing sets it the analyzer behaves exactly as it did before.
+        ///
+        /// This is the signal the analyzer never had. It judged "who is talking" purely
+        /// from how MUCH a mouth moved, with no idea whether the sound was doing anything
+        /// at the same time — so a face that chews, laughs, yawns or runs an idle
+        /// animation won the verdict whenever it happened to move most, and with two
+        /// faces moving it could only abstain.
+        /// </summary>
+        public Func<int> AudioLevelDbProvider { get; set; }
+
+        /// <summary>Recent audio energy, paired by index with every slot's MotionRing.</summary>
+        private readonly double[] _audioRing = new double[CorrWindow];
+        private int _audioCount;
+
+        /// <summary>
+        /// Records this frame's audio energy. dB is mapped onto a 0..1 scale across the
+        /// range speech actually occupies; below -60 dB is treated as silence.
+        /// </summary>
+        private void PushAudioSample()
+        {
+            double energy = 0;
+            try
+            {
+                Func<int> src = AudioLevelDbProvider;
+                if (src != null)
+                {
+                    int db = src();
+                    energy = db <= -60 ? 0.0 : Math.Min(1.0, (db + 60.0) / 60.0);
+                }
+            }
+            catch { energy = 0; }
+
+            // Oldest-first shift. CorrWindow is 24, so this is cheaper than the modular
+            // arithmetic a ring head would need in the correlation loop below.
+            Array.Copy(_audioRing, 1, _audioRing, 0, CorrWindow - 1);
+            _audioRing[CorrWindow - 1] = energy;
+            if (_audioCount < CorrWindow) { _audioCount++; }
+        }
+
+        /// <summary>Records one net mouth-motion sample for a slot, aligned with the audio ring.</summary>
+        private static void PushMotionSample(Slot s, double net)
+        {
+            Array.Copy(s.MotionRing, 1, s.MotionRing, 0, CorrWindow - 1);
+            s.MotionRing[CorrWindow - 1] = net;
+            if (s.RingCount < CorrWindow) { s.RingCount++; }
+        }
+
+        /// <summary>
+        /// Pearson correlation between a slot's mouth motion and the audio over the
+        /// window: does this mouth move WHEN THE SOUND DOES?
+        ///
+        /// Returns NaN when it cannot be answered honestly — too few samples, or audio
+        /// too flat to correlate with anything. Callers must treat NaN as "no opinion"
+        /// rather than as zero, because "no opinion" and "definitely not this face" are
+        /// very different verdicts.
+        /// </summary>
+        private double CorrelateWithAudio(Slot s)
+        {
+            int n = Math.Min(_audioCount, s.RingCount);
+            if (n < CorrWindow / 2) { return double.NaN; }
+
+            int aOff = CorrWindow - n, mOff = CorrWindow - n;
+            double aSum = 0, mSum = 0;
+            for (int i = 0; i < n; i++) { aSum += _audioRing[aOff + i]; mSum += s.MotionRing[mOff + i]; }
+            double aMean = aSum / n, mMean = mSum / n;
+
+            double aVar = 0, mVar = 0, cov = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double da = _audioRing[aOff + i] - aMean;
+                double dm = s.MotionRing[mOff + i] - mMean;
+                aVar += da * da; mVar += dm * dm; cov += da * dm;
+            }
+
+            // A flat signal on either side has no shape to match.
+            if (Math.Sqrt(aVar / n) < MinAudioSpread || mVar <= 1e-9) { return double.NaN; }
+            return cov / Math.Sqrt(aVar * mVar);
+        }
         // Stop() runs on the UI thread while a frame may be mid-analysis on the timer
         // thread. Without this, Stop()'s _slots.Clear() could yank the list out from
         // under the foreach loops below ("Collection was modified; enumeration
@@ -610,6 +716,13 @@ namespace AutoClicker.Utils
             // mid-enumeration; Stop() just waits the few ms this frame needs.
             lock (_slotLock)
             {
+            // One audio sample per analysed frame, taken BEFORE the motion loops so it
+            // lines up index-for-index with the motion each slot is about to record.
+            // Every alive slot gets exactly one motion sample per frame — the detected
+            // path for matched slots, the coasting path for the rest — which is what
+            // keeps the two rings aligned without timestamps.
+            PushAudioSample();
+
             foreach (var s in _slots) { s.MatchedPrevFrame = s.MatchedThisFrame; s.MatchedThisFrame = false; }
 
             // 4. Match faces to persistent slots by nearest centre, so "Face 2" stays
@@ -729,6 +842,7 @@ namespace AutoClicker.Utils
                     {
                         best.MotionEma = best.MotionEma * 0.7 + net * 0.3;
                     }
+                    PushMotionSample(best, net);
 
                     // Whole-box motion feeds the static-image detector. Sampled here
                     // (not just the mouth strip) because a poster's giveaway is that
@@ -787,6 +901,7 @@ namespace AutoClicker.Utils
                         s.X + s.W * 0.75, s.Y + s.H * 0.45, drvx, drvy);
                     double net = Math.Max(0, mouth - upper * 1.1);
                     s.MotionEma = s.MotionEma * 0.7 + net * 0.3;
+                    PushMotionSample(s, net);
 
                     // Keep the static-image record fed while coasting too, so a
                     // static face that starts moving is un-flagged just as fast no
@@ -847,6 +962,28 @@ namespace AutoClicker.Utils
                 if (eff >= SpeakMotion) { talking++; }
                 double sizeConf = Math.Min(1.0, Math.Sqrt(s.W / 64.0));
                 double score = eff * sizeConf;
+
+                // Does this mouth move WHEN THE SOUND DOES?
+                //
+                // Motion magnitude alone cannot separate speech from chewing, laughing,
+                // yawning or a game character's idle loop — all of which move a mouth,
+                // and any of which could out-move the real speaker. Correlating each
+                // face's motion against the audio envelope asks the question that
+                // actually distinguishes them, and it is the one signal this analyzer
+                // was missing entirely.
+                //
+                // Applied as a MODEST re-weighting, not a gate. The correlation is
+                // computed over a couple of seconds of a noisy per-pixel measurement, so
+                // it is a useful lean and not proof; a strongly-articulating face with an
+                // unlucky correlation must still be able to win. NaN — too few samples,
+                // or audio too flat to say — leaves the score untouched, which is exactly
+                // the old behaviour.
+                s.AudioCorr = CorrelateWithAudio(s);
+                if (!double.IsNaN(s.AudioCorr))
+                {
+                    double c = Math.Max(-1.0, Math.Min(1.0, s.AudioCorr));
+                    score *= 0.75 + 0.45 * Math.Max(0.0, c);
+                }
                 if (score > top)
                 {
                     second = top; top = score; speaker = i + 1;
@@ -859,6 +996,16 @@ namespace AutoClicker.Utils
             _talkingFaces = talking;
             bool confident = top >= SpeakMotion && (second <= 0.01 || top >= second * SpeakLead);
             _visualSpeaker = confident ? speaker : 0;
+
+            // Publish the winner's correlation for Live debug.
+            double winnerCorr = double.NaN;
+            if (_visualSpeaker >= 1 && _visualSpeaker <= _slots.Count)
+            {
+                winnerCorr = _slots[_visualSpeaker - 1].AudioCorr;
+            }
+            _speakerCorrX100 = double.IsNaN(winnerCorr)
+                ? -1000
+                : (int)Math.Round(Math.Max(-1.0, Math.Min(1.0, winnerCorr)) * 100.0);
             }
         }
 
@@ -876,6 +1023,17 @@ namespace AutoClicker.Utils
 
         /// <summary>How many visible faces are articulating right now (0, 1, 2…).</summary>
         public int TalkingFaceCount => _talkingFaces;
+
+        private volatile int _speakerCorrX100 = -1000;
+
+        /// <summary>
+        /// How well the chosen speaker's mouth motion tracks the audio, -1..1, or NaN
+        /// when there was not enough to say. Surfaced in Live debug: a confident label
+        /// backed by a strongly negative correlation is the signature of the analyzer
+        /// following the wrong face, and there was previously no way to see that.
+        /// </summary>
+        public double SpeakerAudioCorrelation =>
+            _speakerCorrX100 <= -1000 ? double.NaN : _speakerCorrX100 / 100.0;
 
         /// <summary>Scene cuts / hard pans skipped by the motion guard this session.</summary>
         public int SceneCutCount => _sceneCuts;

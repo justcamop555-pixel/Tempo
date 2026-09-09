@@ -322,7 +322,7 @@ namespace AutoClicker.UI
                 else if (tr != null && tr.CaptureLost)
                 {
                     pill = "⚠  Not hearing anything";
-                    pillColor = _theme.Danger;
+                    pillColor = _theme.DangerText;
                 }
                 else if (tr != null && tr.IsStarting)
                 {
@@ -332,7 +332,7 @@ namespace AutoClicker.UI
                 else
                 {
                     pill = "●  Listening…";
-                    pillColor = _theme.Success;
+                    pillColor = _theme.SuccessText;
                 }
                 _capStatePill.Text = pill;
                 _capStatePill.ForeColor = pillColor;
@@ -915,7 +915,7 @@ namespace AutoClicker.UI
             }
 
             _capQualityLine.Text = sb.ToString();
-            _capQualityLine.ForeColor = warn ? _theme.Danger : _theme.TextMuted;
+            _capQualityLine.ForeColor = warn ? _theme.DangerText : _theme.TextMuted;
         }
 
         private void RefreshCaptionDelayLine()
@@ -945,7 +945,7 @@ namespace AutoClicker.UI
             _capDelayLine.Text = sb.ToString();
 
             bool cannotKeepUp = rtf >= 1.0 || TempoTranscriber.GpuWouldHelp;
-            _capDelayLine.ForeColor = cannotKeepUp ? _theme.Danger : _theme.TextMuted;
+            _capDelayLine.ForeColor = cannotKeepUp ? _theme.DangerText : _theme.TextMuted;
 
             // Which remedy to offer depends on the machine. Telling someone with an idle
             // discrete GPU to shrink their model is the wrong advice: Tempo already probes

@@ -28,6 +28,16 @@ namespace AutoClicker.UI
         private int _corner;                   // 0 TR, 1 TL, 2 BR, 3 BL — live, can change
         private readonly int _dwellMs;
         private Image _icon;                   // source-app icon (owned; disposed on close)
+
+        /// <summary>
+        /// True for Tempo's OWN notifications, so the card draws the live frame of an
+        /// animated custom logo instead of a still taken when it was built. Off for
+        /// mirrored cards — those show the sending app's icon, which must not be replaced
+        /// by Tempo's.
+        /// </summary>
+        public bool AnimateAppIcon { get; set; }
+
+        private bool _logoSubscribed;
         private readonly Image _hero;          // large picture below the text (owned; optional)
         private Action _onActivate;            // run when the card body is clicked (open the app)
 
@@ -312,6 +322,14 @@ namespace AutoClicker.UI
         {
             base.OnShown(e);
             OverlayTopmost.Register(Handle);   // stay above fullscreen games / video
+
+            // Follow the logo's frames only when there is an animation to follow, and only
+            // on Tempo's own cards. A mirrored card must keep the sending app's icon.
+            if (AnimateAppIcon && !_logoSubscribed && Utils.AnimatedLogo.IsAnimating)
+            {
+                Utils.AnimatedLogo.FrameChanged += OnLogoFrameRepaint;
+                _logoSubscribed = true;
+            }
             // Stamp the clock HERE, not in the constructor: the gap between building the
             // card and actually showing it (icon decode, layout) would otherwise be
             // counted as animation time already elapsed, and the card would jump part-way
@@ -374,6 +392,13 @@ namespace AutoClicker.UI
             _bodyFont?.Dispose();
             _glyphFont?.Dispose();
             _closeFont?.Dispose();
+            if (_logoSubscribed)
+            {
+                // A static event outlives this card; staying subscribed would keep it
+                // alive and repaint a closed window.
+                try { Utils.AnimatedLogo.FrameChanged -= OnLogoFrameRepaint; } catch { }
+                _logoSubscribed = false;
+            }
             _icon?.Dispose();
             if (_hero != null && !ReferenceEquals(_hero, _icon)) { _hero.Dispose(); }
             base.OnFormClosed(e);
@@ -606,6 +631,24 @@ namespace AutoClicker.UI
                 (int)(a.B + (b.B - a.B) * t));
         }
 
+        /// <summary>
+        /// Repaints just the app-icon square when the logo advances a frame. Invalidating
+        /// only that rectangle matters: these cards can be on screen over a game, and
+        /// repainting the whole card ten times a second for a 26px icon would not be a
+        /// fair trade.
+        /// </summary>
+        private void OnLogoFrameRepaint()
+        {
+            if (IsDisposed || !IsHandleCreated) { return; }
+            try
+            {
+                bool showClose = ShowCloseButton;
+                int contentLeft = showClose ? Pad + CloseInset + CloseBox + 10 : Pad;
+                Invalidate(new Rectangle(contentLeft, Pad, IconSize, IconSize));
+            }
+            catch { }
+        }
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
@@ -639,14 +682,33 @@ namespace AutoClicker.UI
             int closeLeft = Pad + CloseInset;
             int contentLeft = showClose ? closeLeft + CloseBox + 10 : Pad;
             var iconRect = new Rectangle(contentLeft, Pad, IconSize, IconSize);
-            if (_icon != null)
+
+            // For TEMPO'S OWN cards, draw whichever frame the logo is showing right now.
+            //
+            // An animated custom logo plays in the title bar, the taskbar, the tray and
+            // the header — and stopped dead on the notification, which took a still copy
+            // of frame 0 when the card was built. One surface out of five wearing a frozen
+            // logo reads as the wrong icon, not as a deliberate still.
+            //
+            // BORROWED, never stored: this form owns _icon and disposes it on close, and
+            // the frame belongs to AnimatedLogo. Using it only as a local keeps the
+            // ownership rule intact and costs no allocation per frame.
+            Image appIcon = _icon;
+            if (AnimateAppIcon)
+            {
+                Image live = Utils.AnimatedLogo.CurrentTile;
+                if (live != null) { appIcon = live; }
+            }
+
+            if (appIcon != null)
             {
                 // The DETECTED source-app icon, rounded to a squircle like Win11.
                 using (var clip = RoundedRect(iconRect, 6))
                 {
                     var saved = g.Save();
                     g.SetClip(clip, CombineMode.Intersect);
-                    g.DrawImage(_icon, iconRect);
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(appIcon, iconRect);
                     g.Restore(saved);
                 }
             }

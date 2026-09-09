@@ -782,6 +782,16 @@ echo      Target     : %RID%  ^(self-contained single file; everything bundled, 
 echo      App version: %VER%
 if defined BUILDNO echo      Build ID   : build !BUILDNO!  ^(!BUILDCH!^)
 echo  ---------------------------------------------------------------------------
+REM  Show the last few builds RIGHT HERE, every time.
+REM
+REM  The history existed from the start but only answered to "publish.cmd
+REM  /history", which you have to already know about - so in practice it could
+REM  not be found at all. Printing it where the build already reports itself
+REM  makes it impossible to miss, and names the file for anyone who wants the
+REM  whole thing.
+echo    %C_TITLE%RECENT BUILDS%C_RESET%   %C_DIM%(all of them: publish.cmd /history)%C_RESET%
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%record-build.ps1" -Show 5 2>nul
+echo  ---------------------------------------------------------------------------
 echo    %C_TITLE%NEXT STEPS%C_RESET%
 if not defined OPT_OFFICIAL (
   echo      This is a %C_WARN%TEST%C_RESET% build. It says so on every screen, and its

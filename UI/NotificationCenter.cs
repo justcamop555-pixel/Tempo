@@ -130,6 +130,12 @@ namespace AutoClicker.UI
                 Utils.Logger.Info("[Notify] card suppressed (" + holdReason + ") — dropped: " +
                                   (string.IsNullOrWhiteSpace(appName) ? "?" : appName.Trim()) +
                                   ": " + (title ?? "").Trim());
+
+                // Dropping the CARD is right; dropping the message is not. This is the
+                // one path where the user cannot possibly have seen it, so it is the
+                // path the history exists for.
+                Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
+                    Utils.NotificationHistory.Outcome.Missed, holdReason);
                 icon?.Dispose();
                 if (hero != null && !ReferenceEquals(hero, icon)) { hero.Dispose(); }
                 return null;
@@ -149,10 +155,18 @@ namespace AutoClicker.UI
                 if (!_active[i].Matches(appName, title, body)) { continue; }
                 _active[i].Repeat(DurationFor(title, body));
                 RepeatsCollapsed++;
+                Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
+                    Utils.NotificationHistory.Outcome.Repeated);
                 icon?.Dispose();
                 if (hero != null && !ReferenceEquals(hero, icon)) { hero.Dispose(); }
                 return _active[i];
             }
+
+            // Recorded here rather than in SpawnCard so a card that waits its turn in the
+            // queue is still written down at the moment it was raised — the history is
+            // about what Tempo had to say and when, not about window management.
+            Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
+                Utils.NotificationHistory.Outcome.Shown);
 
             if (_active.Count >= MaxVisible)
             {
@@ -205,6 +219,13 @@ namespace AutoClicker.UI
 
             var card = new NotificationToastForm(_theme(), appName, title, body, kind,
                                                  _corner(), ms, icon, hero, onActivate);
+
+            // Only Tempo's own cards follow the animated logo. Mirrored cards carry the
+            // sending app's icon and must keep it — replacing a Discord message's icon
+            // with Tempo's is the exact bug the per-app icon lookup exists to prevent.
+            // "Tempo" is the literal every internal caller passes; it is the product name,
+            // not a translated string, so matching it here is stable.
+            card.AnimateAppIcon = string.Equals(appName, "Tempo", StringComparison.Ordinal);
             card.Dismissed += OnCardDismissed;
             _active.Add(card);
             ShownCount++;

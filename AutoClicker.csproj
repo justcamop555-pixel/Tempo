@@ -26,9 +26,9 @@
     <LangVersion>12.0</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\tempo.ico</ApplicationIcon>
-    <Version>1.0.320</Version>
-    <AssemblyVersion>1.0.320.0</AssemblyVersion>
-    <FileVersion>1.0.320.0</FileVersion>
+    <Version>1.0.321</Version>
+    <AssemblyVersion>1.0.321.0</AssemblyVersion>
+    <FileVersion>1.0.321.0</FileVersion>
     <Company>Tempo Project</Company>
     <Product>Tempo</Product>
     <AssemblyTitle>Tempo</AssemblyTitle>
@@ -120,25 +120,17 @@
     one thing it exists to carry. An empty stamp reports as "unstamped dev build":
     honest, and better than inventing an ID.
   -->
-  <Target Name="EnsureBuildInfo" BeforeTargets="BeforeCompile"
-          Condition="!Exists('$(MSBuildProjectDirectory)\Utils\BuildInfo.Generated.cs')">
-    <WriteLinesToFile
-        File="$(MSBuildProjectDirectory)\Utils\BuildInfo.Generated.cs"
-        Overwrite="true"
-        WriteOnlyWhenDifferent="true"
-        Lines="// GENERATED because it was missing - do not hand-edit, and do not commit.;// stamp-build.ps1 rewrites this on every publish. Logic lives in BuildInfo.cs.;namespace AutoClicker.Utils;{;    public static partial class BuildInfo;    {;        public const string StampUtc = &quot;&quot;%3B;        public const string Channel = &quot;dev&quot;%3B;    };}" />
-    <Message Importance="high"
-             Text="EnsureBuildInfo: wrote a neutral Utils\BuildInfo.Generated.cs (unstamped dev build)." />
+  <Target Name="EnsureBuildInfo" BeforeTargets="BeforeCompile" Condition="!Exists('$(MSBuildProjectDirectory)\Utils\BuildInfo.Generated.cs')">
+    <WriteLinesToFile File="$(MSBuildProjectDirectory)\Utils\BuildInfo.Generated.cs" Overwrite="true" WriteOnlyWhenDifferent="true" Lines="// GENERATED because it was missing - do not hand-edit, and do not commit.;// stamp-build.ps1 rewrites this on every publish. Logic lives in BuildInfo.cs.;namespace AutoClicker.Utils;{;    public static partial class BuildInfo;    {;        public const string StampUtc = &quot;&quot;%3B;        public const string Channel = &quot;dev&quot;%3B;    };}" />
+    <Message Importance="high" Text="EnsureBuildInfo: wrote a neutral Utils\BuildInfo.Generated.cs (unstamped dev build)." />
   </Target>
 
-  <Target Name="VerifyReadyToRun" AfterTargets="Publish"
-          Condition="'$(RuntimeIdentifier)' != '' And '$(PublishSingleFile)' == 'true'">
+  <Target Name="VerifyReadyToRun" AfterTargets="Publish" Condition="'$(RuntimeIdentifier)' != '' And '$(PublishSingleFile)' == 'true'">
     <PropertyGroup>
       <_TempoExe>$(PublishDir)$(AssemblyName).exe</_TempoExe>
       <_R2RFloorBytes>95000000</_R2RFloorBytes>
     </PropertyGroup>
-    <Error Condition="!Exists('$(_TempoExe)')"
-           Text="Publish finished but $(_TempoExe) is not there." />
+    <Error Condition="!Exists('$(_TempoExe)')" Text="Publish finished but $(_TempoExe) is not there." />
     <!--
       The size is read by PowerShell rather than MSBuild item metadata: MSBuild has
       no well-known FileSize metadata (FullPath, ModifiedTime and friends, but not
@@ -151,22 +143,20 @@
       whole command line as the error, and the sentence explaining what went wrong
       is lost in the middle of it. This way the message IS the error.
     -->
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;(Get-Item -LiteralPath '$(_TempoExe)').Length&quot;"
-          ConsoleToMSBuild="true" StandardOutputImportance="low">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;(Get-Item -LiteralPath '$(_TempoExe)').Length&quot;" ConsoleToMSBuild="true" StandardOutputImportance="low">
       <Output TaskParameter="ConsoleOutput" PropertyName="_TempoExeBytes" />
     </Exec>
-    <Error Condition="'$(_TempoExeBytes)' == ''"
-           Text="Could not read the size of $(_TempoExe) to verify ReadyToRun." />
-    <Error Condition="'$(_TempoExeBytes)' &lt; '$(_R2RFloorBytes)'"
-           Text="ReadyToRun did NOT apply. $(AssemblyName).exe is $(_TempoExeBytes) bytes, under the $(_R2RFloorBytes) floor — a correct build is ~101 MB, and ~84 MB means the precompiled native code is missing and start-up will be slower. PublishReadyToRun is set in AutoClicker.csproj; check nothing on the command line overrode it to false." />
-    <Message Importance="high"
-             Text="  ReadyToRun verified: $(AssemblyName).exe is $(_TempoExeBytes) bytes." />
+    <Error Condition="'$(_TempoExeBytes)' == ''" Text="Could not read the size of $(_TempoExe) to verify ReadyToRun." />
+    <Error Condition="'$(_TempoExeBytes)' &lt; '$(_R2RFloorBytes)'" Text="ReadyToRun did NOT apply. $(AssemblyName).exe is $(_TempoExeBytes) bytes, under the $(_R2RFloorBytes) floor — a correct build is ~101 MB, and ~84 MB means the precompiled native code is missing and start-up will be slower. PublishReadyToRun is set in AutoClicker.csproj; check nothing on the command line overrode it to false." />
+    <Message Importance="high" Text="  ReadyToRun verified: $(AssemblyName).exe is $(_TempoExeBytes) bytes." />
   </Target>
 
   <!-- Embed the app icon so the window and tray can load it at runtime. -->
   <ItemGroup>
     <EmbeddedResource Include="Assets\tempo.ico" />
     <EmbeddedResource Include="Assets\tempo-about.gif" />
+    <!-- Embedded, not copied beside the exe: publish is single-file. -->
+    <EmbeddedResource Include="UI\Web\settings.html" />
   </ItemGroup>
 
   <!--
@@ -178,6 +168,7 @@
     a normal Windows build; they are not available in the offline build sandbox.
   -->
   <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <!--
       Whisper.net is PINNED at 1.8.1 — the 1.9.1 core was tried on 2026-07-13 and

@@ -7,15 +7,16 @@
 <p align="center">
   A fast, modern, <strong>free &amp; open-source</strong> Windows auto-clicker — and a lot more.<br>
   Precise clicking, multi-point routes, full macro record &amp; replay with <strong>Python steps</strong>,<br>
-  live statistics, rebindable hotkeys, 38 themes — and <strong>offline AI Live Captions</strong> with<br>
-  speaker labels, 90+ languages and optional GPU speed. Every build <strong>verifies itself</strong><br>
-  against its published release. Runs <strong>100% on your PC</strong> — no account, no telemetry.
+  live statistics, rebindable hotkeys, 38 themes, <strong>offline AI Live Captions</strong> with speaker<br>
+  labels and 90+ languages, and a <strong>Roblox account manager</strong> with an encrypted vault.<br>
+  Every build <strong>verifies itself</strong> against its published release.<br>
+  Runs <strong>100% on your PC</strong> — no account, no telemetry.
 </p>
 
 <p align="center">
-  <img alt="Windows 10 & 11" src="https://img.shields.io/badge/Windows-10%20%26%2011-0078D6?logo=windows&logoColor=white">
+  <img alt="Windows 10 &amp; 11" src="https://img.shields.io/badge/Windows-10%20%26%2011-0078D6?logo=windows&logoColor=white">
   <img alt=".NET 8 (built in)" src="https://img.shields.io/badge/.NET%208-built--in-512BD4?logo=dotnet&logoColor=white">
-  <img alt="Free & Open" src="https://img.shields.io/badge/Free%20%26%20Open-%E2%9C%93-34d399">
+  <img alt="Free &amp; Open" src="https://img.shields.io/badge/Free%20%26%20Open-%E2%9C%93-34d399">
   <img alt="No telemetry" src="https://img.shields.io/badge/Telemetry-none-7c5cff">
   <a href="https://github.com/justcamop555-pixel/Tempo/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/justcamop555-pixel/Tempo?color=7c5cff"></a>
   <a href="https://github.com/justcamop555-pixel/Tempo/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/justcamop555-pixel/Tempo/total?color=34d399"></a>
@@ -37,10 +38,10 @@
 
 Most free auto-clickers stop at *"click here, this fast."* Tempo goes further — multi-point
 routes, recordable macros, a live statistics dashboard, fully rebindable keyboard **and**
-mouse hotkeys, and a complete **offline Live Captions system** (subtitles for anything your
-PC plays, with coloured speaker labels, in 90+ languages) — wrapped in a clean, fast, fully
-themeable interface that was rebuilt from the ground up. It's free, open, and it never phones
-home: everything stays on your machine.
+mouse hotkeys, a complete **offline Live Captions system** (subtitles for anything your PC
+plays, in 90+ languages), and an optional **Roblox account manager** — wrapped in a clean,
+fast, fully themeable interface. It's free, open, and it never phones home: everything stays
+on your machine.
 
 > [!NOTE]
 > **Use responsibly.** Auto-clicking may violate the terms of service of some games and
@@ -83,6 +84,7 @@ removal later (or run `uninstall.cmd`).
 > [release](https://github.com/justcamop555-pixel/Tempo/releases).
 
 **Requirements:** 64-bit Windows 10 or 11. Nothing else — the .NET runtime is built in.
+Tempo never needs administrator rights, for any feature.
 
 ---
 
@@ -131,9 +133,39 @@ timing and aim, and marathon pauses.
 
 **Run a Python script as a macro step.** Point a step at a `.py` file and Tempo runs it
 mid-macro — with a timeout you set, a choice of what happens if it fails, and the interpreter
-it found shown up front. Held keys and buttons are released before the script starts, so a
-script can never inherit a stuck input, and the whole process tree is cleaned up when the macro
-stops.
+it found shown up front. A `.venv` beside the script wins over system Python. Held keys and
+buttons are released before the script starts, so a script can never inherit a stuck input,
+and the whole process tree is cleaned up when the macro stops.
+
+### 👤 Accounts — a Roblox account manager
+**Off until you turn it on.** Keep several Roblox accounts, launch any of them straight into a
+game by **Place ID** (or a private server), **follow** a player into whatever they're playing,
+and switch accounts without signing in and out.
+
+- **You never type a Roblox password into Tempo.** Signing in opens **your own browser** —
+  Chrome by preference, then Edge, Brave or Opera — in a private window, and you sign in to
+  Roblox exactly as you always do. Tempo takes the session from that window when you're done.
+  Sign in with a **passkey or "quick log in"** and Tempo notices there is no password to save,
+  and saves only the username.
+- **An encrypted vault.** Sessions and any saved passwords are sealed with **AES-256-GCM**
+  under a key stretched from a master password you choose (PBKDF2-SHA256, 1.2 million
+  iterations), and the file is sealed again by Windows to your account with **DPAPI**.
+  Optionally re-locks itself the moment you switch tabs.
+- **A dot per account tells you if its session still works** — green (good), red (expired),
+  amber (not checked yet) — re-checked in the background. If a launch fails because a session
+  expired, Tempo offers to sign that account back in there and then.
+- **Type a Place ID and the game identifies itself** — name, creator, icon, players right now,
+  likes, total visits and server size, so a mistyped ID is obvious before you launch into it.
+- **Several clients at once, without administrator.** Roblox allows one client per PC by
+  holding a single lock; Tempo closes that lock so more can start — by asking Windows to close
+  the handle, from a normal user account. Tempo does not modify or inject into Roblox.
+- Drag to reorder, copy a username or password to the clipboard (passwords auto-wipe), and the
+  whole tab is translated into all six languages.
+
+> [!WARNING]
+> **Running several Roblox clients at once is against Roblox's rules and can get accounts
+> banned.** Tempo asks before enabling it, every time, and says exactly that in the question.
+> Your accounts are your responsibility.
 
 ### 📊 Statistics
 A live dashboard with session &amp; lifetime totals, personal records, and insights (streaks,
@@ -154,10 +186,22 @@ launch-at-startup, and per-tab scroll memory.
 ### 🛡 Dependable
 Anti-freeze protection (a CPS cap **plus** a CPU-adaptive throttle that backs off if your PC
 gets busy), crash-safe saving that keeps the previous copy so an interrupted write costs one
-save rather than everything, in-app update checks with a one-click installer, error
-notifications so problems never hide in a log, and a **Live debug** window (health check +
-live stats + colour-coded event stream, one colour per subsystem) for when you want to see
-exactly what Tempo is doing.
+save rather than everything, in-app update checks with a one-click installer, and error
+notifications so problems never hide in a log.
+
+**A notification history** keeps every message Tempo raised — including the ones it had to
+*suppress* because a fullscreen game had the screen, which is exactly when you were most
+likely to miss one.
+
+**Survives a restart.** Tempo never answers a Windows shutdown with a dialog (it can't be
+refused, and a question nobody is there to answer just stalls the shutdown), and it writes
+your window position, current tab, settings and click totals the instant Windows says the
+session is ending — rather than losing them to a reboot that arrives mid-run.
+
+**Live debug** (Settings › Data &amp; Backup) shows a health check, live engine stats and a
+colour-coded event stream, one colour per subsystem — including whether Windows will *really*
+launch Tempo at sign-in, and what the Accounts vault and multi-instance lock are actually
+doing. **Copy** gives you the perfect text to paste into a bug report.
 
 ### 🔐 Tamper check
 Tempo hashes its own program file at every launch and compares it with the SHA-256 GitHub
@@ -236,9 +280,17 @@ started. The complete list:
 | Tamper check, once per version | GitHub releases API | nothing but the request itself |
 | Downloading a speech model | Hugging Face | — |
 | A custom logo from a URL | whatever URL you enter | — |
+| **Accounts:** signing in | your own browser → roblox.com | you sign in to Roblox yourself; Tempo never sees the password |
+| **Accounts:** launching, or checking a session | roblox.com APIs | that account's own Roblox session — the same thing signing in does |
+| **Accounts:** a game's name/icon from a Place ID | roblox.com APIs | nothing but the Place ID |
 
-None of them carry your data, and every one can be avoided: turn off the update check and the
-tamper check in **Settings**, and simply don't download a model or set a logo URL.
+The Roblox rows only ever happen if you turn the **Accounts** tab on and add an account; with
+it off, Tempo never contacts Roblox. Your account sessions are stored encrypted on your PC and
+are sent to nobody but Roblox itself.
+
+None of these carry your data anywhere else, and every one can be avoided: turn off the update
+check and the tamper check in **Settings**, don't download a model, don't set a logo URL, and
+leave the Accounts tab off.
 
 **Bug reports are yours to review.** Nothing is sent until you pick how to send it, and Tempo
 shows you the entire report first so you can edit or delete any of it. Your Windows account
@@ -258,6 +310,13 @@ because it can mention files you have opened.
   on. Extremely high rates are rarely necessary.
 - **Captions lag or fall behind** — pick a smaller model, or turn on the GPU engine
   (Settings › Live Captions). Tempo also steps down automatically if a model can't keep up.
+- **Tempo doesn't start with Windows** — open **Live debug**; it says whether Windows will
+  really launch it, and names the two things that override the setting silently: a
+  **Task Manager › Startup apps** disable, and an entry left pointing at a copy of `Tempo.exe`
+  that has since been deleted or moved.
+- **A Roblox account won't launch** — its session has probably expired (a red dot). Use
+  **Re-login** on that account; Tempo also offers this the moment a launch fails for that
+  reason.
 - **Want to see what Tempo is doing right now?** — **Settings › Data &amp; Backup › Live
   debug** shows a health check, live engine stats and a colour-coded event stream; **Copy**
   gives you the perfect text to paste into a bug report.
@@ -289,8 +348,8 @@ and never needs admin rights:
 ```
 
 That folder holds your settings, profiles, macros and statistics (and, if you use Tempo's
-offline captions, the downloaded speech model). Uninstalling an installed copy can optionally
-remove its data.
+offline captions, the downloaded speech model; and, if you use the Accounts tab, the encrypted
+account vault). Uninstalling an installed copy can optionally remove its data.
 
 ---
 
@@ -316,33 +375,40 @@ calling `dotnet publish` by hand.
 ## Publishing a release (maintainers)
 
 ```bat
-publish.cmd                 :: win-x64, full clean build
+publish.cmd                 :: win-x64 test build, full clean
+publish.cmd /official       :: the build you upload to GitHub
 publish.cmd win-arm64       :: a different runtime
 publish.cmd /quick          :: incremental (faster; don't ship this)
 publish.cmd /ci             :: plain output for scripts/automation
+publish.cmd /history        :: the developer build history
 publish.cmd /help           :: all options
 ```
 
-It builds a self-contained Tempo and produces, under `bin\publish\<rid>\`:
+Every build is stamped with a **build ID** — the minute it was made, in UTC, e.g.
+`build 260908-2203`. Without `/official` it is stamped **test**, wears a TEST badge on every
+screen, and its artifacts are staged in `bin\publish\test\` so they can never be mistaken for
+— or written over — a release.
+
+With `/official`, the uploadable artifacts land together in `bin\publish\`:
 
 - `Tempo.exe` — one fully self-contained file (the .NET runtime, UI-Automation assemblies and
   the native offline-speech libraries are all bundled and self-extract at run time, so the exe
   works anywhere on its own)
 - `Tempo.exe.sha256` — checksum
-- `install.cmd` / `uninstall.cmd` — the per-user installer and uninstaller
-- `INSTALL-README.txt` — the short how-to that ships in the zip
-- `bin\publish\<version>.zip` — the bundle users download (run `Tempo.exe` for portable, or
-  `install.cmd` to install)
-- `bin\publish\CHECKSUMS.txt` — checksums for the exe and the zip
+- `<version>.zip` — the bundle users download (run `Tempo.exe` for portable, or `install.cmd`
+  to install), containing `install.cmd`, `uninstall.cmd` and `INSTALL-README.txt`
+- `CHECKSUMS.txt` — checksums for the exe and the zip
+- `RELEASE-NOTES-<version>.md` — copied from `release-notes/`
 
-Each step is verified (exe produced, size sane, checksum written, embedded version matches the
-project) with a progress display and green check marks; a full log goes to `publish-log.txt`.
+Each step is verified (exe produced, ReadyToRun actually applied, size sane, checksum written,
+embedded version matches the project) with a progress display and green check marks; a full log
+goes to `publish-log.txt`.
 
 ### Cutting a release
-1. Bump `<Version>`, `<AssemblyVersion>` and `<FileVersion>` in `AutoClicker.csproj`, and the
-   startup log line in `Program.cs`. (About reads the version from the assembly, so it needs no
-   edit.) Add an entry to `CHANGELOG.md` and a `release-notes/<version>.md`.
-2. Run `publish.cmd`.
+1. Bump `<Version>`, `<AssemblyVersion>` and `<FileVersion>` in `AutoClicker.csproj`. (The
+   About box and the startup log line both read the version from the assembly, so neither needs
+   editing.) Add an entry to `CHANGELOG.md` and a matching `release-notes/<version>.md`.
+2. Run `publish.cmd /official`.
 3. Create a GitHub release tagged **`v<version>`** and attach both **`<version>.zip`** (for new
    users, portable or installed) and the standalone **`Tempo.exe`** (what the in-app updater
    downloads).
@@ -361,11 +427,13 @@ project) with a progress display and green check marks; a full log goes to `publ
 AutoClicker/
   Program.cs        App entry point, single-instance, global exception handling
   Engine/           Click engine, precise timing, schedulers, macro player/recorder
-  Models/           Settings, profiles, statistics, hotkeys, enums
+  Models/           Settings, profiles, statistics, hotkeys, accounts, enums
   Native/           Low-level keyboard/mouse hooks, raw input, second-mouse listener
-  Persistence/      Crash-safe saving of settings, profiles, macros, history
+  Persistence/      Crash-safe saving of settings, profiles, macros, history;
+                    the encrypted account vault and its crypto
   UI/               MainForm (per-tab partials) + dialogs + theming + notifications
-  Utils/            Logging, updates, integrity, localization, speech engine, helpers
+  Utils/            Logging, updates, integrity, localization, speech engine,
+                    Roblox API/launcher, startup registration, helpers
   Assets/           Icon and About artwork (embedded at build time)
   release-notes/    One file per version, pasted into the GitHub release
   publish.cmd       Release builder (see above)

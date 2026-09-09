@@ -15,7 +15,8 @@ namespace AutoClicker.UI
         Chart,     // Statistics
         Keyboard,  // Keybinds
         Caption,   // Live Captions
-        Gear       // Settings
+        Gear,      // Settings
+        Account    // Accounts
     }
 
     /// <summary>
@@ -52,6 +53,7 @@ namespace AutoClicker.UI
                     case NavIconKind.Keyboard: DrawKeyboard(g, brush, pen, b); break;
                     case NavIconKind.Caption: DrawCaption(g, brush, pen, b); break;
                     case NavIconKind.Gear: DrawGear(g, brush, b); break;
+                    case NavIconKind.Account: DrawAccount(g, brush, b); break;
                 }
             }
             g.SmoothingMode = old;
@@ -78,6 +80,32 @@ namespace AutoClicker.UI
         /// card because the tab is about having several, and it has to stay distinct
         /// from Macro's document shape at 20px.
         /// </summary>
+        /// <summary>
+        /// A head and shoulders — the ordinary "person" mark, so the row reads as
+        /// "someone" rather than as another settings-ish section. Drawn from primitives
+        /// like every icon here, so it tints and scales with the rest.
+        /// </summary>
+        private static void DrawAccount(Graphics g, Brush brush, RectangleF b)
+        {
+            float head = b.Width * 0.34f;
+            g.FillEllipse(brush,
+                b.X + (b.Width - head) / 2f, b.Y + b.Height * 0.10f, head, head);
+
+            // Shoulders: a wide rounded arch, clipped to the lower half so it reads as a
+            // bust rather than a circle sitting on a pill.
+            var body = new RectangleF(
+                b.X + b.Width * 0.12f, b.Y + b.Height * 0.52f,
+                b.Width * 0.76f, b.Height * 0.62f);
+            var clip = g.Clip;
+            g.SetClip(new RectangleF(b.X, b.Y + b.Height * 0.52f, b.Width, b.Height * 0.42f),
+                      System.Drawing.Drawing2D.CombineMode.Intersect);
+            using (var path = RoundedF(body, b.Width * 0.34f))
+            {
+                g.FillPath(brush, path);
+            }
+            g.Clip = clip;
+        }
+
         private static void DrawProfile(Graphics g, Brush brush, Pen pen, RectangleF b, Color color)
         {
             // Back card: outline only, peeking out at the top-right.

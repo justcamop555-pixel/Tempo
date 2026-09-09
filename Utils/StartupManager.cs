@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -233,11 +234,91 @@ namespace AutoClicker.Utils
             }
         }
 
+        /// <summary>The path of the Tempo.exe running right now. Exposed for diagnostics.</summary>
+        public static string CurrentExePath()
+        {
+            try { return ResolveExePath(); } catch { return null; }
+        }
+
         /// <summary>
-        /// Migrates an existing startup entry that predates the --startup flag so the
-        /// "start in the tray at sign-in" behaviour also works for users who enabled
-        /// start-with-Windows in an older version. No-op if startup isn't enabled or the
-        /// flag is already present.
+        /// The raw command Windows will run at sign-in, or null when there is no entry.
+        /// </summary>
+        public static string RegisteredCommand()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKeyPath, false))
+                {
+                    return key?.GetValue(ValueName) as string;
+                }
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// Pulls the executable out of a Run command string:
+        /// <c>"C:\…\Tempo.exe" --startup</c> → <c>C:\…\Tempo.exe</c>. Handles both the
+        /// quoted form we write and an unquoted legacy value.
+        /// </summary>
+        public static string ExePathFromCommand(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command)) { return null; }
+            command = command.Trim();
+            if (command[0] == '"')
+            {
+                int end = command.IndexOf('"', 1);
+                return end > 1 ? command.Substring(1, end - 1) : null;
+            }
+            // Unquoted: everything up to the first argument separator. A path with spaces
+            // can't be recovered here, but we only ever WROTE the quoted form.
+            int sp = command.IndexOf(" -", StringComparison.Ordinal);
+            if (sp < 0) { sp = command.IndexOf(" /", StringComparison.Ordinal); }
+            return sp > 0 ? command.Substring(0, sp).Trim() : command;
+        }
+
+        /// <summary>The executable Windows will actually launch at sign-in, or null.</summary>
+        public static string RegisteredExePath()
+        {
+            return ExePathFromCommand(RegisteredCommand());
+        }
+
+        /// <summary>
+        /// The command the Run entry SHOULD hold, given the one it currently holds and
+        /// where Tempo is running from. Pure (apart from asking the filesystem whether the
+        /// registered exe is still there), so the keep-vs-repoint rule can be tested
+        /// directly rather than through the registry.
+        ///
+        /// Rule: keep the registered executable while it still exists — only its missing
+        /// --startup flag is added — and fall back to the running executable when it has
+        /// gone. See <see cref="RefreshStartupCommand"/> for why hijacking is the bug.
+        /// </summary>
+        public static string DesiredCommandFor(string existingValue, string runningExe)
+        {
+            string registered = ExePathFromCommand(existingValue);
+            bool stillThere = false;
+            try { stillThere = !string.IsNullOrEmpty(registered) && File.Exists(registered); }
+            catch { /* an unreadable path counts as gone */ }
+
+            string exe = stillThere ? registered : runningExe;
+            return "\"" + exe + "\" --startup";
+        }
+
+        /// <summary>
+        /// Keeps an existing startup entry working, without ever stealing it.
+        ///
+        /// It has two jobs: add the --startup flag to entries written by older versions
+        /// (so they start in the tray), and self-heal an entry whose executable has gone
+        /// — a portable copy the user moved, or a reinstall to a new folder.
+        ///
+        /// What it must NOT do is repoint the entry at whatever copy of Tempo happens to
+        /// be running. It used to rewrite the path on EVERY launch, so opening a second
+        /// copy once — a freshly built exe, a portable copy on a USB stick, an update
+        /// staged in Downloads — silently moved the user's sign-in entry to that file.
+        /// When that copy was later deleted (a build folder gets cleaned, the stick comes
+        /// out), start-with-Windows stopped working and nothing said why: the checkbox
+        /// still read ON, because the Run value was still present, just pointing at a
+        /// file that no longer existed. So the registered path is only replaced when it
+        /// has actually stopped resolving.
         /// </summary>
         public static void RefreshStartupCommand()
         {
@@ -255,18 +336,12 @@ namespace AutoClicker.Utils
                         return; // startup isn't enabled - nothing to refresh
                     }
 
-                    string exe = ResolveExePath();
-                    string desired = "\"" + exe + "\" --startup";
+                    string desired = DesiredCommandFor(val, ResolveExePath());
 
-                    // Keep the startup entry pointing at wherever Tempo actually is now.
-                    // A portable copy that the user moved (USB stick, a different folder)
-                    // would otherwise leave Windows trying to launch the old, now-missing
-                    // path at sign-in; an older entry might also be missing the --startup
-                    // flag. Rewrite only when it genuinely differs, to avoid needless
-                    // registry writes on every launch.
                     if (!string.Equals(val, desired, StringComparison.OrdinalIgnoreCase))
                     {
                         key.SetValue(ValueName, desired);
+                        Logger.Info("[Startup] rewrote the sign-in entry: " + val + "  ->  " + desired);
                     }
                 }
             }

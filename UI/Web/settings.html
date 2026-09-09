@@ -1,0 +1,151 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* The host substitutes the live theme here — see WebSettingsHost.BuildHtml. */
+  :root { /*THEME*/ }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    -webkit-user-select: none;
+    user-select: none;
+    overflow-y: auto;
+  }
+  .page { max-width: 720px; padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 22px; }
+  h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.4px; margin: 0; }
+  .lede { font-size: 12px; color: var(--muted); margin: 5px 0 0; }
+  .ghd { font-size: 11px; color: var(--muted); padding: 0 4px 8px; }
+  .grp { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 16px; padding: 11px 20px; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .lbl { flex-grow: 1; }
+  .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* A switch, drawn rather than themed — no OS control to fight. */
+  .sw { width: 40px; height: 24px; border-radius: 12px; background: var(--surface2);
+        border: 1px solid var(--border); position: relative; cursor: pointer;
+        transition: background 140ms ease, border-color 140ms ease; flex-shrink: 0; }
+  .sw i { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 9px;
+          background: var(--muted); transition: transform 140ms ease, background 140ms ease; }
+  .sw.on { background: var(--accent); border-color: var(--accent); }
+  .sw.on i { transform: translateX(16px); background: var(--on-accent); }
+
+  select, input[type=range] { font: inherit; color: var(--text); }
+  select { height: 32px; border-radius: 8px; border: 1px solid var(--border);
+           background: var(--surface2); padding: 0 10px; }
+  input[type=range] { width: 180px; accent-color: var(--accent); }
+  .val { font-size: 12px; color: var(--muted); width: 46px; text-align: right; }
+  .note { font-size: 11px; color: var(--muted); padding: 0 4px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div>
+    <h1>Settings</h1>
+    <p class="lede">Experimental HTML page. Changes here write to the same settings file as the normal tab.</p>
+  </div>
+
+  <div>
+    <div class="ghd">Window</div>
+    <div class="grp">
+      <div class="row">
+        <div class="lbl">Always on top</div>
+        <div class="sw" data-key="AlwaysOnTop"><i></i></div>
+      </div>
+      <div class="row">
+        <div class="lbl">
+          Close button sends Tempo to the tray
+          <div class="sub">Instead of quitting</div>
+        </div>
+        <div class="sw" data-key="MinimizeToTrayOnClose"><i></i></div>
+      </div>
+      <div class="row">
+        <div class="lbl">Start minimised to the tray</div>
+        <div class="sw" data-key="StartMinimizedToTray"><i></i></div>
+      </div>
+      <div class="row">
+        <div class="lbl">Window opacity</div>
+        <input type="range" min="50" max="100" step="1" data-key="WindowOpacity">
+        <div class="val" data-for="WindowOpacity">100%</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="ghd">Behaviour</div>
+    <div class="grp">
+      <div class="row">
+        <div class="lbl">
+          Ask before quitting while clicking
+          <div class="sub">Stops an accidental close mid-run</div>
+        </div>
+        <div class="sw" data-key="ConfirmBeforeExitWhileRunning"><i></i></div>
+      </div>
+      <div class="row">
+        <div class="lbl">Animate a custom logo</div>
+        <div class="sw" data-key="AnimateCustomLogo"><i></i></div>
+      </div>
+      <div class="row">
+        <div class="lbl">Animation speed</div>
+        <select data-key="LogoAnimationSpeed">
+          <option value="25">0.25x</option>
+          <option value="50">0.5x</option>
+          <option value="100">1x</option>
+          <option value="150">1.5x</option>
+          <option value="200">2x</option>
+          <option value="400">4x</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    Every colour on this page came from Tempo's theme as a CSS variable — nothing here
+    knows which of the 38 themes is running.
+  </div>
+</div>
+
+<script>
+  var state = /*STATE*/;
+
+  function send(key, value) {
+    try { window.chrome.webview.postMessage(key + "=" + value); } catch (e) {}
+  }
+
+  // Switches
+  document.querySelectorAll(".sw").forEach(function (el) {
+    var key = el.getAttribute("data-key");
+    if (state[key]) { el.classList.add("on"); }
+    el.addEventListener("click", function () {
+      var on = !el.classList.contains("on");
+      el.classList.toggle("on", on);
+      send(key, on ? "1" : "0");
+    });
+  });
+
+  // Range
+  document.querySelectorAll("input[type=range]").forEach(function (el) {
+    var key = el.getAttribute("data-key");
+    var out = document.querySelector('[data-for="' + key + '"]');
+    el.value = state[key];
+    if (out) { out.textContent = el.value + "%"; }
+    el.addEventListener("input", function () { if (out) { out.textContent = el.value + "%"; } });
+    // Commit on release, not on every pixel of the drag.
+    el.addEventListener("change", function () { send(key, el.value); });
+  });
+
+  // Select
+  document.querySelectorAll("select").forEach(function (el) {
+    var key = el.getAttribute("data-key");
+    el.value = String(state[key]);
+    el.addEventListener("change", function () { send(key, el.value); });
+  });
+</script>
+</body>
+</html>

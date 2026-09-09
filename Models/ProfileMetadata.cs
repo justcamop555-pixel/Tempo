@@ -64,11 +64,23 @@ namespace AutoClicker.Models
                 if (existing != null)
                 {
                     existing.Hotkey = b.Hotkey.Clone();
+                    continue;
                 }
-                else
+
+                // An action this build does not know is IGNORED, which is what the class
+                // doc above has always promised — and what the code did the opposite of.
+                //
+                // It added them. A profile written by a build with more actions injected a
+                // binding for one that has no row in the Keybinds tab and no case in
+                // DispatchAction: an invisible entry that reserved a key system-wide to do
+                // nothing, and could only be cleared by resetting every keybind. Skipping
+                // it here loses nothing, because the profile keeps its own copy — the
+                // build that understands the action still restores it.
+                if (HotkeyActions.Get(b.Action) == null)
                 {
-                    settings.Bindings.Add(b.Clone());
+                    continue;
                 }
+                settings.Bindings.Add(b.Clone());
             }
         }
     }

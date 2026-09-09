@@ -256,6 +256,39 @@ namespace AutoClicker.UI
             dataInfo.Width = 264;
             dataInfo.AutoSize = false;
             dataInfo.AutoEllipsis = true;
+
+            // Name the operating system. About listed the display, the runtime and the
+            // data folder but never Windows itself, so "which Windows are you on?" — the
+            // first question of every bug report — had no answer anywhere in the app.
+            // Placed in the gap that already existed between this block and the rule at
+            // 182, so nothing below has to move.
+            string osText;
+            try
+            {
+                osText = Utils.WindowsVersion.Describe();
+                string note = Utils.WindowsVersion.SupportNote();
+                if (note.Length > 0) { osText += "  ⚠"; }
+            }
+            catch { osText = null; }
+
+            if (!string.IsNullOrEmpty(osText))
+            {
+                var osInfo = UiFactory.Label(osText, 24, 142, FontStyle.Regular, 9f);
+                osInfo.ForeColor = Utils.WindowsVersion.Status == Utils.WindowsVersion.Support.Supported
+                    ? theme.TextMuted : theme.Warning;
+                osInfo.AutoSize = false;
+                // 300, not the full 410: the right-hand column from x=330 down to ~176
+                // belongs to the logo, its "Choose image…" button and the reset link.
+                // A full-width label here ran straight underneath them.
+                osInfo.Width = 300;
+                osInfo.Height = 16;
+                osInfo.AutoEllipsis = true;
+                if (Utils.WindowsVersion.SupportNote().Length > 0)
+                {
+                    new ToolTip().SetToolTip(osInfo, Utils.WindowsVersion.SupportNote());
+                }
+                Controls.Add(osInfo);
+            }
             var openData = new LinkLabel
             {
                 Text = Localization.T("Open data folder"),
