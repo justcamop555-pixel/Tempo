@@ -5,7 +5,7 @@
 <h1 align="center">Tempo</h1>
 
 <p align="center">
-  A fast, modern, <strong>free &amp; open-source</strong> Windows auto-clicker — and a lot more.<br>
+  A fast, modern, <strong>free &amp; source-available</strong> Windows auto-clicker — and a lot more.<br>
   Precise clicking, multi-point routes, full macro record &amp; replay with <strong>Python steps</strong>,<br>
   live statistics, rebindable hotkeys, 38 themes, <strong>offline AI Live Captions</strong> with speaker<br>
   labels and 90+ languages, and a <strong>Roblox account manager</strong> with an encrypted vault.<br>
@@ -16,7 +16,7 @@
 <p align="center">
   <img alt="Windows 10 &amp; 11" src="https://img.shields.io/badge/Windows-10%20%26%2011-0078D6?logo=windows&logoColor=white">
   <img alt=".NET 8 (built in)" src="https://img.shields.io/badge/.NET%208-built--in-512BD4?logo=dotnet&logoColor=white">
-  <img alt="Free &amp; Open" src="https://img.shields.io/badge/Free%20%26%20Open-%E2%9C%93-34d399">
+  <img alt="Free" src="https://img.shields.io/badge/Free-source--available-34d399">
   <img alt="No telemetry" src="https://img.shields.io/badge/Telemetry-none-7c5cff">
   <a href="https://github.com/justcamop555-pixel/Tempo/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/justcamop555-pixel/Tempo?color=7c5cff"></a>
   <a href="https://github.com/justcamop555-pixel/Tempo/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/justcamop555-pixel/Tempo/total?color=34d399"></a>
@@ -51,8 +51,21 @@ on your machine.
 
 ## Download &amp; install
 
-**You don't need to build anything** — grab the latest build from the
-[**Releases page**](https://github.com/justcamop555-pixel/Tempo/releases). There are two
+**You don't need to build anything.** The quickest way is one line in PowerShell — the
+ordinary one, not "as administrator":
+
+```powershell
+irm https://justcamop555-pixel.github.io/Tempo/install.ps1 | iex
+```
+
+That fetches the current release, **checks its SHA-256 against the checksum GitHub published
+for it** (and stops if they differ), installs it for your user only, and adds a Start-Menu
+entry you can uninstall from Settings › Apps. The script is plain text if you'd rather read it
+first: [install.ps1](https://justcamop555-pixel.github.io/Tempo/install.ps1). Add `-Portable`
+to simply download `Tempo.exe` instead.
+
+Prefer to do it by hand? Everything is on the
+[**Releases page**](https://github.com/justcamop555-pixel/Tempo/releases), and there are two
 equally good ways to run it; pick whichever you like.
 
 ### ⚡ Portable — no install
@@ -79,9 +92,13 @@ removal later (or run `uninstall.cmd`).
 > **Want to be certain it's the real thing?** You don't have to take our word for it, and
 > you don't have to check by hand: Tempo verifies its own program file against the release
 > published on GitHub every time it starts, and says so in **Settings › Data &amp; Backup**.
-> To check yourself, run `certutil -hashfile Tempo.exe SHA256` and compare it with the
-> SHA-256 GitHub shows for the asset on the
-> [release](https://github.com/justcamop555-pixel/Tempo/releases).
+> Once GitHub has confirmed your copy, Tempo shows its **Official ID** at the bottom of the
+> sidebar and in **About** — four groups of four characters, like `CC21-FB7A-D6F3-8831`. It is
+> the first 16 characters of the SHA-256 GitHub lists beside `Tempo.exe` on the
+> [release page](https://github.com/justcamop555-pixel/Tempo/releases), so anyone can match it
+> there without trusting Tempo. Every release has its own ID; a test build or a modified copy
+> has none. To check the file itself, run `certutil -hashfile Tempo.exe SHA256` and compare the
+> result with that same line — the `Tempo.exe` one, not the zip's.
 
 **Requirements:** 64-bit Windows 10 or 11. Nothing else — the .NET runtime is built in.
 Tempo never needs administrator rights, for any feature.
@@ -206,7 +223,9 @@ doing. **Copy** gives you the perfect text to paste into a bug report.
 ### 🔐 Tamper check
 Tempo hashes its own program file at every launch and compares it with the SHA-256 GitHub
 publishes for that release — so it can tell you, in **Settings › Data &amp; Backup**, whether the
-copy you are running is the one that was published. It catches a patched or repackaged build,
+copy you are running is the one that was published. A confirmed copy shows its **Official ID** —
+the first 16 characters of that SHA-256 — in the sidebar and in About, so the answer can be checked
+on GitHub by anyone rather than taken from Tempo's word. It catches a patched or repackaged build,
 a copy that came from somewhere other than the releases page, and a file damaged by a crash or
 a failed update. Being offline is never treated as evidence of anything, and a build you made
 yourself can be marked trusted in one click.
@@ -355,9 +374,20 @@ account vault). Uninstalling an installed copy can optionally remove its data.
 
 # For developers
 
-The rest is for building from source or cutting releases — regular users don't need any of it.
+The rest is for reading the source or cutting releases — regular users don't need any of it.
 
-The full source lives on this branch — clone it and it builds with one command.
+## What is published here
+
+Nearly all of Tempo is on this branch: the click engine and its timing, multi-point routes,
+the macro recorder and player, Live Captions, the 38 themes, every other tab, the installer
+scripts, the release tooling and the website.
+
+The Roblox **Accounts** stack is not — the encrypted vault and its crypto, the real-browser
+sign-in, the Roblox API client and the launcher. Those files are excluded, so what you clone
+is there to **read**, not to build: `dotnet build` on a fresh clone will stop on the missing
+types. Everything Tempo ships is still checkable against the release the same way it always
+was — the **Tamper check** section above — and the binary that check verifies is built from
+exactly this tree plus those files.
 
 ## Build &amp; run
 
@@ -371,6 +401,9 @@ dotnet run   -c Release
 Or open `AutoClicker.csproj` in **Visual Studio 2022** (with the *.NET desktop development*
 workload) and press **F5**. For a release-quality build, use **`publish.cmd`** rather than
 calling `dotnet publish` by hand.
+
+These commands are what a maintainer runs against the complete tree; a public clone is
+missing the Accounts stack above and will not compile as-is.
 
 ## Publishing a release (maintainers)
 
@@ -417,7 +450,7 @@ goes to `publish-log.txt`.
 > [!IMPORTANT]
 > Attach the **exact** `Tempo.exe` that `publish.cmd` produced. Tempo's tamper check compares
 > the running file against the SHA-256 GitHub publishes for the release, so an exe rebuilt
-> after the fact would make every user's copy report as modified. The build is deterministic —
+> after the fact would make every user's copy report as modified, with no Official ID. The build is deterministic —
 > the same source rebuilds to a byte-identical exe — so re-running `publish.cmd` is safe;
 > building from *different* source is not.
 
@@ -429,17 +462,22 @@ AutoClicker/
   Engine/           Click engine, precise timing, schedulers, macro player/recorder
   Models/           Settings, profiles, statistics, hotkeys, accounts, enums
   Native/           Low-level keyboard/mouse hooks, raw input, second-mouse listener
-  Persistence/      Crash-safe saving of settings, profiles, macros, history;
-                    the encrypted account vault and its crypto
+  Persistence/      Crash-safe saving of settings, profiles, macros, history
   UI/               MainForm (per-tab partials) + dialogs + theming + notifications
   Utils/            Logging, updates, integrity, localization, speech engine,
-                    Roblox API/launcher, startup registration, helpers
+                    startup registration, helpers
   Assets/           Icon and About artwork (embedded at build time)
   release-notes/    One file per version, pasted into the GitHub release
   publish.cmd       Release builder (see above)
   install.cmd       Per-user installer
   uninstall.cmd     Matching uninstaller
+  install.ps1       The web installer behind the one-liner at the top
+  index.html        The website (GitHub Pages serves this branch)
 ```
+
+Not in the tree, by choice: the Accounts stack — the encrypted vault and its crypto in
+`Persistence/`, the browser sign-in, Roblox API client and launcher in `Utils/`, and the
+account screens in `UI/`. See [What is published here](#what-is-published-here).
 
 > [!NOTE]
 > `.gitattributes` sets `* -text` on purpose. `publish.cmd` requires CRLF endings and is

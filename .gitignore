@@ -21,3 +21,38 @@ desktop.ini
 # file that changes on every build has no place in history; the csproj's EnsureBuildInfo
 # target writes a neutral one if it's missing, so a fresh clone still compiles.
 Utils/BuildInfo.Generated.cs
+
+# ---------------------------------------------------------------------------
+# The Roblox Accounts stack is not published.
+#
+# These files hold the encrypted account vault and its crypto, the real-browser
+# sign-in flow, the Roblox API client, the launcher and the account screens.
+# They stay on the maintainer's machine: a public clone is there to READ the
+# rest of Tempo, not to build it, and `dotnet build` will stop on the missing
+# types. Everything else — the click engine, macros, captions, themes, the
+# installer scripts, the release tooling and the website — is published.
+#
+# Listed by name rather than by a wildcard so that adding a new file here is a
+# deliberate act, and so nothing else is hidden by accident.
+# ---------------------------------------------------------------------------
+Models/RobloxAccount.cs
+Persistence/AccountVault.cs
+Persistence/VaultCrypto.cs
+UI/AccountApiDialog.cs
+UI/AccountDialog.cs
+UI/AccountListView.cs
+UI/MainForm.Accounts.cs
+UI/MainForm.MultiInstance.cs
+UI/RobloxClientDialog.cs
+UI/RobloxLoginForm.cs
+Utils/AccountApiServer.cs
+Utils/PrivateServerRef.cs
+Utils/RealBrowserLogin.cs
+Utils/RobloxApi.cs
+Utils/RobloxClients.cs
+Utils/RobloxInstall.cs
+Utils/RobloxLauncher.cs
+Utils/RobloxSingletonKiller.cs
+
+# Design scratch — working files, not a deliverable.
+design/
