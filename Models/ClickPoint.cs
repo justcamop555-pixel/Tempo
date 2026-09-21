@@ -9,6 +9,10 @@ namespace AutoClicker.Models
     /// </summary>
     public sealed class ClickPoint
     {
+        /// <summary>Fields written by a newer Tempo, kept so saving here cannot erase them. See AppSettings.UnknownFields.</summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public System.Collections.Generic.Dictionary<string, System.Text.Json.JsonElement> UnknownFields { get; set; }
+
         /// <summary>Optional friendly label shown in the UI list.</summary>
         public string Label { get; set; } = "Point";
 

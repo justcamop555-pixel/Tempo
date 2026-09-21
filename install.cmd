@@ -50,7 +50,11 @@ if /i "%A%"=="/nolaunch"  set "OPT_NOLAUNCH=1"  & goto :pnext
 if /i "%A%"=="/nomodel"   set "OPT_NOMODEL=1"   & goto :pnext
 set "BADARG=%A%"
 :pnext
-shift
+REM  SHIFT /1, not SHIFT: a plain SHIFT moves argument zero too, so after the first flag the
+REM  script's own folder was lost. install.cmd /silent then searched for Tempo.exe from the root
+REM  of the drive and installed whichever copy a scan of the whole disk found first - on the PC
+REM  this was caught on, an old build lying in the Recycle Bin.
+shift /1
 goto :parse
 :parsed
 
@@ -73,7 +77,16 @@ set "LEGACY_DIR=%LOCALAPPDATA%\Programs\Tempo"
 set "EXE=%INSTALL_DIR%\Tempo.exe"
 set "UNINST=%INSTALL_DIR%\uninstall.cmd"
 set "SM_LNK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Tempo.lnk"
-set "DESK_LNK=%USERPROFILE%\Desktop\Tempo.lnk"
+REM  The Desktop Windows actually shows, which is not always the Desktop folder in the user profile:
+REM  OneDrive's folder backup moves it into OneDrive, and a shortcut written to the old path landed in
+REM  a folder nobody sees - while this script still reported "Desktop shortcut created".
+set "DESK_DIR="
+for /f "tokens=2,*" %%A in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" /v Desktop 2^>nul') do (
+  if /i "%%A"=="REG_EXPAND_SZ" call set "DESK_DIR=%%B"
+  if /i "%%A"=="REG_SZ" set "DESK_DIR=%%B"
+)
+if not defined DESK_DIR set "DESK_DIR=%USERPROFILE%\Desktop"
+set "DESK_LNK=%DESK_DIR%\Tempo.lnk"
 set "REGKEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Tempo"
 set "LOG=%TEMP%\tempo-install-log.txt"
 
@@ -187,22 +200,13 @@ if exist "%EXE%" (
 REM ---------------------------------------------------------------------------
 REM  Close a running Tempo so files aren't locked during copy.
 REM ---------------------------------------------------------------------------
-tasklist /fi "imagename eq Tempo.exe" 2>nul | find /i "Tempo.exe" >nul
+REM find by its full path: with Git's Unix tools on the PATH a bare find is GNU find, which would miss a running Tempo
+tasklist /fi "imagename eq Tempo.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "Tempo.exe" >nul
 if not errorlevel 1 (
   echo   Tempo is currently running - closing it first ...
   taskkill /im Tempo.exe /f >nul 2>&1
   >> "%LOG%" echo Killed : running Tempo.exe before copy
-  timeout /t 1 >nul
-)
-
-REM ---------------------------------------------------------------------------
-REM  Migrate from the old "Programs\Tempo" folder (whose path made Discord think
-REM  Tempo was a Steam game). Remove the stale copy so it can't be launched.
-REM ---------------------------------------------------------------------------
-if exist "%LEGACY_DIR%\Tempo.exe" (
-  echo   Removing old install at %LEGACY_DIR% ...
-  rd /s /q "%LEGACY_DIR%" >nul 2>&1
-  >> "%LOG%" echo Removed: legacy install at %LEGACY_DIR%
+  "%SystemRoot%\System32\timeout.exe" /t 1 >nul
 )
 
 echo   Installing to:
@@ -212,17 +216,43 @@ echo(
 REM ---------------------------------------------------------------------------
 REM  Copy files. Roll back the folder if the main copy fails.
 REM ---------------------------------------------------------------------------
+REM  Retried for about ten seconds: the Tempo.exe being replaced can stay locked for a moment after
+REM  Tempo is closed, or while antivirus scans it. The old check only asked whether a Tempo.exe was
+REM  there afterwards - on an update there always is - so a failed copy still said "Done" and wrote
+REM  the new version number into Settings > Apps over the old program.
+set "HADEXE="
+if exist "%EXE%" set "HADEXE=1"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>&1
-copy /y "%SRC%Tempo.exe" "%EXE%" >nul
-if not exist "%EXE%" (
-  echo   ERROR: Could not copy Tempo.exe into place.
-  echo   Rolling back ...
-  rd /s /q "%INSTALL_DIR%" >nul 2>&1
-  >> "%LOG%" echo RESULT : FAILED - copy error, rolled back
+set "COPIED="
+for /l %%i in (1,1,10) do if not defined COPIED (
+  copy /y "%SRC%Tempo.exe" "%EXE%" >nul 2>&1 && set "COPIED=1" || "%SystemRoot%\System32\PING.EXE" -n 2 127.0.0.1 >nul
+)
+if not defined COPIED (
+  if defined HADEXE (
+    echo   ERROR: Could not replace the installed Tempo.exe - something is still using it.
+    echo   Your current Tempo is unchanged. Close Tempo ^(check the tray^), then run install.cmd again.
+    >> "%LOG%" echo RESULT : FAILED - Tempo.exe in use, update not applied
+  ) else (
+    echo   ERROR: Could not copy Tempo.exe into place.
+    echo   Rolling back ...
+    rd /s /q "%INSTALL_DIR%" >nul 2>&1
+    >> "%LOG%" echo RESULT : FAILED - copy error, rolled back
+  )
   echo(
   if not defined OPT_SILENT pause
   endlocal
   exit /b 2
+)
+
+REM ---------------------------------------------------------------------------
+REM  Migrate from the old "Programs\Tempo" folder (whose path made Discord think
+REM  Tempo was a Steam game). Remove the stale copy so it can't be launched -
+REM  only now that the new copy is in place, so a failed copy never leaves neither.
+REM ---------------------------------------------------------------------------
+if exist "%LEGACY_DIR%\Tempo.exe" (
+  echo   Removing old install at %LEGACY_DIR% ...
+  rd /s /q "%LEGACY_DIR%" >nul 2>&1
+  >> "%LOG%" echo Removed: legacy install at %LEGACY_DIR%
 )
 if exist "%SRC%Tempo.exe.sha256" copy /y "%SRC%Tempo.exe.sha256" "%INSTALL_DIR%\Tempo.exe.sha256" >nul
 if exist "%SRC%uninstall.cmd"     ( copy /y "%SRC%uninstall.cmd"     "%UNINST%" >nul ) else if exist "%~dp0uninstall.cmd" ( copy /y "%~dp0uninstall.cmd" "%UNINST%" >nul )
@@ -297,8 +327,10 @@ if not defined OPT_DESKTOP if not defined OPT_NODESKTOP if not defined OPT_SILEN
 )
 if defined MAKEDESK (
   call :MakeShortcut "%DESK_LNK%" "%EXE%" "%INSTALL_DIR%"
-  echo   Desktop shortcut created.
-  >> "%LOG%" echo Shortcut: desktop
+  if exist "%DESK_LNK%" (
+    echo   Desktop shortcut created.
+    >> "%LOG%" echo Shortcut: desktop
+  )
 )
 
 REM ---------------------------------------------------------------------------
@@ -393,7 +425,7 @@ if not errorlevel 1 (
   if exist "%~1" goto :eof
 )
 REM Fallback: build the shortcut with a temporary VBScript.
-set "VBS=%TEMP%	empo_lnk_%RANDOM%.vbs"
+set "VBS=%TEMP%\tempo_lnk_%RANDOM%.vbs"
 > "%VBS%" echo Set s = CreateObject("WScript.Shell")
 >> "%VBS%" echo Set lnk = s.CreateShortcut("%~1")
 >> "%VBS%" echo lnk.TargetPath = "%~2"

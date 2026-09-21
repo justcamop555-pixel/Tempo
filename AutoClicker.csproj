@@ -26,9 +26,9 @@
     <LangVersion>12.0</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\tempo.ico</ApplicationIcon>
-    <Version>1.0.321</Version>
-    <AssemblyVersion>1.0.321.0</AssemblyVersion>
-    <FileVersion>1.0.321.0</FileVersion>
+    <Version>1.0.322</Version>
+    <AssemblyVersion>1.0.322.0</AssemblyVersion>
+    <FileVersion>1.0.322.0</FileVersion>
     <Company>Tempo Project</Company>
     <Product>Tempo</Product>
     <AssemblyTitle>Tempo</AssemblyTitle>
@@ -157,6 +157,17 @@
     <EmbeddedResource Include="Assets\tempo-about.gif" />
     <!-- Embedded, not copied beside the exe: publish is single-file. -->
     <EmbeddedResource Include="UI\Web\settings.html" />
+    <!--
+      The uninstaller, carried INSIDE Tempo.exe so an update can refresh the copy sitting in
+      the install folder. install.cmd copies uninstall.cmd next to the exe and points both
+      UninstallString and QuietUninstallString at it, but an update only ever replaces
+      Tempo.exe (UpdateInstaller pulls just that file out of the zip) — so everyone who
+      installed from the setup zip kept running the uninstall.cmd they first installed with,
+      and none of its fixes ever reached them. Utils/UninstallScriptRefresh.cs compares these
+      bytes with that file on startup. LogicalName is fixed so the lookup cannot drift with
+      the folder layout.
+    -->
+    <EmbeddedResource Include="uninstall.cmd" LogicalName="Tempo.uninstall.cmd" />
   </ItemGroup>
 
   <!--

@@ -9,6 +9,10 @@ namespace AutoClicker.Models
     /// </summary>
     public sealed class ClickProfile
     {
+        /// <summary>Fields written by a newer Tempo, kept so saving here cannot erase them. See AppSettings.UnknownFields.</summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public System.Collections.Generic.Dictionary<string, System.Text.Json.JsonElement> UnknownFields { get; set; }
+
         // ── Identity ──────────────────────────────────────────────────────────
         public string Name { get; set; } = "New Profile";
         public string Description { get; set; } = string.Empty;

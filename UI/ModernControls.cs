@@ -960,18 +960,98 @@ namespace AutoClicker.UI
     }
 
     /// <summary>A single-line TextBox clipped to rounded corners to match the inputs.</summary>
+    /// <summary>
+    /// A text box with rounded corners and an outline painted in the theme.
+    ///
+    /// The corners are cut by a rounded window region, and the outline used to be the square
+    /// 1 px frame Windows draws for FixedSingle — so the region clipped that frame at every
+    /// corner, and each box showed a top line, a bottom line and two short ticks for sides
+    /// instead of an outline (every UiFactory.Text box in Tempo; the Accounts unlock screen made
+    /// it obvious). The combo boxes beside them already paint their own rounded border. This does
+    /// the same: Windows' square frame is covered in the box's own background, then a rounded
+    /// outline is drawn in the theme's border colour — the accent while the box has focus.
+    /// </summary>
     public sealed class FlatTextBox : TextBox
     {
+        private const int WmPaint = 0x000F;
+        private const int WmNcPaint = 0x0085;
+        private const int Radius = 6;
+
+        private Color _border = SystemColors.ControlDark;
+        private Color _focusBorder = SystemColors.Highlight;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr GetWindowDC(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+        /// <summary>Takes the outline colours from <paramref name="theme"/> (ThemeManager calls this).</summary>
+        public void ApplyTheme(Theme theme)
+        {
+            if (theme == null) { return; }
+            // Border is the theme's DIVIDER colour — on the light palettes barely different from an
+            // input's fill, which drew an outline you had to hunt for. The edge of something you
+            // type into wants 3:1 (WCAG 1.4.11), so the same hue is pushed until it gets there.
+            _border = Theme.Readable(theme.Border, theme.InputBackground, 3.0);
+            _focusBorder = Theme.Readable(theme.Accent, theme.InputBackground, 3.0);
+            PaintOutline();
+        }
+
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); RoundRegion(); }
         protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); RoundRegion(); }
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); PaintOutline(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); PaintOutline(); }
+        protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); PaintOutline(); }
+        protected override void OnBackColorChanged(EventArgs e) { base.OnBackColorChanged(e); PaintOutline(); }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            // After Windows has drawn its frame (WM_NCPAINT) or the text area (WM_PAINT), draw
+            // the outline over it.
+            if (m.Msg == WmNcPaint || m.Msg == WmPaint)
+            {
+                PaintOutline();
+            }
+        }
 
         private void RoundRegion()
         {
             if (Width <= 1 || Height <= 1) return;
 
-            using (var p = ModernPaint.Rounded(new Rectangle(0, 0, Width, Height), 6))
+            using (var p = ModernPaint.Rounded(new Rectangle(0, 0, Width, Height), Radius))
             {
                 Region = new Region(p);
+            }
+        }
+
+        private void PaintOutline()
+        {
+            if (!IsHandleCreated || Width <= 2 || Height <= 2) { return; }
+            IntPtr hdc = GetWindowDC(Handle);          // whole window, the frame included
+            if (hdc == IntPtr.Zero) { return; }
+            try
+            {
+                using (var g = Graphics.FromHdc(hdc))
+                {
+                    // Cover the square frame first, so none of it shows through the anti-aliased
+                    // edge of the rounded outline.
+                    using (var cover = new Pen(BackColor, 2f))
+                    {
+                        g.DrawRectangle(cover, 0, 0, Width - 1, Height - 1);
+                    }
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    using (var path = ModernPaint.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), Radius))
+                    using (var pen = new Pen(Focused && Enabled ? _focusBorder : _border, 1.4f))
+                    {
+                        g.DrawPath(pen, path);
+                    }
+                }
+            }
+            catch { /* the outline is cosmetic; never let painting throw */ }
+            finally
+            {
+                ReleaseDC(Handle, hdc);
             }
         }
     }

@@ -9,6 +9,18 @@ namespace AutoClicker.UI
     /// </summary>
     public static class ThemeManager
     {
+        /// <summary>
+        /// Tag for a Panel that should look like the PAGE it sits on — the page colour, or
+        /// see-through over a wallpaper, by the same rule as the labels on it.
+        ///
+        /// Untagged panels are left alone, which is right for panels that carry a colour of their
+        /// own — and was wrong for the Accounts tab's screens (enable / set password / unlock /
+        /// list), which are plain containers meant to vanish into the page. They kept the colour
+        /// they were built with while every label on them followed the theme, so each label sat in
+        /// a lighter box of its own: #FEF8F4 labels on a #FEF8EA panel, measured off the screen.
+        /// </summary>
+        public const string PageTag = "page";
+
         public static void Apply(Control root, Theme theme)
         {
             if (root == null || theme == null)
@@ -91,7 +103,8 @@ namespace AutoClicker.UI
             {
                 return;
             }
-            if (root is Label || root is CheckBox || root is RadioButton)
+            if (root is Label || root is CheckBox || root is RadioButton
+                || (root is Panel p && p.Tag is string tag && tag == PageTag))
             {
                 root.BackColor = EffectiveBackColor(root, theme);
             }
@@ -167,6 +180,10 @@ namespace AutoClicker.UI
                     textBox.BackColor = theme.InputBackground;
                     textBox.ForeColor = theme.Text;
                     textBox.BorderStyle = BorderStyle.FixedSingle;
+                    if (textBox is FlatTextBox flat)
+                    {
+                        flat.ApplyTheme(theme);   // its rounded border is painted in the theme
+                    }
                     break;
 
                 case FlatNumericUpDown flatNud:
@@ -292,6 +309,10 @@ namespace AutoClicker.UI
                     else if (panel.Tag is string tag2 && tag2 == "surface2")
                     {
                         panel.BackColor = theme.Surface2;
+                    }
+                    else if (panel.Tag is string tag3 && tag3 == PageTag)
+                    {
+                        panel.BackColor = EffectiveBackColor(panel, theme);
                     }
                     break;
 

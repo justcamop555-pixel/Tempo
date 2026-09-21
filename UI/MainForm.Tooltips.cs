@@ -210,8 +210,6 @@ namespace AutoClicker.UI
             T(_duplicatePointBtn, "Duplicate the selected point (Ctrl+D).");
             T(_togglePointBtn, "Enable or disable the selected point.");
             T(_removePointBtn, "Remove the selected point (Delete).");
-            T(_movePointUpBtn, "Move the selected point earlier in the order.");
-            T(_movePointDownBtn, "Move the selected point later in the order.");
             T(_showPointsBtn, "Flash numbered markers on screen at each point.");
             T(_clearPointsBtn, "Remove all points.");
             T(_toggleAllPointsBtn, "Enable every point, or disable them all if they're all on.");

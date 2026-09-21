@@ -9,6 +9,10 @@ namespace AutoClicker.Models
     /// </summary>
     public sealed class MacroAction
     {
+        /// <summary>Fields written by a newer Tempo, kept so saving here cannot erase them. See AppSettings.UnknownFields.</summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public System.Collections.Generic.Dictionary<string, System.Text.Json.JsonElement> UnknownFields { get; set; }
+
         public MacroActionType Type { get; set; }
         public int X { get; set; }
         public int Y { get; set; }
@@ -143,6 +147,10 @@ namespace AutoClicker.Models
     /// </summary>
     public sealed class Macro
     {
+        /// <summary>Fields written by a newer Tempo, kept so saving here cannot erase them. See AppSettings.UnknownFields.</summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public System.Collections.Generic.Dictionary<string, System.Text.Json.JsonElement> UnknownFields { get; set; }
+
         /// <summary>
         /// Schema version of the macro file. Incremented whenever the macro file
         /// format changes in a backwards-incompatible way so older recordings can

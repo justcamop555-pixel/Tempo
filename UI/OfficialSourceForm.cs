@@ -199,12 +199,19 @@ namespace AutoClicker.UI
                 {
                     case Utils.IntegrityVerdict.Genuine:
                         colour = theme.SuccessText;
-                        return Localization.T("✓ This copy matches the release published on GitHub.");
+                        return Utils.IntegrityCheck.OfficialId != null
+                            ? Localization.F("✓ This copy matches GitHub's {0} release — Official ID {1}.",
+                                             Utils.IntegrityCheck.OfficialTag, Utils.IntegrityCheck.OfficialId)
+                            : Localization.T("✓ This copy matches the release published on GitHub.");
                     case Utils.IntegrityVerdict.TestBuild:
                         colour = theme.WarningText;
                         return Localization.F(
                             "⚠ This copy is a test build ({0}) — it did not come from either of those.",
                             Utils.BuildInfo.Id);
+                    case Utils.IntegrityVerdict.UnpackedModified:
+                        colour = theme.DangerText;
+                        return Localization.T("✗ The copy of Tempo running from your TEMP folder was changed. "
+                                              + "Open Settings and press Repair.");
                     case Utils.IntegrityVerdict.Modified:
                     case Utils.IntegrityVerdict.Repackaged:
                     case Utils.IntegrityVerdict.UnknownRelease:

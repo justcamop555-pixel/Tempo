@@ -99,8 +99,15 @@ namespace AutoClicker.Utils
             }
         }
 
+        /// <summary>
+        /// Write one entry. <paramref name="whenUtc"/> exists for a card that WAITED before
+        /// its fate was known: the outcome is decided when a slot frees (or when it is
+        /// dropped), but the entry must still carry the moment Tempo had something to say,
+        /// or a queued message reads as though it arrived a minute after the thing it was
+        /// about.
+        /// </summary>
         public static void Add(string source, string title, string body, string kind,
-                               Outcome how, string reason = "")
+                               Outcome how, string reason = "", DateTime? whenUtc = null)
         {
             Entry entry;
             lock (Lock)
@@ -108,7 +115,7 @@ namespace AutoClicker.Utils
                 EnsureLoaded();
                 entry = new Entry
                 {
-                    WhenUtc = DateTime.UtcNow,
+                    WhenUtc = whenUtc ?? DateTime.UtcNow,
                     Source = Clean(source),
                     Title = Clean(title),
                     Body = Clean(body),

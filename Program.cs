@@ -76,6 +76,35 @@ namespace AutoClicker
             if (!granted) { try { AllowSetForegroundWindow(ASFW_ANY); } catch { } }
         }
 
+        /// <summary>
+        /// Asks the running Tempo to open its uninstall flow, and reports whether it actually
+        /// received the request. A broadcast alone cannot say that — PostMessage succeeds whether
+        /// or not anyone is listening (an older build has no handler) — so the running copy sets a
+        /// named event when the message arrives, and this waits for it. The event is created BEFORE
+        /// the broadcast, so an instance that answers instantly cannot signal into nothing.
+        /// </summary>
+        private static bool HandUninstallToRunningInstance()
+        {
+            try
+            {
+                using (var ack = new EventWaitHandle(false, EventResetMode.AutoReset, MainForm.UninstallAckEventName))
+                {
+                    // The uninstall confirmation opens in the other process and must be allowed to
+                    // take the foreground, exactly like the "show me" hand-off.
+                    GrantForegroundToOtherTempo();
+                    int msg = RegisterWindowMessage(MainForm.UninstallRequestMessageName);
+                    if (msg == 0) { return false; }
+                    PostMessage(HWND_BROADCAST, msg, IntPtr.Zero, IntPtr.Zero);
+                    return ack.WaitOne(TimeSpan.FromSeconds(4));
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Swallow("HandUninstallToRunningInstance", ex);
+                return false;
+            }
+        }
+
         private static void TryActivateExistingInstance()
         {
             try
@@ -153,6 +182,35 @@ namespace AutoClicker
                 // the fresh instance.
                 createdNew = true;
                 Logger.Info("[Restart] hand-over complete; continuing as the new instance.");
+            }
+            if (!createdNew && StartedForUninstall())
+            {
+                // Settings → Apps launched us to uninstall, but Tempo is already running — which it
+                // nearly always is, because it starts with Windows and lives in the tray. This
+                // process cannot do the uninstall itself (the running copy holds the mutex, the log
+                // and the exe), and it used to fall straight through to the "already running"
+                // notice below: clicking Uninstall in Settings → Apps told the user Tempo was running
+                // and did nothing else. So hand the request to the running copy, and fall back to
+                // that notice only when nothing acknowledges it — never a silent no-op.
+                if (HandUninstallToRunningInstance())
+                {
+                    Logger.Info("[Uninstall] handed the Settings > Apps request to the running Tempo.");
+                    return;
+                }
+                Logger.Warn("[Uninstall] the running Tempo did not acknowledge the uninstall request.");
+            }
+            if (!createdNew && Utils.StartupManager.LaunchedAtStartup())
+            {
+                // Tempo was already open when the start-with-Windows launch fired: the user got
+                // there first, opening it themselves straight after signing in. This launch has
+                // nothing left to do. It used to fall through to the block below, which pulled
+                // the window forward and put "Tempo is already running" in front of whatever the
+                // user was doing — a notice about something they did on purpose, from a launch
+                // they never asked for. A startup launch never shows a window of its own, so it
+                // shows none here either; it just leaves. A launch the USER makes while Tempo is
+                // running still goes below and brings the window forward, as before.
+                Logger.Info("[startup] Tempo is already running (opened before the sign-in launch fired) — this start-with-Windows launch exits quietly.");
+                return;
             }
             if (!createdNew)
             {
@@ -283,12 +341,26 @@ namespace AutoClicker
             // therefore be kept. Never blocks startup, never throws.
             Utils.BundleCleanup.SweepInBackground();
 
+            // The user's data, before this build touches any of it: apply a restore that was scheduled
+            // from Settings, then keep a restore point if this is not the build that ran last. Here and
+            // not later — MainForm saves settings within moments of loading them, and only this instance
+            // owns the mutex, so a second launch can never take a point of its own.
+            Persistence.DataSnapshots.OnStartup();
+
             // Keep the version Windows shows in sync with the exe that is running.
             // Self-updates replace Tempo.exe without touching the registry, so the number
             // in Settings > Apps drifts further behind with every release. Off-thread and
             // best-effort: it is a cosmetic value and must never delay startup.
             System.Threading.ThreadPool.QueueUserWorkItem(
                 _ => Utils.Uninstaller.RefreshRegisteredVersion());
+
+            // The Uninstall button of a zip install runs the uninstall.cmd that was copied into the
+            // install folder on day one, and an update only ever replaces Tempo.exe — so those users
+            // never received a single fix to it. Bring that file up to the version this build carries.
+            // Same slot and same rules as the line above: off-thread, best-effort, never delays
+            // startup, and it only ever touches a script that is already there.
+            System.Threading.ThreadPool.QueueUserWorkItem(
+                _ => Utils.UninstallScriptRefresh.Run());
 
             // Prime WinForms and put the splash on screen FIRST, before any other
             // startup work, so there's instant visible feedback. Everything below this
@@ -492,9 +564,13 @@ namespace AutoClicker
         /// Throws if the relaunch can't start, so the caller can keep the app open and
         /// tell the user; in that case the current instance is NOT exited.
         /// </summary>
-        internal static void RestartApp()
+        internal static void RestartApp(string relaunchExe = null)
         {
-            string exe = Environment.ProcessPath;
+            // Normally the same file relaunches itself. Installing a portable copy relaunches the
+            // INSTALLED copy instead, through the very same --restart hand-over, so the new
+            // location takes over with none of the "already running" race this method exists for.
+            string exe = relaunchExe;
+            if (string.IsNullOrEmpty(exe)) { exe = Environment.ProcessPath; }
             if (string.IsNullOrEmpty(exe)) { exe = Application.ExecutablePath; }
 
             var psi = new System.Diagnostics.ProcessStartInfo

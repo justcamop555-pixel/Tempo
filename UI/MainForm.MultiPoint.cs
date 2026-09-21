@@ -17,6 +17,20 @@ namespace AutoClicker.UI
         // ItemChecked handler doesn't fight RefreshPointsList.
         private bool _suppressPointCheck;
 
+        // Save, on the tab where the points are actually edited. The tab used to say only "press
+        // Save on the Clicker tab", and switching profile discards unsaved point edits silently —
+        // the only warning lived on another tab.
+        private Button _pointsSaveBtn;
+        private Label _pointsSaveNote;
+
+        // True while a row is being dragged: the live marker must not scroll the list under the drag.
+        private bool _pointsDragging;
+
+        // The live marker is an index into the list the RUN started with. Once the working list is
+        // reordered or edited mid-run that index names a different row, so the marker is withheld
+        // until the run ends rather than pointing at the wrong point.
+        private bool _pointsLiveStale;
+
         private void BuildMultiPointTab()
         {
             var page = new BackdropTabPage(Utils.Localization.T("Multi-Point")) { AutoScroll = true };
@@ -36,6 +50,10 @@ namespace AutoClicker.UI
             var orderLabel = UiFactory.Label(Utils.Localization.T("Order:"), 12, 56, FontStyle.Bold);
             _pointOrderCombo = UiFactory.Combo(66, 53, 150, Utils.Localization.T("Sequential"), Utils.Localization.T("Reverse"), Utils.Localization.T("Random"), Utils.Localization.T("Ping-Pong"));
             _pointOrderCombo.SelectedIndex = 0;
+            // The summary beside it depends on the order — Ping-Pong's cycle includes the way back,
+            // Random has no cycle at all — yet nothing recomputed it when the order changed, so it
+            // kept describing whichever order was showing when the list last changed.
+            _pointOrderCombo.SelectedIndexChanged += (s, e) => UpdateCycleInfo();
 
             _cycleInfoLabel = UiFactory.Label("", 232, 56, FontStyle.Italic, 9f);
             _cycleInfoLabel.AutoSize = false;
@@ -75,6 +93,16 @@ namespace AutoClicker.UI
             _pointsList.ItemChecked += OnPointItemChecked;
             _pointsList.KeyDown += OnPointsListKeyDown;
             _pointsList.SelectedIndexChanged += (s, e) => UpdatePointButtonStates();
+
+            // Reorder by dragging a row — the Move Up / Move Down buttons are gone. ListView raises
+            // ItemDrag itself once the pointer passes the system drag threshold, so a plain click, or a
+            // tick in a row's checkbox, never starts one.
+            _pointsList.AllowDrop = true;
+            _pointsList.ItemDrag += OnPointItemDrag;
+            _pointsList.DragEnter += OnPointDragOver;
+            _pointsList.DragOver += OnPointDragOver;
+            _pointsList.DragLeave += (s, e) => _pointsList.DropLineIndex = -1;
+            _pointsList.DragDrop += OnPointDragDrop;
 
             // Every item goes through T(). Three of these — Edit, Duplicate, Remove —
             // were raw literals sitting between translated siblings, so the right-click
@@ -117,25 +145,38 @@ namespace AutoClicker.UI
             _removePointBtn = UiFactory.Button(Utils.Localization.T("Remove"), bx, 256, 130, 30);
             _removePointBtn.Click += OnRemovePoint;
 
-            _movePointUpBtn = UiFactory.Button(Utils.Localization.T("Move Up"), bx, 300, 130, 30);
-            _movePointUpBtn.Click += (s, e) => MovePoint(-1);
-
-            _movePointDownBtn = UiFactory.Button(Utils.Localization.T("Move Down"), bx, 334, 130, 30);
-            _movePointDownBtn.Click += (s, e) => MovePoint(1);
-
-            _showPointsBtn = UiFactory.Button(Utils.Localization.T("Show on screen"), bx, 380, 130, 30);
+            // Move Up / Move Down are gone: rows are reordered by dragging them in the list (and
+            // Ctrl+Up/Down, Ctrl+Home/End still work from the keyboard). The rest close the gap.
+            _showPointsBtn = UiFactory.Button(Utils.Localization.T("Show on screen"), bx, 300, 130, 30);
             _showPointsBtn.Click += OnShowPointsOverlay;
 
-            _clearPointsBtn = UiFactory.Button(Utils.Localization.T("Clear All"), bx, 414, 130, 30);
+            _clearPointsBtn = UiFactory.Button(Utils.Localization.T("Clear All"), bx, 334, 130, 30);
             _clearPointsBtn.Click += OnClearPoints;
 
-            _toggleAllPointsBtn = UiFactory.Button(Utils.Localization.T("Enable / Disable all"), bx, 448, 130, 30);
+            _toggleAllPointsBtn = UiFactory.Button(Utils.Localization.T("Enable / Disable all"), bx, 368, 130, 30);
             _toggleAllPointsBtn.Click += OnToggleAllPoints;
 
-            var applyNote = UiFactory.Label(
-                "Tip: press Save on the\nClicker tab to store these\npoints in the profile.",
-                bx, 488, FontStyle.Italic, 8.25f);
-            applyNote.ForeColor = _theme.TextMuted;
+            // Save right here. This column used to end in a tip — "press Save on the Clicker tab to
+            // store these points" — while switching profile throws unsaved point edits away, and the only
+            // unsaved-changes warning was on that other tab. Always enabled, like the Clicker tab's own
+            // Save; the note below carries the state.
+            _pointsSaveBtn = UiFactory.Button(Utils.Localization.T("Save"), bx, 414, 130, 30);
+            _pointsSaveBtn.Click += OnSaveProfile;
+            StyleAccentButton(_pointsSaveBtn);
+            SetGlyph(_pointsSaveBtn, ActionGlyph.Save);
+
+            _pointsSaveNote = new Label
+            {
+                Text = Utils.Localization.T("● Unsaved changes — click Save"),
+                AutoSize = false,
+                AutoEllipsis = true,
+                Location = new Point(bx, 450),
+                // Three lines at this width: the longer translations need them.
+                Size = new Size(130, 48),
+                Font = new Font("Segoe UI", 8.25f, FontStyle.Bold),
+                ForeColor = _theme.AccentText,
+                Visible = false
+            };
 
             page.Controls.Add(help);
             page.Controls.Add(orderLabel);
@@ -184,12 +225,11 @@ namespace AutoClicker.UI
             page.Controls.Add(_duplicatePointBtn);
             page.Controls.Add(_togglePointBtn);
             page.Controls.Add(_removePointBtn);
-            page.Controls.Add(_movePointUpBtn);
-            page.Controls.Add(_movePointDownBtn);
             page.Controls.Add(_showPointsBtn);
             page.Controls.Add(_clearPointsBtn);
             page.Controls.Add(_toggleAllPointsBtn);
-            page.Controls.Add(applyNote);
+            page.Controls.Add(_pointsSaveBtn);
+            page.Controls.Add(_pointsSaveNote);
 
             ShiftBelowIntro(page, help, helpText, 720, firstRowY: 52);
 
@@ -201,6 +241,15 @@ namespace AutoClicker.UI
             if (_pointsList == null)
             {
                 return;
+            }
+
+            // Edited while a run is going: the run keeps using the list it started with, so its point
+            // numbers no longer line up with these rows. Withhold the live marker until the run ends
+            // rather than let it point at the wrong row. (Every caller is an edit or a profile load —
+            // nothing refreshes this list just because a run started.)
+            if (_engine != null && _engine.IsRunning)
+            {
+                _pointsLiveStale = true;
             }
 
             _suppressPointCheck = true;
@@ -269,9 +318,8 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
-        /// Greys out the per-point action buttons when nothing is selected (and the
-        /// Move buttons at the ends of the list), so the buttons reflect what's
-        /// actually possible rather than always looking clickable.
+        /// Greys out the per-point action buttons when nothing is selected, so the buttons
+        /// reflect what's actually possible rather than always looking clickable.
         /// </summary>
         private void UpdatePointButtonStates()
         {
@@ -282,8 +330,6 @@ namespace AutoClicker.UI
             if (_duplicatePointBtn != null) _duplicatePointBtn.Enabled = hasSelection;
             if (_togglePointBtn != null) _togglePointBtn.Enabled = hasSelection;
             if (_removePointBtn != null) _removePointBtn.Enabled = hasSelection;
-            if (_movePointUpBtn != null) _movePointUpBtn.Enabled = hasSelection && index > 0;
-            if (_movePointDownBtn != null) _movePointDownBtn.Enabled = hasSelection && index < _workingPoints.Count - 1;
         }
 
         /// <summary>Shows how many points are active and the clicks per full cycle.</summary>
@@ -296,18 +342,25 @@ namespace AutoClicker.UI
 
             int enabled = 0;
             int offScreen = 0;
-            long clicksPerCycle = 0;
-            long dwellPerCycle = 0;
             foreach (ClickPoint p in _workingPoints)
             {
                 if (p.Enabled)
                 {
                     enabled++;
-                    clicksPerCycle += p.Repeat < 1 ? 1 : p.Repeat;
-                    if (p.DwellMilliseconds > 0) dwellPerCycle += p.DwellMilliseconds;
                     if (!Utils.ScreenGeometry.IsOnScreen(p.X, p.Y)) { offScreen++; }
                 }
             }
+
+            // The order decides what a "cycle" even is: ping-pong bounces back through the interior
+            // points (2n-2 visits), and random has no cycle at all. The old line reported n visits
+            // and one click each for every order, so a ping-pong list understated its own pass and
+            // three double-click points read "3 clicks" while Statistics recorded 6.
+            MultiPointOrder order = _pointOrderCombo != null && _pointOrderCombo.SelectedIndex >= 0
+                ? (MultiPointOrder)_pointOrderCombo.SelectedIndex
+                : MultiPointOrder.Sequential;
+            int holdMs = _holdMsNum != null ? (int)_holdMsNum.Value : 0;
+            MultiPointCycle.Estimate est = MultiPointCycle.Measure(
+                _workingPoints, order, CurrentIntervalMs(), EffectiveCap(), holdMs);
 
             // This whole page describes a sequence that only runs in Multi-point mode, and
             // it said so nowhere. With the Clicker tab on "Current cursor position" the
@@ -353,17 +406,29 @@ namespace AutoClicker.UI
                 string pointsText = enabled == total
                     ? Utils.Localization.F("{0} active point(s)", enabled)
                     : Utils.Localization.F("{0} of {1} points active", enabled, total);
-                string text = pointsText + "  \u2022  "
-                    + Utils.Localization.F("{0} click(s) per cycle", clicksPerCycle);
 
-                // How long one full pass takes. The dwell was already counted here, but
-                // the clicks were not \u2014 and the clicks are most of it. Without them the
-                // line said "0 ms" for a sequence that plainly takes a second to run.
-                double cycleMs = dwellPerCycle + clicksPerCycle * CurrentIntervalMs();
-                if (cycleMs > 0)
+                // Random never repeats a pattern, so "per cycle" would be a promise it cannot keep;
+                // it gets "per pass over the points" instead. Ping-Pong's cycle includes the way back.
+                bool fixedCycle = MultiPointCycle.HasFixedCycle(order);
+                string text = pointsText + "  \u2022  " + (fixedCycle
+                    ? Utils.Localization.F("{0} click(s) per cycle", est.Clicks)
+                    : Utils.Localization.F("{0} click(s) per pass", est.Clicks));
+
+                // How long one pass takes: every visit's dwell (or the interval the engine will
+                // really use \u2014 Anti-Freeze floors it) plus the time each click is held down.
+                if (est.Milliseconds > 0)
                 {
-                    text += "  \u2022  " + Utils.Localization.F("about {0} per cycle",
-                        FormatDuration(cycleMs));
+                    text += "  \u2022  " + (fixedCycle
+                        ? Utils.Localization.F("about {0} per cycle", FormatDuration(est.Milliseconds))
+                        : Utils.Localization.F("about {0} per pass", FormatDuration(est.Milliseconds)));
+                }
+                if (order == MultiPointOrder.PingPong && enabled > 2)
+                {
+                    text += "  \u2022  " + Utils.Localization.F("{0} visits, bouncing back", est.Visits);
+                }
+                if (est.Capped)
+                {
+                    text += "  \u2022  " + Utils.Localization.T("held back by the Max CPS cap");
                 }
                 // The off-screen tally used to be appended here as well. It is said in full
                 // \u2014 with the reason \u2014 by the warning label under the list, and repeating it
@@ -627,6 +692,122 @@ namespace AutoClicker.UI
 
             _workingPoints.RemoveAt(index);
             RefreshPointsList();
+
+            // Keep a row selected: the one that moved up into this slot, or the new last row. The refresh
+            // rebuilds every item and drops the selection, so pressing Delete a second time used to do
+            // nothing at all — even though the help text says Delete "removes the selected point".
+            if (_pointsList.Items.Count > 0)
+            {
+                int next = Math.Min(index, _pointsList.Items.Count - 1);
+                _pointsList.Items[next].Selected = true;
+                _pointsList.Items[next].Focused = true;
+                _pointsList.Items[next].EnsureVisible();
+            }
+        }
+
+        // ── Drag to reorder ─────────────────────────────────────────────────────────
+        // What rides the drag: the row's index in the working list. A private type, so nothing dragged
+        // in from outside Tempo can ever be mistaken for one of these rows.
+        private sealed class PointDragData
+        {
+            public int Index;
+        }
+
+        private void OnPointItemDrag(object sender, ItemDragEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left || _workingPoints.Count < 2) { return; }
+            if (!(e.Item is ListViewItem item)) { return; }
+
+            int from = item.Tag is int tag ? tag : item.Index;
+            if (from < 0 || from >= _workingPoints.Count) { return; }
+
+            _pointsDragging = true;
+            try
+            {
+                _pointsList.DoDragDrop(new PointDragData { Index = from }, DragDropEffects.Move);
+            }
+            finally
+            {
+                // A drag cancelled with Esc, or released outside the list, never raises DragDrop.
+                _pointsDragging = false;
+                _pointsList.DropLineIndex = -1;
+            }
+        }
+
+        private void OnPointDragOver(object sender, DragEventArgs e)
+        {
+            if (e.Data == null || !e.Data.GetDataPresent(typeof(PointDragData)))
+            {
+                e.Effect = DragDropEffects.None;   // something from outside Tempo — not ours to take
+                return;
+            }
+            e.Effect = DragDropEffects.Move;
+
+            Point local = _pointsList.PointToClient(new Point(e.X, e.Y));
+
+            // Near the top or bottom edge, scroll one row, so a point can be dragged to a place that is
+            // not on screen yet. Scroll FIRST and place the line after: the row rectangles the line is
+            // measured against only hold once the scroll has happened.
+            ListViewItem top = _pointsList.TopItem;
+            if (top != null && top.Index > 0 && local.Y < 44)
+            {
+                _pointsList.Items[top.Index - 1].EnsureVisible();
+            }
+            else if (local.Y > _pointsList.ClientSize.Height - 20)
+            {
+                ListViewItem lastShown = _pointsList.GetItemAt(4, _pointsList.ClientSize.Height - 6);
+                int next = lastShown != null ? lastShown.Index + 1 : -1;
+                if (next > 0 && next < _pointsList.Items.Count)
+                {
+                    _pointsList.Items[next].EnsureVisible();
+                }
+            }
+
+            _pointsList.DropLineIndex = _pointsList.DropIndexAt(local);
+        }
+
+        private void OnPointDragDrop(object sender, DragEventArgs e)
+        {
+            int dropAt = _pointsList.DropLineIndex;
+            _pointsList.DropLineIndex = -1;
+
+            var data = e.Data?.GetData(typeof(PointDragData)) as PointDragData;
+            if (data == null || dropAt < 0) { return; }
+
+            int from = data.Index;
+            if (from < 0 || from >= _workingPoints.Count) { return; }
+
+            // dropAt is a gap in the list as it stands, counted BEFORE the dragged row is taken out;
+            // removing that row first moves every later gap up by one.
+            int to = dropAt > from ? dropAt - 1 : dropAt;
+            if (to == from) { return; }   // dropped onto its own row, or the gap just after it
+
+            ClickPoint moved = _workingPoints[from];
+            _workingPoints.RemoveAt(from);
+            _workingPoints.Insert(to, moved);
+
+            RefreshPointsList();
+            if (to < _pointsList.Items.Count)
+            {
+                _pointsList.Items[to].Selected = true;
+                _pointsList.Items[to].Focused = true;
+                _pointsList.Items[to].EnsureVisible();
+            }
+        }
+
+        /// <summary>
+        /// Shows or hides this tab's unsaved-changes note. Called from UpdateProfileDirty on the UI tick,
+        /// so it follows exactly the same snapshot comparison as the Clicker tab's own warning.
+        /// </summary>
+        private void UpdatePointsSaveState(bool dirty)
+        {
+            if (_pointsSaveNote == null) { return; }
+            if (_pointsSaveNote.Visible != dirty) { _pointsSaveNote.Visible = dirty; }
+            // ThemeManager resets label colours on a theme switch; keep this one in the accent.
+            if (dirty && _theme != null && _pointsSaveNote.ForeColor != _theme.AccentText)
+            {
+                _pointsSaveNote.ForeColor = _theme.AccentText;
+            }
         }
 
         private void MovePoint(int direction)
@@ -839,24 +1020,37 @@ namespace AutoClicker.UI
 
             if (!_engine.IsRunning)
             {
+                // A finished run leaves no marker, and the next run starts with a trustworthy one.
+                _pointsLiveStale = false;
+                _pointsList.LiveIndex = -1;
                 return;
             }
 
             int idx = _engine.CurrentPointIndex;
-            if (idx < 0 || idx >= _pointsList.Items.Count)
+            if (_pointsLiveStale || idx < 0 || idx >= _pointsList.Items.Count)
+            {
+                _pointsList.LiveIndex = -1;
+                return;
+            }
+
+            if (_pointsList.LiveIndex == idx)
             {
                 return;
             }
 
-            // Only move the selection if it actually changed, to avoid flicker.
-            if (_pointsList.SelectedItems.Count == 1 && _pointsList.SelectedItems[0].Index == idx)
+            // A MARKER, not the selection. This used to clear the selection and select the live row on
+            // every tick, so during a run the "selected point" that Delete, Duplicate, Toggle and the
+            // Alt+arrow nudge act on was whichever point the engine had just reached rather than the row
+            // the user picked — Delete could remove a different point from the one they clicked.
+            //
+            // Scroll first, mark after (ThemedListView's rule: a rectangle invalidated before a scroll is
+            // stale after it), and never scroll while a row is being dragged, or the list would move out
+            // from under the pointer.
+            if (!_pointsDragging)
             {
-                return;
+                _pointsList.Items[idx].EnsureVisible();
             }
-
-            _pointsList.SelectedItems.Clear();
-            _pointsList.Items[idx].Selected = true;
-            _pointsList.Items[idx].EnsureVisible();
+            _pointsList.LiveIndex = idx;
         }
     }
 }

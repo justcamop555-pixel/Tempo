@@ -46,6 +46,9 @@ namespace AutoClicker.Persistence
                     "  profiles.json   - your saved clicker profiles\r\n" +
                     "  macros.json     - your recorded macros\r\n" +
                     "  sessions.json   - your statistics and session history\r\n" +
+                    "  backups\\         - restore points: a copy of these files that Tempo\r\n" +
+                    "                    saves by itself before a new version first starts\r\n" +
+                    "                    (the newest five; restore one from Settings)\r\n" +
                     "  models\\          - the offline speech model used by Tempo's own\r\n" +
                     "                    captions (only present if you've used them; can be\r\n" +
                     "                    100+ MB and is re-downloaded if removed)\r\n" +

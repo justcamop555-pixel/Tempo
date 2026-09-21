@@ -8,6 +8,17 @@ namespace AutoClicker.Models
     /// </summary>
     public sealed class AppSettings
     {
+        /// <summary>
+        /// Fields this build does not know, kept and written back untouched.
+        ///
+        /// They come from a NEWER Tempo sharing this data folder — a portable copy still lying around
+        /// after installing, or a version someone went back to. System.Text.Json drops unknown fields on
+        /// load, so an older copy used to erase every setting a newer one had added simply by saving. The
+        /// same bag is on every model that is saved to disk. This build never reads it.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public System.Collections.Generic.Dictionary<string, System.Text.Json.JsonElement> UnknownFields { get; set; }
+
         // ── Appearance ────────────────────────────────────────────────────────
         public ThemeKind Theme { get; set; } = ThemeKind.Dark;
 
@@ -95,6 +106,14 @@ namespace AutoClicker.Models
         public string LastCrashAcknowledgedUtc { get; set; } = "";
 
         /// <summary>
+        /// The user answered "no" to installing a portable copy of Tempo, so the offer is not
+        /// repeated at every launch; the Settings button stays available either way. Machine
+        /// state, not a preference: a settings file imported from another PC says nothing about
+        /// whether the copy running HERE should be installed.
+        /// </summary>
+        public bool InstallOfferDeclined { get; set; } = false;
+
+        /// <summary>
         /// Capture OTHER apps' Windows notifications and re-show them in Tempo's
         /// style. Requires Windows to grant notification-listener access (asked
         /// once); availability depends on the Windows build. Off by default.
@@ -106,6 +125,18 @@ namespace AutoClicker.Models
         /// from the Windows Action Center so the same message isn't kept twice.
         /// </summary>
         public bool MirrorClearFromActionCenter { get; set; } = false;
+
+        /// <summary>
+        /// Apps whose notifications are NOT mirrored, by display name.
+        ///
+        /// Mirroring is all-or-nothing otherwise, and one chatty app is all it takes to
+        /// make the whole feature unusable — the choice was "put up with it" or "turn
+        /// mirroring off". Muting is per app and reversible: right-click that app's card,
+        /// or Settings → Notifications → Muted apps. A muted notification is still written
+        /// to the history with the reason, so nothing disappears without a trace.
+        /// </summary>
+        public System.Collections.Generic.List<string> MirrorMutedApps { get; set; }
+            = new System.Collections.Generic.List<string>();
 
         /// <summary>Corner the pop-up stack grows from: 0 top-right, 1 top-left,
         /// 2 bottom-right, 3 bottom-left.</summary>
@@ -301,8 +332,15 @@ namespace AutoClicker.Models
         /// Start captions automatically when a video site (YouTube, TikTok, Twitch,
         /// Netflix, ...) or a game (Roblox, COD, Rainbow Six, ...) is in the
         /// foreground with audio playing (see Utils.MediaDetector).
+        ///
+        /// OFF for a fresh install (it used to be on). The detector runs from the very first
+        /// launch, so a brand-new user who had never opened the Captions tab got a caption bar
+        /// over the first video or game they played — plus the CPU cost of transcribing, and a
+        /// speech-pack download on first use — without having asked for any of it. Captions are
+        /// one click or hotkey away; having them switch on by themselves is an opt-in. This only
+        /// changes the default: an existing settings file keeps the value written in it.
         /// </summary>
-        public bool CaptionAutoStart { get; set; } = true;
+        public bool CaptionAutoStart { get; set; } = false;
 
         // ── Camera-relative movement (see Engine/CameraRelativeMovement) ────────
 
@@ -584,6 +622,17 @@ namespace AutoClicker.Models
         public bool AutoLockOnTabSwitch { get; set; } = false;
 
         /// <summary>
+        /// Auto-lock the vault after this many minutes with no keyboard or mouse activity on the PC,
+        /// so an unlocked vault is never left open when you walk away — the moment that matters most
+        /// if something on the machine goes looking for saved sessions. Measured from the real system
+        /// idle time (so it never fires while you are using the PC, even in another app), 0 = off.
+        /// Defaults to 15 minutes: a protective default is the right call for a store of live logins,
+        /// and it is one number to change on the Accounts page. The vault ALSO locks the instant
+        /// Windows locks or the machine sleeps, which is not optional and has no setting.
+        /// </summary>
+        public int VaultIdleLockMinutes { get; set; } = 15;
+
+        /// <summary>
         /// Which browser opens for Roblox sign-in: "" = Automatic (pick the best installed), or a
         /// specific one — "Chrome", "Edge", "Brave" or "Opera". Automatic prefers Chrome (no
         /// sign-in/sync friction), then Edge, Brave, Opera. A chosen browser that isn't installed
@@ -758,6 +807,163 @@ namespace AutoClicker.Models
         }
 
         /// <summary>
+        /// "Reset to defaults": every preference goes back to its default, and what is not a
+        /// preference survives.
+        ///
+        /// The button used to swap in <see cref="CreateDefault"/> wholesale, and this class holds
+        /// much more than preferences. One click on the Settings page therefore also zeroed every
+        /// lifetime statistic (which the Statistics tab guards behind "this cannot be undone"),
+        /// wiped the integrity baseline so the next launch re-trusted whatever exe was there,
+        /// reset the crash watermark so every old crash report was announced again, reset every
+        /// keybind although the Keybinds tab has its own reset, turned the account manager off and
+        /// threw away the local API token its scripts use, forgot a skipped update and the
+        /// language the user reads, and cleared which macro each quick-play hotkey fires.
+        ///
+        /// Kept: records, this PC's state, answers already given, the language, and the settings
+        /// that live on their own page (keybinds, the Roblox account manager). Everything else —
+        /// every switch, slider and choice on the Settings page — goes back to its default.
+        /// </summary>
+        public static AppSettings CreateResetFrom(AppSettings current)
+        {
+            AppSettings fresh = CreateDefault();
+            if (current != null)
+            {
+                fresh.KeepMachineStateFrom(current);
+                fresh.KeepRecordsFrom(current);
+                fresh.KeepAnswersFrom(current);
+                fresh.KeepSeparatelyManagedFrom(current);
+            }
+            fresh.EnsureConsistency();
+            return fresh;
+        }
+
+        /// <summary>
+        /// Facts about THIS PC and THIS copy of Tempo, which neither a reset nor a settings file
+        /// from elsewhere should overwrite: the integrity baseline and verdicts, the crash-report
+        /// watermark, the update-check cache, the window's place on these monitors and the
+        /// restart hand-over flag. Import uses it too — a file exported on another machine or by
+        /// another build carries that machine's answers, and adopting them would raise a false
+        /// tamper warning (or quietly accept a real one) and put the window off-screen.
+        /// </summary>
+        public void KeepMachineStateFrom(AppSettings local)
+        {
+            if (local == null)
+            {
+                return;
+            }
+            IntegrityBaselineHash = local.IntegrityBaselineHash;
+            IntegrityBaselineVersion = local.IntegrityBaselineVersion;
+            IntegrityBaselineSize = local.IntegrityBaselineSize;
+            IntegrityBaselineUtc = local.IntegrityBaselineUtc;
+            IntegrityBaselineBuild = local.IntegrityBaselineBuild;
+            IntegrityVerifiedHash = local.IntegrityVerifiedHash;
+            IntegrityVerifiedUtc = local.IntegrityVerifiedUtc;
+            IntegrityLastWarned = local.IntegrityLastWarned;
+            LastCrashAcknowledgedUtc = local.LastCrashAcknowledgedUtc;
+            LastUpdateCheckUtc = local.LastUpdateCheckUtc;
+            LastKnownLatestVersion = local.LastKnownLatestVersion;
+            LastUpdateCheckFailed = local.LastUpdateCheckFailed;
+            LastCheckFoundUpdate = local.LastCheckFoundUpdate;
+            WindowLeft = local.WindowLeft;
+            WindowTop = local.WindowTop;
+            WindowWidth = local.WindowWidth;
+            WindowHeight = local.WindowHeight;
+            CaptionResumeAfterRestart = local.CaptionResumeAfterRestart;
+            InstallOfferDeclined = local.InstallOfferDeclined;
+        }
+
+        /// <summary>Statistics and records — what the Statistics tab's own resets guard.</summary>
+        private void KeepRecordsFrom(AppSettings s)
+        {
+            LifetimeClicks = s.LifetimeClicks;
+            LifetimeSessions = s.LifetimeSessions;
+            LifetimePeakCps = s.LifetimePeakCps;
+            LifetimeRuntimeSeconds = s.LifetimeRuntimeSeconds;
+            LifetimeMostClicksRun = s.LifetimeMostClicksRun;
+            LifetimeLongestRunSeconds = s.LifetimeLongestRunSeconds;
+            LifetimeAggregatesSeeded = s.LifetimeAggregatesSeeded;
+            LifetimeByHour = s.LifetimeByHour != null ? (long[])s.LifetimeByHour.Clone() : new long[24];
+            LifetimeByWeekday = s.LifetimeByWeekday != null ? (long[])s.LifetimeByWeekday.Clone() : new long[7];
+            LifetimeByProfile = new System.Collections.Generic.Dictionary<string, long>(System.StringComparer.OrdinalIgnoreCase);
+            if (s.LifetimeByProfile != null)
+            {
+                // Merged, not copied: a loaded file's dictionary compares case-SENSITIVELY, so
+                // "Default" and "default" can both be in it, and the case-insensitive copy would
+                // throw on the second.
+                foreach (var kv in s.LifetimeByProfile)
+                {
+                    if (kv.Key == null) { continue; }
+                    LifetimeByProfile.TryGetValue(kv.Key, out long had);
+                    LifetimeByProfile[kv.Key] = had + kv.Value;
+                }
+            }
+            LifetimeActiveDays = s.LifetimeActiveDays;
+            LifetimeLastActiveDay = s.LifetimeLastActiveDay;
+            LifetimeCurrentDayClicks = s.LifetimeCurrentDayClicks;
+            LifetimeBestDayClicks = s.LifetimeBestDayClicks;
+            LifetimeBestDay = s.LifetimeBestDay;
+            LifetimeCurrentStreak = s.LifetimeCurrentStreak;
+            LifetimeLongestStreak = s.LifetimeLongestStreak;
+            LifetimeYearClicks = s.LifetimeYearClicks;
+            LifetimeYearOf = s.LifetimeYearOf;
+            CpsTestBest = s.CpsTestBest;
+            SessionGoalClicks = s.SessionGoalClicks;
+        }
+
+        /// <summary>
+        /// Questions already answered and state no switch on the Settings page represents:
+        /// notices shown once, a skipped update, the last bug-report channel, the active profile
+        /// and tab — and the language, which must never be reset out from under someone who
+        /// can't read the default one.
+        /// </summary>
+        private void KeepAnswersFrom(AppSettings s)
+        {
+            HasShownTrayIntro = s.HasShownTrayIntro;
+            DiscordPathHintShown = s.DiscordPathHintShown;
+            SpeakerLabelsNoticeShown = s.SpeakerLabelsNoticeShown;
+            SkippedUpdateVersion = s.SkippedUpdateVersion;
+            LastBugReportChannel = s.LastBugReportChannel;
+            LastProfileName = s.LastProfileName;
+            LastTabIndex = s.LastTabIndex;
+            LastTabKey = s.LastTabKey;
+            Language = s.Language;
+            LanguageAutoDetected = s.LanguageAutoDetected;
+        }
+
+        /// <summary>
+        /// Settings with their own page and their own reset: the keybinds (with which macro each
+        /// quick-play key fires and the step the interval keys nudge by), and the Roblox account
+        /// manager's switches, which live with the vault on the Accounts page.
+        /// </summary>
+        private void KeepSeparatelyManagedFrom(AppSettings s)
+        {
+            Bindings = new System.Collections.Generic.List<HotkeyBinding>();
+            if (s.Bindings != null)
+            {
+                foreach (HotkeyBinding b in s.Bindings)
+                {
+                    if (b != null) { Bindings.Add(b.Clone()); }
+                }
+            }
+            StartStopHotkey = s.StartStopHotkey?.Clone() ?? StartStopHotkey;
+            PickPositionHotkey = s.PickPositionHotkey?.Clone() ?? PickPositionHotkey;
+            EmergencyStopHotkey = s.EmergencyStopHotkey?.Clone() ?? EmergencyStopHotkey;
+            MacroSlot1 = s.MacroSlot1;
+            MacroSlot2 = s.MacroSlot2;
+            MacroSlot3 = s.MacroSlot3;
+            IntervalStepMilliseconds = s.IntervalStepMilliseconds;
+
+            AccountsEnabled = s.AccountsEnabled;
+            RobloxMultiInstance = s.RobloxMultiInstance;
+            AccountApiEnabled = s.AccountApiEnabled;
+            AccountApiPort = s.AccountApiPort;
+            AccountApiToken = s.AccountApiToken;
+            AutoLockOnTabSwitch = s.AutoLockOnTabSwitch;
+            VaultIdleLockMinutes = s.VaultIdleLockMinutes;
+            LoginBrowser = s.LoginBrowser;
+        }
+
+        /// <summary>
         /// Guards against missing nested objects after deserialization of an older
         /// or partial settings file.
         /// </summary>
@@ -781,6 +987,14 @@ namespace AutoClicker.Models
             if (LastProfileName == null)
             {
                 LastProfileName = string.Empty;
+            }
+
+            // A hand-edited or older settings file can carry a port the server would refuse to bind
+            // (privileged, or not a port at all). Put it back on the default rather than leaving the
+            // API permanently unable to start with nothing on screen to explain why.
+            if (AccountApiPort < 1024 || AccountApiPort > 65535)
+            {
+                AccountApiPort = 7963;
             }
 
             EnsureBindings();

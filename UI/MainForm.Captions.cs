@@ -194,8 +194,7 @@ namespace AutoClicker.UI
             var clearBtn = UiFactory.Button("Clear", 630, 26, 46, 28);
             clearBtn.Click += (s, e) =>
             {
-                _captionHistory.Clear();
-                _captionHistoryTimes.Clear();
+                _transcript.Clear();
                 try { _captionHistoryForm?.SetHistory(_captionHistory); } catch { }
                 _capRenderedText = null;
                 RefreshCaptionTranscript();
@@ -931,12 +930,22 @@ namespace AutoClicker.UI
             }
 
             double rtf = t.RealTimeFactor;
-            double delay = t.EstimatedDelaySeconds;
+            // MEASURED once a caption has come out: the engine's share (words heard → text out)
+            // plus the bar's (text in → word on screen). The estimate it used to show instead
+            // counted the same wait twice and read ~4.3 s while captions were ~2 s behind.
+            double engineDelay = t.MeasuredDelaySeconds;
+            double delay = engineDelay >= 0 ? engineDelay + CaptionBarLagSeconds() : t.EstimatedDelaySeconds;
             var sb = new StringBuilder();
             sb.Append("Delay ~").Append(delay.ToString("0.0")).Append(" s behind");
+            if (t.CurrentDecodeSeconds >= 4)
+            {
+                sb.Append("  ·  frozen ").Append((int)t.CurrentDecodeSeconds).Append(" s in one decode");
+            }
             if (rtf > 0)
             {
-                sb.Append("  ·  ").Append(rtf.ToString("0.0")).Append("× real time");
+                // Two decimals: at one, 0.96 printed as "1.0× real time" in the calm colour while
+                // 1.00 printed the same "1.0×" in the warning colour.
+                sb.Append("  ·  ").Append(rtf.ToString("0.00")).Append("× real time");
             }
             if (t.BacklogDroppedSeconds > 0.5)
             {
@@ -968,6 +977,91 @@ namespace AutoClicker.UI
         // Whether the remedy button currently offers the GPU engine (rather than a
         // smaller model), decided in RefreshCaptionDelayLine from what this PC has.
         private bool _capOfferGpuEngine;
+
+        /// <summary>
+        /// The caption bar's share of caption delay, in seconds: how long words wait on the bar
+        /// before they appear. 0 while the bar is hidden (nothing waits on a bar nobody can see)
+        /// or before it has revealed a word.
+        /// </summary>
+        private double CaptionBarLagSeconds()
+        {
+            var bar = _captionOverlay;
+            if (bar == null || bar.IsDisposed || !bar.Visible) { return 0; }
+            int lag = bar.RevealLagMs;
+            return lag < 0 ? 0 : lag / 1000.0;
+        }
+
+        /// <summary>
+        /// Live debug's caption SYNC block: how far behind the speech captions really are, split into
+        /// the engine's share and the bar's, and what each is made of right now.
+        ///
+        /// It replaces a "delay ~4.3 s (window 2.8 s + backlog 2.1 s + decode 1.2 s)" line whose parts
+        /// did not add up to its total and whose total was about double the truth: the engine now
+        /// measures every caption against the audio it came from, and the bar times every word from
+        /// arriving to appearing. A decode that is running long — the freeze — is named while it is
+        /// happening instead of only afterwards, as a drop.
+        /// </summary>
+        private void AppendCaptionSyncStats(StringBuilder sb, TempoTranscriber t)
+        {
+            double engine = t.MeasuredDelaySeconds;
+            double bar = CaptionBarLagSeconds();
+            if (engine < 0)
+            {
+                sb.Append("  Caption sync: no caption yet (estimate ~")
+                  .Append(t.EstimatedDelaySeconds.ToString("0.0")).Append(" s once words arrive)").AppendLine();
+            }
+            else
+            {
+                sb.Append("  Caption sync: words reach the bar ~").Append((engine + bar).ToString("0.0"))
+                  .Append(" s after they are spoken (engine ").Append(engine.ToString("0.0")).Append(" s");
+                if (bar > 0) { sb.Append(" + bar reveal ").Append(bar.ToString("0.0")).Append(" s"); }
+                sb.Append(')').AppendLine();
+                sb.Append("    last caption: newest words ").Append(t.LastCaptionNewestDelaySeconds.ToString("0.0"))
+                  .Append(" s, oldest ").Append(t.LastCaptionOldestDelaySeconds.ToString("0.0")).Append(" s");
+                double worst = t.WorstRecentDelaySeconds;
+                if (worst >= 0) { sb.Append(" · longest wait in the last 30 s ").Append(worst.ToString("0.0")).Append(" s"); }
+                sb.AppendLine();
+            }
+
+            double rtf = t.RealTimeFactor;
+            sb.Append("    engine: backlog ").Append(t.BacklogSeconds.ToString("0.0")).Append(" s")
+              .Append(" · decode avg ").Append((t.AverageInferenceMs / 1000.0).ToString("0.00"))
+              .Append(" s, slowest ").Append((t.WorstRecentInferenceMs / 1000.0).ToString("0.0")).Append(" s in the last minute")
+              .Append(" · pace ").Append(rtf <= 0 ? "—" : rtf.ToString("0.00") + "× real time");
+            if (rtf >= 1.0) { sb.Append("  ⚠ SLOWER THAN REAL TIME"); }
+            sb.AppendLine();
+
+            double decoding = t.CurrentDecodeSeconds;
+            if (decoding >= 2)
+            {
+                sb.Append("    ⚠ one decode has been running for ").Append(decoding.ToString("0.0"))
+                  .Append(" s — nothing reaches the bar until it returns").AppendLine();
+            }
+
+            var overlay = _captionOverlay;
+            if (overlay != null && !overlay.IsDisposed && overlay.Visible)
+            {
+                int queued = Math.Max(0, overlay.RevealTotalWords - overlay.RevealShownWords);
+                int waiting = overlay.RevealWaitingMs;
+                sb.Append("    bar: ").Append(queued).Append(queued == 1 ? " word waiting" : " words waiting");
+                if (waiting > 0) { sb.Append(", the oldest for ").Append((waiting / 1000.0).ToString("0.0")).Append(" s"); }
+                sb.Append(" · revealing at ").Append(overlay.RevealPaceMs).Append(" ms a word").AppendLine();
+            }
+
+            double sinceDrop = t.SecondsSinceLastDrop;
+            if (sinceDrop >= 0)
+            {
+                sb.Append("    ").Append(sinceDrop < 120 ? "⚠ " : "").Append("last skipped audio: ")
+                  .Append(t.LastDropSeconds.ToString("0.0")).Append(" s, ").Append(FormatAgo(sinceDrop)).Append(" ago · ")
+                  .Append(t.BacklogDroppedSeconds.ToString("0.0")).Append(" s this session").AppendLine();
+            }
+            if (rtf >= 1.0)
+            {
+                sb.Append("    → '").Append(_captionModelActiveKey ?? "?")
+                  .Append("' cannot hold pace on this PC. A smaller model (small/base) or the GPU engine fixes the drift.")
+                  .AppendLine();
+            }
+        }
 
         /// <summary>
         /// Switches captions to the GPU engine. It only takes effect on restart — the
@@ -1243,10 +1337,13 @@ namespace AutoClicker.UI
         /// with: load them next to a recording, hand them to someone else, or check what
         /// was said at a given moment.
         ///
-        /// Honest limitation: only one timestamp is stored per line (when that line was
-        /// last updated), so a cue ends where the next one begins, and the final cue gets
-        /// a nominal three seconds. Cue timings are therefore approximate, and the file
-        /// says so in a header comment where the format allows one.
+        /// Cue times: a cue starts when its line's first words were SPOKEN and ends a moment
+        /// after its last words (or where the next cue begins, if that is sooner). Lines used
+        /// to carry only the time they were last UPDATED — the moment a long line's final
+        /// words arrived, seconds after they were said — so every cue started late, often
+        /// after its speech had finished. Tempo's engine measures when each caption's words
+        /// were heard; the Windows mirror can't, so its cues start when the words arrived.
+        /// Still approximate at the word level, and the file says so where the format allows.
         /// </summary>
         private void ExportTranscriptSubtitles()
         {
@@ -1275,7 +1372,7 @@ namespace AutoClicker.UI
                     if (vtt)
                     {
                         sb.AppendLine("WEBVTT");
-                        sb.AppendLine("NOTE Times are approximate - Tempo records one timestamp per caption line.");
+                        sb.AppendLine("NOTE Times are approximate - each cue starts when its first words were spoken and ends shortly after its last.");
                         sb.AppendLine();
                     }
 
@@ -1287,9 +1384,15 @@ namespace AutoClicker.UI
                         cue++;
 
                         TimeSpan start = (i < _captionHistoryTimes.Count ? _captionHistoryTimes[i] : origin) - origin;
-                        TimeSpan end = i + 1 < _captionHistoryTimes.Count
-                            ? _captionHistoryTimes[i + 1] - origin
-                            : start + TimeSpan.FromSeconds(3);
+                        // Ends a moment after its last words were spoken, or where the next cue
+                        // begins if that is sooner — not held on screen through a silence.
+                        TimeSpan end = (i < _transcript.EndTimes.Count ? _transcript.EndTimes[i] : origin)
+                                       - origin + TimeSpan.FromSeconds(1.5);
+                        if (i + 1 < _captionHistoryTimes.Count)
+                        {
+                            TimeSpan next = _captionHistoryTimes[i + 1] - origin;
+                            if (next < end) { end = next; }
+                        }
                         if (start < TimeSpan.Zero) { start = TimeSpan.Zero; }
                         if (end <= start) { end = start + TimeSpan.FromSeconds(1); }
 

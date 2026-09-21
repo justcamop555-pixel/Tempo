@@ -234,6 +234,45 @@ namespace AutoClicker.Utils
             }
         }
 
+        /// <summary>
+        /// Moves an EXISTING sign-in entry to <paramref name="exe"/>.
+        ///
+        /// The one deliberate exception to <see cref="RefreshStartupCommand"/>'s rule of never
+        /// stealing the entry. Installing a portable copy leaves the portable exe where it was, and
+        /// that rule keeps a registered exe for as long as the file exists — so without this, every
+        /// sign-in would go on launching the old download instead of the installed copy, for as long
+        /// as the user kept the download. Does nothing when start-with-Windows is off: installing
+        /// must never switch it on.
+        /// </summary>
+        public static bool RepointTo(string exe) => RepointTo(Registry.CurrentUser, RunKeyPath, exe);
+
+        /// <summary>Test seam: the same move against any key, never the user's real sign-in entry.</summary>
+        internal static bool RepointTo(RegistryKey hive, string runKeyPath, string exe)
+        {
+            try
+            {
+                if (hive == null || string.IsNullOrEmpty(exe)) { return false; }
+                using (RegistryKey key = hive.OpenSubKey(runKeyPath, true))
+                {
+                    string val = key?.GetValue(ValueName) as string;
+                    if (string.IsNullOrEmpty(val)) { return false; }
+
+                    string desired = "\"" + exe + "\" --startup";
+                    if (!string.Equals(val, desired, StringComparison.OrdinalIgnoreCase))
+                    {
+                        key.SetValue(ValueName, desired);
+                        Logger.Info("[Startup] moved the sign-in entry to the installed copy: " + val + "  ->  " + desired);
+                    }
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Startup] could not move the sign-in entry to the installed copy: " + ex.Message);
+                return false;
+            }
+        }
+
         /// <summary>The path of the Tempo.exe running right now. Exposed for diagnostics.</summary>
         public static string CurrentExePath()
         {

@@ -50,11 +50,49 @@ namespace AutoClicker.Utils
         private volatile int _currentSpeaker;         // 0 = unknown / silence so far
         private volatile bool _forgetRequested;       // see ForgetVoices()
 
+        // Which output the profiler actually opened. It runs its OWN loopback capture,
+        // separate from the caption engine's, so the two can end up on different
+        // devices — and when they do, speaker labels are judged from different audio
+        // than the words being captioned. Nothing could show that before.
+        private volatile string _deviceId;
+        private volatile string _deviceName;
+        private volatile bool _usedFallback;
+        private volatile int _captureOpens;
+        private volatile int _forcedMerges;
+
         /// <summary>1-based number of the speaker currently talking; 0 while unknown.</summary>
         public int CurrentSpeaker => _currentSpeaker;
 
         /// <summary>True once capture started successfully (voice matching available).</summary>
         public bool Running => _running;
+
+        /// <summary>Endpoint id of the output being listened to, or null when NAudio chose it.</summary>
+        public string DeviceId => _deviceId;
+
+        /// <summary>Friendly name of the output being listened to, or null.</summary>
+        public string DeviceName => _deviceName;
+
+        /// <summary>True when a chosen speaker was unavailable and the default was used instead.</summary>
+        public bool UsedFallback => _usedFallback;
+
+        /// <summary>
+        /// Captures opened this session. More than one means the device was re-opened —
+        /// after a device change, or by a follow that genuinely had to switch outputs.
+        /// </summary>
+        public int CaptureOpens => _captureOpens;
+
+        /// <summary>Voices learned so far this session.</summary>
+        public int ProfileCount => _profiles.Count;
+
+        /// <summary>How many distinct voices can be told apart before new ones get merged.</summary>
+        public int ProfileCapacity => MaxProfiles;
+
+        /// <summary>
+        /// New voices folded into an existing profile because the table was full. Each
+        /// one means two different people now share a speaker number — and the shared
+        /// profile drifts toward whichever of them spoke last.
+        /// </summary>
+        public int ForcedMerges => _forcedMerges;
 
         /// <summary>What the audio currently is: quiet, human speech, or other sound.</summary>
         public enum AudioKind { Quiet = 0, Speech = 1, Sound = 2 }
@@ -108,6 +146,18 @@ namespace AutoClicker.Utils
             {
                 return;
             }
+            // A start that follows a real Stop() begins a NEW session. Stop() clears the
+            // voice table from the UI thread, but an audio callback already inside
+            // ProcessFrame can still add a profile or set the speaker number a moment
+            // later — which then leaked into the next session as a stale voice. Asking
+            // the capture thread to wipe it guarantees the fresh session starts empty.
+            if (_disposedFlag)
+            {
+                _forgetRequested = true;
+                _currentSpeaker = 0;
+                _forcedMerges = 0;
+                _captureOpens = 0;
+            }
             _disposedFlag = false;   // a fresh session re-arms the device-change recovery
             try
             {
@@ -117,8 +167,17 @@ namespace AutoClicker.Utils
                 // user's chosen device when one is picked, Windows' default else.
                 using (var en = new NAudio.CoreAudioApi.MMDeviceEnumerator())
                 {
-                    var dev = AudioDeviceSelection.Resolve(en, NAudio.CoreAudioApi.DataFlow.Render, out _);
+                    var dev = AudioDeviceSelection.Resolve(en, NAudio.CoreAudioApi.DataFlow.Render, out bool fellBack);
+                    _usedFallback = fellBack;
+                    _deviceId = null;
+                    _deviceName = null;
+                    if (dev != null)
+                    {
+                        try { _deviceId = dev.ID; } catch { }
+                        _deviceName = AudioDeviceSelection.NameOf(dev, NAudio.CoreAudioApi.DataFlow.Render);
+                    }
                     _capture = dev != null ? new WasapiLoopbackCapture(dev) : new WasapiLoopbackCapture();
+                    _captureOpens++;
                 }
                 int deviceRate = _capture.WaveFormat.SampleRate;
                 _decim = Math.Max(1, deviceRate / 16000);
@@ -203,10 +262,16 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
-        /// Re-opens capture on the CURRENT default speaker while keeping every
-        /// learned voice. For default-device switches where the old device stays
-        /// alive (no RecordingStopped fires) — without this the profiler keeps
-        /// listening to the wrong, silent device.
+        /// Re-opens capture on the speaker it should now be hearing — the chosen one
+        /// when picked, Windows' default otherwise — while keeping every learned voice.
+        /// For default-device switches where the old device stays alive (no
+        /// RecordingStopped fires); without this the profiler keeps listening to the
+        /// wrong, silent device.
+        ///
+        /// Does nothing when that is already the open device. Every default-speaker
+        /// change used to tear the capture down and reopen it even with a speaker
+        /// PINNED that had not changed at all, cutting the voice being measured in half
+        /// for no benefit.
         /// </summary>
         public void FollowDefaultDevice()
         {
@@ -214,9 +279,16 @@ namespace AutoClicker.Utils
             {
                 return;
             }
+            string target = AudioDeviceSelection.ResolveId(DataFlow.Render);
+            string open = _deviceId;
+            if (_capture != null && target != null && open != null &&
+                string.Equals(target, open, StringComparison.OrdinalIgnoreCase))
+            {
+                return;            // already listening to the right device
+            }
             _running = false;      // suppress the auto-restart branch during swap
             Cleanup();
-            Start();               // reopens on the new default; profiles are kept
+            Start();               // reopens on the resolved device; profiles are kept
         }
 
         public void Dispose() => Stop();
@@ -267,6 +339,9 @@ namespace AutoClicker.Utils
                     _segPitch.Clear();
                     _segZcrSum = 0; _segFrames = 0;
                     _segClassified = false; _segProfileIdx = -1;
+                    // Also here, on the thread that writes it: a zero set by the caller
+                    // can be overwritten by a callback that was already mid-classify.
+                    _currentSpeaker = 0;
                 }
 
                 WaveFormat fmt = _capture.WaveFormat;
@@ -629,6 +704,9 @@ namespace AutoClicker.Utils
                 if (_profiles.Count >= MaxProfiles)
                 {
                     // Table full: reuse the closest instead of inventing Speaker 47.
+                    // Counted, because it is otherwise silent: a genuinely new voice now
+                    // shares an existing number and pulls that profile toward itself.
+                    _forcedMerges++;
                     bestIdx = 0;
                     double closest = double.MaxValue;
                     for (int i = 0; i < _profiles.Count; i++)

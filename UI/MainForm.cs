@@ -364,6 +364,17 @@ namespace AutoClicker.UI
         internal const string ShowInstanceMessageName = "TempoShowExistingInstance_v1";
         private static readonly int WM_SHOW_TEMPO_INSTANCE = RegisterWindowMessage(ShowInstanceMessageName);
 
+        // Settings → Apps' Uninstall button runs "Tempo.exe --uninstall". With Tempo already
+        // running — the normal case — that second process cannot uninstall anything, so it asks
+        // THIS instance to, over the same broadcast path as the "show me" message above (which a
+        // tray-hidden window still receives), and waits on the acknowledgement event to know the
+        // request really landed. Any process could broadcast this, but all it can do is open the
+        // confirmation dialog, whose default answer is No.
+        internal const string UninstallRequestMessageName = "TempoUninstallRequest_v1";
+        internal const string UninstallAckEventName = @"Local\TempoUninstallAck_v1";
+        private static readonly int WM_TEMPO_UNINSTALL_REQUEST = RegisterWindowMessage(UninstallRequestMessageName);
+        private bool _uninstallFlowOpen;
+
         // Explorer broadcasts this registered message to every top-level window the moment
         // the taskbar's notification area exists. Nothing here was listening for it, and
         // that is a real fault for an app that is launched AT SIGN-IN and lives in the tray.
@@ -413,6 +424,19 @@ namespace AutoClicker.UI
             if (WM_SHOW_TEMPO_INSTANCE != 0 && m.Msg == WM_SHOW_TEMPO_INSTANCE)
             {
                 try { ShowFromTrayAndActivate(); } catch { }
+                return;
+            }
+            if (WM_TEMPO_UNINSTALL_REQUEST != 0 && m.Msg == WM_TEMPO_UNINSTALL_REQUEST)
+            {
+                // Acknowledge first: it means "the request arrived", and the waiting process
+                // exits on it either way. Then queue the flow so this message returns at once.
+                AcknowledgeUninstallRequest();
+                try
+                {
+                    ShowFromTrayAndActivate();
+                    BeginInvoke((Action)RunUninstallFromRequest);
+                }
+                catch (Exception ex) { Utils.Logger.Swallow("UninstallRequest", ex); }
                 return;
             }
             if (WM_TASKBARCREATED != 0 && m.Msg == WM_TASKBARCREATED)
@@ -1262,6 +1286,35 @@ namespace AutoClicker.UI
             return new Size(w, h);
         }
 
+        private static void AcknowledgeUninstallRequest()
+        {
+            try
+            {
+                if (System.Threading.EventWaitHandle.TryOpenExisting(UninstallAckEventName, out var ack))
+                {
+                    using (ack) { ack.Set(); }
+                }
+            }
+            catch { /* the requester has gone; nothing to tell */ }
+        }
+
+        /// <summary>
+        /// The uninstall flow, started by Settings → Apps while Tempo was already running. Guarded
+        /// so a second click on Uninstall cannot stack a second confirmation over the first.
+        /// </summary>
+        private void RunUninstallFromRequest()
+        {
+            if (_uninstallFlowOpen) { return; }
+            _uninstallFlowOpen = true;
+            try
+            {
+                Utils.Logger.Info("[Uninstall] started from Settings > Apps while Tempo was running.");
+                OnUninstallClicked(this, EventArgs.Empty);
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RunUninstallFromRequest", ex); }
+            finally { _uninstallFlowOpen = false; }
+        }
+
         private void ShowFromTrayAndActivate()
         {
             try
@@ -1425,9 +1478,12 @@ namespace AutoClicker.UI
         // because UI Automation is broken on this PC. One-shot per caption session.
         private bool _captionUiaFallbackDone;
         private volatile bool _captionDiagLogged;
-        private readonly System.Collections.Generic.List<string> _captionHistory = new System.Collections.Generic.List<string>();
-        // Wall-clock time each history line was last updated (parallel to _captionHistory).
-        private readonly System.Collections.Generic.List<DateTime> _captionHistoryTimes = new System.Collections.Generic.List<DateTime>();
+        // The running transcript (Utils/CaptionTranscript.cs). The two names below are its lines and
+        // their start times, kept under the names every reader of the history already uses.
+        private readonly Utils.CaptionTranscript _transcript = new Utils.CaptionTranscript();
+        private System.Collections.Generic.List<string> _captionHistory => _transcript.Lines;
+        // When each line's first words were SPOKEN (parallel to _captionHistory).
+        private System.Collections.Generic.List<DateTime> _captionHistoryTimes => _transcript.Times;
         // External-toggle watcher state (user pressing Win+Ctrl+L themselves).
         private DateTime _externalWatchCooldownUntil = DateTime.MinValue;
         private int _externalWatchTick;
@@ -1608,8 +1664,6 @@ namespace AutoClicker.UI
         private Button _clearPointsBtn;
         private Button _toggleAllPointsBtn;
         private Label _pointsEmptyHint;
-        private Button _movePointUpBtn;
-        private Button _movePointDownBtn;
         private Button _capturePointBtn;
         private Button _duplicatePointBtn;
         private Button _togglePointBtn;
@@ -1621,7 +1675,9 @@ namespace AutoClicker.UI
         private Label _pointsWarnLabel;
 
         // ── Macros tab controls ───────────────────────────────────────────────
-        private ListBox _macroListBox;
+        // Typed as MacroListBox, not ListBox: the drag-to-reorder drop line (DropLineIndex /
+        // DropIndexAt) lives on the subclass, and a base-typed field hid it from every caller.
+        private MacroListBox _macroListBox;
         private Button _recordBtn;
         private Button _stopRecordBtn;
         private Button _playMacroBtn;
@@ -1795,6 +1851,8 @@ namespace AutoClicker.UI
 
         /// <summary>Says how many notifications were dropped unseen, beside the history button.</summary>
         private Label _notifyMissedLabel;
+        private Button _mutedAppsBtn;
+        private Label _mutedAppsLabel;
 
         /// <summary>Opens Windows' notifications-access page; shown only when it refused.</summary>
         private Button _notifyPermissionBtn;
@@ -1848,6 +1906,7 @@ namespace AutoClicker.UI
             _macros.Load();
             _accounts.Refresh();   // vault: just detect NoVault/Locked — never auto-unlock at startup
             _history.Load();
+            ClearStaleUpdateFlag();   // an "update available" saved before the user updated to it
             // One-time: seed the rolling lifetime stat aggregates from existing history so
             // the all-time insight cards don't reset for users upgrading with past runs.
             SeedLifetimeAggregatesIfNeeded();
@@ -2638,10 +2697,35 @@ namespace AutoClicker.UI
                                    : "Tempo steps back up by itself once your PC shows sustained headroom."));
                 }
                 var tr = _captionTranscriber;
-                if (tr != null && tr.IsRunning && tr.BacklogDroppedSeconds > 0.5)
+                if (tr != null && tr.IsRunning)
                 {
-                    issues.Add("⚠ Captions are behind live audio — dropped " +
-                               tr.BacklogDroppedSeconds.ToString("0.0") + " s. A smaller model, or the GPU, would keep up.");
+                    // A decode that runs on is a FREEZE, not lag: nothing reaches the bar until it
+                    // returns. It was invisible for exactly as long as it lasted, and then showed up
+                    // only as a drop. (Measured before the token cap: 10–73 s on a single 2.8 s chunk.)
+                    double decoding = tr.CurrentDecodeSeconds;
+                    if (decoding >= 4)
+                    {
+                        issues.Add("⚠ Captions are frozen: one decode has been running for " + ((int)decoding) +
+                                   " s, and nothing reaches the bar until it returns. Audio queued behind it will " +
+                                   "be skipped to catch up.");
+                    }
+
+                    // Only while it is RECENT. The session total used to keep this line here for good
+                    // after a single hitch, telling someone whose engine keeps pace comfortably to
+                    // shrink their model — the wrong advice for a one-off stall.
+                    double sinceDrop = tr.SecondsSinceLastDrop;
+                    if (sinceDrop >= 0 && sinceDrop < 120)
+                    {
+                        double pace = tr.RealTimeFactor;
+                        issues.Add("⚠ Captions skipped " + tr.LastDropSeconds.ToString("0.0") + " s of audio " +
+                                   FormatAgo(sinceDrop) + " ago to catch up (" +
+                                   tr.BacklogDroppedSeconds.ToString("0.0") + " s this session). " +
+                                   (pace >= 1.0
+                                       ? "This model can't keep pace on this PC — a smaller model, or the GPU engine, would."
+                                       : "The engine keeps pace on average (" + pace.ToString("0.00") +
+                                         "× real time), so this was one slow stretch — the slowest decode in the last " +
+                                         "minute took " + (tr.WorstRecentInferenceMs / 1000.0).ToString("0.0") + " s."));
+                    }
                 }
 
                 // The three silent failures. Each was already KNOWN to the engine and
@@ -2823,6 +2907,9 @@ namespace AutoClicker.UI
                     }
                 }
 
+                // Speaker labels judged from different audio than the captions.
+                AddSpeakerIssues(issues);
+
                 // Start-with-Windows that won't actually start. Both of these leave the
                 // Settings checkbox reading ON, so the failure is invisible until the
                 // next reboot doesn't bring Tempo back.
@@ -2850,22 +2937,43 @@ namespace AutoClicker.UI
                 }
 
                 // Expired Roblox sessions can't launch until they're signed in again.
-                if (_accounts != null && _accounts.IsUnlocked && _sessionHealth.Count > 0)
+                if (_accounts != null && _accounts.IsUnlocked)
                 {
                     int expired = 0;
                     foreach (var a in _accounts.Accounts)
                     {
-                        if (string.IsNullOrEmpty(a.Cookie)) { continue; }
-                        if (_sessionHealth.TryGetValue(a.Name, out SessionHealth h) && h == SessionHealth.Expired)
-                        {
-                            expired++;
-                        }
+                        if (SessionHealthFor(a) == SessionHealth.Expired) { expired++; }
                     }
                     if (expired > 0)
                     {
                         issues.Add("⚠ " + expired + (expired == 1 ? " Roblox account has" : " Roblox accounts have")
                                    + " an expired session and cannot launch — use Re-login on "
                                    + (expired == 1 ? "it" : "them") + " in the Accounts tab.");
+                    }
+
+                    // Roblox itself can't launch, or its client failed the signature check.
+                    string robloxIssue = RobloxInstallIssue();
+                    if (robloxIssue != null) { issues.Add(robloxIssue); }
+
+                    // Multi-instance switched on while the vault is open, but not actually able to work.
+                    if (_settings != null && _settings.RobloxMultiInstance)
+                    {
+                        var killer = Utils.RobloxSingletonKiller.Status;
+                        int blockedClients = Utils.RobloxSingletonKiller.BlockedClientCount;
+                        if (killer == Utils.RobloxSingletonKiller.KillerStatus.Off)
+                        {
+                            issues.Add("⚠ Multi-instance is on, but Tempo's lock closer isn't running"
+                                       + (Utils.RobloxSingletonKiller.StopReason != null
+                                           ? " (" + Utils.RobloxSingletonKiller.StopReason + ")" : "")
+                                       + " — extra Roblox clients will fold into the first one.");
+                        }
+                        else if (blockedClients > 0)
+                        {
+                            issues.Add("⚠ " + blockedClients
+                                       + (blockedClients == 1 ? " running Roblox client refuses" : " running Roblox clients refuse")
+                                       + " to be opened, so the single-client lock can't be closed — new clients will fold into "
+                                       + (blockedClients == 1 ? "it." : "them."));
+                        }
                     }
                 }
             }
@@ -3023,30 +3131,7 @@ namespace AutoClicker.UI
 
                 if (engineOn && t != null && t.IsRunning)
                 {
-                    double rtf = t.RealTimeFactor;
-                    sb.Append("  Caption timing: delay ~")
-                      .Append(t.EstimatedDelaySeconds.ToString("0.0")).Append("s")
-                      .Append("  (window ").Append(TempoTranscriber.WindowSizeSeconds.ToString("0.0"))
-                      .Append("s + backlog ").Append(t.BacklogSeconds.ToString("0.0"))
-                      .Append("s + decode ").Append(t.AverageInferenceMs).Append("ms)")
-                      .AppendLine();
-                    sb.Append("    pace ")
-                      .Append(rtf <= 0 ? "—" : rtf.ToString("0.00") + "×")
-                      .Append(rtf <= 0 ? "" : (rtf < 1.0 ? " (keeping up)" : " ⚠ SLOWER THAN REAL TIME"))
-                      .Append("   · chunk ").Append(t.LastChunkMs).Append("ms")
-                      .Append(" · last decode ").Append(t.LastInferenceMs).Append("ms");
-                    if (t.CatchUpTakes > 0) { sb.Append(" · catch-up takes ").Append(t.CatchUpTakes); }
-                    if (t.BacklogDroppedSeconds > 0.05)
-                    {
-                        sb.Append(" · ⚠ dropped ").Append(t.BacklogDroppedSeconds.ToString("0.0")).Append("s of audio");
-                    }
-                    sb.AppendLine();
-                    if (rtf >= 1.0)
-                    {
-                        sb.Append("    → '").Append(_captionModelActiveKey ?? "?")
-                          .Append("' cannot hold pace on this PC. A smaller model (small/base) or the GPU engine fixes the drift.")
-                          .AppendLine();
-                    }
+                    AppendCaptionSyncStats(sb, t);
                 }
 
                 // Caption overlays: where they actually ARE and whether that is on a
@@ -3200,9 +3285,9 @@ namespace AutoClicker.UI
                     // sentence on the next emission.
                     if (_captionOverlay != null && !_captionOverlay.IsDisposed && _captionOverlay.Visible)
                     {
+                        // (The reveal pace and how long words wait are in the Caption sync block.)
                         sb.Append("Bar: reveal ").Append(_captionOverlay.RevealShownWords)
                           .Append('/').Append(_captionOverlay.RevealTotalWords).Append(" words")
-                          .Append(" · pace ").Append(_captionOverlay.RevealPaceMs).Append(" ms/word")
                           .Append(" · rolling line ").Append(_tempoRollingLine.Length).Append(" chars")
                           .AppendLine();
                     }
@@ -3223,12 +3308,13 @@ namespace AutoClicker.UI
 
                 if (_audioWatcher != null)
                 {
-                    bool spkChosen = _settings != null && _settings.CaptionSpeakerDeviceId.Length > 0;
-                    bool micChosen = _settings != null && _settings.CaptionMicDeviceId.Length > 0;
-                    sb.Append("Devices: 🔊 ").Append(_audioWatcher.SpeakerName ?? "none")
-                      .Append(spkChosen ? " [chosen]" : " [default]")
-                      .Append(" · 🎙 ").Append(_audioWatcher.MicrophoneName ?? "none")
-                      .Append(micChosen ? " [chosen]" : " [default]").AppendLine();
+                    sb.Append("Devices: 🔊 ")
+                      .Append(DescribeChosenDevice(_audioWatcher.Speakers,
+                          _settings != null ? _settings.CaptionSpeakerDeviceId : "", _audioWatcher.SpeakerName))
+                      .Append(" · 🎙 ")
+                      .Append(DescribeChosenDevice(_audioWatcher.Microphones,
+                          _settings != null ? _settings.CaptionMicDeviceId : "", _audioWatcher.MicrophoneName))
+                      .AppendLine();
                 }
 
                 if (_gamePresence != null && _gamePresence.FullscreenActive)
@@ -3261,17 +3347,11 @@ namespace AutoClicker.UI
                     }
                 }
                 catch { }
-                int voice = _voiceProfiler != null ? _voiceProfiler.CurrentSpeaker : 0;
-                int face = _faceAnalyzer != null ? _faceAnalyzer.CurrentVisualSpeaker : 0;
-                int faces = _faceAnalyzer != null ? _faceAnalyzer.FaceCount : 0;
-                sb.Append(" · speaker: voice ").Append(voice).Append(" / face ").Append(face)
-                  .Append(" (").Append(faces).Append(" faces)");
-                if (_faceAnalyzer != null && _faceAnalyzer.Running && _faceAnalyzer.CrossTalk)
-                {
-                    sb.Append(" · CROSSTALK — ").Append(_faceAnalyzer.TalkingFaceCount)
-                      .Append(" faces talking at once (label held)");
-                }
                 sb.AppendLine();
+                // Speaker identification has its own block now (MainForm.Speakers.cs): the
+                // label on the bar, which evidence named it, and whether that evidence is
+                // listening to the same audio as the captions.
+                AppendSpeakerStats(sb);
                 // Per-face detail: where each tracked face is, its size, live mouth
                 // motion, and whether it's coasting through a head turn — so you can
                 // see exactly why the label chose (or didn't choose) a face.
@@ -3314,13 +3394,7 @@ namespace AutoClicker.UI
                     string fd = _faceAnalyzer.DebugDetail();
                     if (!string.IsNullOrEmpty(fd)) { sb.Append(fd); }
                 }
-                // Per-voice detail: each learned voice's fingerprint (pitch,
-                // brightness, intonation) and evidence — why "Speaker N" is who it is.
-                if (_voiceProfiler != null && _voiceProfiler.Running)
-                {
-                    string vd = _voiceProfiler.DebugDetail();
-                    if (!string.IsNullOrEmpty(vd)) { sb.Append(vd); }
-                }
+                // (Per-voice detail is printed by AppendSpeakerStats, under the voice matcher.)
                 // The AI word fixer's pulse: proof it's running, how often it acts,
                 // and its most recent repair — the fastest way to spot both a dead
                 // fixer (0 checked) and an over-eager one (last fix looks wrong).
@@ -3493,6 +3567,15 @@ namespace AutoClicker.UI
                   .Append(_settings != null && _settings.TraySleepEnabled ? "on" : "off")
                   .AppendLine();
 
+                // What the low-level hooks cost against the deadline Windows drops them for.
+                // Nothing reports a dropped hook — the handle stays valid and the keys simply
+                // stop arriving — so the only warning available is the time they take.
+                try
+                {
+                    sb.Append("  Hook callbacks: ").Append(Utils.HookHealth.Describe()).AppendLine();
+                }
+                catch { }
+
                 // Notifications: style, geometry, live card counts, and the mirror's full
                 // state — enough to spot a silent problem (mirror denied, cards piling up
                 // in the queue, the fast-path never firing) without guessing.
@@ -3526,10 +3609,26 @@ namespace AutoClicker.UI
                                 sb.Append(" · ").Append(_notifications.SuppressedCount)
                                   .Append(" held back (").Append(_notifications.LastSuppressedReason).Append(')');
                             }
+                            // Cards that waited behind the stack and were then dropped —
+                            // too old to be true any more, or the screen went fullscreen
+                            // while they waited. Each one is in the history with its reason.
+                            if (_notifications.DroppedFromQueueCount > 0)
+                            {
+                                sb.Append(" · ").Append(_notifications.DroppedFromQueueCount)
+                                  .Append(" dropped from the queue");
+                            }
                             if (Utils.GamePresence.ShouldHoldNotifications(out string holdNow))
                             {
                                 sb.Append(" · ⏸ NOT showing cards right now — ").Append(holdNow);
                             }
+                        }
+                        // A muted app looks exactly like a broken mirror from the outside,
+                        // so the mute has to be visible somewhere that isn't the dialog.
+                        int mutedApps = _settings.MirrorMutedApps?.Count ?? 0;
+                        if (mutedApps > 0)
+                        {
+                            sb.Append(" · ").Append(mutedApps).Append(" app(s) muted: ")
+                              .Append(string.Join(", ", _settings.MirrorMutedApps));
                         }
                         sb.AppendLine();
 
@@ -3804,6 +3903,9 @@ namespace AutoClicker.UI
                     }
                 }
                 sb.AppendLine();
+                // What the check compared that it used to skip: the unpacked files Tempo actually runs.
+                sb.Append("  Unpacked copy: ").Append(Utils.IntegrityCheck.PayloadSummary).AppendLine();
+                sb.Append("  Official ID: ").Append(Utils.IntegrityCheck.OfficialIdReportLine()).AppendLine();
 
                 // Backdrop image / GIF. Its cost is easy to miss: an animated wallpaper
                 // repaints the whole window and forces compositing, so when the UI feels
@@ -3938,6 +4040,9 @@ namespace AutoClicker.UI
                     sb.Append("Logo: (probe error: ").Append(lex.Message).Append(')').AppendLine();
                 }
 
+                // Emoji: drawn in colour through Direct2D, or fallen back to GDI's flat silhouettes (and why).
+                sb.Append("Emoji: ").Append(ColorEmoji.Status).AppendLine();
+
                 // Which Windows, said once, near the top of what people paste into a bug
                 // report. The rest of this panel described Tempo in detail and never
                 // named the platform it was running on.
@@ -3950,6 +4055,7 @@ namespace AutoClicker.UI
 
                 AppendStartupStats(sb);
                 AppendAccountsStats(sb);
+                AppendRecentSystemsStats(sb);
 
                 sb.Append("Session: v").Append(Application.ProductVersion)
                   .Append(" · clicker ").Append(_engine != null && _engine.IsRunning ? "RUNNING" : "idle")
@@ -4082,62 +4188,248 @@ namespace AutoClicker.UI
                     return;
                 }
 
+                bool unlocked = _accounts != null && _accounts.IsUnlocked;
                 sb.Append("Accounts: ");
                 if (_accounts == null)
                 {
-                    sb.Append("vault not loaded");
+                    sb.Append("vault not loaded").AppendLine();
                 }
-                else if (!_accounts.IsUnlocked)
+                else if (!unlocked)
                 {
-                    sb.Append("vault LOCKED (accounts and sessions are unreadable until it's unlocked)");
+                    // Nothing that names an account is printed while the vault is locked.
+                    sb.Append("vault LOCKED (accounts and sessions are unreadable until it's unlocked)").AppendLine();
                 }
                 else
                 {
                     int total = _accounts.Accounts.Count;
-                    int withCookie = 0, valid = 0, expired = 0, unknown = 0;
+                    int withCookie = 0, valid = 0, expired = 0, unconfirmed = 0, inconclusive = 0;
+                    string lastInconclusive = null;
                     foreach (var a in _accounts.Accounts)
                     {
-                        if (string.IsNullOrEmpty(a.Cookie)) { continue; }
+                        SessionHealth h = SessionHealthFor(a);
+                        if (h == SessionHealth.None) { continue; }
                         withCookie++;
-                        if (!_sessionHealth.TryGetValue(a.Name, out SessionHealth h)) { h = SessionHealth.Unknown; }
                         if (h == SessionHealth.Valid) { valid++; }
                         else if (h == SessionHealth.Expired) { expired++; }
-                        else { unknown++; }
+                        else { unconfirmed++; }
+                        if (_sessionStates.TryGetValue(a.Name, out SessionState st) && st.Inconclusive != null
+                            && st.CookieFingerprint == CookieFingerprint(a.Cookie))
+                        {
+                            inconclusive++;
+                            lastInconclusive = st.Inconclusive;
+                        }
                     }
                     sb.Append("vault unlocked · ").Append(total).Append(total == 1 ? " account" : " accounts")
                       .Append(" · ").Append(withCookie).Append(" with a saved session").AppendLine();
                     sb.Append("  sessions: ").Append(valid).Append(" valid · ")
-                      .Append(expired).Append(" expired · ").Append(unknown).Append(" unchecked");
-                    if (_checkingSessions) { sb.Append("   · scanning now"); }
+                      .Append(expired).Append(" expired · ").Append(unconfirmed).Append(" unconfirmed");
+                    if (_checkingSessions)
+                    {
+                        sb.Append("   · checking ").Append(_sessionCheckingName ?? "…");
+                    }
+                    else if (_lastSessionScanUtc != DateTime.MinValue)
+                    {
+                        sb.Append("   · last full check ")
+                          .Append(FormatAgo((DateTime.UtcNow - _lastSessionScanUtc).TotalSeconds)).Append(" ago");
+                    }
+                    if (_sessionRescanDue) { sb.Append(" · re-check due when the list is next on screen"); }
+                    double backoff = (_sessionBackoffUntilUtc - DateTime.UtcNow).TotalSeconds;
+                    if (backoff > 0)
+                    {
+                        sb.Append("   ⚠ rate-limited by Roblox — resuming in ").Append((int)Math.Ceiling(backoff)).Append(" s");
+                    }
                     if (expired > 0)
                     {
                         sb.Append("   ⚠ ").Append(expired == 1 ? "that account needs" : "those need")
                           .Append(" Re-login before launching");
                     }
+                    sb.AppendLine();
+                    if (inconclusive > 0)
+                    {
+                        sb.Append("  ⚠ ").Append(inconclusive).Append(inconclusive == 1 ? " session check" : " session checks")
+                          .Append(" couldn't reach a verdict — last reason: ").Append(lastInconclusive).AppendLine();
+                    }
                 }
-                sb.AppendLine();
 
                 sb.Append("  multi-instance: ").Append(multiOn ? "ON" : "off")
-                  .Append(" · singleton closer ").Append(killer);
-                int clients = Utils.RobloxSingletonKiller.ActiveClientCount;
-                if (clients > 0)
+                  .Append(" · lock closer ").Append(killer);
+                if (killer != Utils.RobloxSingletonKiller.KillerStatus.Off)
                 {
-                    sb.Append(" · ").Append(clients).Append(clients == 1 ? " client live" : " clients live");
+                    int running = Utils.RobloxSingletonKiller.RunningClientCount;
+                    int managed = Utils.RobloxSingletonKiller.ActiveClientCount;
+                    int cleared = Utils.RobloxSingletonKiller.ClearedClientCount;
+                    int blocked = Utils.RobloxSingletonKiller.BlockedClientCount;
+                    sb.Append(" · ").Append(running).Append(running == 1 ? " client running" : " clients running");
+                    if (running > 0)
+                    {
+                        sb.Append(" (").Append(managed).Append(" managed · ").Append(cleared)
+                          .Append(" lock cleared · ").Append(blocked).Append(" blocked)");
+                    }
+                    if (killer == Utils.RobloxSingletonKiller.KillerStatus.Blocked)
+                    {
+                        sb.Append("   ⚠ can't open any running Roblox client — multi-instance cannot work here");
+                    }
+                    else if (blocked > 0)
+                    {
+                        sb.Append("   ⚠ a blocked client keeps its lock — new clients will fold into it");
+                    }
+                    else if (managed > cleared)
+                    {
+                        // Normal for a moment after a client starts; lasting, it means the lock wasn't
+                        // found (its name may have changed) and the next client will fold.
+                        sb.Append("   · lock not cleared yet in ").Append(managed - cleared);
+                    }
                 }
-                if (killer == Utils.RobloxSingletonKiller.KillerStatus.Blocked)
+                else if (multiOn && unlocked)
                 {
-                    sb.Append("   ⚠ can't open the Roblox process — multi-instance cannot work here");
+                    sb.Append("   ⚠ ON but not running")
+                      .Append(Utils.RobloxSingletonKiller.StopReason != null
+                          ? " — " + Utils.RobloxSingletonKiller.StopReason : "");
                 }
-                if (!string.IsNullOrEmpty(_lastLaunchedAccountName))
+                if (unlocked && !string.IsNullOrEmpty(_lastLaunchedAccountName))
                 {
                     sb.Append(" · last launched: ").Append(_lastLaunchedAccountName);
                 }
                 sb.AppendLine();
+                AppendRobloxInstallStats(sb);
             }
             catch (Exception ex)
             {
                 sb.Append("Accounts: (probe error: ").Append(ex.Message).Append(')').AppendLine();
             }
+        }
+
+        // Listing restore points reads folders and files; the stats refresh twice a second.
+        private string _restorePointsLine;
+        private DateTime _restorePointsLineUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// Lines for the pieces built most recently, which Live debug had no line for at all: where a
+        /// multi-point run is, the local account API, restore points, and the installed copy's
+        /// uninstaller. Each is silent when there is nothing to say.
+        /// </summary>
+        private void AppendRecentSystemsStats(System.Text.StringBuilder sb)
+        {
+            // A multi-point run: which point it is on, and whether the list on screen still matches
+            // the one the run started with (an edit mid-run doesn't reach the running engine).
+            try
+            {
+                if (_engine != null && _engine.IsRunning && _engine.CurrentPointIndex >= 0 && _workingPoints != null)
+                {
+                    int enabled = 0;
+                    foreach (var p in _workingPoints) { if (p != null && p.Enabled) { enabled++; } }
+                    sb.Append("Multi-point: running · on point ").Append(_engine.CurrentPointIndex + 1)
+                      .Append(" · ").Append(enabled).Append(" of ").Append(_workingPoints.Count).Append(" enabled");
+                    if (_pointsLiveStale)
+                    {
+                        sb.Append("  ⚠ the list was edited after the run began — the run keeps the list it started with until it stops");
+                    }
+                    sb.AppendLine();
+                }
+            }
+            catch (Exception ex) { sb.Append("Multi-point: (probe error: ").Append(ex.Message).Append(')').AppendLine(); }
+
+            // The local account API: said only when it is wanted or running.
+            try
+            {
+                bool wanted = _settings != null && _settings.AccountApiEnabled;
+                bool running = _apiServer != null && _apiServer.IsRunning;
+                if (wanted || running)
+                {
+                    sb.Append("Local API: ");
+                    if (running)
+                    {
+                        sb.Append("listening on 127.0.0.1:").Append(_apiServer.Port);
+                        if (_apiServer.BoundIpv6) { sb.Append(" and [::1]"); }
+                        else { sb.Append(" (IPv4 only — a client that prefers ::1 will be refused)"); }
+                        if (_apiServer.Faulted) { sb.Append("  ⚠ its accept loop faulted"); }
+                        // What it has actually been asked to do. "My script does nothing" used to
+                        // leave no trace at all unless it tripped the token throttle.
+                        sb.AppendLine();
+                        sb.Append("  ").Append(_apiServer.Requests).Append(" request(s)");
+                        if (_apiServer.Refused > 0) { sb.Append(", ").Append(_apiServer.Refused).Append(" refused"); }
+                        string lastCall = _apiServer.LastRequest;
+                        DateTime? when = _apiServer.LastRequestUtc;
+                        if (lastCall == null) { sb.Append(" · nothing has called it yet"); }
+                        else
+                        {
+                            sb.Append(" · last ").Append(lastCall);
+                            if (when != null)
+                            {
+                                double secs = Math.Max(0, (DateTime.UtcNow - when.Value).TotalSeconds);
+                                sb.Append(secs < 90 ? ", just now"
+                                          : secs < 3600 ? ", " + (int)(secs / 60) + "m ago"
+                                          : ", " + (int)(secs / 3600) + "h ago");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // It only listens while the vault is open, so a locked vault is the normal
+                        // reason for it to be down — not something to flag.
+                        string why = _apiServer != null ? _apiServer.LastError : null;
+                        bool locked = _accounts == null || !_accounts.IsUnlocked;
+                        if (!string.IsNullOrEmpty(why)) { sb.Append("⚠ on in settings but not listening — ").Append(why); }
+                        else if (locked) { sb.Append("on · starts listening when the vault is unlocked"); }
+                        else { sb.Append("⚠ on in settings and the vault is open, but it is not listening"); }
+                    }
+                    sb.AppendLine();
+                }
+            }
+            catch (Exception ex) { sb.Append("Local API: (probe error: ").Append(ex.Message).Append(')').AppendLine(); }
+
+            // Restore points: how many there are and when the newest was taken.
+            try
+            {
+                if (_restorePointsLine == null || (DateTime.UtcNow - _restorePointsLineUtc).TotalSeconds > 15)
+                {
+                    var points = Persistence.DataSnapshots.List(Persistence.SettingsManager.GetSettingsDirectory());
+                    if (points.Count == 0)
+                    {
+                        _restorePointsLine = "Restore points: none yet (one is taken the first time a new build starts)";
+                    }
+                    else
+                    {
+                        var newest = points[0];
+                        _restorePointsLine = "Restore points: " + points.Count + " kept · newest "
+                            + newest.SavedLocal.ToString("yyyy-MM-dd HH:mm")
+                            + (newest.IsUndo ? " (taken before a restore)" : "")
+                            + (string.IsNullOrEmpty(newest.Before) ? "" : " · as " + newest.Before + " started");
+                    }
+                    _restorePointsLineUtc = DateTime.UtcNow;
+                }
+                sb.AppendLine(_restorePointsLine);
+            }
+            catch (Exception ex) { sb.Append("Restore points: (probe error: ").Append(ex.Message).Append(')').AppendLine(); }
+
+            // The installed copy's uninstall.cmd, refreshed at startup (a zip install otherwise keeps the
+            // script from the day it was installed).
+            try
+            {
+                var outcome = Utils.UninstallScriptRefresh.LastOutcome;
+                if (outcome.HasValue && outcome.Value != Utils.UninstallScriptRefresh.Outcome.NotInstalled)
+                {
+                    switch (outcome.Value)
+                    {
+                        case Utils.UninstallScriptRefresh.Outcome.Updated:
+                            sb.AppendLine("Uninstaller: uninstall.cmd was brought up to this build's version at startup");
+                            break;
+                        case Utils.UninstallScriptRefresh.Outcome.AlreadyCurrent:
+                            sb.AppendLine("Uninstaller: uninstall.cmd already matches this build");
+                            break;
+                        case Utils.UninstallScriptRefresh.Outcome.NoScriptThere:
+                            sb.AppendLine("Uninstaller: no uninstall.cmd beside Tempo.exe — Settings › Apps uninstalls through Tempo itself");
+                            break;
+                        case Utils.UninstallScriptRefresh.Outcome.NoShippedCopy:
+                            sb.AppendLine("⚠ Uninstaller: this build carries no uninstall.cmd to refresh with (a build mistake)");
+                            break;
+                        case Utils.UninstallScriptRefresh.Outcome.Failed:
+                            sb.AppendLine("⚠ Uninstaller: uninstall.cmd could not be refreshed — the older script is still in place");
+                            break;
+                    }
+                }
+            }
+            catch (Exception ex) { sb.Append("Uninstaller: (probe error: ").Append(ex.Message).Append(')').AppendLine(); }
         }
 
         /// <summary>
@@ -4893,6 +5185,31 @@ namespace AutoClicker.UI
             });
         }
 
+        /// <summary>
+        /// Clears an "update available" flag left over from BEFORE the user updated.
+        ///
+        /// The flag and the version it names are both persisted, and only a check that actually reaches
+        /// GitHub rewrites them — which is throttled (daily by default), can be switched off entirely,
+        /// and leaves them alone when it fails. So after updating, Tempo went on advertising the very
+        /// version it was now running until some later check happened to succeed. Fixing the comparison
+        /// stops new cases; this repairs the users already stuck in one, at the next launch.
+        /// </summary>
+        private void ClearStaleUpdateFlag()
+        {
+            try
+            {
+                if (_settings == null || !_settings.LastCheckFoundUpdate) { return; }
+                if (Utils.UpdateChecker.IsNewerThanCurrent(_settings.LastKnownLatestVersion)) { return; }
+
+                _settings.LastCheckFoundUpdate = false;
+                Utils.Logger.Info("[Update] cleared a stale 'update available' flag — v"
+                                  + (_settings.LastKnownLatestVersion ?? "(none)")
+                                  + " is not newer than " + Utils.UpdateChecker.CurrentVersion + ".");
+                try { SettingsManager.Save(_settings); } catch { }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("ClearStaleUpdateFlag", ex); }
+        }
+
         private Utils.UpdateChecker.UpdateResult _pendingUpdate;
         private bool _presentingUpdate;
 
@@ -5079,23 +5396,7 @@ namespace AutoClicker.UI
                 // everywhere the version is printed. The build number is the only thing
                 // that differs, so a non-release build says so permanently, in the
                 // warning colour, at the bottom of every screen.
-                var notes = new System.Collections.Generic.List<(string Text, Color Colour)>();
-                if (Utils.BuildInfo.IsTest)
-                {
-                    notes.Add((Utils.BuildInfo.Short, _theme.Warning));
-                }
-                try
-                {
-                    if (_settings != null && _settings.LastCheckFoundUpdate &&
-                        !string.IsNullOrWhiteSpace(_settings.LastKnownLatestVersion) &&
-                        !string.Equals(_settings.LastKnownLatestVersion,
-                                       Utils.UpdateChecker.CurrentVersion?.ToString(),
-                                       StringComparison.OrdinalIgnoreCase))
-                    {
-                        notes.Add(("v" + _settings.LastKnownLatestVersion + " available", _theme.Accent));
-                    }
-                }
-                catch { /* the footer must never be the thing that throws */ }
+                var notes = SidebarFooterNotes();
 
                 using (var vf = new Font("Segoe UI", 8f, FontStyle.Regular))
                 using (var vb = new SolidBrush(_theme.TextMuted))
@@ -5124,6 +5425,17 @@ namespace AutoClicker.UI
                                 ny += lineH;
                             }
                         }
+                    }
+
+                    // The Accounts button is parked above this footer (LayoutBottomNav), and the
+                    // footer's height changes without any resize — the integrity verdict arrives, an
+                    // update check finds a release. Re-park the button when the room it needs changed.
+                    // Deferred: moving a child from inside its parent's paint repaints mid-paint.
+                    int reserve = FooterReserveFor(sz.Height, notes.Count);
+                    if (reserve != _sidebarFooterReserve)
+                    {
+                        _sidebarFooterReserve = reserve;
+                        try { BeginInvoke((Action)LayoutBottomNav); } catch { }
                     }
                 }
             };
@@ -5215,7 +5527,8 @@ namespace AutoClicker.UI
                 this,
                 () => BuildActiveTheme(),
                 () => _settings != null ? _settings.NotificationCorner : 0,
-                () => (_settings != null ? Math.Max(2, Math.Min(20, _settings.NotificationDurationSeconds)) : 5) * 1000);
+                () => (_settings != null ? Math.Max(2, Math.Min(20, _settings.NotificationDurationSeconds)) : 5) * 1000,
+                MuteMirroredApp);
 
             _uiTimer = new System.Windows.Forms.Timer { Interval = 200 };
             _uiTimer.Tick += (s, e) =>
@@ -5751,13 +6064,87 @@ namespace AutoClicker.UI
             {
                 if (!IsBottomNav(i)) { continue; }
                 RoundedButton nav = _navButtons[i];
-                // FooterReserve clears the version stamp, the build-ID line and the hairline
-                // the sidebar paints above them (see the Paint handler on _sidebar).
-                const int FooterReserve = 78;
-                int top = _sidebar.ClientSize.Height - FooterReserve - nav.Height;
+                // The reserve clears the footer the sidebar paints under the button: the hairline,
+                // the version stamp and every note below it (see the Paint handler on _sidebar,
+                // which re-measures it and calls back here when that height changes).
+                int top = _sidebar.ClientSize.Height - _sidebarFooterReserve - nav.Height;
+                // A taller footer lifts the button — but never up into the stacked buttons. Where the
+                // two would meet the footer gives way instead (the button covers its top line): a nav
+                // button nobody can click is the worse fault. And no higher than it always sat when
+                // that spot was already clear of the stack.
+                int usual = _sidebar.ClientSize.Height - MinFooterReserve - nav.Height;
+                int clear = StackedNavBottom() + 8;
+                if (top < clear) { top = Math.Min(usual, clear); }
                 if (top < _sidebar.Padding.Top) { top = _sidebar.Padding.Top; }
                 nav.Top = top;
             }
+        }
+
+        // The 78px the bottom nav button has always been parked above: the version stamp, up to two
+        // notes and the hairline, at 96 DPI. The live figure only grows past it when it has to.
+        private const int MinFooterReserve = 78;
+        private int _sidebarFooterReserve = MinFooterReserve;
+
+        /// <summary>
+        /// Room the sidebar footer needs under the bottom nav button — the same arithmetic the
+        /// sidebar's Paint handler lays the footer out with (12px bottom margin, the version line,
+        /// a line per note, 10px up to the hairline) plus a 12px gap above the hairline, so the two
+        /// cannot drift apart. It was a constant sized for two notes; an official release with an
+        /// update waiting has three (the Official ID's two lines, then "available"), and the text
+        /// grows with the display scale while a constant does not.
+        /// </summary>
+        private static int FooterReserveFor(float versionLineHeight, int noteCount)
+        {
+            float needed = 12f + versionLineHeight + noteCount * (versionLineHeight + 1f) + 10f + 12f;
+            return Math.Max(MinFooterReserve, (int)Math.Ceiling(needed));
+        }
+
+        /// <summary>The lowest edge of the stacked (not bottom-pinned) nav buttons.</summary>
+        private int StackedNavBottom()
+        {
+            int bottom = _sidebar.Padding.Top;
+            for (int i = 0; i < _navButtons.Count && i < _tabs.TabPages.Count; i++)
+            {
+                if (!IsBottomNav(i)) { bottom = Math.Max(bottom, _navButtons[i].Bottom); }
+            }
+            return bottom;
+        }
+
+        /// <summary>
+        /// The lines stacked under the version in the sidebar footer, top to bottom. Shared by the
+        /// Paint handler and the footer's measured height, so the room made is the room drawn in.
+        /// </summary>
+        private System.Collections.Generic.List<(string Text, Color Colour)> SidebarFooterNotes()
+        {
+            var notes = new System.Collections.Generic.List<(string Text, Color Colour)>();
+            if (Utils.BuildInfo.IsTest)
+            {
+                notes.Add((Utils.BuildInfo.Short, _theme.Warning));
+            }
+            // The Official ID, once GitHub has confirmed this exact file — at the bottom of every
+            // screen, so "is this the real Tempo?" is answered right where the version is read.
+            // Never alongside the test-build line above: a test build is never confirmed.
+            string officialId = Utils.IntegrityCheck.OfficialId;
+            if (officialId != null)
+            {
+                notes.Add((Localization.T("✓ Official release"), _theme.SuccessText));
+                notes.Add((officialId, _theme.TextMuted));
+            }
+            try
+            {
+                // Compared as VERSIONS, not as strings. The cached value comes from a release tag
+                // ("1.0.321") and the running build is a four-part assembly version ("1.0.321.0"), so the
+                // old string test could never match — and this note went on advertising the very version
+                // the user had just updated to, for as long as the saved flag stayed true.
+                if (_settings != null && _settings.LastCheckFoundUpdate &&
+                    Utils.UpdateChecker.IsNewerThanCurrent(_settings.LastKnownLatestVersion))
+                {
+                    // Through F: this was an English literal glued to the version, so it never translated.
+                    notes.Add((Localization.F("v{0} available", _settings.LastKnownLatestVersion), _theme.Accent));
+                }
+            }
+            catch { /* the footer must never be the thing that throws */ }
+            return notes;
         }
 
         /// <summary>
@@ -7573,6 +7960,19 @@ namespace AutoClicker.UI
                                     return;
                                 }
 
+                                // Muted app? Nothing on screen, but it is written down with
+                                // the reason — a muted message must be findable, not gone.
+                                if (IsMirrorMuted(app))
+                                {
+                                    Utils.NotificationHistory.Add(
+                                        string.IsNullOrWhiteSpace(app) ? "Windows" : app, title, body,
+                                        UI.ToastKind.Mirror.ToString(),
+                                        Utils.NotificationHistory.Outcome.Missed,
+                                        "you muted this app");
+                                    try { icon?.Dispose(); } catch { }
+                                    return;
+                                }
+
                                 // Click the mirrored card → go where the notification
                                 // points: a link in its text (a real redirect), else the
                                 // source app — but NOT a blank browser tab when a web-push
@@ -7623,6 +8023,58 @@ namespace AutoClicker.UI
                 }
             }
             catch (Exception ex) { Utils.Logger.Swallow("ApplyNotificationSettings", ex); }
+        }
+
+        // ── muting one noisy app ──────────────────────────────────────────────────
+        //
+        // Mirroring was all-or-nothing: one app that posts every few seconds made the
+        // whole feature unusable, and the only lever was turning mirroring off. These
+        // three sit on MainForm because the list lives in settings and the confirmation
+        // is itself a notification.
+
+        /// <summary>True when this app's mirrored notifications are muted.</summary>
+        private bool IsMirrorMuted(string app)
+        {
+            if (_settings?.MirrorMutedApps == null || _settings.MirrorMutedApps.Count == 0) { return false; }
+            string name = (app ?? "").Trim();
+            if (name.Length == 0) { name = "Windows"; }
+            foreach (string m in _settings.MirrorMutedApps)
+            {
+                if (string.Equals(m, name, StringComparison.OrdinalIgnoreCase)) { return true; }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Mute an app from its own card. Confirmed with a Tempo card rather than silently:
+        /// a right-click that makes a whole app's notifications stop needs to say so, and to
+        /// say where the switch is.
+        /// </summary>
+        private void MuteMirroredApp(string app)
+        {
+            if (_settings == null) { return; }
+            string name = (app ?? "").Trim();
+            if (name.Length == 0 || string.Equals(name, "Tempo", StringComparison.Ordinal)) { return; }
+            if (_settings.MirrorMutedApps == null) { _settings.MirrorMutedApps = new System.Collections.Generic.List<string>(); }
+            if (IsMirrorMuted(name)) { return; }
+
+            _settings.MirrorMutedApps.Add(name);
+            try { Persistence.SettingsManager.Save(_settings); } catch { }
+            Utils.Logger.Info("[Notify] muted mirrored notifications from " + name + ".");
+            _notifications?.Notify("Tempo", Utils.Localization.F("Muted {0}", name),
+                Utils.Localization.T("Its notifications stay in the history. Unmute in Settings → Notifications."),
+                UI.ToastKind.Info, TempoNotifyIcon());
+        }
+
+        /// <summary>Let an app through again.</summary>
+        private void UnmuteMirroredApp(string app)
+        {
+            if (_settings?.MirrorMutedApps == null) { return; }
+            int removed = _settings.MirrorMutedApps.RemoveAll(
+                m => string.Equals(m, (app ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
+            if (removed <= 0) { return; }
+            try { Persistence.SettingsManager.Save(_settings); } catch { }
+            Utils.Logger.Info("[Notify] unmuted mirrored notifications from " + (app ?? "").Trim() + ".");
         }
 
         /// <summary>
@@ -8603,14 +9055,17 @@ namespace AutoClicker.UI
                 _captionFellBackToWindows = false;
                 _captionUiaFallbackDone = false;
                 _speakerTurns.Reset();
+                // A fresh caption session starts with no arbitration history either.
+                _speakerHintWhy = "";
+                _speakerHintSpace = '\0';
+                _speakerHintSpaceSwitches = 0;
                 _lastCaptionTextUtc = DateTime.MinValue;
                 _soundKindSinceUtc = DateTime.MinValue;
                 _soundNoteShown = false;
                 _lastVoiceSource = "";
                 _tempoRollingLine = "";
                 // Each caption session gets a fresh transcript.
-                _captionHistory.Clear();
-                _captionHistoryTimes.Clear();
+                _transcript.Clear();
                 // The on-device mishear fixer (Windows' spell engine) — created once,
                 // reused for the app's lifetime.
                 if (_wordFixer == null)
@@ -9753,9 +10208,30 @@ namespace AutoClicker.UI
             return Math.Max(1, Math.Min(12, lines));
         }
 
+        /// <summary>
+        /// Where the last <paramref name="count"/> words of <paramref name="line"/> begin — 0 when the
+        /// line holds no more words than that, so a caller can refuse to empty the line.
+        /// </summary>
+        internal static int StartOfLastWords(string line, int count)
+        {
+            int i = line == null ? 0 : line.Length;
+            for (int w = 0; w < count && i > 0; w++)
+            {
+                while (i > 0 && line[i - 1] == ' ') { i--; }
+                while (i > 0 && line[i - 1] != ' ') { i--; }
+            }
+            return i;
+        }
+
         private void OnTempoCaptionText(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
+            // Read here, on the engine's thread inside its RaiseText: they describe THIS caption, and
+            // the next caption may have replaced them by the time the UI thread runs the lambda.
+            var engine = _captionTranscriber;
+            DateTime spokenStart = engine != null ? engine.LastCaptionSpokenAt : DateTime.MinValue;
+            DateTime spokenEnd = engine != null ? engine.LastCaptionSpokenEndAt : DateTime.MinValue;
+            int retract = engine != null ? engine.LastCaptionRetractWords : 0;
             UiInvoke(() =>
             {
                 if (!_captionsActive) return;
@@ -9793,6 +10269,24 @@ namespace AutoClicker.UI
                     // still vanished after a few seconds. ~120 chars per line keeps the
                     // buffer just ahead of what the bar can actually show.
                     int budget = 120 * CaptionLineBudget();
+                    // This chunk heard the previous caption's cut-off last word whole ("help" →
+                    // "helping", TempoTranscriber.JoinSeam): take that word back off the line, the
+                    // labeller's copy and the transcript before the better hearing goes on.
+                    if (retract > 0 && _tempoRollingLine.Length > 0)
+                    {
+                        int keep = StartOfLastWords(_tempoRollingLine, retract);
+                        if (keep > 0)
+                        {
+                            _tempoRollingLine = _tempoRollingLine.Substring(0, keep).TrimEnd();
+                            _speakerTurns.NoteTailRevision(_tempoRollingLine.Length);
+                            _transcript.RetractWords(retract);
+                        }
+                    }
+                    // What is on the bar before these words — not the words themselves — is the
+                    // text a fresh labeller must treat as already shown. (Left to prime itself on
+                    // its first Label call, it counted the session's first caption as old text and
+                    // dropped it from the bar when the second one arrived.)
+                    _speakerTurns.PrimeIfNeeded(_tempoRollingLine);
                     _tempoRollingLine = _tempoRollingLine.Length == 0
                         ? clean
                         : _tempoRollingLine + " " + clean;
@@ -9833,9 +10327,17 @@ namespace AutoClicker.UI
                     // The engine batches text every ~2.5 s even mid-sentence, so the
                     // turn threshold must exceed that or every batch becomes a "turn".
                     _speakerTurns.TurnGapSeconds = 4.0;
-                    _speakerTurns.VoiceDriven = _voiceProfiler != null && _voiceProfiler.Running;
+                    // Captioning the MICROPHONE: the voice profiler and face analyzer are
+                    // judging other audio (the speakers, the window playing sound), so their
+                    // verdicts must not name anyone — and voice-driven mode must be off, or
+                    // pauses stop counting turns while it waits for a verdict that describes
+                    // somebody else.
+                    bool captionsFromMic = _captionTranscriber != null
+                        && _captionTranscriber.ActiveMode == Utils.CaptureMode.Microphone;
+                    _speakerTurns.VoiceDriven = !captionsFromMic
+                        && _voiceProfiler != null && _voiceProfiler.Running;
                     string shown = _settings != null && _settings.CaptionSpeakerTurns
-                        ? _speakerTurns.Label(_tempoRollingLine, EffectiveSpeakerHint())
+                        ? _speakerTurns.Label(_tempoRollingLine, EffectiveSpeakerHint(captionsFromMic))
                         : _tempoRollingLine;
                     // The "♪ App ·" tag goes to the BAR only, never into history: it
                     // trades apps every second or two with dual audio, and any tag change
@@ -9849,7 +10351,16 @@ namespace AutoClicker.UI
                     {
                         _captionOverlay.SetCaption(tagged);
                     }
-                    AppendCaptionHistory(shown);
+                    // The transcript gets the new words themselves, not the bar's trimmed,
+                    // relabelled view of the rolling line (see CaptionTranscript).
+                    bool labelled = _settings != null && _settings.CaptionSpeakerTurns;
+                    DateTime arrived = DateTime.Now;
+                    _transcript.AppendChunk(clean,
+                        labelled ? _speakerTurns.CurrentSpeaker : 0,
+                        labelled ? _speakerTurns.CurrentTurnStartedUtc : DateTime.MinValue,
+                        spokenStart == DateTime.MinValue ? arrived : spokenStart,
+                        spokenEnd == DateTime.MinValue ? arrived : spokenEnd);
+                    OnTranscriptChanged();
                 }
             });
         }
@@ -10110,15 +10621,27 @@ namespace AutoClicker.UI
         /// (face slots vs voice profiles), so whichever source is currently
         /// confident owns the numbering rather than mixing them mid-conversation.
         /// </summary>
-        private int EffectiveSpeakerHint()
+        private int EffectiveSpeakerHint(bool captionsHearMicrophone = false)
         {
             try
             {
+                // Microphone captions: BOTH evidence sources describe the wrong audio. The
+                // voice profiler only ever listens to the speakers, and the face analyzer
+                // watches whichever window is playing sound — neither is the room the
+                // microphone hears. Worse, voice-driven labelling HOLDS the number across
+                // pauses while it waits for a voice verdict, so a microphone conversation
+                // with nothing playing stayed "Speaker 1" for good. With no hint the
+                // labeler counts pauses, the only honest signal there is here.
+                if (captionsHearMicrophone)
+                {
+                    return NoteSpeakerHint(0, '\0',
+                        "voice and faces ignored — captions hear the microphone, so turns are counted from pauses");
+                }
                 int visual = _faceAnalyzer != null && _faceAnalyzer.Running ? _faceAnalyzer.CurrentVisualSpeaker : 0;
                 if (visual > 0)
                 {
                     _lastVisualHintUtc = DateTime.UtcNow;
-                    return visual;
+                    return NoteSpeakerHint(visual, 'f', "named by face " + visual + " (sight beats sound)");
                 }
                 // CROSSTALK: two faces visibly talking at once. The voice guess is
                 // meaningless during an overlap — the pitch tracker reads whichever
@@ -10127,7 +10650,8 @@ namespace AutoClicker.UI
                 // the overlap resolves, which is what a human captioner does too.
                 if (_faceAnalyzer != null && _faceAnalyzer.Running && _faceAnalyzer.CrossTalk)
                 {
-                    return 0;
+                    return NoteSpeakerHint(0, '\0',
+                        "HOLDING — " + _faceAnalyzer.TalkingFaceCount + " faces talking at once");
                 }
                 // The face verdict drops to 0 the instant mouth-motion confidence dips
                 // (between phrases, a head turn) — but face slots and voice profiles are
@@ -10138,17 +10662,59 @@ namespace AutoClicker.UI
                 // labeler keeps the current number. Voice numbering resumes only once the
                 // face source has been cold for the whole window (or faces are gone —
                 // FaceCount hits 0 in game mode / true loss, releasing the hold).
+                double sinceFace = (DateTime.UtcNow - _lastVisualHintUtc).TotalSeconds;
                 if (_faceAnalyzer != null && _faceAnalyzer.Running && _faceAnalyzer.FaceCount > 0
-                    && (DateTime.UtcNow - _lastVisualHintUtc).TotalSeconds < 4.0)
+                    && sinceFace < 4.0)
                 {
-                    return 0;
+                    return NoteSpeakerHint(0, '\0',
+                        "HOLDING — the face went quiet " + sinceFace.ToString("0.0") + " s ago; staying on face numbers");
                 }
-                return _voiceProfiler != null ? _voiceProfiler.CurrentSpeaker : 0;
+                // The LIVE verdict, deliberately. Caption text arrives in ~2.8 s batches that
+                // each get ONE label, so a batch straddling a hand-over is partly wrong at
+                // whatever moment the voice is read. Reading it back at the caption delay was
+                // tried and measured with a scripted two-voice conversation: it moved the
+                // error from the old speaker's last words to the new speaker's first ones,
+                // and mislabelled two hand-overs where this live read mislabelled one. A real
+                // fix needs per-segment timing to split the batch, not a different read time.
+                int voice = _voiceProfiler != null ? _voiceProfiler.CurrentSpeaker : 0;
+                if (voice > 0)
+                {
+                    return NoteSpeakerHint(voice, 'v', "named by voice " + voice);
+                }
+                return NoteSpeakerHint(0, '\0', _voiceProfiler != null && _voiceProfiler.Running
+                    ? "no verdict yet — voice matching needs about a second of speech"
+                    : "counting pauses — voice matching isn't running");
             }
             catch
             {
                 return 0;
             }
+        }
+
+        // The last arbitration outcome, for Live debug. The panel could show the voice
+        // number and the face number side by side — from two different number spaces —
+        // but never which of them named the label, or that it was deliberately HOLDING.
+        private string _speakerHintWhy = "";
+        private char _speakerHintSpace;            // 'f' face numbers, 'v' voice numbers, '\0' none yet
+        private int _speakerHintSpaceSwitches;     // times labels moved between the two spaces
+
+        /// <summary>
+        /// Records why <see cref="EffectiveSpeakerHint"/> answered as it did, and counts
+        /// hand-overs between face and voice numbering — each one a moment where the
+        /// same label number may start to mean a different person.
+        /// </summary>
+        private int NoteSpeakerHint(int number, char space, string why)
+        {
+            if (number > 0 && space != '\0')
+            {
+                if (_speakerHintSpace != '\0' && _speakerHintSpace != space)
+                {
+                    _speakerHintSpaceSwitches++;
+                }
+                _speakerHintSpace = space;
+            }
+            _speakerHintWhy = why;
+            return number;
         }
 
         /// <summary>
@@ -10242,6 +10808,9 @@ namespace AutoClicker.UI
                         _lastSpeakerResetUtc = DateTime.UtcNow;
                         try { _voiceProfiler?.ForgetVoices(); } catch { }
                         _speakerTurns.Reset();
+                        // New app, new people: a later face↔voice hand-over must not be
+                        // counted against numbering that was just thrown away.
+                        _speakerHintSpace = '\0';
                         Utils.Logger.Info("[Captions] audio source changed to " + src + " — speaker numbering reset.");
                     }
                     else
@@ -10293,7 +10862,13 @@ namespace AutoClicker.UI
                         ? "♪ " + CaptionSourceTagText(audioSource) + "  ·  " + shown
                         : shown;
                     _captionOverlay.SetCaption(tagged);
-                    AppendCaptionHistory(shown);
+                    // The turn's whole text, not the bar's capped view with earlier turns in front.
+                    bool labelled = _settings != null && _settings.CaptionSpeakerTurns;
+                    _transcript.AppendRolling(labelled ? _speakerTurns.CurrentTurnText : text,
+                        labelled ? _speakerTurns.CurrentSpeaker : 0,
+                        labelled ? _speakerTurns.CurrentTurnStartedUtc : DateTime.MinValue,
+                        DateTime.Now);
+                    OnTranscriptChanged();
                 }
                 else
                 {
@@ -10388,28 +10963,6 @@ namespace AutoClicker.UI
                     : "\u266a " + Localization.T("Music or sounds playing \u2014 no speech"));
             }
             catch { }
-        }
-
-        /// <summary>Keeps the per-line timestamp list aligned with _captionHistory.</summary>
-        private void SyncHistoryTime(bool added)
-        {
-            if (added)
-            {
-                _captionHistoryTimes.Add(DateTime.Now);
-            }
-            else if (_captionHistoryTimes.Count > 0)
-            {
-                _captionHistoryTimes[_captionHistoryTimes.Count - 1] = DateTime.Now;
-            }
-            // Self-heal any drift so the save never mispairs lines and times.
-            while (_captionHistoryTimes.Count < _captionHistory.Count)
-            {
-                _captionHistoryTimes.Add(DateTime.Now);
-            }
-            while (_captionHistoryTimes.Count > _captionHistory.Count)
-            {
-                _captionHistoryTimes.RemoveAt(_captionHistoryTimes.Count - 1);
-            }
         }
 
         /// <summary>
@@ -10561,62 +11114,14 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
-        /// Accumulates caption text into the rolling history shown by the "Show
-        /// full history" window. Live Captions re-sends a growing line as it
-        /// refines a phrase, so we replace the in-progress tail rather than
-        /// appending duplicates: if the new text extends the previous line we swap
-        /// it; otherwise it is a new utterance and we add a line.
+        /// Pushes the transcript to the surfaces that show it, after either caption path has added
+        /// to it. What goes INTO the transcript — and why it is no longer the bar's text — is
+        /// Utils/CaptionTranscript.cs.
         /// </summary>
-        private void AppendCaptionHistory(string text)
+        private void OnTranscriptChanged()
         {
-            if (string.IsNullOrWhiteSpace(text)) return;
             try
             {
-                text = text.Trim();
-                if (_captionHistory.Count > 0)
-                {
-                    string last = _captionHistory[_captionHistory.Count - 1];
-
-                    // Windows Live Captions streams a single phrase by re-sending it
-                    // as it grows and lightly revises wording/punctuation, and it
-                    // also slides: the new text often begins where the previous line
-                    // ended. Handle both so the panel shows continuous distinct
-                    // speech instead of overlapping near-duplicates.
-                    string merged = TryMergeOverlap(last, text);
-                    if (merged != null)
-                    {
-                        _captionHistory[_captionHistory.Count - 1] = merged;
-                        SyncHistoryTime(false);
-                    }
-                    else if (IsSameUtterance(last, text))
-                    {
-                        _captionHistory[_captionHistory.Count - 1] =
-                            text.Length >= last.Length ? text : last;
-                        SyncHistoryTime(false);
-                    }
-                    else
-                    {
-                        _captionHistory.Add(text);
-                        SyncHistoryTime(true);
-                    }
-                }
-                else
-                {
-                    _captionHistory.Add(text);
-                    SyncHistoryTime(true);
-                }
-
-                const int MaxHistory = 500;
-                if (_captionHistory.Count > MaxHistory)
-                {
-                    int drop = _captionHistory.Count - MaxHistory;
-                    _captionHistory.RemoveRange(0, drop);
-                    if (_captionHistoryTimes.Count >= drop)
-                    {
-                        _captionHistoryTimes.RemoveRange(0, drop);
-                    }
-                }
-
                 if (_captionHistoryForm != null && !_captionHistoryForm.IsDisposed)
                 {
                     _captionHistoryForm.SetHistory(_captionHistory);
@@ -10626,63 +11131,6 @@ namespace AutoClicker.UI
                 RefreshCaptionTranscript();
             }
             catch { }
-        }
-
-        /// <summary>
-        /// If the end of <paramref name="prev"/> overlaps the start of
-        /// <paramref name="next"/> (the sliding window Live Captions produces),
-        /// returns the two stitched into one continuous line; otherwise null.
-        /// Example: prev="...I seen it. I would have", next="I would have seen if
-        /// y'all" → "...I seen it. I would have seen if y'all".
-        /// </summary>
-        private static string TryMergeOverlap(string prev, string next)
-        {
-            if (string.IsNullOrEmpty(prev) || string.IsNullOrEmpty(next)) return null;
-            if (next.Length >= prev.Length &&
-                next.StartsWith(prev, StringComparison.OrdinalIgnoreCase))
-            {
-                return next; // pure growth
-            }
-
-            // Find the largest k where prev's last k chars equal next's first k.
-            int max = Math.Min(prev.Length, next.Length);
-            for (int k = max; k >= 8; k--) // require a meaningful overlap (>=8 chars)
-            {
-                string tail = prev.Substring(prev.Length - k);
-                string head = next.Substring(0, k);
-                if (string.Equals(tail, head, StringComparison.OrdinalIgnoreCase))
-                {
-                    return prev + next.Substring(k);
-                }
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// True when two caption strings are the same phrase being refined (so the
-        /// history should replace, not append). Considers exact/contained matches
-        /// and a long shared prefix, which is how Live Captions revises a line as
-        /// it streams.
-        /// </summary>
-        private static bool IsSameUtterance(string a, string b)
-        {
-            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
-            if (a == b) return true;
-            if (a.StartsWith(b, StringComparison.OrdinalIgnoreCase) ||
-                b.StartsWith(a, StringComparison.OrdinalIgnoreCase)) return true;
-
-            // Length of the common leading run of characters.
-            int n = Math.Min(a.Length, b.Length);
-            int common = 0;
-            for (int i = 0; i < n; i++)
-            {
-                if (char.ToLowerInvariant(a[i]) == char.ToLowerInvariant(b[i])) common++;
-                else break;
-            }
-            // If they agree on most of the shorter string's length, it's the same
-            // line mid-revision (e.g. a trailing word changed or punctuation moved).
-            int shorter = Math.Min(a.Length, b.Length);
-            return shorter > 0 && common >= (int)(shorter * 0.7);
         }
 
         /// <summary>
@@ -12287,6 +12735,10 @@ namespace AutoClicker.UI
             // colours the same way.
             ApplyThemeToProfileCards();
 
+            // The Accounts tab's four screens — three of them detached from the page at any
+            // moment, where the pass above cannot reach — plus the colours that mean something.
+            ThemeAccountStates();
+
             // Keep the Settings live preview in sync.
             RefreshThemePreview();
 
@@ -12559,6 +13011,8 @@ HookSystemEvents();
                 if (_settings == null) { return; }
 
                 RefreshIntegrityStatus();
+                // The sidebar footer carries the Official ID; repaint it now the verdict is in.
+                try { _sidebar?.Invalidate(); } catch { }
 
                 // Persist unconditionally. The check may have recorded a new fingerprint,
                 // a GitHub confirmation, or both — and once the online layer can promote
@@ -12594,8 +13048,17 @@ HookSystemEvents();
 
                 string title;
                 string body;
+                Action onActivate = null;
                 switch (verdict)
                 {
+                    case Utils.IntegrityVerdict.UnpackedModified:
+                        title = Localization.T("Tempo's unpacked files were changed");
+                        body = Localization.T(
+                            "Tempo.exe itself is intact, but the copy Tempo runs from in your TEMP folder was altered, "
+                            + "so the code running is not the code Tempo.exe carries. Reinstalling does not fix this. "
+                            + "Click here to repair: Tempo restarts and unpacks a clean copy.");
+                        onActivate = OnRepairUnpackedCopy;
+                        break;
                     case Utils.IntegrityVerdict.Damaged:
                         title = Localization.T("Tempo's program file is damaged");
                         body = Localization.T(
@@ -12635,11 +13098,12 @@ HookSystemEvents();
 
                 if (_notifications != null)
                 {
-                    _notifications.Notify("Tempo", title, body, ToastKind.Warning);
+                    _notifications.Notify("Tempo", title, body, ToastKind.Warning, null, null, onActivate);
                 }
                 else
                 {
                     ShowWarning(title + "\n\n" + body);
+                    onActivate?.Invoke();
                 }
             }
             catch (Exception ex) { Utils.Logger.Swallow("OnIntegrityResult", ex); }
@@ -13004,6 +13468,42 @@ HookSystemEvents();
             {
                 // Cosmetic only — never block startup over it.
             }
+
+            // Straight after that notice closes, never stacked on top of it — and so under the same
+            // rules: only with the window on screen, not over a fullscreen game, once per run.
+            MaybeOfferInstall();
+        }
+
+        private bool _installOfferAttempted;
+
+        /// <summary>
+        /// Offers ONCE to install a portable copy. This is the fix for Tempo missing from Control
+        /// Panel and Settings › Apps: install.cmd was the only thing that ever registered it, and most
+        /// people simply open Tempo.exe. Not offered for a copy that is already installed, one running
+        /// out of a temporary folder (inside a zip), one beside an existing install (it could downgrade
+        /// it), or a launch that is itself part of an uninstall or a restart. "No" is remembered; the
+        /// Settings button stays available either way.
+        /// </summary>
+        private void MaybeOfferInstall()
+        {
+            if (_installOfferAttempted || _settings == null || _settings.InstallOfferDeclined) { return; }
+            if (_launchedForUninstall || _launchedForRestart) { return; }
+            if (!Visible || WindowState == FormWindowState.Minimized) { return; }
+            if (!Utils.DeploymentInfo.CanOfferInstall) { return; }
+            if (Utils.GamePresence.ShouldHoldNotifications(out _)) { return; }
+            _installOfferAttempted = true;
+
+            DialogResult go = MessageBox.Show(this, InstallOfferText, "Install Tempo",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
+            if (go == DialogResult.Yes)
+            {
+                InstallAndRelaunch();
+                return;
+            }
+
+            _settings.InstallOfferDeclined = true;
+            try { Persistence.SettingsManager.Save(_settings); } catch { }
+            Utils.Logger.Info("[Install] kept as a portable copy at the user's choice; the offer will not repeat.");
         }
 
         /// <summary>Shows or hides the just-for-fun colourful cursor trail overlay.</summary>
@@ -13157,7 +13657,7 @@ HookSystemEvents();
             }
         }
 
-        private void FadeOutThenRestart(string whatFailed = "the new language")
+        private void FadeOutThenRestart(string whatFailed = "the new language", string relaunchExe = null)
         {
             _reallyClosing = true;
             // A restart has already asked its own question (see DescribeRestartInterruption),
@@ -13244,7 +13744,7 @@ HookSystemEvents();
 
                 try
                 {
-                    AutoClicker.Program.RestartApp();
+                    AutoClicker.Program.RestartApp(relaunchExe);
                     Utils.Logger.Info("[Restart] replacement launched; this instance is exiting.");
                 }
                 catch (Exception ex)
@@ -14110,6 +14610,11 @@ HookSystemEvents();
             try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
             try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged; } catch { }
             try { Microsoft.Win32.SystemEvents.SessionEnding -= OnSessionEnding; } catch { }
+            UnhookVaultSessionEvents();
+            // Nothing else closed the local API's listener: it was stopped when the vault locked or
+            // the page went away, but a straight exit left the HttpListener open and the port held
+            // until the process died. Shutting it down here makes closing Tempo release it properly.
+            StopApiServer();
             CleanUp();
             base.OnFormClosed(e);
         }

@@ -271,7 +271,7 @@ namespace AutoClicker.UI
                 DrawActionGlyph(g, Glyph, gbox, fore);
                 var tr = new Rectangle((int)(gbox.Right + gap), 0,
                     (int)(Width - gbox.Right - gap), Height);
-                TextRenderer.DrawText(g, Text, Font, tr, fore,
+                ColorEmoji.DrawText(g, Text, Font, tr, fore,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 return;
             }
@@ -356,7 +356,9 @@ namespace AutoClicker.UI
                     break;
             }
 
-            TextRenderer.DrawText(g, Text, Font, textRect, fore, flags);
+            // ColorEmoji keeps an emoji in the label (🔒 Lock vault, the profile icon picker) in colour;
+            // TextRenderer painted it as a flat silhouette in the button's text colour.
+            ColorEmoji.DrawText(g, Text, Font, textRect, fore, flags);
         }
 
         // Crisp little line/solid glyphs for the action buttons, drawn inside box.

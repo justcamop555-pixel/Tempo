@@ -161,7 +161,12 @@ namespace AutoClicker.Native
                         bool injected = (data.flags & NativeMethods.LLMHF_INJECTED) != 0;
                         var args = new MouseHookEventArgs(
                             type.Value, data.pt.X, data.pt.Y, wheel, data.time, injected);
+                        // Timed against the deadline Windows drops hooks for — see HookHealth.
+                        // The mouse hook is the busier of the two (every movement), so a slow
+                        // listener here costs the hook first.
+                        long started = System.Diagnostics.Stopwatch.GetTimestamp();
                         MouseEvent?.Invoke(this, args);
+                        HookHealth.NoteCallback("mouse", started);
                         if (args.Handled)
                         {
                             // Swallow: don't pass this event to the window beneath.

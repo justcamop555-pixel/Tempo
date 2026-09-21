@@ -399,6 +399,10 @@ namespace AutoClicker.UI
                 try { Utils.AnimatedLogo.FrameChanged -= OnLogoFrameRepaint; } catch { }
                 _logoSubscribed = false;
             }
+            // The card's own menu goes with it — see ShowCardMenu.
+            try { _cardMenu?.Close(); } catch { }
+            try { _cardMenu?.Dispose(); } catch { }
+            _cardMenu = null;
             _icon?.Dispose();
             if (_hero != null && !ReferenceEquals(_hero, _icon)) { _hero.Dispose(); }
             base.OnFormClosed(e);
@@ -470,9 +474,25 @@ namespace AutoClicker.UI
                 ? new Rectangle(Pad + CloseInset - 5, Pad - 2, CloseBox + 10, CloseBox + 10)
                 : Rectangle.Empty;
 
+        /// <summary>
+        /// Set for a MIRRORED card: "mute this app" from the card itself. Null on Tempo's
+        /// own cards — muting Tempo from a Tempo card would be a trap.
+        /// </summary>
+        internal Action<string> MuteAppRequested;
+
         protected override void OnMouseClick(MouseEventArgs e)
         {
             base.OnMouseClick(e);
+
+            // Right-click is a menu, not an "open". It used to fall through to the body
+            // click and launch the app — the one gesture on this card that could do
+            // something the user did not ask for.
+            if (e.Button == MouseButtons.Right)
+            {
+                ShowCardMenu(e.Location);
+                return;
+            }
+
             // Clicking the ✕ only dismisses; clicking the body opens the app that sent
             // the notification (Windows 11 behaviour), then dismisses.
             if (CloseHitRect.Contains(e.Location))
@@ -487,6 +507,64 @@ namespace AutoClicker.UI
             }
             BeginDismiss();
         }
+
+        /// <summary>
+        /// The card's own little menu. It holds the card open while it is up — a menu that
+        /// vanished mid-decision because the dwell ran out would be worse than no menu.
+        /// </summary>
+        private void ShowCardMenu(Point at)
+        {
+            try
+            {
+                var menu = new ContextMenuStrip { ShowImageMargin = false };
+                menu.Renderer = new ToolStripProfessionalRenderer();
+                menu.BackColor = _theme.Surface2;
+                menu.ForeColor = _theme.Text;
+
+                if (MuteAppRequested != null && !string.IsNullOrWhiteSpace(_appName))
+                {
+                    string app = _appName;
+                    var mute = new ToolStripMenuItem(Utils.Localization.F("Mute {0}", app));
+                    mute.Click += (s, e) =>
+                    {
+                        var ask = MuteAppRequested;
+                        BeginDismiss();
+                        try { ask(app); } catch { }
+                    };
+                    menu.Items.Add(mute);
+                }
+
+                var close = new ToolStripMenuItem(Utils.Localization.T("Dismiss"));
+                close.Click += (s, e) => BeginDismiss();
+                menu.Items.Add(close);
+
+                // Keep the card alive while the menu is open, and let the dwell resume
+                // (from a full window, so there is time to read what is left) after.
+                _remainingMs = Math.Max(_remainingMs, _dwellMs);
+                if (_phase == Phase.Out) { EnterPhase(Phase.Dwell); }
+                _menuOpen = true;
+                menu.Closed += (s, e) =>
+                {
+                    _menuOpen = false;
+                    _remainingMs = Math.Max(_remainingMs, 2000);
+                    // Deliberately NOT disposed here. Closed fires while WinForms is still
+                    // inside the drop-down's own hide, and disposing from under it throws
+                    // ObjectDisposedException out of the click — choosing "Mute" took the
+                    // app down. The previous menu is disposed when the next one opens, and
+                    // the last one when the card closes.
+                };
+                // Held in a field, not just shown: a card can be taken away while its menu
+                // is open (the centre disposes the stack on shutdown), and a menu whose card
+                // no longer exists would sit on screen with nothing behind it.
+                try { _cardMenu?.Dispose(); } catch { }
+                _cardMenu = menu;
+                menu.Show(this, at);
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("NotificationToastForm.Menu", ex); }
+        }
+
+        private bool _menuOpen;
+        private ContextMenuStrip _cardMenu;
 
         private void OnAnimTick(object sender, EventArgs e)
         {
@@ -513,7 +591,10 @@ namespace AutoClicker.UI
 
                 case Phase.Dwell:
                     _x = _targetX;
-                    if (!_hovered)
+                    // Hovering pauses the countdown, and so does an open card menu: the
+                    // mouse is over the MENU, not the card, so _hovered alone would let the
+                    // card slide away underneath the choice being made.
+                    if (!_hovered && !_menuOpen)
                     {
                         // Count down by REAL elapsed time. Subtracting the timer's
                         // nominal interval assumed every tick arrived exactly on

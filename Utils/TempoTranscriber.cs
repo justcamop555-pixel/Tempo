@@ -179,22 +179,27 @@ namespace AutoClicker.Utils
         public static double WindowSizeSeconds => WindowSeconds;
 
         /// <summary>
-        /// Rough delay between a word being SPOKEN and its caption appearing, in seconds.
+        /// Rough delay between a word being SPOKEN and its caption appearing, in seconds — the
+        /// fallback until <see cref="MeasuredDelaySeconds"/> has a real figure.
         ///
         /// Three things add up, and separating them is what makes "captions are behind"
         /// diagnosable instead of a shrug:
-        ///   • half the window on average, waiting for the window to fill,
-        ///   • whatever audio is already queued ahead of it (the backlog), and
+        ///   • half a STEP on average, waiting for the new audio a pass takes to arrive (the
+        ///     window also re-hears the overlap, but that audio was already waited for once),
+        ///   • whatever audio is already queued behind that step (the backlog), and
         ///   • the decode itself.
-        /// A backlog that keeps growing means the model cannot hold real-time pace on
-        /// this machine — see <see cref="RealTimeFactor"/>.
+        /// It used to take half the whole window AND count the step still being gathered as
+        /// backlog, so the same wait was added twice: measured at 4.3 s against a true 2.0 s.
+        /// A backlog that keeps growing means the model cannot hold real-time pace on this
+        /// machine — see <see cref="RealTimeFactor"/>.
         /// </summary>
         public double EstimatedDelaySeconds
         {
             get
             {
                 if (!IsRunning) { return 0; }
-                return (WindowSeconds / 2.0) + BacklogSeconds + (_avgInferMs / 1000.0);
+                int stepMs = _stepMsActive > 0 ? _stepMsActive : (int)((WindowSeconds - OverlapSeconds) * 1000);
+                return (stepMs / 2000.0) + BacklogSeconds + (_avgInferMs / 1000.0);
             }
         }
         /// <summary>Oversized takes used to drain a queued backlog this session.</summary>
@@ -224,8 +229,9 @@ namespace AutoClicker.Utils
         private volatile float _systemVolume = -1f;
         private volatile bool _systemMuted;
         private long _lastVolumeCheckTick;
-        // The last caption text we emitted, used to strip the duplicated overlap
-        // that consecutive (overlapping) chunks would otherwise produce.
+        // The last dozen words of the caption as shown (every emission joined, retractions
+        // applied), used to strip the duplicated overlap that consecutive (overlapping)
+        // chunks would otherwise produce — see JoinSeam and ShownTail.
         private string _lastEmitted = "";
         // Which native engine loaded ("Vulkan" = GPU, "Cpu" = fallback) — shown in
         // the start status so it's obvious why big models are fast (or not).
@@ -246,7 +252,6 @@ namespace AutoClicker.Utils
         // ── Live-debug stats (read by the Live Debug window, ~2 Hz) ─────────
         private volatile int _lastInferMs;      // how long the last chunk took
         private volatile int _lastChunkMs;      // how much audio that chunk covered
-        private volatile int _backlogMs;        // audio waiting in the buffer
         private volatile string _langState = "auto-detect";
         private volatile int _levelDb = -60;    // loudness of the latest capture buffer
         // Loudest buffer since the meter last read it; see TakeLevelPeakDb.
@@ -274,7 +279,15 @@ namespace AutoClicker.Utils
 
         public int LastInferenceMs => _lastInferMs;
         public int LastChunkMs => _lastChunkMs;
-        public double BacklogSeconds => _backlogMs / 1000.0;
+
+        /// <summary>
+        /// Audio already heard that has to wait for a LATER pass: whatever is in the buffer beyond
+        /// the step the next pass will take. The audio still arriving to fill that step is not
+        /// backlog — counting it, as this used to, reported a full step of "backlog" (~2 s) on an
+        /// engine that was keeping up comfortably. Read live, so a decode that runs on shows its
+        /// backlog growing instead of a figure frozen at the moment the decode began.
+        /// </summary>
+        public double BacklogSeconds => Math.Max(0, _bufferedSamples - _needSamples) / (double)WhisperSampleRate;
         public string LanguageState => _langState;
         /// <summary>Loudness Tempo is hearing right now, in dBFS (−60 silent … 0 max).</summary>
         public int LevelDb => _levelDb;
@@ -333,6 +346,126 @@ namespace AutoClicker.Utils
                 return t == 0 ? -1 : (Environment.TickCount64 - t) / 1000.0;
             }
         }
+        // ── Caption SYNC, measured rather than estimated ─────────────────────
+        // Every caption the engine puts out comes from a known stretch of audio: the step's first
+        // and last sample, in TickCount64 time. So the delay between words being HEARD and their
+        // text leaving the engine can be measured, instead of the old sum of guesses — which
+        // counted the audio still being gathered for the next pass as "backlog" on top of an
+        // average wait for that same audio, and read ~4.3 s while captions were really ~2 s behind
+        // (measured with scratchpad/syncprobe, which feeds the real loop speech whose word timings
+        // are known).
+        private volatile int _syncDelayMs = -1;     // smoothed delay of a caption's middle word; -1 = none yet
+        private volatile int _syncNewestMs = -1;    // the last caption's newest words
+        private volatile int _syncOldestMs = -1;    // the last caption's oldest words
+        private readonly object _syncLock = new object();
+        private readonly Queue<KeyValuePair<long, int>> _syncRecent = new Queue<KeyValuePair<long, int>>();
+        private long _lastSpokenUtcTicks;           // when the last caption's first word was heard (UTC ticks)
+        private volatile int _stepMsActive;         // audio in the last step taken, ms
+        private volatile int _needSamples;          // audio the next pass is waiting for
+        private volatile int _bufferedSamples;      // audio sitting in the buffer right now
+        private long _decodeStartTick;              // non-zero while a decode is running
+        private long _lastRealDropTick;             // when audio with sound in it was last thrown away
+        private volatile int _lastRealDropMs;
+        private volatile int _worstInferMs;         // longest decode in roughly the last minute
+        private long _worstInferTick;
+
+        /// <summary>
+        /// Seconds between words being heard and their caption leaving the engine, smoothed over
+        /// the last few captions (the middle word of each), or −1 before the first caption. The
+        /// caption bar's word-by-word reveal comes on top of this.
+        /// </summary>
+        public double MeasuredDelaySeconds => _syncDelayMs < 0 ? -1 : _syncDelayMs / 1000.0;
+
+        /// <summary>The most recent caption's NEWEST words: seconds after they were heard, or −1.</summary>
+        public double LastCaptionNewestDelaySeconds => _syncNewestMs < 0 ? -1 : _syncNewestMs / 1000.0;
+
+        /// <summary>The most recent caption's OLDEST words: seconds after they were heard, or −1.</summary>
+        public double LastCaptionOldestDelaySeconds => _syncOldestMs < 0 ? -1 : _syncOldestMs / 1000.0;
+
+        /// <summary>The longest any word waited, among captions from the last 30 seconds; −1 if none.</summary>
+        public double WorstRecentDelaySeconds
+        {
+            get
+            {
+                lock (_syncLock)
+                {
+                    long now = Environment.TickCount64;
+                    int worst = -1;
+                    foreach (var kv in _syncRecent)
+                    {
+                        if (now - kv.Key <= 30000 && kv.Value > worst) { worst = kv.Value; }
+                    }
+                    return worst < 0 ? -1 : worst / 1000.0;
+                }
+            }
+        }
+
+        /// <summary>
+        /// When the first word of the most recent caption was HEARD (local time), or
+        /// DateTime.MinValue. Transcript lines and exported subtitles are stamped with this rather
+        /// than with the moment the text arrived, which is seconds later.
+        /// </summary>
+        public DateTime LastCaptionSpokenAt
+        {
+            get
+            {
+                long t = Interlocked.Read(ref _lastSpokenUtcTicks);
+                return t == 0 ? DateTime.MinValue : new DateTime(t, DateTimeKind.Utc).ToLocalTime();
+            }
+        }
+
+        private volatile int _retractWords;
+
+        /// <summary>
+        /// How many of the PREVIOUS caption's last words the most recent caption replaces: 0 almost
+        /// always, 1 when the new chunk heard the word the previous one was cut off on ("help" that
+        /// was "helping"). Read inside the TextRecognized handler; see JoinSeam.
+        /// </summary>
+        public int LastCaptionRetractWords => _retractWords;
+
+        /// <summary>When the LAST word of the most recent caption was heard (local time), or DateTime.MinValue.</summary>
+        public DateTime LastCaptionSpokenEndAt
+        {
+            get
+            {
+                long t = Interlocked.Read(ref _lastSpokenEndUtcTicks);
+                return t == 0 ? DateTime.MinValue : new DateTime(t, DateTimeKind.Utc).ToLocalTime();
+            }
+        }
+
+        private long _lastSpokenEndUtcTicks;
+
+        /// <summary>
+        /// How long the decode in progress has been running, in seconds; 0 when none is. A decode
+        /// that runs on is what freezes captions — nothing reaches the bar until it returns — and
+        /// until now it was invisible for exactly as long as it lasted.
+        /// </summary>
+        public double CurrentDecodeSeconds
+        {
+            get
+            {
+                long t = Interlocked.Read(ref _decodeStartTick);
+                return t == 0 ? 0 : (Environment.TickCount64 - t) / 1000.0;
+            }
+        }
+
+        /// <summary>The longest decode in about the last minute, ms (0 when there has been none).</summary>
+        public int WorstRecentInferenceMs =>
+            Environment.TickCount64 - Interlocked.Read(ref _worstInferTick) > 60000 ? _lastInferMs : _worstInferMs;
+
+        /// <summary>Seconds since audio that had sound in it was last thrown away, or −1 if never this session.</summary>
+        public double SecondsSinceLastDrop
+        {
+            get
+            {
+                long t = Interlocked.Read(ref _lastRealDropTick);
+                return t == 0 ? -1 : (Environment.TickCount64 - t) / 1000.0;
+            }
+        }
+
+        /// <summary>How much audio the most recent drop threw away, in seconds.</summary>
+        public double LastDropSeconds => _lastRealDropMs / 1000.0;
+
         /// <summary>Whether the current processor decodes with beam search.</summary>
         public bool BeamActive => _beamActive;
         private volatile string _cadenceTier = "standard";
@@ -721,6 +854,20 @@ namespace AutoClicker.Utils
                 _lastConfidenceX1000 = -1;
                 _earlyTakes = 0;
                 _catchUpTakes = 0;
+                _syncDelayMs = -1;
+                _syncNewestMs = -1;
+                _syncOldestMs = -1;
+                lock (_syncLock) { _syncRecent.Clear(); }
+                Interlocked.Exchange(ref _lastSpokenUtcTicks, 0);
+                Interlocked.Exchange(ref _lastSpokenEndUtcTicks, 0);
+                _stepMsActive = 0;
+                _needSamples = 0;
+                _bufferedSamples = 0;
+                Interlocked.Exchange(ref _decodeStartTick, 0);
+                Interlocked.Exchange(ref _lastRealDropTick, 0);
+                _lastRealDropMs = 0;
+                _worstInferMs = 0;
+                Interlocked.Exchange(ref _worstInferTick, 0);
                 _levelDb = -60;
                 _gainX100 = 100;
                 // Unknown until this session's capture actually opens — never report a
@@ -1047,6 +1194,35 @@ namespace AutoClicker.Utils
         /// <summary>Seconds of previous-chunk context carried into each decode.</summary>
         public double CarryContextSeconds => _carryMsActive / 1000.0;
 
+        /// <summary>
+        /// The most tokens one decode pass may produce (see the cap in BuildProcessor). English
+        /// speech runs about six tokens a second, so the few seconds of audio in a chunk never need
+        /// more than a couple of dozen and 48 leaves twice that. Dense scripts — Chinese, Japanese,
+        /// Korean, Thai and their neighbours — spend more tokens per second, and "auto" may turn out
+        /// to be one of them, so those get 64. Ordinary speech never comes near either figure; only a
+        /// decode that has run away into a loop does, and that is what the cap is there to end.
+        /// </summary>
+        internal static int TokenCapFor(string language)
+        {
+            switch ((language ?? "auto").Trim().ToLowerInvariant())
+            {
+                case "zh":
+                case "yue":
+                case "ja":
+                case "ko":
+                case "th":
+                case "lo":
+                case "my":
+                case "km":
+                case "bo":
+                case "auto":
+                case "":
+                    return 64;
+                default:
+                    return 48;
+            }
+        }
+
         private WhisperProcessor BuildProcessor(WhisperFactory factory, string modelPath, string language,
             bool allowBeam = true)
         {
@@ -1074,11 +1250,29 @@ namespace AutoClicker.Utils
                 // model wasn't sure about) can be dropped before display.
                 .WithProbabilities()
                 .WithTemperature(0.0f)
-                // Repetition-loop detector, slightly stricter than whisper.cpp's
-                // default (2.4): a degenerate low-entropy decode ("the the the…",
-                // looping phrases on noisy audio) is retried at a higher
-                // temperature instead of being shown. Retries only fire on
-                // degenerate segments, so the real-time cost is negligible.
+                // BOUNDED DECODES — the caption freeze.
+                //
+                // A chunk that is mostly a pause plus the first word of the next sentence
+                // ("clearly … If") sends the decoder into a repetition loop ("If the rate
+                // may, if the rate may, …"). Uncapped, whisper runs a loop out to ~220
+                // tokens, calls it failed, and re-decodes at five rising temperatures —
+                // sampling several candidates each time. Measured on base.en with this
+                // exact configuration (scratchpad/syncprobe): 10–73 SECONDS for a single
+                // 2.8 s chunk, and it happened mid-sentence too (10 s on "Remember that
+                // the bridge is closed…"). Nothing reaches the bar while that runs, then
+                // the backlog trim throws the queued audio away — the "captions froze,
+                // then skipped" report, and the 7.2 s drop in this PC's own log.
+                //
+                // No temperature fallback, and a per-pass token cap well above any real
+                // speech in a few seconds of audio (English runs ~6 tokens a second; a
+                // dense script or an unknown language gets more room). Across 124 chunks of
+                // the test speech the slowest decode fell from 10.1 s (73 s with pauses)
+                // to 2.1 s, and recall did not drop. The repetition that does reach the cap
+                // is collapsed by CollapseRepeats before anything is shown.
+                .WithTemperatureInc(0f)
+                .WithMaxTokensPerSegment(TokenCapFor(language))
+                // With no fallback left this only marks a low-entropy decode as degenerate
+                // for whisper's own bookkeeping; kept at the value tuned before.
                 .WithEntropyThreshold(2.8f)
                 // Decoder-level sound-tag ban: tokens OPENING a bracketed
                 // annotation ("[Music]", "(applause)") are suppressed at
@@ -1106,7 +1300,11 @@ namespace AutoClicker.Utils
             bool beam = allowBeam && ((lightModel && Environment.ProcessorCount >= 6) || gpuLoaded);
             if (beam)
             {
-                builder.WithBeamSearchSamplingStrategy();
+                // Three beams, not whisper's default five. On the same 124 chunks, with the cap
+                // above, three HEARD more (96.6% of the words in unbroken speech against 96.1%)
+                // in three-quarters of the decode time, and reached the token cap far less often
+                // (3 decodes over 1.5 s against 15) — the extra beams mostly explored loops.
+                ((BeamSearchSamplingStrategyBuilder)builder.WithBeamSearchSamplingStrategy()).WithBeamSize(3);
                 Logger.Info("[Captions] beam-search decoding enabled for " + fileName +
                             (gpuLoaded ? " (GPU headroom)." : "."));
             }
@@ -1234,6 +1432,8 @@ namespace AutoClicker.Utils
                     }
                 }
                 if (dev == null) { throw new InvalidOperationException("no playback device"); }
+                try { _openDeviceId = dev.ID; } catch { _openDeviceId = null; }
+                _openDeviceName = AudioDeviceSelection.NameOf(dev, DataFlow.Render);
                 ReadEndpointVolume(dev);
                 var cap = new LowLatencyLoopbackCapture(dev, WantedCaptureBufferMs);
                 _captureBufMs = WantedCaptureBufferMs;
@@ -1244,6 +1444,10 @@ namespace AutoClicker.Utils
                 Logger.Warn("[Captions] low-latency loopback unavailable (" + ex.Message +
                             "); using the standard 100 ms capture.");
                 _captureBufMs = 100;
+                // NAudio's stock capture opens Windows' DEFAULT output by itself rather
+                // than the resolved one, so no specific device can honestly be claimed.
+                _openDeviceId = null;
+                _openDeviceName = null;
                 return new WasapiLoopbackCapture();
             }
         }
@@ -1257,8 +1461,19 @@ namespace AutoClicker.Utils
         private volatile string _captureDeviceId;
         private volatile string _captureDeviceName;
 
-        /// <summary>Friendly name of the output being captured, or null.</summary>
-        public string CaptureDeviceName => _captureDeviceName;
+        // The device a capture was OPENED on, recorded the moment it opens. The pair
+        // above was also rewritten by the periodic volume refresh from whichever device
+        // would be chosen NOW — so after a default-speaker switch that had not been
+        // followed yet, "capturing X" (and X's volume and mute) named a device Tempo was
+        // not listening to. Null when NAudio's stock capture picked the device itself.
+        private volatile string _openDeviceId;
+        private volatile string _openDeviceName;
+
+        /// <summary>Friendly name of the device being captured, or null.</summary>
+        public string CaptureDeviceName => _openDeviceName ?? _captureDeviceName;
+
+        /// <summary>Endpoint id of the device being captured, or null when unknown.</summary>
+        public string CaptureDeviceId => _openDeviceId ?? _captureDeviceId;
 
         /// <summary>
         /// Another output that is producing sound while the captured one is silent, or
@@ -1358,16 +1573,45 @@ namespace AutoClicker.Utils
             }
         }
 
-        /// <summary>Re-reads the speaker's volume/mute; the slider can move mid-session.</summary>
+        /// <summary>
+        /// Re-reads the captured speaker's volume/mute; the slider can move mid-session.
+        ///
+        /// Reads the device that is actually OPEN. It used to re-resolve instead, which
+        /// after a default-speaker switch that had not been followed yet read — and
+        /// named as "capturing" — a device Tempo was not listening to, so a mute warning
+        /// could describe a different speaker entirely.
+        /// </summary>
         private void RefreshEndpointVolume()
         {
             if (_activeMode != CaptureMode.SystemAudio) { return; }
             try
             {
                 using (var en = new MMDeviceEnumerator())
-                using (var dev = AudioDeviceSelection.Resolve(en, DataFlow.Render, out _))
                 {
-                    if (dev != null) { ReadEndpointVolume(dev); }
+                    MMDevice dev = null;
+                    string open = _openDeviceId;
+                    if (!string.IsNullOrEmpty(open))
+                    {
+                        try
+                        {
+                            dev = en.GetDevice(open);
+                            if (dev != null && dev.State != DeviceState.Active)
+                            {
+                                dev.Dispose();
+                                dev = null;
+                            }
+                        }
+                        catch { dev = null; }
+                    }
+                    if (dev == null)
+                    {
+                        // Unknown or gone: fall back to what would be chosen now.
+                        dev = AudioDeviceSelection.Resolve(en, DataFlow.Render, out _);
+                    }
+                    using (dev)
+                    {
+                        if (dev != null) { ReadEndpointVolume(dev); }
+                    }
                 }
             }
             catch { }
@@ -1389,6 +1633,8 @@ namespace AutoClicker.Utils
                     }
                 }
                 if (dev == null) { throw new InvalidOperationException("no capture device"); }
+                try { _openDeviceId = dev.ID; } catch { _openDeviceId = null; }
+                _openDeviceName = AudioDeviceSelection.NameOf(dev, DataFlow.Capture);
                 var cap = new WasapiCapture(dev, false, WantedCaptureBufferMs);
                 _captureBufMs = WantedCaptureBufferMs;
                 return cap;
@@ -1398,6 +1644,8 @@ namespace AutoClicker.Utils
                 Logger.Warn("[Captions] low-latency microphone capture unavailable (" + ex.Message +
                             "); using the standard 100 ms capture.");
                 _captureBufMs = 100;
+                _openDeviceId = null;       // the stock class picks the default input itself
+                _openDeviceName = null;
                 return new WasapiCapture();
             }
         }
@@ -1580,7 +1828,8 @@ namespace AutoClicker.Utils
             _hpPrevOut = 0f;
             _hpFresh = true;
 
-            lock (_bufferLock) { _mono16k.Clear(); }
+            lock (_bufferLock) { _mono16k.Clear(); _bufferedSamples = 0; }
+            Interlocked.Exchange(ref _decodeStartTick, 0);
         }
 
         private int _captureRestarts;
@@ -1659,6 +1908,25 @@ namespace AutoClicker.Utils
                     // here; this one did not, which is how a stopped session could be
                     // left with a live capture.
                     if (!_running) { return; }
+
+                    // Nothing to follow when the capture is healthy and already on the
+                    // speaker it would reopen. Every Windows default-speaker change lands
+                    // here, and with a speaker PINNED that meant tearing a working capture
+                    // down and opening the very same device again — dropping the audio in
+                    // flight for nothing. Only system-audio captures are skipped: for a
+                    // microphone, or a request that could change the capture mode, the
+                    // old always-reopen path still runs.
+                    if (_activeMode == CaptureMode.SystemAudio && !_captureLost && _capture != null
+                        && (Mode == CaptureMode.SystemAudio || Mode == CaptureMode.Auto))
+                    {
+                        string open = _openDeviceId;
+                        string target = AudioDeviceSelection.ResolveId(DataFlow.Render);
+                        if (open != null && target != null &&
+                            string.Equals(open, target, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return;
+                        }
+                    }
 
                     var old = _capture;
                     _capture = null;
@@ -1946,6 +2214,7 @@ namespace AutoClicker.Utils
                 lock (_bufferLock)
                 {
                     _mono16k.AddRange(new ReadOnlySpan<float>(_outScratch, 0, outCount));
+                    _bufferedSamples = _mono16k.Count;
                 }
 
                 // Nudge the worker: fresh audio is in. CurrentCount check keeps the
@@ -2300,6 +2569,7 @@ namespace AutoClicker.Utils
                         }
                     }
                     if (earlyTake) { need = have; _earlyTakes++; }
+                    _needSamples = need;
 
                     // CATCH-UP take — the missing recovery path after a transient
                     // hitch (game loading screen, an installer, a browser spike).
@@ -2319,7 +2589,6 @@ namespace AutoClicker.Utils
                         takeCap = (stepSamples * 3) / 2;
                         pressureTake = true;
                     }
-                    _backlogMs = (int)(_mono16k.Count * 1000L / WhisperSampleRate);
 
                     // Trim runaway backlog first (keep newest audio) so captions stay
                     // current instead of falling further behind with every chunk.
@@ -2353,6 +2622,10 @@ namespace AutoClicker.Utils
                             // sign the engine can't keep pace on this machine.
                             _droppedMs += (int)(drop * 1000L / WhisperSampleRate);
                             droppedThisPass = drop;
+                            // When, and how much: the session total alone kept a single
+                            // hitch hours ago reading as "captions are behind" for good.
+                            _lastRealDropMs = (int)(drop * 1000L / WhisperSampleRate);
+                            Interlocked.Exchange(ref _lastRealDropTick, Environment.TickCount64);
                         }
                     }
 
@@ -2366,6 +2639,7 @@ namespace AutoClicker.Utils
                         _mono16k.CopyTo(0, step, 0, take);
                         _mono16k.RemoveRange(0, take);
                         if (pressureTake && take > stepSamples) { _catchUpTakes++; }
+                        _stepMsActive = (int)(take * 1000L / WhisperSampleRate);
                         // What's left in the buffer is newer than the step, so the
                         // step ENDS that much before now (± the ~40 ms capture
                         // buffer, which the guard's lag scan absorbs).
@@ -2373,6 +2647,7 @@ namespace AutoClicker.Utils
                             - _mono16k.Count * 1000L / WhisperSampleRate;
                         stepStartTick = stepEndTick - take * 1000L / WhisperSampleRate;
                     }
+                    _bufferedSamples = _mono16k.Count;
                 }
 
                 // Falling behind is a real, user-visible condition ("captions lag") that
@@ -2504,7 +2779,7 @@ namespace AutoClicker.Utils
                     stepStartTick = stepEndTick - step.Length * 1000L / WhisperSampleRate;
                     if (step.Length < (int)(WhisperSampleRate * 0.6) && !TailIsSilent(step))
                     {
-                        lock (_bufferLock) { _mono16k.InsertRange(0, step); }
+                        lock (_bufferLock) { _mono16k.InsertRange(0, step); _bufferedSamples = _mono16k.Count; }
                         // Same event-driven wait: resume as soon as more audio lands.
                         try { await _samplesReady.WaitAsync(80, token); } catch { }
                         continue;                       // speech just began - let it build
@@ -2520,7 +2795,12 @@ namespace AutoClicker.Utils
                 // opening words, so they skip the cut.
                 if (step.Length >= stepSamples)
                 {
+                    int before = step.Length;
                     step = CutAtSilence(step);
+                    // The audio after the cut went back into the buffer, so this step now
+                    // ends EARLIER. Left alone, every caption cut this way would be measured
+                    // as arriving up to 0.8 s sooner after its words than it really did.
+                    stepEndTick -= (before - step.Length) * 1000L / WhisperSampleRate;
                 }
 
                 if (holder.P == null) break;
@@ -2557,6 +2837,9 @@ namespace AutoClicker.Utils
                 }
 
                 // Build the chunk to transcribe: previous tail (context) + new step.
+                // Whether it re-hears the previous chunk's tail decides how its opening
+                // words may be joined onto the previous caption (JoinSeam).
+                bool overlapped = carry.Length > 0;
                 float[] chunk;
                 if (carry.Length > 0)
                 {
@@ -2711,6 +2994,7 @@ namespace AutoClicker.Utils
                 try
                 {
                     var inferClock = System.Diagnostics.Stopwatch.StartNew();
+                    Interlocked.Exchange(ref _decodeStartTick, Environment.TickCount64);
                     var sb = new System.Text.StringBuilder();
                     string segLang = null;
                     double probSum = 0;
@@ -2769,6 +3053,7 @@ namespace AutoClicker.Utils
                         }
                         sb.Append(seg.Text);
                     }
+                    Interlocked.Exchange(ref _decodeStartTick, 0);
 
                     // Cancelled during the chunk: the enumerable has now drained fully
                     // (so Whisper's own cleanup runs with no native work in flight) and
@@ -2845,16 +3130,28 @@ namespace AutoClicker.Utils
                         // as an artifact and silently vanished from the captions.
                         bool chunksAdjacent = lastEmitMs != 0 &&
                             Environment.TickCount64 - lastEmitMs < 6000;
+                        int retract = 0;
                         if (chunksAdjacent)
                         {
-                            text = StripDuplicateOverlap(_lastEmitted, text);
+                            text = JoinSeam(_lastEmitted, text, overlapped, out retract);
                         }
+                        // A decode loop that wrapped back to an earlier point and ran on to the
+                        // token cap leaves a tail that repeats what is already on screen.
+                        text = TrimRepeatedTail(chunksAdjacent ? ShownTail(_lastEmitted, retract, string.Empty) : string.Empty, text);
                         if (text.Length > 0)
                         {
-                            _lastEmitted = text;
+                            // Read by the host inside its handler, like the spoken times below.
+                            _retractWords = retract;
+                            // What the next chunk is compared against: the END of the caption as
+                            // shown, not only this emission — which can be two words ("at 9.")
+                            // while the next chunk re-hears further back ("gate at 9, and then…").
+                            _lastEmitted = ShownTail(_lastEmitted, retract, text);
                             lastEmitMs = Environment.TickCount64;   // back to full-step cadence
                             Interlocked.Exchange(ref _lastEmitTick, lastEmitMs);
                             _emits++;
+                            // Before RaiseText: the host reads LastCaptionSpokenAt inside its
+                            // handler to stamp the transcript line with when this was SAID.
+                            NoteCaptionTiming(lastEmitMs, stepStartTick, stepEndTick);
                             RaiseText(text);
                         }
                     }
@@ -2868,6 +3165,14 @@ namespace AutoClicker.Utils
                     double audioMs = chunk.Length * 1000.0 / WhisperSampleRate;
                     _lastInferMs = (int)inferClock.ElapsedMilliseconds;
                     _lastChunkMs = (int)audioMs;
+                    // The worst decode of the last minute or so. The smoothed average hides a
+                    // single runaway decode completely, and that one decode is the freeze.
+                    long inferDone = Environment.TickCount64;
+                    if (_lastInferMs >= _worstInferMs || inferDone - Interlocked.Read(ref _worstInferTick) > 60000)
+                    {
+                        _worstInferMs = _lastInferMs;
+                        Interlocked.Exchange(ref _worstInferTick, inferDone);
+                    }
                     _chunksDone++;
                     // Smoothed inference time (EMA ~ last 8 chunks) for Live Debug —
                     // one steady number instead of a jittering per-chunk reading.
@@ -2956,10 +3261,13 @@ namespace AutoClicker.Utils
                         double rtf = audioMs > 0 ? inferClock.ElapsedMilliseconds / audioMs : 0;
                         string shown = text.Length == 0 ? "(nothing shown)"
                             : "“" + (text.Length > 60 ? text.Substring(0, 60) + "…" : text) + "”";
+                        string heard = text.Length == 0 || _syncNewestMs < 0 ? ""
+                            : " · out " + (_syncNewestMs / 1000.0).ToString("0.0") + "–"
+                              + (_syncOldestMs / 1000.0).ToString("0.0") + " s after heard";
                         Logger.Info("[Trace] chunk " + (int)audioMs + " ms → " + _lastInferMs +
                                     " ms (" + rtf.ToString("0.00") + "×RT) · backlog " +
-                                    (_backlogMs / 1000.0).ToString("0.0") + " s · gain " +
-                                    (_gainX100 / 100.0).ToString("0.0") + "× · " + shown);
+                                    BacklogSeconds.ToString("0.0") + " s · gain " +
+                                    (_gainX100 / 100.0).ToString("0.0") + "×" + heard + " · " + shown);
                     }
                     // Sustained headroom → restore what the ladder gave up. Beam comes
                     // back FIRST (cheap rebuild, it was the first thing dropped): ~25
@@ -3067,10 +3375,12 @@ namespace AutoClicker.Utils
                 }
                 catch (OperationCanceledException)
                 {
+                    Interlocked.Exchange(ref _decodeStartTick, 0);
                     break;
                 }
                 catch (Exception ex)
                 {
+                    Interlocked.Exchange(ref _decodeStartTick, 0);
                     RaiseStatus("Transcription error: " + ex.Message);
                     try { await Task.Delay(500, token); } catch { }
                 }
@@ -3190,6 +3500,7 @@ namespace AutoClicker.Utils
                     lock (_bufferLock)
                     {
                         _mono16k.InsertRange(0, back);
+                        _bufferedSamples = _mono16k.Count;
                     }
                     var cut = new float[bestCut];
                     Array.Copy(step, 0, cut, 0, bestCut);
@@ -3450,6 +3761,172 @@ namespace AutoClicker.Utils
                 if (!hit) { i++; }
             }
             return changed ? string.Join(" ", words) : text;
+        }
+
+        /// <summary>
+        /// Joins a new chunk's text onto the previous caption. Returns what to show, and in
+        /// <paramref name="retractWords"/> how many of the previous caption's last words it replaces.
+        ///
+        /// Chunks overlap by up to a second, so each opens by re-hearing the words the previous
+        /// caption ended on. Heard IDENTICALLY, StripDuplicateOverlap drops them. Heard a little
+        /// differently, nothing matched and both hearings went on screen: 9 of 33 captions in
+        /// scratchpad/syncprobe opened that way ("…at the harbour gate. the Harbor Gate at 9",
+        /// "Thank you all for help. all for helping with…"). Two edges explain nearly all of it —
+        /// the previous chunk's LAST word is often cut short ("help", "note", "warmth"), and the
+        /// new chunk's FIRST word often loses its front ("Graphs", "Other"). So on a near match
+        /// the previous caption's hearing is kept for the overlap, except its last word, which the
+        /// new chunk heard whole.
+        ///
+        /// Only for a chunk that really re-heard the previous one's audio
+        /// (<paramref name="overlapped"/>); otherwise a similar opening is new speech. The rules are
+        /// deliberately narrow — an exact word must anchor the match, a middle word may differ by
+        /// one or two letters at most, and only the edge words get more room — so a sentence that
+        /// merely resembles the last one ("the red car" … "the blue car") is left alone.
+        /// scratchpad/seamtest holds both kinds of case.
+        /// </summary>
+        private static string JoinSeam(string prev, string next, bool overlapped, out int retractWords)
+        {
+            retractWords = 0;
+            string exact = StripDuplicateOverlap(prev, next);
+            if (!string.Equals(exact, next, StringComparison.Ordinal) || !overlapped
+                || string.IsNullOrWhiteSpace(prev) || string.IsNullOrWhiteSpace(next))
+            {
+                return exact;
+            }
+
+            string[] p = prev.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            string[] n = next.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            int maxK = Math.Min(6, Math.Min(p.Length, n.Length));
+            for (int k = maxK; k >= 2; k--)
+            {
+                int same = 0, letters = 0, misheard = 0;
+                bool ok = true, shortFront = false;
+                for (int i = 0; i < k; i++)
+                {
+                    string a = LettersOf(p, p.Length - k + i, 1);
+                    string b = LettersOf(n, i, 1);
+                    if (a.Length == 0 || b.Length == 0) { ok = false; break; }
+                    letters += Math.Max(a.Length, b.Length);
+                    if (a == b) { same++; continue; }
+                    bool last = i == k - 1;
+                    int longer = Math.Max(a.Length, b.Length);
+                    int allowed = last ? (longer >= 4 ? 2 : 0) : (longer >= 7 ? 2 : longer >= 4 ? 1 : 0);
+                    if (allowed > 0 && EditDistance(a, b, allowed) <= allowed) { continue; }
+                    // The previous chunk's last word, cut off at its edge: "note" / "notebook",
+                    // or misheard longer from its opening letters: "warmth" / "warm".
+                    if (last && (StartsWithWord(b, a) || StartsWithWord(a, b))) { continue; }
+                    // The new chunk's first word, missing its front: "photographs" / "Graphs".
+                    if (i == 0 && b.Length >= 3 && a.EndsWith(b, StringComparison.Ordinal)) { continue; }
+                    // ...cut down to two letters ("setup" / "up") — needs every other word exact.
+                    if (i == 0 && b.Length == 2 && a.Length > 2 && a.EndsWith(b, StringComparison.Ordinal))
+                    {
+                        shortFront = true;
+                        continue;
+                    }
+                    // ONE word misheard outright ("weather" / "Other", "Harbor" / "Harvard",
+                    // "or" / "early") — only in a match of four or more words, three of them exact.
+                    if (k >= 4 && misheard == 0) { misheard++; continue; }
+                    ok = false;
+                    break;
+                }
+                if (!ok || same == 0 || letters < 8) { continue; }
+                if (shortFront && same < k - 1) { continue; }
+                if (misheard > 0 && same < Math.Max(3, k - 2)) { continue; }
+
+                bool lastSame = LettersOf(p, p.Length - 1, 1) == LettersOf(n, k - 1, 1);
+                if (lastSame)
+                {
+                    return string.Join(" ", n, k, n.Length - k).Trim();
+                }
+                retractWords = 1;
+                return string.Join(" ", n, k - 1, n.Length - (k - 1)).Trim();
+            }
+            return next;
+        }
+
+        /// <summary>
+        /// The last twelve words of the caption as shown after <paramref name="text"/> joins it
+        /// (minus any words it retracted) — what the next chunk's opening is compared against.
+        /// </summary>
+        private static string ShownTail(string tail, int retract, string text)
+        {
+            var words = new List<string>((tail ?? string.Empty).Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
+            if (retract > 0 && words.Count > retract) { words.RemoveRange(words.Count - retract, retract); }
+            words.AddRange((text ?? string.Empty).Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries));
+            if (words.Count > 12) { words.RemoveRange(0, words.Count - 12); }
+            return string.Join(" ", words);
+        }
+
+        /// <summary>
+        /// Drops a run of five or more words at the END of a new caption that repeats words already
+        /// shown (<paramref name="shownTail"/>) or said earlier in the same caption — the shape a
+        /// decode loop takes when it wraps back to the start of a sentence and runs on to the token
+        /// cap: "Remember that the bridge is" then "closed for repairs until the end of the bridge is
+        /// closed for repairs" (scratchpad/syncprobe, twice in four runs). Back-to-back repeats are
+        /// CollapseRepeats' job; this is the loop that restarts further back. Five words is well
+        /// past what ordinary speech repeats within a few seconds.
+        /// </summary>
+        private static string TrimRepeatedTail(string shownTail, string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) { return text; }
+            string[] t = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (t.Length < 6) { return text; }
+            string[] shown = (shownTail ?? string.Empty).Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+
+            // Everything in normalised letters, the shown tail first, then the new caption.
+            var all = new List<string>(shown.Length + t.Length);
+            foreach (string w in shown) { all.Add(LettersOf(new[] { w }, 0, 1)); }
+            foreach (string w in t) { all.Add(LettersOf(new[] { w }, 0, 1)); }
+
+            for (int run = Math.Min(10, t.Length - 1); run >= 5; run--)
+            {
+                int runStart = all.Count - run;
+                // An earlier copy must end before this run begins (no self-overlap).
+                for (int s = 0; s + run <= runStart; s++)
+                {
+                    bool match = true;
+                    for (int k = 0; k < run; k++)
+                    {
+                        if (all[s + k].Length == 0 || all[s + k] != all[runStart + k]) { match = false; break; }
+                    }
+                    if (match)
+                    {
+                        int keep = t.Length - run;
+                        return keep <= 0 ? string.Empty : string.Join(" ", t, 0, keep);
+                    }
+                }
+            }
+            return text;
+        }
+
+        /// <summary>True when <paramref name="longer"/> is <paramref name="start"/> carried on (3+ letters in common).</summary>
+        private static bool StartsWithWord(string longer, string start)
+        {
+            return start.Length >= 3 && longer.Length > start.Length
+                   && longer.StartsWith(start, StringComparison.Ordinal);
+        }
+
+        /// <summary>Levenshtein distance, giving up (returning limit + 1) once it must exceed <paramref name="limit"/>.</summary>
+        private static int EditDistance(string a, string b, int limit)
+        {
+            if (Math.Abs(a.Length - b.Length) > limit) { return limit + 1; }
+            var prevRow = new int[b.Length + 1];
+            var row = new int[b.Length + 1];
+            for (int j = 0; j <= b.Length; j++) { prevRow[j] = j; }
+            for (int i = 1; i <= a.Length; i++)
+            {
+                row[0] = i;
+                int best = row[0];
+                for (int j = 1; j <= b.Length; j++)
+                {
+                    int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                    row[j] = Math.Min(Math.Min(row[j - 1] + 1, prevRow[j] + 1), prevRow[j - 1] + cost);
+                    if (row[j] < best) { best = row[j]; }
+                }
+                if (best > limit) { return limit + 1; }
+                var swap = prevRow; prevRow = row; row = swap;
+            }
+            return prevRow[b.Length];
         }
 
         /// <summary>Lower-case letters/digits of a word range, all else stripped.</summary>
@@ -3760,6 +4237,39 @@ namespace AutoClicker.Utils
         }
 
         private float[] _monoLpScratch = Array.Empty<float>();
+
+        /// <summary>
+        /// Records how long after its words were heard a caption is leaving the engine.
+        ///
+        /// <paramref name="startTick"/>/<paramref name="endTick"/> are when the step's first and last
+        /// samples arrived. A sample arrives when its capture buffer is delivered, which on average
+        /// is half a buffer after it was played, so that half is added. The carry re-heard at the
+        /// front of a chunk is not counted: its words were already shown by the previous caption
+        /// and the seam dedupe strips them.
+        /// </summary>
+        private void NoteCaptionTiming(long emitTick, long startTick, long endTick)
+        {
+            try
+            {
+                if (startTick <= 0 || endTick <= 0) { return; }
+                int half = Math.Max(0, _captureBufMs / 2);
+                int newest = (int)Math.Max(0, emitTick - endTick) + half;
+                int oldest = (int)Math.Max(0, emitTick - startTick) + half;
+                int middle = (newest + oldest) / 2;
+                _syncNewestMs = newest;
+                _syncOldestMs = oldest;
+                _syncDelayMs = _syncDelayMs < 0 ? middle : (_syncDelayMs * 3 + middle) / 4;
+                lock (_syncLock)
+                {
+                    _syncRecent.Enqueue(new KeyValuePair<long, int>(emitTick, oldest));
+                    while (_syncRecent.Count > 0 && emitTick - _syncRecent.Peek().Key > 30000) { _syncRecent.Dequeue(); }
+                }
+                DateTime nowUtc = DateTime.UtcNow;
+                Interlocked.Exchange(ref _lastSpokenUtcTicks, nowUtc.AddMilliseconds(-oldest).Ticks);
+                Interlocked.Exchange(ref _lastSpokenEndUtcTicks, nowUtc.AddMilliseconds(-newest).Ticks);
+            }
+            catch { /* a diagnostic must never cost a caption */ }
+        }
 
         private void RaiseText(string text)
         {

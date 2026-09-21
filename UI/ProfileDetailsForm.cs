@@ -106,7 +106,7 @@ namespace AutoClicker.UI
 
             // ── Icon ──────────────────────────────────────────────────────────
             Controls.Add(UiFactory.Label("Icon", 18, y, FontStyle.Bold));
-            _preview = new Label
+            _preview = new EmojiLabel     // keeps the chosen icon in colour
             {
                 Left = 412,
                 Top = y - 6,

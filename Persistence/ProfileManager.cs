@@ -56,27 +56,35 @@ namespace AutoClicker.Persistence
             _profiles.Clear();
             LoadRecycleBin();
 
+            bool recovered = false;
             try
             {
                 string path = GetProfilesPath();
+                // A missing file stays missing — deleting it is the README's way to reset profiles.
                 if (File.Exists(path))
                 {
-                    string json = File.ReadAllText(path);
-                    if (!string.IsNullOrWhiteSpace(json))
+                    List<ClickProfile> loaded = TryParseProfiles(File.ReadAllText(path));
+                    if (loaded == null)
                     {
-                        var loaded = JsonSerializer.Deserialize<List<ClickProfile>>(json, Options);
-                        if (loaded != null)
+                        // Empty or unreadable: recover the previous save, as settings always have. Without
+                        // this, a damaged file meant losing every profile — and the default seeded below was
+                        // saved at once, so the save after that rotated it over the good ".1" for good.
+                        string previous = PersistenceHelper.ReadPreviousIfUsable(path, t => TryParseProfiles(t) != null);
+                        loaded = TryParseProfiles(previous);
+                        PersistenceHelper.BackupCorruptFile(path);
+                        recovered = loaded != null;
+                    }
+                    if (loaded != null)
+                    {
+                        foreach (var p in loaded)
                         {
-                            foreach (var p in loaded)
+                            if (p != null)
                             {
-                                if (p != null)
+                                if (p.Points == null)
                                 {
-                                    if (p.Points == null)
-                                    {
-                                        p.Points = new List<ClickPoint>();
-                                    }
-                                    _profiles.Add(p);
+                                    p.Points = new List<ClickPoint>();
                                 }
+                                _profiles.Add(p);
                             }
                         }
                     }
@@ -89,6 +97,9 @@ namespace AutoClicker.Persistence
                 _profiles.Clear();
             }
 
+            // Recovered profiles go straight back to disk (the damaged file was set aside).
+            if (recovered && _profiles.Count > 0) { Save(); }
+
             if (_profiles.Count == 0)
             {
                 _profiles.Add(CreateDefaultProfile());
@@ -100,6 +111,14 @@ namespace AutoClicker.Persistence
             // right-hand detail column isn't the one English thing left on the screen.
             UI.SplashForm.Report(0, _profiles.Count + " " +
                 Utils.Localization.T(_profiles.Count == 1 ? "profile" : "profiles"));
+        }
+
+        /// <summary>The profile list in <paramref name="json"/>, or null when it is empty or not a profile list.</summary>
+        private static List<ClickProfile> TryParseProfiles(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) { return null; }
+            try { return JsonSerializer.Deserialize<List<ClickProfile>>(json, Options); }
+            catch { return null; }
         }
 
         public bool Save()

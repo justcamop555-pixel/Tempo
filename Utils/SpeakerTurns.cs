@@ -115,6 +115,30 @@ namespace AutoClicker.Utils
         /// </summary>
         public bool VoiceDriven { get; set; }
 
+        /// <summary>
+        /// The speaker number the bar is showing right now; 0 before the first words.
+        /// Read by Live debug, which could show the two pieces of EVIDENCE (the voice
+        /// and face numbers) but never the label they actually produced.
+        /// </summary>
+        public int CurrentSpeaker => _speaker;
+
+        /// <summary>
+        /// When the current turn began (UTC), or DateTime.MinValue before the first words. A number
+        /// corrected in place keeps its turn's start — which is how the transcript tells a relabel
+        /// ("that was Speaker 2 all along") from a new turn.
+        /// </summary>
+        public DateTime CurrentTurnStartedUtc => _turnStartUtc;
+
+        /// <summary>
+        /// All of the current turn's words, uncapped and unlabelled. The bar's text is trimmed to fit
+        /// and re-shows up to three earlier turns in front of this one, so it cannot be what a
+        /// transcript is built from: fed that, the transcript stored the same sentences again every
+        /// time the trim moved (481 words kept for 149 spoken, measured by scratchpad/transcripttest).
+        /// </summary>
+        public string CurrentTurnText => _lastTurnFull;
+
+        private string _lastTurnFull = string.Empty;
+
         /// <summary>Forget everything — the next new words become "Speaker 1:".</summary>
         public void Reset()
         {
@@ -126,6 +150,7 @@ namespace AutoClicker.Utils
             _primeNeeded = true;
             _history.Clear();
             _lastShown = string.Empty;
+            _lastTurnFull = string.Empty;
             _pendingHandoverText = null;
         }
 
@@ -150,6 +175,45 @@ namespace AutoClicker.Utils
             {
                 _baseline = chars >= _baseline.Length ? string.Empty : _baseline.Substring(chars);
             }
+        }
+
+        /// <summary>
+        /// For a caller that builds its own line from new words (Tempo's engine): marks
+        /// <paramref name="alreadyShown"/> — the line as it stood BEFORE the words being added now
+        /// — as the text already on screen, in place of the priming Label() does on its first call.
+        ///
+        /// That priming is right for Windows Live Captions, whose window already holds text when
+        /// Tempo starts mirroring it. For Tempo's engine the first call carries the session's first
+        /// real words, and priming them away made them vanish from the bar the moment the second
+        /// caption arrived. No-op once primed.
+        /// </summary>
+        public void PrimeIfNeeded(string alreadyShown)
+        {
+            if (!_primeNeeded) { return; }
+            _primeNeeded = false;
+            alreadyShown = alreadyShown ?? string.Empty;
+            _baseline = alreadyShown;
+            _lastRaw = alreadyShown;
+            _lastGrowUtc = DateTime.MinValue;
+            _turnStartUtc = DateTime.MinValue;
+            _speaker = 0;                      // the next growth is "first real words"
+            _lastShown = string.Empty;
+            _lastTurnFull = string.Empty;
+            _pendingHandoverText = null;
+        }
+
+        /// <summary>
+        /// Tells the labeler the caller cut the END of the rolling line back to
+        /// <paramref name="keptLength"/> characters before this Label() call: the engine heard the
+        /// previous caption's last word better and is putting it back (TempoTranscriber.JoinSeam).
+        /// Without this the shorter line could read as a ROLL, and the turn baseline would be
+        /// rebased off its FRONT — the very mis-cut NoteFrontShed exists to prevent.
+        /// </summary>
+        public void NoteTailRevision(int keptLength)
+        {
+            if (keptLength < 0) { keptLength = 0; }
+            if (_lastRaw.Length > keptLength) { _lastRaw = _lastRaw.Substring(0, keptLength); }
+            if (_baseline.Length > keptLength) { _baseline = _baseline.Substring(0, keptLength); }
         }
 
         /// <summary>
@@ -226,8 +290,25 @@ namespace AutoClicker.Utils
                 _turnStartUtc = now;
                 _speaker = voiceSpeaker > 0 ? voiceSpeaker : 1;
                 _lastShown = LastSentence(raw);
+                _lastTurnFull = _lastShown;
                 _pendingHandoverText = null;
                 return Prefix(_speaker) + _lastShown;
+            }
+
+            // Words that scrolled off the FRONT of the line, measured by where the new text actually
+            // begins inside the old — not by how much shorter the line got. Windows scrolls old words
+            // away in the same update that adds new ones, so the length alone under-counted the roll
+            // by the new words (or missed it entirely when the two cancelled out), the turn baseline
+            // was rebased by the wrong amount, and the next cut landed mid-word: the bar showed
+            // "Speaker 3: est this morning. Our team will…", earlier turns and all.
+            int rolled = FrontShedChars(_lastRaw, raw);
+            if (rolled > 0)
+            {
+                _lastRaw = _lastRaw.Substring(rolled);
+                if (_baseline.Length > 0)
+                {
+                    _baseline = rolled >= _baseline.Length ? string.Empty : _baseline.Substring(rolled);
+                }
             }
 
             bool grew = raw.Length > _lastRaw.Length;
@@ -326,7 +407,7 @@ namespace AutoClicker.Utils
 
                 _lastGrowUtc = now;
             }
-            else if (raw.Length < _lastRaw.Length - 10)
+            else if (rolled > 0 || raw.Length < _lastRaw.Length - 10)
             {
                 // The line ROLLED — dropped a chunk of old words from the FRONT to
                 // make room. That only happens while recognition is actively running,
@@ -339,14 +420,19 @@ namespace AutoClicker.Utils
                 // FuzzyCutIndex(raw, baseline) then mismatches at the very first
                 // letter, returns 0, and the WHOLE rolled line — previous turns
                 // included — leaks back out under the current speaker's label
-                // ("Speaker 1: ..go that park. I'll see you later."). Rebase by
-                // shedding from the baseline's front what the line itself lost.
-                int lost = _lastRaw.Length - raw.Length;
-                if (_baseline.Length > 0 && lost > 0)
+                // ("Speaker 1: ..go that park. I'll see you later."). A roll that
+                // could be aligned was rebased above; this is the fallback for one
+                // that couldn't (the line rewritten beyond recognition): shed from
+                // the baseline's front what the line itself lost.
+                if (rolled <= 0)
                 {
-                    _baseline = lost >= _baseline.Length
-                        ? string.Empty
-                        : _baseline.Substring(lost);
+                    int lost = _lastRaw.Length - raw.Length;
+                    if (_baseline.Length > 0 && lost > 0)
+                    {
+                        _baseline = lost >= _baseline.Length
+                            ? string.Empty
+                            : _baseline.Substring(lost);
+                    }
                 }
             }
             // Any other non-growing change is a reflow of existing words — same turn.
@@ -375,6 +461,7 @@ namespace AutoClicker.Utils
             {
                 shown = LastSentence(raw);   // bounded fallback — never dump the whole line
             }
+            _lastTurnFull = shown;           // the transcript's copy, before the bar's cap below
 
             // One speaker talking for a while builds a long turn; the overlay trims
             // overflowing text from the LEFT, which would cut the label off first.
@@ -485,6 +572,53 @@ namespace AutoClicker.Utils
             }
             string tail = best >= 0 ? s.Substring(Math.Min(best, s.Length)).TrimStart(' ', '.', ',', '!', '?') : s;
             return tail.Length == 0 ? s : tail;
+        }
+
+        /// <summary>
+        /// How many characters scrolled off the FRONT of <paramref name="previous"/> to leave the
+        /// text <paramref name="current"/> now begins with: 0 when it still begins where it did, −1
+        /// when its opening can't be found in the old text. Compared on letters and digits only,
+        /// ignoring case, so a reflow of punctuation or capitals can't hide a roll. When the opening
+        /// words occur more than once, the place where the REST of the old text runs straight into
+        /// the new one wins, so a repeated phrase can't make the roll look shorter than it was.
+        /// </summary>
+        internal static int FrontShedChars(string previous, string current)
+        {
+            if (string.IsNullOrEmpty(previous) || string.IsNullOrEmpty(current)) { return 0; }
+
+            var prevLetters = new System.Text.StringBuilder(previous.Length);
+            var prevIndex = new List<int>(previous.Length);
+            for (int i = 0; i < previous.Length; i++)
+            {
+                if (char.IsLetterOrDigit(previous[i]))
+                {
+                    prevLetters.Append(char.ToLowerInvariant(previous[i]));
+                    prevIndex.Add(i);
+                }
+            }
+            var curLetters = new System.Text.StringBuilder(current.Length);
+            foreach (char c in current)
+            {
+                if (char.IsLetterOrDigit(c)) { curLetters.Append(char.ToLowerInvariant(c)); }
+            }
+
+            string p = prevLetters.ToString();
+            string q = curLetters.ToString();
+            const int Probe = 16;
+            if (q.Length < Probe || p.Length < Probe) { return 0; }        // too little to align on
+            string opening = q.Substring(0, Probe);
+            if (p.StartsWith(opening, StringComparison.Ordinal)) { return 0; }
+
+            int first = -1;
+            for (int at = p.IndexOf(opening, 1, StringComparison.Ordinal); at > 0;
+                 at = at + 1 < p.Length ? p.IndexOf(opening, at + 1, StringComparison.Ordinal) : -1)
+            {
+                if (first < 0) { first = at; }
+                int rest = p.Length - at;
+                int span = Math.Min(rest, q.Length);
+                if (string.CompareOrdinal(p, at, q, 0, span) == 0) { return prevIndex[at]; }
+            }
+            return first > 0 ? prevIndex[first] : -1;
         }
 
         /// <summary>

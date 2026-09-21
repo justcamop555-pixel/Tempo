@@ -30,8 +30,6 @@ namespace AutoClicker.UI
         private Label _macroSummaryLabel;
         private CheckBox _macroSmoothCheck;
         private CheckBox _macroPreserveHoldsCheck;
-        private Button _macroMoveUpBtn;
-        private Button _macroMoveDownBtn;
         private NumericUpDown _macroCountdownNum;
         private NumericUpDown _macroLoopDelayNum;
         private TextBox _macroSearchBox;
@@ -151,9 +149,9 @@ namespace AutoClicker.UI
                 "Record mouse and keyboard input, edit the steps, then play it back. " +
                 "The Live Monitor below fills in real time as you record and highlights " +
                 "each step during playback. Tick \"Append to selected macro\" to add onto " +
-                "an existing recording. In the list: Enter plays, Ctrl+D duplicates, " +
-                "F2 renames, Delete moves to the recycle bin. Bind \"Record\" and \"Play\" " +
-                "on the Keybinds tab to control it hands-free.";
+                "an existing recording. In the list: drag a macro to reorder it, Enter plays, " +
+                "Ctrl+D duplicates, F2 renames, Delete moves to the recycle bin. Bind \"Record\" " +
+                "and \"Play\" on the Keybinds tab to control it hands-free.";
             var help = UiFactory.Label(helpText, 12, 12);
             help.MaximumSize = new Size(720, 0);
             help.AutoSize = true;
@@ -175,6 +173,20 @@ namespace AutoClicker.UI
             _macroListBox.DoubleClick += (s, e) => EditSelectedMacro();
             _macroListBox.SelectedIndexChanged += (s, e) => LoadMacroDefaultsIntoUi();
             _macroListBox.KeyDown += OnMacroListKeyDown;
+
+            // Drag a macro to reorder it, replacing the Move up / Move down buttons — the same change
+            // the Accounts list got, for the same reason ("we can add drag account to anywhere").
+            // A ListBox has no ItemDrag (that is ListView/TreeView), so the drag starts by hand: remember
+            // what was pressed, and begin only once the pointer has moved past the system drag threshold
+            // — otherwise an ordinary click to select would start a drag.
+            _macroListBox.AllowDrop = true;
+            _macroListBox.MouseDown += OnMacroDragMouseDown;
+            _macroListBox.MouseMove += OnMacroDragMouseMove;
+            _macroListBox.MouseUp += (s, e) => _macroDragCandidate = null;
+            _macroListBox.DragEnter += OnMacroDragOver;
+            _macroListBox.DragOver += OnMacroDragOver;
+            _macroListBox.DragLeave += (s, e) => _macroListBox.DropLineIndex = -1;
+            _macroListBox.DragDrop += OnMacroDragDrop;
 
             var macroMenu = new ContextMenuStrip();
             macroMenu.Items.Add(Utils.Localization.T("Play"), null, OnPlayMacroClicked);
@@ -209,7 +221,9 @@ namespace AutoClicker.UI
             // Top 92, not 84: the Sort combo above it ends at y=91, so the card's top
             // border ran 7px through the bottom of the combo. Height is unchanged, so the
             // bottom moves to 628 and still clears the Live Monitor card at 634.
-            var manageGroup = UiFactory.Group(Utils.Localization.T("Manage"), 320, 92, 124, 536, CardIcon.Gear);
+            // 460 rather than 536: Move up / Move down are gone (drag the rows instead), so the card is
+            // two rows shorter and still ends well clear of the Live Monitor at y=634.
+            var manageGroup = UiFactory.Group(Utils.Localization.T("Manage"), 320, 92, 124, 460, CardIcon.Gear);
             int mx = 6;
             int mw = 112;
 
@@ -225,40 +239,37 @@ namespace AutoClicker.UI
             _notesMacroBtn = UiFactory.Button(Utils.Localization.T("Notes…"), mx, 126, mw, 30);
             _notesMacroBtn.Click += OnEditMacroNotes;
 
-            _macroMoveUpBtn = UiFactory.Button(Utils.Localization.T("Move up"), mx, 168, mw, 30);
-            _macroMoveUpBtn.Click += (s, e) => MoveMacro(-1);
-
-            _macroMoveDownBtn = UiFactory.Button(Utils.Localization.T("Move down"), mx, 202, mw, 30);
-            _macroMoveDownBtn.Click += (s, e) => MoveMacro(1);
-
-            _exportMacroBtn = UiFactory.Button(Utils.Localization.T("Export…"), mx, 244, mw, 30);
+            // Move up / Move down are gone: dragging a row does it directly, and two buttons to shuffle
+            // one position at a time were the slowest possible way to say "put this one at the top".
+            // Everything below them moves up by the 76px the pair occupied.
+            _exportMacroBtn = UiFactory.Button(Utils.Localization.T("Export…"), mx, 168, mw, 30);
             _exportMacroBtn.Click += OnExportMacro;
 
-            _importMacroBtn = UiFactory.Button(Utils.Localization.T("Import…"), mx, 278, mw, 30);
+            _importMacroBtn = UiFactory.Button(Utils.Localization.T("Import…"), mx, 202, mw, 30);
             _importMacroBtn.Click += OnImportMacro;
 
-            _exportAllBtn = UiFactory.Button(Utils.Localization.T("Export all…"), mx, 312, mw, 30);
+            _exportAllBtn = UiFactory.Button(Utils.Localization.T("Export all…"), mx, 236, mw, 30);
             _exportAllBtn.Click += OnExportAllMacros;
 
-            _importAllBtn = UiFactory.Button(Utils.Localization.T("Import all…"), mx, 346, mw, 30);
+            _importAllBtn = UiFactory.Button(Utils.Localization.T("Import all…"), mx, 270, mw, 30);
             _importAllBtn.Click += OnImportAllMacros;
 
-            _mergeMacroBtn = UiFactory.Button(Utils.Localization.T("Merge…"), mx, 388, mw, 30);
+            _mergeMacroBtn = UiFactory.Button(Utils.Localization.T("Merge…"), mx, 312, mw, 30);
             _mergeMacroBtn.Click += OnMergeMacroClicked;
 
             // Sits directly above Delete: the repair pass a recording usually wants
             // before it is trusted (stuck keys, off-screen clicks, robotic timing).
             // Delete stays last so the destructive button keeps its own corner.
-            _fixMacroBtn = UiFactory.Button(Utils.Localization.T("Fix…"), mx, 422, mw, 30);
+            _fixMacroBtn = UiFactory.Button(Utils.Localization.T("Fix…"), mx, 346, mw, 30);
             _fixMacroBtn.Click += OnFixMacroClicked;
 
-            _deleteMacroBtn = UiFactory.Button("Delete", mx, 456, mw, 30);
+            _deleteMacroBtn = UiFactory.Button("Delete", mx, 380, mw, 30);
             _deleteMacroBtn.ForeColor = _theme.DangerText;
             _deleteMacroBtn.Click += OnDeleteMacroClicked;
 
             // Directly under Delete, because that is the button people press by
             // accident and this is the way back from it.
-            _macroRecycleBtn = UiFactory.Button(Utils.Localization.T("Recycle bin"), mx, 494, mw, 30);
+            _macroRecycleBtn = UiFactory.Button(Utils.Localization.T("Recycle bin"), mx, 418, mw, 30);
             _macroRecycleBtn.Click += OnMacroRecycleBinClicked;
 
             manageGroup.Controls.Add(_macroRecycleBtn);
@@ -267,8 +278,6 @@ namespace AutoClicker.UI
             manageGroup.Controls.Add(_renameMacroBtn);
             manageGroup.Controls.Add(_duplicateMacroBtn);
             manageGroup.Controls.Add(_notesMacroBtn);
-            manageGroup.Controls.Add(_macroMoveUpBtn);
-            manageGroup.Controls.Add(_macroMoveDownBtn);
             manageGroup.Controls.Add(_exportMacroBtn);
             manageGroup.Controls.Add(_importMacroBtn);
             manageGroup.Controls.Add(_exportAllBtn);
@@ -1704,20 +1713,105 @@ namespace AutoClicker.UI
             }
         }
 
-        private void MoveMacro(int delta)
+        // ── Drag to reorder ────────────────────────────────────────────────────
+        //
+        // The list is NOT a straight window onto the stored order: favourites are drawn first, and the
+        // search box filters rows out. So a drop's row number is meaningless to the store — what it
+        // means is "put this macro next to THAT one", and the neighbour's own position is looked up in
+        // the store to turn it into an index. Reordering while a search is active is refused outright:
+        // the rows on screen are a subset in a different order, so there is no honest answer to where
+        // a drop belongs among the macros the user cannot see.
+
+        private Macro _macroDragCandidate;   // pressed, but not yet dragged far enough to count
+        private Point _macroDragStart;
+
+        private void OnMacroDragMouseDown(object sender, MouseEventArgs e)
         {
-            Macro macro = SelectedMacro();
-            if (macro == null)
+            _macroDragCandidate = null;
+            if (_macroListBox == null || e.Button != MouseButtons.Left) { return; }
+
+            int i = _macroListBox.IndexFromPoint(e.Location);
+            if (i < 0 || i >= _macroListBox.Items.Count) { return; }
+            // Taken from the row under the pointer, not from SelectedMacro(): at mouse-down the
+            // selection may still be the previous row.
+            _macroDragCandidate = _macroListBox.Items[i] as Macro;
+            _macroDragStart = e.Location;
+        }
+
+        private void OnMacroDragMouseMove(object sender, MouseEventArgs e)
+        {
+            if (_macroDragCandidate == null || (e.Button & MouseButtons.Left) == 0) { return; }
+
+            Size threshold = SystemInformation.DragSize;
+            if (Math.Abs(e.X - _macroDragStart.X) < threshold.Width
+                && Math.Abs(e.Y - _macroDragStart.Y) < threshold.Height)
             {
-                return;
+                return;   // still a click, not a drag
             }
 
-            if (_macros.Move(macro.Name, delta))
+            Macro dragged = _macroDragCandidate;
+            _macroDragCandidate = null;
+
+            if (!string.IsNullOrWhiteSpace(_macroFilter))
             {
-                _macros.Save();
-                RefreshMacroList();
-                SelectMacro(macro);
+                // Say why rather than letting the drag silently do nothing: while a search is active the
+                // rows are a subset in a different order, so there is no honest place to drop into.
+                if (_recordStatusLabel != null)
+                {
+                    _recordStatusLabel.Text = Utils.Localization.T("Clear the search box to reorder macros by dragging.");
+                }
+                return;
             }
+            if (_macros.Macros.Count < 2) { return; }
+
+            _macroListBox.DoDragDrop(dragged, DragDropEffects.Move);
+        }
+
+        private void OnMacroDragOver(object sender, DragEventArgs e)
+        {
+            if (_macroListBox == null || e.Data == null || !e.Data.GetDataPresent(typeof(Macro)))
+            {
+                e.Effect = DragDropEffects.None;   // something from outside Tempo — not ours to take
+                return;
+            }
+            e.Effect = DragDropEffects.Move;
+            Point local = _macroListBox.PointToClient(new Point(e.X, e.Y));
+            _macroListBox.DropLineIndex = _macroListBox.DropIndexAt(local);
+        }
+
+        private void OnMacroDragDrop(object sender, DragEventArgs e)
+        {
+            if (_macroListBox == null) { return; }
+            int dropAt = _macroListBox.DropLineIndex;
+            _macroListBox.DropLineIndex = -1;
+
+            var dragged = e.Data.GetData(typeof(Macro)) as Macro;
+            if (dragged == null || dropAt < 0) { return; }
+
+            int target = StoreIndexForDrop(dropAt, dragged);
+            if (target < 0 || !_macros.MoveTo(dragged.Name, target)) { return; }
+
+            _macros.Save();
+            RefreshMacroList();
+            SelectMacro(dragged);
+            Utils.Logger.Info("[Macro] reordered the library by drag.");
+        }
+
+        /// <summary>
+        /// Turns a drop position in the LIST into an insertion index in the STORE, by asking where the
+        /// row it was dropped against actually lives. Returns -1 when it cannot be resolved.
+        /// </summary>
+        private int StoreIndexForDrop(int dropAt, Macro dragged)
+        {
+            // Dropped at the very end of the list → the end of the store.
+            if (dropAt >= _macroListBox.Items.Count) { return _macros.Macros.Count; }
+
+            var before = _macroListBox.Items[dropAt] as Macro;
+            if (before == null) { return -1; }
+            if (ReferenceEquals(before, dragged)) { return -1; }   // dropped on itself
+
+            int index = _macros.IndexOf(before.Name);
+            return index < 0 ? -1 : index;
         }
 
         private void OnExportMacro(object sender, EventArgs e)

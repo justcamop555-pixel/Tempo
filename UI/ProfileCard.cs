@@ -294,11 +294,12 @@ namespace AutoClicker.UI
             }
             if (!string.IsNullOrEmpty(Glyph))
             {
-                // Segoe UI Emoji renders the colour glyphs; plain Segoe UI would draw
-                // a hollow box for anything outside the BMP symbol range.
+                // Segoe UI Emoji has the glyphs (plain Segoe UI would draw a hollow box), but
+                // TextRenderer can't paint its colour layers — every badge came out as a black
+                // silhouette. ColorEmoji draws them through DirectWrite in their real colours.
                 using (var ef = new Font("Segoe UI Emoji", 12f))
                 {
-                    TextRenderer.DrawText(g, Glyph, ef, badge, TextColor,
+                    ColorEmoji.DrawText(g, Glyph, ef, badge, TextColor,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
                         TextFormatFlags.NoPadding);
                 }

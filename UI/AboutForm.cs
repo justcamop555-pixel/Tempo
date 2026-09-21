@@ -24,7 +24,8 @@ namespace AutoClicker.UI
             // Taller and a little wider: the description below is a real summary of what
             // Tempo does now rather than one sentence about clicking, and it was being
             // squeezed into 78px.
-            Size = new Size(470, 500);
+            // +22 for the Official ID row, which also gave "Open data folder" back a line of its own.
+            Size = new Size(470, 522);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -76,26 +77,37 @@ namespace AutoClicker.UI
             var dropHint = UiFactory.Label(
                 "Want your own logo? Click \"Choose image…\" and pick a .gif / .png / .jpg, " +
                 "or drag an image straight onto the logo (even from a web page).",
-                24, 194, FontStyle.Italic, 8f);
+                24, 216, FontStyle.Italic, 8f);
             dropHint.ForeColor = theme.TextMuted;
             dropHint.AutoSize = false;
             dropHint.Width = 410;
             dropHint.Height = 30;
 
             var chooseLogo = UiFactory.Button("Choose image…", 330, 128, 104, 26);
+            chooseLogo.Name = "chooseLogo";
             chooseLogo.BackColor = theme.Surface2;
             chooseLogo.ForeColor = theme.Text;
 
+            // Wrapped inside the logo column rather than one line starting at x=330. On one line it
+            // needs 116px in English and 143–215px in the other languages, while the column is 104px
+            // and the window ends about 20px after it — so every translation was cut off at the right
+            // edge. The height is measured: a longer translation takes another line instead.
             var resetLogo = new LinkLabel
             {
+                Name = "resetLogo",
                 Text = Localization.T("Reset to default logo"),
-                AutoSize = true,
+                Font = UiFactory.BodyFont,
+                AutoSize = false,
+                TextAlign = ContentAlignment.TopCenter,
                 Left = 330,
-                Top = 160,
+                Top = 158,
+                Width = 104,
                 LinkColor = theme.TextMuted,
                 ActiveLinkColor = theme.Accent,
                 Visible = CustomLogo.Exists()
             };
+            resetLogo.Height = TextRenderer.MeasureText(resetLogo.Text, resetLogo.Font, new Size(resetLogo.Width, 0),
+                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height + 2;
             resetLogo.LinkClicked += (s, e) =>
             {
                 CustomLogo.Clear();
@@ -255,13 +267,17 @@ namespace AutoClicker.UI
             dataInfo.ForeColor = theme.TextMuted;
             dataInfo.Width = 264;
             dataInfo.AutoSize = false;
+            // One line, like the OS row under it. Left at its auto-sized 23px, this box ran 3px
+            // into that row.
+            dataInfo.Height = 18;
             dataInfo.AutoEllipsis = true;
 
             // Name the operating system. About listed the display, the runtime and the
             // data folder but never Windows itself, so "which Windows are you on?" — the
             // first question of every bug report — had no answer anywhere in the app.
-            // Placed in the gap that already existed between this block and the rule at
-            // 182, so nothing below has to move.
+            // It went in at y=142 as if that row were empty, but "Open data folder" already sat
+            // there — and this opaque label, added first and so on top, hid the link and took its
+            // clicks. The link has its own row now, under the Official ID.
             string osText;
             try
             {
@@ -289,11 +305,14 @@ namespace AutoClicker.UI
                 }
                 Controls.Add(osInfo);
             }
+            // The Official ID: the one line in this dialog anyone can check without trusting Tempo.
+            Controls.Add(BuildOfficialIdRow(theme, sysInfo.Font));
+
             var openData = new LinkLabel
             {
                 Text = Localization.T("Open data folder"),
                 AutoSize = true,
-                Location = new Point(24, 142),
+                Location = new Point(24, 180),
                 LinkColor = theme.Accent,
                 ActiveLinkColor = theme.Accent,
                 BackColor = Color.Transparent
@@ -318,7 +337,7 @@ namespace AutoClicker.UI
             var rule = new Panel
             {
                 Left = 24,
-                Top = 182,
+                Top = 204,
                 Width = 410,
                 Height = 1,
                 // Surface2, not Border: on the darker themes Border sits so close to the
@@ -333,7 +352,7 @@ namespace AutoClicker.UI
             // what Tempo is now, and none of them were mentioned.
             var lead = UiFactory.Label(
                 "A clicking, macro and accessibility tool that runs entirely on your PC.",
-                24, 232, FontStyle.Bold, 9.5f);
+                24, 254, FontStyle.Bold, 9.5f);
             lead.AutoSize = false;
             lead.Width = 410;
             // Two lines of room, not one. At 9.5pt bold this sentence needs ~490px and
@@ -346,7 +365,7 @@ namespace AutoClicker.UI
             var description = new Label
             {
                 Left = 24,
-                Top = 274,
+                Top = 296,
                 Width = 410,
                 Height = 128,
                 AutoSize = false,
@@ -361,19 +380,19 @@ namespace AutoClicker.UI
                     + "•  Global hotkeys, themes, live statistics and a CPS test")
             };
 
-            var openLog = UiFactory.Button("Open Log Folder", 24, 414, 150, 32);
+            var openLog = UiFactory.Button("Open Log Folder", 24, 436, 150, 32);
             openLog.BackColor = theme.Surface2;
             openLog.ForeColor = theme.Text;
             openLog.Click += (s, e) => OpenLogFolder();
 
-            var ok = UiFactory.PrimaryButton("Close", 344, 414, 90, 32, theme);
+            var ok = UiFactory.PrimaryButton("Close", 344, 436, 90, 32, theme);
             ok.Click += (s, e) => Close();
 
             var siteLink = new LinkLabel
             {
                 Text = Localization.T("Website"),
                 AutoSize = true,
-                Location = new Point(190, 422),
+                Location = new Point(190, 444),
                 LinkColor = theme.Accent,
                 ActiveLinkColor = theme.Accent,
                 BackColor = Color.Transparent
@@ -386,7 +405,7 @@ namespace AutoClicker.UI
                 // Not translated, deliberately: a brand name, like "Tempo" itself.
                 Text = "GitHub",
                 AutoSize = true,
-                Location = new Point(258, 422),
+                Location = new Point(258, 444),
                 LinkColor = theme.Accent,
                 ActiveLinkColor = theme.Accent,
                 BackColor = Color.Transparent
@@ -397,6 +416,87 @@ namespace AutoClicker.UI
             Controls.AddRange(new Control[] { logo, dropHint, chooseLogo, resetLogo, title, version, sysInfo, buildInfo, dataInfo, description, openLog, ok });
 
             AcceptButton = ok;
+        }
+
+        /// <summary>
+        /// The Official ID row: the start of the SHA-256 that GitHub lists for Tempo.exe on the
+        /// release page, shown only once GitHub has confirmed this exact file (IntegrityCheck.OfficialId).
+        ///
+        /// A screenshot of this row proves nothing by itself — a modified copy can print any text it
+        /// likes. The ID is worth showing because it can be matched somewhere Tempo does not control:
+        /// the release page, or Get-FileHash on the file. So the verified row links straight to that
+        /// page, and every other state says why there is no ID, rather than leaving a blank that
+        /// reads as "fine".
+        /// </summary>
+        private Control BuildOfficialIdRow(Theme theme, Font font)
+        {
+            string id = Utils.IntegrityCheck.OfficialId;
+            string tip = null;
+            Control row;
+            if (id != null)
+            {
+                string url = Utils.IntegrityCheck.OfficialReleaseUrl;
+                var link = new LinkLabel
+                {
+                    Text = Localization.F("✓ Official ID {0}", id),
+                    LinkColor = theme.SuccessText,
+                    VisitedLinkColor = theme.SuccessText,
+                    ActiveLinkColor = theme.Accent,
+                    LinkBehavior = LinkBehavior.HoverUnderline
+                };
+                link.LinkClicked += (s, e) => OpenUrl(url);
+                tip = Localization.F("Anyone can check this without trusting Tempo: it is the start of the SHA-256 "
+                    + "that GitHub lists for Tempo.exe on the {0} release page. Every release has its own ID. "
+                    + "Click to open that page.", Utils.IntegrityCheck.OfficialTag);
+                row = link;
+            }
+            else
+            {
+                string text;
+                Color colour = theme.TextMuted;
+                switch (Utils.IntegrityCheck.Verdict)
+                {
+                    case Utils.IntegrityVerdict.TestBuild:
+                        text = Localization.T("No Official ID — test build");
+                        colour = theme.WarningText;
+                        tip = Localization.T("Only the Tempo.exe published on GitHub's releases page has an Official ID. "
+                            + "A test build, or a copy built from source, has none.");
+                        break;
+                    case Utils.IntegrityVerdict.Modified:
+                    case Utils.IntegrityVerdict.Repackaged:
+                    case Utils.IntegrityVerdict.Damaged:
+                    case Utils.IntegrityVerdict.UnknownRelease:
+                    case Utils.IntegrityVerdict.UnpackedModified:
+                        text = Localization.T("✗ No Official ID — this copy failed its check");
+                        colour = theme.DangerText;
+                        tip = Localization.T("Open Settings to see what the check found.");
+                        break;
+                    case Utils.IntegrityVerdict.Unverified:
+                        // Switched off, or the file could not be read: nothing was checked either way.
+                        text = Localization.T("Official ID: not checked");
+                        break;
+                    default:
+                        // Not confirmed yet: the check is still running, or GitHub was out of reach.
+                        text = Localization.T("Official ID: not verified yet");
+                        tip = Localization.T("Tempo shows an Official ID once GitHub confirms that this exact file "
+                            + "is the one it published. That needs an internet connection once.");
+                        break;
+                }
+                row = new Label { Text = text, ForeColor = colour };
+            }
+            var label = (Label)row;             // a LinkLabel is a Label
+            label.AutoSize = false;
+            label.AutoEllipsis = true;
+            row.Name = "officialId";
+            row.Font = font;
+            row.BackColor = Color.Transparent;
+            row.Location = new Point(24, 160);
+            row.Size = new Size(300, 18);
+            if (tip != null)
+            {
+                new ToolTip { AutoPopDelay = 20000 }.SetToolTip(row, tip);
+            }
+            return row;
         }
 
         /// <summary>A rounded rectangle path, for the logo's drop-target outline.</summary>

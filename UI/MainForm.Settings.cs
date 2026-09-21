@@ -23,6 +23,7 @@ namespace AutoClicker.UI
         private CheckBox _rememberTabCheck;
         private CheckBox _integrityCheck;
         private Label _integrityStatusLabel;
+        private Button _integrityTrustBtn;   // "Trust this copy" — or "Repair" when the unpacked copy was altered
         private SmoothTrackBar _opacitySlider;
         private Label _opacityValueLabel;
         // NOTE: the separate header/footer backdrop pickers were replaced by the single
@@ -437,8 +438,9 @@ namespace AutoClicker.UI
             // (Live Captions controls moved to their own dedicated group below.)
 
             // ── Notifications ──────────────────────────────────────────────────
-            // 220, not 184: one more row for the history button below the checkboxes.
-            var notify = UiFactory.Group(Localization.T("Notifications"), 12, 556, 696, 220, CardIcon.Gear);
+            // 252, not 220: one row for the history button, and one more for muted apps.
+            // (The card's Y is derived by RestackSettingsCards, so growing it is safe.)
+            var notify = UiFactory.Group(Localization.T("Notifications"), 12, 556, 696, 252, CardIcon.Gear);
 
             _customNotifyCheck = UiFactory.Check("Use Tempo's animated pop-up notifications", 16, 30);
             _customNotifyCheck.AutoSize = true;
@@ -580,6 +582,23 @@ namespace AutoClicker.UI
 
             _notifyMissedLabel = UiFactory.Caption("", 214, 188);
             notify.Controls.Add(_notifyMissedLabel);
+
+            // One noisy app used to mean turning the whole mirror off. Muting happens on
+            // the card (right-click it); this is where you take it back, and the count is
+            // the only place a muted app is visible when no card is on screen.
+            _mutedAppsBtn = UiFactory.Button(Localization.T("Muted apps…"), 16, 214, 190, 28);
+            _mutedAppsBtn.Click += (s, e) =>
+            {
+                using (var dlg = new UI.MutedAppsDialog(_theme, _settings, UnmuteMirroredApp))
+                {
+                    dlg.ShowDialog(this);
+                }
+                RefreshMutedAppsLabel();
+            };
+            notify.Controls.Add(_mutedAppsBtn);
+
+            _mutedAppsLabel = UiFactory.Caption("", 214, 220);
+            notify.Controls.Add(_mutedAppsLabel);
 
             _notifyStatusLabel = UiFactory.Caption("", 388, 118);
             _notifyStatusLabel.AutoSize = false;
@@ -942,7 +961,8 @@ namespace AutoClicker.UI
             // 232, not 164: the tamper check adds a row of actions and a status line.
             // Everything below — Window & Display, the movement card in its own method,
             // the button row and the notes under it — shifts down by the same 68.
-            var data = UiFactory.Group(Localization.T("Data & Backup"), 12, 1202, 696, 232, CardIcon.Folder);
+            // 266, not 232: a row for restore points under the tamper check (its final height is measured below).
+            var data = UiFactory.Group(Localization.T("Data & Backup"), 12, 1202, 696, 266, CardIcon.Folder);
 
             var openFolderBtn = UiFactory.Button("Open data folder", 16, 30, 150, 30);
             openFolderBtn.Click += OnOpenDataFolder;
@@ -1017,9 +1037,9 @@ namespace AutoClicker.UI
             // replaced the exe on purpose — a self-built copy, a sideloaded update —
             // would be told forever that Tempo had been tampered with, and the only
             // way to stop it would be to switch the whole check off.
-            var trustBtn = UiFactory.Button("Trust this copy", 546, 156, 140, 28);
-            trustBtn.Click += OnTrustThisCopy;
-            data.Controls.Add(trustBtn);
+            _integrityTrustBtn = UiFactory.Button("Trust this copy", 546, 156, 140, 28);
+            _integrityTrustBtn.Click += OnTrustThisCopy;
+            data.Controls.Add(_integrityTrustBtn);
 
             _integrityStatusLabel = UiFactory.Caption("", 16, 190);
             _integrityStatusLabel.AutoSize = false;
@@ -1027,6 +1047,25 @@ namespace AutoClicker.UI
             _integrityStatusLabel.Height = 32;
             _integrityStatusLabel.ForeColor = _theme.TextMuted;
             data.Controls.Add(_integrityStatusLabel);
+
+            // ── Restore points ─────────────────────────────────────────────────
+            // Tempo takes one by itself before a new version first touches the data. A backup nobody can
+            // get back from is only a folder, so the way back sits right here beside "Back up all data".
+            var restoreBtn = UiFactory.Button("Restore points…", 16, 228, 170, 28);
+            restoreBtn.Width = Math.Max(170, TextRenderer.MeasureText(restoreBtn.Text, restoreBtn.Font).Width + 28);
+            restoreBtn.Click += OnRestorePointsClicked;
+            data.Controls.Add(restoreBtn);
+
+            var restoreHint = UiFactory.Caption(
+                Localization.T("Tempo saves your data automatically before each update."), restoreBtn.Right + 10, 234);
+            restoreHint.ForeColor = _theme.TextMuted;
+            restoreHint.AutoSize = false;
+            restoreHint.Width = 680 - restoreHint.Left;
+            restoreHint.Height = Math.Max(16, TextRenderer.MeasureText(restoreHint.Text, restoreHint.Font,
+                new System.Drawing.Size(restoreHint.Width, int.MaxValue),
+                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height);
+            data.Controls.Add(restoreHint);
+            data.Height = Math.Max(266, Math.Max(restoreBtn.Bottom, restoreHint.Bottom) + 10);
 
             // ── Window & Display ───────────────────────────────────────────────
             // 152, not 88: this card held one row and half of it was empty, while the
@@ -1123,24 +1162,63 @@ namespace AutoClicker.UI
             page.Controls.Add(_lastCheckedLabel);
             UpdateLastCheckedLabel();
 
-            // When running as a portable copy (not via the installer), explain how a
-            // portable copy behaves and where its data lives.
-            string portableNote = Utils.DeploymentInfo.PortableNote;
-            if (portableNote != null)
+            // How this copy of Tempo is deployed. An installed copy needs no note. A portable copy
+            // gets the note AND the way out of being portable — because the note on its own only
+            // ever said "run install.cmd", and that is how so many copies came to be missing from
+            // Control Panel and Settings › Apps. A copy beside an existing install, or one running
+            // out of a zip, is told why it will not install instead of being offered something that
+            // would go wrong.
+            int tailY = 1932;
+            Utils.DeploymentKind deployKind = Utils.DeploymentInfo.Kind;
+            string deployNote = null;
+            switch (deployKind)
             {
-                var portable = UiFactory.Caption(portableNote, 12, 1932);
+                case Utils.DeploymentKind.Portable:
+                    deployNote = Utils.DeploymentInfo.PortableNoteText;   // UiFactory translates it
+                    break;
+                case Utils.DeploymentKind.PortableWithInstalledCopy:
+                    // Formatted here, AFTER translating the template: UiFactory would otherwise look up
+                    // the finished sentence, and no table holds a key with a real folder path in it.
+                    deployNote = Localization.F(Utils.DeploymentInfo.SeparateCopyNoteText,
+                                                Utils.DeploymentInfo.InstalledDirectory);
+                    break;
+                case Utils.DeploymentKind.Transient:
+                    deployNote = Utils.DeploymentInfo.TransientNoteText;
+                    break;
+            }
+            if (deployNote != null)
+            {
+                var portable = UiFactory.Caption(deployNote, 12, tailY);
                 portable.ForeColor = Theme.Readable(_theme.Warning, _theme.InputBackground);
                 portable.AutoSize = false;
                 portable.Width = 700;
-                portable.Height = 64;
+                // Measured rather than a fixed 64: every translation runs longer than the English,
+                // and a caption cut off at its last line loses exactly the sentence that says what to
+                // do. The layout suite checks overlaps and button captions, not a label's last line.
+                int needed = TextRenderer.MeasureText(portable.Text, portable.Font,
+                    new System.Drawing.Size(portable.Width, int.MaxValue),
+                    TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height;
+                portable.Height = Math.Max(32, needed + 4);
                 page.Controls.Add(portable);
+                tailY += portable.Height + 6;
+
+                if (deployKind == Utils.DeploymentKind.Portable)
+                {
+                    var installBtn = UiFactory.Button("Install Tempo on this PC…", 12, tailY, 220, 30);
+                    installBtn.Width = Math.Max(220, TextRenderer.MeasureText(installBtn.Text, installBtn.Font).Width + 36);
+                    installBtn.Click += OnInstallTempoClicked;
+                    page.Controls.Add(installBtn);
+                    tailY += installBtn.Height + 10;
+                }
             }
 
+            // The rest of the tail follows whatever the note above actually took up.
+            int privacyY = Math.Max(2000, tailY);
             var privacyNote = UiFactory.Caption(
                 "Privacy: Tempo runs entirely on your PC. Your clicks, macros, profiles and " +
                 "statistics never leave your computer. The only network use is the optional " +
                 "update check (GitHub), which you can turn off under Behaviour.",
-                12, 2000);
+                12, privacyY);
             privacyNote.ForeColor = _theme.TextMuted;
             privacyNote.AutoSize = false;
             privacyNote.Width = 700;
@@ -1156,7 +1234,7 @@ namespace AutoClicker.UI
             verText += "   ·   " + Utils.BuildInfo.Short;
             // True bottom of the page — the old y=724 had ended up BEHIND the cards
             // as the page grew over the releases.
-            var versionLabel = UiFactory.Caption(verText, 12, 2054);
+            var versionLabel = UiFactory.Caption(verText, 12, privacyY + 54);
             versionLabel.ForeColor = _theme.TextMuted;
             page.Controls.Add(versionLabel);
 
@@ -1408,6 +1486,7 @@ namespace AutoClicker.UI
             UpdateAccentControlsEnabled();
             RefreshThemePreview();
             RefreshMissedNotificationsLabel();
+            RefreshMutedAppsLabel();
         }
 
         /// <summary>
@@ -1429,6 +1508,22 @@ namespace AutoClicker.UI
                 _notifyMissedLabel.ForeColor = missed > 0 ? _theme.WarningText : _theme.TextMuted;
             }
             catch (Exception ex) { Utils.Logger.Swallow("RefreshMissedNotificationsLabel", ex); }
+        }
+
+        /// <summary>
+        /// "N app(s) muted" beside the button. A mute is otherwise invisible — the app
+        /// simply stops appearing, which is indistinguishable from mirroring being broken.
+        /// </summary>
+        private void RefreshMutedAppsLabel()
+        {
+            if (_mutedAppsLabel == null) { return; }
+            try
+            {
+                int n = _settings?.MirrorMutedApps?.Count ?? 0;
+                _mutedAppsLabel.Text = n == 0 ? "" : Utils.Localization.F("{0} app(s) muted", n);
+                _mutedAppsLabel.ForeColor = _theme.TextMuted;
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RefreshMutedAppsLabel", ex); }
         }
 
         private void OnThemeChanged(object sender, EventArgs e)
@@ -1495,7 +1590,16 @@ namespace AutoClicker.UI
 
             _settings.Language = lang;
             SettingsManager.Save(_settings);
+            OfferRestartForLanguage();
+        }
 
+        /// <summary>
+        /// Some text is built once at startup, so a new language only appears everywhere after a
+        /// restart — offer one. Shared by the language picker and Import, which can bring in a
+        /// different language and used to leave the window in the old one without a word.
+        /// </summary>
+        private void OfferRestartForLanguage()
+        {
             bool restart = AskToRestart(
                 Localization.T("Language changed"),
                 Localization.T("Your choice is already saved — nothing is lost either way."),
@@ -2850,7 +2954,7 @@ namespace AutoClicker.UI
         /// Anything that must be PUSHED rather than observed belongs here, so the two
         /// paths cannot disagree again.
         /// </summary>
-        private void ApplyReplacedSettings()
+        private void ApplyReplacedSettings(AppSettings before)
         {
             _settings.EnsureConsistency();
             _lifetimeBaseline = _settings.LifetimeClicks;
@@ -2874,18 +2978,104 @@ namespace AutoClicker.UI
 
             ApplyThemeToEverything();
             ApplyHotkeysFromSettings();
+            RefreshTraySleepNotice();
             ReassertTopMost();
             ApplyBackgroundGif();
             if (_trayAlwaysOnTopItem != null)
             {
                 _trayAlwaysOnTopItem.Checked = _settings.AlwaysOnTop;
             }
+
+            // The rest was missing, so each of these kept doing what the REPLACED settings said
+            // until Tempo restarted: the log went on writing (or stayed silent), the window kept
+            // its opacity, the notification mirror and the clipboard watcher kept running, the
+            // running badge and caption bar kept their look, the second cursor stayed up, and a
+            // running caption session kept its old engine.
+            Utils.Logger.Enabled = _settings.WriteLogFile;
+            try { Opacity = Math.Max(50, Math.Min(100, _settings.WindowOpacity)) / 100.0; } catch { }
+            ApplyNotificationSettings();
+            ApplyClipboardImageWatcher();
+            RefreshNotifyStatus();
+            ShowClickingIndicator(_engine != null && _engine.IsRunning);
+            ApplyCaptionSettingsToOverlays();
+            ApplySecondCursorSettings();
+            ApplyMovementTuning();
+            if (before != null)
+            {
+                ApplyChangedCaptionEngine(before);
+                if (AccountSettingsDiffer(before, _settings))
+                {
+                    // Import can switch the account manager, multi-instance or the local API;
+                    // the page starts and stops those to match only when it is re-evaluated.
+                    try { RefreshAccountsView(); }
+                    catch (Exception ex) { Utils.Logger.Swallow("RefreshAccountsView after replace", ex); }
+                }
+            }
         }
+
+        /// <summary>
+        /// A replaced caption setting on a RUNNING caption session: the same live steps Save
+        /// Settings takes, which Reset and Import skipped.
+        /// </summary>
+        private void ApplyChangedCaptionEngine(AppSettings before)
+        {
+            if (before.CaptionSpeakerTurns != _settings.CaptionSpeakerTurns ||
+                before.CaptionFaceAnalysis != _settings.CaptionFaceAnalysis)
+            {
+                ApplySpeakerTurnsLive();
+            }
+            if (before.CaptionFilterOwnVoice != _settings.CaptionFilterOwnVoice)
+            {
+                ApplyOwnVoiceGuardLive();
+            }
+
+            bool modelChanged =
+                !string.Equals(before.CaptionModelKey, _settings.CaptionModelKey, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(before.CaptionCustomModelPath ?? "", _settings.CaptionCustomModelPath ?? "", StringComparison.OrdinalIgnoreCase);
+            if (modelChanged)
+            {
+                // An explicit model change beats the session's too-slow downgrade override.
+                _captionModelOverrideKey = null;
+                _modelRecoveryBlocked = false;
+            }
+            bool engineChanged = modelChanged
+                || before.CaptionSource != _settings.CaptionSource
+                || before.CaptionCaptureMode != _settings.CaptionCaptureMode
+                || !string.Equals(before.CaptionLanguage ?? "", _settings.CaptionLanguage ?? "", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(before.CaptionSpeakerDeviceId ?? "", _settings.CaptionSpeakerDeviceId ?? "", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(before.CaptionMicDeviceId ?? "", _settings.CaptionMicDeviceId ?? "", StringComparison.OrdinalIgnoreCase);
+            if (engineChanged && _captionsActive)
+            {
+                // None of these reach a running session on their own; cycle it, which also
+                // saves the in-progress transcript instead of dropping it.
+                SetCaptionsActive(false);
+                SetCaptionsActive(true);
+            }
+
+            if (!_settings.CaptionOverlayEnabled && _captionOverlay != null && !_captionOverlay.IsDisposed)
+            {
+                try { _captionOverlay.Hide(); } catch { }
+            }
+        }
+
+        private static bool AccountSettingsDiffer(AppSettings a, AppSettings b) =>
+            a.AccountsEnabled != b.AccountsEnabled
+            || a.RobloxMultiInstance != b.RobloxMultiInstance
+            || a.AccountApiEnabled != b.AccountApiEnabled
+            || a.AccountApiPort != b.AccountApiPort
+            || !string.Equals(a.AccountApiToken ?? "", b.AccountApiToken ?? "", StringComparison.Ordinal);
+
+        private static bool HasAnyBackground(AppSettings s) =>
+            s != null && (!string.IsNullOrWhiteSpace(s.FullBackgroundGifPath)
+                          || !string.IsNullOrWhiteSpace(s.BackgroundGifPath)
+                          || !string.IsNullOrWhiteSpace(s.BackgroundGifPath2));
 
         private void OnResetSettings(object sender, EventArgs e)
         {
+            // Says what is KEPT. "Reset all settings?" alone read as if statistics, keybinds and
+            // the account manager went too — and until CreateResetFrom, they did.
             var confirm = MessageBox.Show(this,
-                "Reset all settings to their defaults?",
+                "Reset all settings to their defaults?\n\nYour profiles, macros, keybinds, statistics, Roblox accounts and language are kept.",
                 "Tempo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
@@ -2895,8 +3085,18 @@ namespace AutoClicker.UI
                 return;
             }
 
-            _settings = AppSettings.CreateDefault();
-            ApplyReplacedSettings();
+            AppSettings before = _settings;
+            _settings = AppSettings.CreateResetFrom(before);
+
+            // The wallpaper goes back to none. Drop Tempo's stored copy the way Clear does, or the
+            // reset leaves an image in the data folder that nothing will reference again.
+            if (HasAnyBackground(before) && !HasAnyBackground(_settings))
+            {
+                DeleteStoredBackgrounds(Persistence.SettingsManager.GetSettingsDirectory());
+            }
+
+            ApplyReplacedSettings(before);
+            Utils.Logger.Info("[Settings] reset to defaults (profiles, macros, keybinds, statistics, accounts and language kept).");
         }
 
         private void UpdateLastCheckedLabel()
@@ -2921,11 +3121,15 @@ namespace AutoClicker.UI
             // opening the update dialog.
             if (_settings != null && _settings.LastUpdateCheckUtc != null)
             {
-                if (_settings.LastCheckFoundUpdate && !string.IsNullOrWhiteSpace(_settings.LastKnownLatestVersion))
+                // The saved flag alone is not enough: it survives the update that resolves it, so it kept
+                // this line saying "Update available: v1.0.321" while 1.0.321 was the running build. The
+                // version itself has to be newer, compared as a version (see UpdateChecker.Normalize).
+                if (_settings.LastCheckFoundUpdate
+                    && Utils.UpdateChecker.IsNewerThanCurrent(_settings.LastKnownLatestVersion))
                 {
                     text += "   ·   Update available: v" + _settings.LastKnownLatestVersion;
                 }
-                else if (!_settings.LastCheckFoundUpdate)
+                else
                 {
                     text += "   ·   You're up to date.";
                 }
@@ -3078,7 +3282,8 @@ namespace AutoClicker.UI
             DialogResult dr;
             string downloadedPath;
             string downloadError;
-            using (var dlg = new UpdateDownloadForm(_theme, result.DownloadUrl, dest, result.LatestVersion, result.Sha256Url))
+            using (var dlg = new UpdateDownloadForm(_theme, result.DownloadUrl, dest, result.LatestVersion, result.Sha256Url,
+                                                    result.DownloadSha256))
             {
                 dr = dlg.ShowDialog(this);
                 downloadedPath = dlg.DownloadedPath;
@@ -3214,8 +3419,9 @@ namespace AutoClicker.UI
             }
         }
 
-        /// <summary>Copies the entire data folder (profiles, macros, settings,
-        /// history) into a timestamped sub-folder of <paramref name="destRoot"/>.
+        /// <summary>Copies the data folder (profiles, macros, settings, history — everything
+        /// except the signed-in browser profiles) into a timestamped sub-folder of
+        /// <paramref name="destRoot"/>.
         /// On success, <paramref name="result"/> is the backup path; on failure it is
         /// an error message.</summary>
         private bool BackupAllData(string destRoot, out string result)
@@ -3234,8 +3440,16 @@ namespace AutoClicker.UI
                 string dest = Path.Combine(destRoot, "Tempo-backup-" + stamp);
                 Directory.CreateDirectory(dest);
 
+                // Not the signed-in browser profiles. Each holds a LIVE Roblox session outside the encrypted
+                // vault — the reason removing an account, turning the Account Manager off and uninstalling all
+                // delete them — so a backup must not scatter copies into whatever folder was picked. They were
+                // also the one thing that could sink the whole backup: a browser with a profile open holds its
+                // cookie store locked, File.Copy threw, and nothing was backed up. Signing in recreates them.
+                string browserProfiles = RobloxAccountBrowser.BaseDir.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+
                 foreach (string file in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
                 {
+                    if (file.StartsWith(browserProfiles, StringComparison.OrdinalIgnoreCase)) { continue; }
                     string rel = file.Substring(src.Length).TrimStart('\\', '/');
                     string target = Path.Combine(dest, rel);
                     string targetDir = Path.GetDirectoryName(target);
@@ -3342,6 +3556,7 @@ namespace AutoClicker.UI
             // Build ID, not just the version — a bug report against "1.0.319" is
             // ambiguous between the release and every test build cut from it.
             sb.AppendLine("Tempo            : " + VersionStamp() + "  ·  " + Utils.BuildInfo.Short);
+            sb.AppendLine("Official ID      : " + Utils.IntegrityCheck.OfficialIdReportLine());
             sb.AppendLine("Caption source   : " + (_settings != null ? _settings.CaptionSource.ToString() : "?"));
             sb.AppendLine("Tempo engine     : " + (_captionTranscriber != null && _captionTranscriber.IsRunning
                                                     ? "running" : "not running"));
@@ -3549,6 +3764,12 @@ namespace AutoClicker.UI
         /// </summary>
         private void OnTrustThisCopy(object sender, EventArgs e)
         {
+            // An altered UNPACKED copy is not something to accept — the same button repairs it instead.
+            if (Utils.IntegrityCheck.Verdict == Utils.IntegrityVerdict.UnpackedModified)
+            {
+                OnRepairUnpackedCopy();
+                return;
+            }
             try
             {
                 var answer = MessageBox.Show(this,
@@ -3570,6 +3791,57 @@ namespace AutoClicker.UI
                 OnRecheckIntegrity(sender, e);   // re-runs and re-records
             }
             catch (Exception ex) { Logger.Swallow("OnTrustThisCopy", ex); }
+        }
+
+        /// <summary>
+        /// Repairs an altered unpacked copy. After a confirmation, a helper waits for Tempo to exit,
+        /// deletes the folder the .NET host unpacked Tempo into, and starts Tempo again — which unpacks
+        /// a clean copy from Tempo.exe. The folder is held open while Tempo runs, so it cannot be
+        /// cleaned from inside, and reinstalling the same exe would simply reuse it.
+        /// </summary>
+        private void OnRepairUnpackedCopy()
+        {
+            try
+            {
+                string dir = Utils.IntegrityCheck.UnpackDirectory;
+                if (!Utils.IntegrityCheck.IsRepairable || string.IsNullOrEmpty(dir))
+                {
+                    return;
+                }
+                if (_recorder != null && _recorder.IsRecording)
+                {
+                    // Exiting would throw the take away; the updater asks the same question.
+                    ShowInfo("Stop the macro recording first, then press Repair.");
+                    return;
+                }
+
+                var answer = MessageBox.Show(this,
+                    "Repair Tempo?\n\nTempo will close, delete the unpacked copy it runs from in your TEMP folder, and start again — unpacking a clean copy from Tempo.exe. Your settings, profiles, macros and accounts are not touched.",
+                    "Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (answer != DialogResult.Yes)
+                {
+                    return;
+                }
+
+                if (!UpdateInstaller.LaunchRepairUnpackHelper(dir, out string err))
+                {
+                    ShowWarning(Localization.F("Tempo couldn't start the repair. Close Tempo, delete this folder, and start Tempo again:\n\n{0}", dir)
+                                + "\n\n(" + err + ")");
+                    return;
+                }
+
+                // The same by-hand shutdown the updater performs before Environment.Exit, which runs no
+                // FormClosing. The warning token is cleared so a later tampering is announced again.
+                try { if (_engine != null && _engine.IsRunning) { _engine.Stop(); } } catch { }
+                try { _trayIcon?.Dispose(); } catch { }
+                ReleaseHeldButtons();
+                try { CaptureSettingsFromUi(); } catch { }
+                _settings.IntegrityLastWarned = "";
+                try { SettingsManager.Save(_settings); } catch { }
+                Logger.Warn("[shutdown] exiting so the altered unpacked copy is replaced with a clean one.");
+                Environment.Exit(0);
+            }
+            catch (Exception ex) { Logger.Swallow("OnRepairUnpackedCopy", ex); }
         }
 
         /// <summary>Puts the current verdict on the Settings page, in the theme's colours.</summary>
@@ -3599,8 +3871,11 @@ namespace AutoClicker.UI
                     case Utils.IntegrityVerdict.Genuine:
                         // The strongest thing Tempo can say, and worth saying distinctly:
                         // this was checked against GitHub, not against a note this PC
-                        // wrote to itself.
-                        text = Localization.T("✓ Verified against the release published on GitHub.");
+                        // wrote to itself. With the Official ID anyone can match on the release page.
+                        text = Utils.IntegrityCheck.OfficialId != null
+                            ? Localization.F("✓ Verified against GitHub's {0} release — Official ID {1}.",
+                                             Utils.IntegrityCheck.OfficialTag, Utils.IntegrityCheck.OfficialId)
+                            : Localization.T("✓ Verified against the release published on GitHub.");
                         colour = _theme.Success;
                         break;
                     case Utils.IntegrityVerdict.UnknownRelease:
@@ -3630,6 +3905,11 @@ namespace AutoClicker.UI
                             + "not the official Tempo build.");
                         colour = _theme.Danger;
                         break;
+                    case Utils.IntegrityVerdict.UnpackedModified:
+                        text = Localization.T("✗ Tempo.exe is intact, but the unpacked copy Tempo runs from was altered — "
+                            + "the code running is not what Tempo.exe carries. Press Repair to unpack a clean copy.");
+                        colour = _theme.Danger;
+                        break;
                     case Utils.IntegrityVerdict.TestBuild:
                         // Deliberately not green. A test build is not a problem, but it
                         // has not been vouched for by anything either, and saying "✓" for
@@ -3650,6 +3930,13 @@ namespace AutoClicker.UI
                 }
                 _integrityStatusLabel.Text = text;
                 _integrityStatusLabel.ForeColor = colour;
+                if (_integrityTrustBtn != null)
+                {
+                    // An altered unpacked copy is repaired, not trusted — the button offers what fixes it.
+                    _integrityTrustBtn.Text = Utils.IntegrityCheck.Verdict == Utils.IntegrityVerdict.UnpackedModified
+                        ? Localization.T("Repair")
+                        : Localization.T("Trust this copy");
+                }
             }
             catch (Exception ex) { Logger.Swallow("RefreshIntegrityStatus", ex); }
         }
@@ -3685,27 +3972,169 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>One key for the whole uninstall confirmation, so it can never go half-translated.</summary>
+        private const string UninstallConfirmText =
+            "Uninstall Tempo?\n\n"
+            + "This removes Tempo from this PC:\n"
+            + "   •  The program\n"
+            + "   •  Start Menu and Desktop shortcuts\n"
+            + "   •  The Windows start-up entry (if set)\n"
+            + "   •  Tempo's entry in Settings > Apps\n"
+            + "   •  Signed-in browser profiles Tempo opened for your accounts\n\n"
+            + "Your profiles, macros, settings and account vault are kept unless you choose to delete them on "
+            + "the next step. Continue?";
+
+        /// <summary>The data question. {0} is the data folder. "No" (keep) is the default button.</summary>
+        private const string UninstallDataText =
+            "Also delete your data?\n\n"
+            + "Your profiles, macros, settings, session history, account vault, restore points and downloaded "
+            + "speech models are kept in:\n{0}\n\n"
+            + "No — keep them. Installing Tempo again brings everything back.\n"
+            + "Yes — delete them for good, together with Tempo's log files. This cannot be undone.";
+
+        /// <summary>One key for the whole restore question.</summary>
+        private const string RestoreConfirmText =
+            "Restore the data saved {0}?\n\n"
+            + "Tempo will restart and put back your settings, profiles, macros, history and account vault as they "
+            + "were then. What you have now is saved as a restore point first, so you can undo this.";
+
+        /// <summary>
+        /// "Restore points…": lists what Tempo saved before each update and puts one back. The restore is
+        /// not done here — the running Tempo saves profiles and macros as it closes, which would overwrite
+        /// it — but scheduled, and applied by the next launch before anything loads.
+        /// </summary>
+        private void OnRestorePointsClicked(object sender, EventArgs e)
+        {
+            string dataDir = SettingsManager.GetSettingsDirectory();
+            string scheduled = null;
+
+            RecycleBinForm.Show(this, _theme,
+                Localization.T("Restore points"),
+                Localization.T("Tempo saves your settings, profiles, macros, history and account vault automatically the "
+                               + "first time a new version starts. Restoring one puts that data back and restarts Tempo. "
+                               + "What you have now is saved as a restore point first, so a restore can be undone."),
+                new[] { Localization.T("Saved"), Localization.T("Reason"), Localization.T("Files") },
+                new[] { 150, 270, 60 },
+                Localization.T("No restore points yet. Tempo makes one the first time a new version starts."),
+                "Delete all {0} restore point(s)? Your current data is not affected.",
+                () => BuildRestorePointRows(dataDir),
+                id =>
+                {
+                    if (scheduled != null) { return false; }   // one restore at a time
+                    DataSnapshots.RestorePoint point = DataSnapshots.List(dataDir).Find(p => p.Id == id);
+                    if (point == null) { return false; }
+                    DialogResult go = MessageBox.Show(this,
+                        Localization.F(RestoreConfirmText,
+                            point.SavedLocal.ToString("g", System.Globalization.CultureInfo.CurrentCulture)),
+                        "Restore points", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                    if (go != DialogResult.Yes) { return false; }
+                    if (!DataSnapshots.ScheduleRestore(dataDir, id, out string err))
+                    {
+                        ShowWarning(Localization.F("Couldn't schedule the restore: {0}", Localization.T(err ?? "")));
+                        return false;
+                    }
+                    scheduled = id;
+                    return true;
+                },
+                () => DataSnapshots.DeleteAll(dataDir),
+                Localization.T("Delete all"),
+                closeOnRestore: true);
+
+            if (scheduled != null)
+            {
+                FadeOutThenRestart("restoring a restore point");
+            }
+        }
+
+        private System.Collections.Generic.List<RecycleBinForm.Entry> BuildRestorePointRows(string dataDir)
+        {
+            var rows = new System.Collections.Generic.List<RecycleBinForm.Entry>();
+            foreach (DataSnapshots.RestorePoint p in DataSnapshots.List(dataDir))
+            {
+                rows.Add(new RecycleBinForm.Entry
+                {
+                    Id = p.Id,
+                    Cells = new[]
+                    {
+                        p.SavedLocal.ToString("g", System.Globalization.CultureInfo.CurrentCulture),
+                        p.IsUndo ? Localization.T("Before a restore") : Localization.F("Tempo {0} started", p.Before),
+                        p.Files.ToString(System.Globalization.CultureInfo.CurrentCulture)
+                    }
+                });
+            }
+            return rows;
+        }
+
+        /// <summary>One key for the whole install question, so it can never go half-translated.</summary>
+        private const string InstallOfferText =
+            "Install Tempo on this PC?\n\n"
+            + "This copy is portable, so it isn't in the Start Menu or in Settings › Apps, and Windows "
+            + "has no normal way to uninstall it.\n\n"
+            + "Installing copies Tempo into your user folder, adds a Start Menu shortcut and an entry in "
+            + "Settings › Apps, then restarts Tempo from there. No administrator rights are needed, and "
+            + "your settings, profiles and macros stay exactly as they are.";
+
+        private bool _installInProgress;
+
+        /// <summary>"Install Tempo on this PC…" in Settings.</summary>
+        private void OnInstallTempoClicked(object sender, EventArgs e)
+        {
+            if (!Utils.DeploymentInfo.CanOfferInstall) { return; }   // installed meanwhile, or must not install
+            DialogResult go = MessageBox.Show(this, InstallOfferText, "Install Tempo",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
+            if (go == DialogResult.Yes)
+            {
+                InstallAndRelaunch();
+            }
+        }
+
+        /// <summary>
+        /// Installs this copy, then hands over to the installed copy through the same --restart path a
+        /// language change uses. The copy and its two SHA-256 passes run OFF the UI thread: from a USB
+        /// stick or a slow disk they take long enough to freeze the window and trip "Not responding".
+        /// </summary>
+        private async void InstallAndRelaunch()
+        {
+            if (_installInProgress) { return; }
+            _installInProgress = true;
+            UseWaitCursor = true;
+            SelfInstaller.Result r = null;
+            try
+            {
+                r = await System.Threading.Tasks.Task.Run(() => SelfInstaller.InstallRunningCopy());
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Install] the install threw: " + ex.Message);
+            }
+            finally
+            {
+                UseWaitCursor = false;
+                _installInProgress = false;
+            }
+
+            if (r == null || !r.Ok)
+            {
+                ShowWarning(Localization.F("Tempo couldn't be installed. {0}",
+                                           Localization.T(r?.Error ?? "")));
+                return;
+            }
+            FadeOutThenRestart("installing Tempo", r.InstalledExe);
+        }
+
         private void OnUninstallClicked(object sender, EventArgs e)
         {
             string dataFolder;
             try { dataFolder = SettingsManager.GetSettingsDirectory(); }
             catch { dataFolder = "%LocalAppData%\\AutoClicker"; }
 
+            // Uninstalling removes the PROGRAM; the user's data stays unless they choose otherwise — the same
+            // default uninstall.cmd has always had. It used to be the other way round: the cleanup deleted the
+            // whole data folder every time, only the program was optional, and that question defaulted to
+            // KEEP — so Settings › Apps' Uninstall button, accepted with its defaults, deleted every profile
+            // and macro, left Tempo.exe behind, and took Tempo out of the list.
             DialogResult confirm = MessageBox.Show(this,
-                // One key for the whole prompt. Split across a raw head and a translated
-                // tail, the head could never match a dictionary entry, so half the warning
-                // stayed English — on the one dialog where being understood matters most.
-                Localization.F("Uninstall Tempo?\n\n"
-                    + "This will permanently remove:\n"
-                    + "   •  All profiles and saved macros\n"
-                    + "   •  Your settings and session history\n"
-                    + "   •  Downloaded speech models\n"
-                    + "   •  The log file\n"
-                    + "   •  The Windows start-up entry (if set)\n"
-                    + "   •  Start Menu and Desktop shortcuts\n"
-                    + "   •  Tempo's entry in Settings > Apps\n\n"
-                    + "All of that lives in:\n{0}\n\n"
-                    + "This cannot be undone. Continue?", dataFolder),
+                UninstallConfirmText,
                 "Uninstall Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2);
 
@@ -3714,43 +4143,39 @@ namespace AutoClicker.UI
                 return;
             }
 
-            // Offer a full backup (profiles, macros, settings, history) before deleting.
-            DialogResult backup = MessageBox.Show(this,
-                "Back up all your data first?\n\n" +
-                "Yes — choose a folder; Tempo copies all profiles, macros, settings\n" +
-                "         and history there before uninstalling\n" +
-                "No — uninstall without a backup",
-                "Uninstall Tempo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question,
-                MessageBoxDefaultButton.Button1);
-
-            if (backup == DialogResult.Cancel)
-            {
-                return;
-            }
-            if (backup == DialogResult.Yes)
-            {
-                // If the backup is cancelled or fails, abort so data isn't lost.
-                if (!PromptAndBackupAllData())
-                {
-                    return;
-                }
-            }
-
-            // Offer to also remove the program file itself.
-            DialogResult alsoExe = MessageBox.Show(this,
-                "Also delete the Tempo program file itself?\n\n" +
-                "Yes — remove everything, including Tempo.exe\n" +
-                "No — remove data only and keep Tempo.exe\n\n" +
-                "Tempo will close to finish removing files.",
+            // Keeping is the default button: deleting has to be chosen.
+            DialogResult alsoData = MessageBox.Show(this,
+                Localization.F(UninstallDataText, dataFolder),
                 "Uninstall Tempo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question,
                 MessageBoxDefaultButton.Button2);
 
-            if (alsoExe == DialogResult.Cancel)
+            if (alsoData == DialogResult.Cancel)
             {
                 return;
             }
 
-            bool deleteExe = alsoExe == DialogResult.Yes;
+            bool deleteData = alsoData == DialogResult.Yes;
+
+            if (deleteData)
+            {
+                // Only now is anything about to be deleted for good, so only now is a backup worth offering.
+                DialogResult backup = MessageBox.Show(this,
+                    "Back up all your data first?\n\n" +
+                    "Yes — choose a folder; Tempo copies all profiles, macros, settings\n" +
+                    "         and history there before uninstalling\n" +
+                    "No — uninstall without a backup",
+                    "Uninstall Tempo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1);
+
+                if (backup == DialogResult.Cancel)
+                {
+                    return;
+                }
+                if (backup == DialogResult.Yes && !PromptAndBackupAllData())
+                {
+                    return;   // a cancelled or failed backup stops the uninstall, so nothing is lost
+                }
+            }
 
             // Stop clicking and remove the start-up entry now (no file lock involved).
             try
@@ -3766,10 +4191,12 @@ namespace AutoClicker.UI
             // Also undo what INSTALLING registered: the Start Menu and Desktop
             // shortcuts and the Settings > Apps entry. Without this the in-app uninstall
             // left Windows still advertising Tempo as installed, pointing at files it
-            // had just deleted — see Uninstaller.RemoveShellIntegration.
+            // had just deleted — see Uninstaller.RemoveShellIntegration. Only what belongs
+            // to THIS copy is removed, so uninstalling a portable copy leaves an installed one alone.
             Uninstaller.RemoveShellIntegration();
 
-            if (Uninstaller.LaunchCleanupAndExitHelper(deleteExe, out string err))
+            // The program always goes — that is what uninstalling is. The data goes only if asked.
+            if (Uninstaller.LaunchCleanupAndExitHelper(deleteData, true, out string err))
             {
                 try { _trayIcon?.Dispose(); } catch { }
 
@@ -3842,10 +4269,18 @@ namespace AutoClicker.UI
                     return;
                 }
 
+                // This PC's facts stay local — a file from another machine or build carries its
+                // integrity baseline, crash watermark, update cache and window position.
+                AppSettings before = _settings;
+                imported.KeepMachineStateFrom(before);
                 _settings = imported;
-                ApplyReplacedSettings();
+                ApplyReplacedSettings(before);
 
                 ShowInfo("Settings imported.");
+                if (before.Language != _settings.Language)
+                {
+                    OfferRestartForLanguage();
+                }
             }
         }
 

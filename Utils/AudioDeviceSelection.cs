@@ -103,6 +103,31 @@ namespace AutoClicker.Utils
             }
         }
 
+        /// <summary>
+        /// The endpoint id <see cref="Resolve"/> would pick right now, or null when nothing
+        /// usable exists. Opens and releases the device; nothing is captured.
+        ///
+        /// Lets a capture ask "would following the device change actually move me?"
+        /// before tearing itself down. Every Windows default-speaker switch used to reopen
+        /// both caption captures even when the user had PINNED a speaker that never
+        /// changed — dropping audio for a reopen that landed on the very same device.
+        /// </summary>
+        public static string ResolveId(DataFlow flow)
+        {
+            try
+            {
+                using (var en = new MMDeviceEnumerator())
+                using (MMDevice dev = Resolve(en, flow, out _))
+                {
+                    return dev?.ID;
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         /// <summary>Name of a device, honest when the model can't be read.</summary>
         public static string NameOf(MMDevice dev, DataFlow flow)
         {

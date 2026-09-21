@@ -55,6 +55,8 @@ namespace AutoClicker.Utils
             // blank exactly where it is meant to be reassuring. Short always names the
             // build ("build 260905-0234 · TEST", or "unstamped dev build").
             sb.AppendLine("Build    : " + Safe(() => BuildInfo.Short));
+            // Which copy crashed: a GitHub-verified release names its Official ID, anything else says why not.
+            sb.AppendLine("Official : " + Safe(() => IntegrityCheck.OfficialIdReportLine()));
             sb.AppendLine("Where    : " + (string.IsNullOrEmpty(context) ? "(unspecified)" : context));
             sb.AppendLine("OS       : " + Safe(() => RuntimeInformation.OSDescription));
             sb.AppendLine("Runtime  : " + Safe(() => RuntimeInformation.FrameworkDescription));

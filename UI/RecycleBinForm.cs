@@ -38,13 +38,17 @@ namespace AutoClicker.UI
         private readonly Func<string, bool> _restoreOne;
         private readonly Action _emptyAll;
         private readonly string _emptyPrompt;
+        private readonly bool _closeOnRestore;
 
         /// <summary>True when anything was restored or purged, so the caller can refresh.</summary>
         public bool Changed { get; private set; }
 
+        /// <param name="emptyLabel">Caption for the button that empties the list; "Empty the bin" when null.</param>
+        /// <param name="closeOnRestore">Close once something is restored — for a list where picking one ends the job.</param>
         public RecycleBinForm(Theme theme, string title, string help,
                               string[] headers, int[] widths, string emptyNote, string emptyPrompt,
-                              Func<List<Entry>> load, Func<string, bool> restoreOne, Action emptyAll)
+                              Func<List<Entry>> load, Func<string, bool> restoreOne, Action emptyAll,
+                              string emptyLabel = null, bool closeOnRestore = false)
         {
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
@@ -54,6 +58,7 @@ namespace AutoClicker.UI
             _restoreOne = restoreOne;
             _emptyAll = emptyAll;
             _emptyPrompt = emptyPrompt;
+            _closeOnRestore = closeOnRestore;
 
             Text = title;
             Size = new Size(560, 400);
@@ -103,7 +108,7 @@ namespace AutoClicker.UI
             _restore.Click += OnRestore;
             Controls.Add(_restore);
 
-            _empty = UiFactory.Button("Empty the bin", 136, 296, 130, 32);
+            _empty = UiFactory.Button(string.IsNullOrEmpty(emptyLabel) ? "Empty the bin" : emptyLabel, 136, 296, 130, 32);
             _empty.Click += OnEmpty;
             Controls.Add(_empty);
 
@@ -185,6 +190,9 @@ namespace AutoClicker.UI
             if (restored > 0)
             {
                 Changed = true;
+                // Picking a restore point is a one-shot choice that restarts Tempo; the list has nothing
+                // more to offer after it, so a caller can ask for it to close.
+                if (_closeOnRestore) { Close(); return; }
                 Reload();
             }
         }
@@ -209,10 +217,12 @@ namespace AutoClicker.UI
         /// <summary>Shows the bin; returns true when something was restored or purged.</summary>
         public static bool Show(IWin32Window owner, Theme theme, string title, string help,
                                 string[] headers, int[] widths, string emptyNote, string emptyPrompt,
-                                Func<List<Entry>> load, Func<string, bool> restoreOne, Action emptyAll)
+                                Func<List<Entry>> load, Func<string, bool> restoreOne, Action emptyAll,
+                                string emptyLabel = null, bool closeOnRestore = false)
         {
             using (var form = new RecycleBinForm(theme, title, help, headers, widths,
-                                                 emptyNote, emptyPrompt, load, restoreOne, emptyAll))
+                                                 emptyNote, emptyPrompt, load, restoreOne, emptyAll,
+                                                 emptyLabel, closeOnRestore))
             {
                 form.ShowDialog(owner);
                 return form.Changed;

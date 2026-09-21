@@ -201,8 +201,22 @@ namespace AutoClicker.Utils
             // A poster / thumbnail / UI portrait, not a living head: excluded
             // from the talking verdict, flagged in DebugDetail.
             public bool IsStatic;
+            // When the CURRENT occupant took this slot. The slot index IS the face's
+            // speaker number, and an expired slot is handed to the next new face — so
+            // someone arriving after a speaker left inherits that speaker's number.
+            // Recording the takeover lets Live debug show when that happened.
+            public DateTime OccupiedSinceUtc;
         }
         private readonly List<Slot> _slots = new List<Slot>();
+
+        // Expired slots handed to a new face this session (see Slot.OccupiedSinceUtc).
+        private volatile int _slotRecycles;
+
+        /// <summary>
+        /// Times this session a new face took over a slot another face had left — each
+        /// one a point where a new person may have inherited a previous speaker's number.
+        /// </summary>
+        public int SlotRecycles => _slotRecycles;
 
         /// <summary>
         /// The live capture level, in dB, supplied by the caption engine. Optional: when
@@ -340,6 +354,7 @@ namespace AutoClicker.Utils
             _visualSpeaker = 0;
             _faceCount = 0;
             _talkingFaces = 0;
+            _slotRecycles = 0;      // per session, like the slots themselves
             try { _timer?.Dispose(); } catch { }
             _timer = null;
 
@@ -765,7 +780,7 @@ namespace AutoClicker.Utils
                     // after the first few faces it ever saw and went blind.
                     foreach (var s in _slots)
                     {
-                        if (!s.Alive) { best = s; break; }
+                        if (!s.Alive) { best = s; _slotRecycles++; break; }
                     }
                     if (best == null)
                     {
@@ -776,6 +791,7 @@ namespace AutoClicker.Utils
                         best = new Slot();
                         _slots.Add(best);
                     }
+                    best.OccupiedSinceUtc = now;     // a new occupant: may be a different person
                     best.X = fx; best.Y = fy; best.W = fw; best.H = fh;
                     best.MotionEma = 0;              // a fresh face starts with a clean history
                     best.FreshMotion = true;
@@ -1132,6 +1148,11 @@ namespace AutoClicker.Utils
                         sb.Append("    face ").Append(i + 1)
                           .Append(_visualSpeaker == i + 1 ? " ● TALKING" : "        ")
                           .Append(" · ").Append(where)
+                          // How long THIS occupant has held the slot: a short time next
+                          // to a long-running conversation marks a newcomer who took over
+                          // a departed face's number.
+                          .Append(s.OccupiedSinceUtc == DateTime.MinValue ? ""
+                              : " · on screen " + (int)(DateTime.UtcNow - s.OccupiedSinceUtc).TotalSeconds + "s")
                           .Append(" · ").Append((int)s.W).Append("px")
                           .Append(" · mouth-motion ").Append(s.MotionEma.ToString("0.0"))
                           .Append(" · vel ")

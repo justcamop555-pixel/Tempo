@@ -91,12 +91,13 @@ namespace AutoClicker.UI
         private Color ClickColor;  // clicker engine / macros — soft orange
         private Color ScriptColor; // Python script steps — lime
         private Color SysColor;    // startup / settings / update — orchid
+        private Color AcctColor;   // Roblox accounts, vault, launches, the local API — teal
         private Color TraceColor;  // per-chunk traces — dim grey
         private readonly CheckBox _colourByKind;   // toggles category colouring on/off
         private RichTextBox _legend;
 
         /// <summary>A subsystem category a log line belongs to, for colouring.</summary>
-        private enum LineKind { Info, Error, Warn, Captions, Movement, Audio, Input, Clicker, Script, System, Trace }
+        private enum LineKind { Info, Error, Warn, Captions, Movement, Audio, Input, Clicker, Script, System, Accounts, Trace }
         // Last stats text rendered. The panel refreshes twice a second; rewriting a
         // RichTextBox that hasn't changed would throw away the user's selection (and
         // flicker) for nothing.
@@ -154,6 +155,7 @@ namespace AutoClicker.UI
                 ClickColor = Color.FromArgb(180, 78, 22);   // clicker — burnt orange
                 ScriptColor = Color.FromArgb(74, 130, 20);  // scripts — olive
                 SysColor = Color.FromArgb(160, 44, 128);    // system — orchid
+                AcctColor = Color.FromArgb(0, 124, 124);    // accounts — deep teal
                 TraceColor = Color.FromArgb(130, 136, 148); // traces — grey
             }
             else
@@ -172,6 +174,9 @@ namespace AutoClicker.UI
                                                             // and 62° off the audio mint.
                 SysColor = Color.FromArgb(235, 150, 210);   // system — orchid (was pale
                                                             // cyan, colliding with captions)
+                AcctColor = Color.FromArgb(64, 214, 200);   // accounts — teal: saturated and
+                                                            // green-leaning, so it reads apart
+                                                            // from the pale sky-blue captions
                 TraceColor = Color.FromArgb(120, 128, 145); // traces — dim grey
             }
         }
@@ -275,12 +280,31 @@ namespace AutoClicker.UI
             };
             Controls.Add(_legend);
 
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 72, BackColor = theme.Surface };
+            // The control strip FLOWS and wraps instead of pinning each control at a fixed x. Pinned,
+            // the longer languages ran them into each other ("Problèmes uniquement" over "Trace des
+            // sous-titres", the hint under "Colorear por categoría"), "Toujours au premier plan" hung
+            // off the right edge, and at the window's minimum width three controls sat outside it in
+            // English too — 27 faults across six languages, measured by scratchpad/debugfit. The
+            // strip's height follows whatever the wrap needs (FitControlStrip).
+            var bottom = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 72,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = true,
+                Padding = new Padding(6, 3, 6, 3),
+                BackColor = theme.Surface
+            };
+            _controlStrip = bottom;
+            bottom.Layout += (s, e) => FitControlStrip();
+            // A height-only resize doesn't lay the strip out again, and the stats/log share still has to follow.
+            Resize += (s, e) => FitControlStrip();
             Controls.Add(bottom);
 
             _filter = new TextBox
             {
-                Left = 10, Top = 8, Width = 220,
+                Width = 220,
+                Margin = new Padding(4, 6, 4, 4),
                 BackColor = theme.InputBackground, ForeColor = theme.Text,
                 BorderStyle = BorderStyle.FixedSingle
             };
@@ -298,7 +322,8 @@ namespace AutoClicker.UI
             bottom.Controls.Add(_filter);
             var filterHint = new Label
             {
-                Left = 236, Top = 12, AutoSize = true,
+                AutoSize = true,
+                Margin = new Padding(0, 9, 12, 4),
                 Text = Utils.Localization.T("filter"),
                 ForeColor = theme.TextMuted, BackColor = Color.Transparent
             };
@@ -306,7 +331,7 @@ namespace AutoClicker.UI
 
             _pause = new CheckBox
             {
-                Left = 280, Top = 9, AutoSize = true, Text = Utils.Localization.T("Pause"),
+                AutoSize = true, Margin = StripCheckMargin, Text = Utils.Localization.T("Pause"),
                 ForeColor = theme.Text, BackColor = Color.Transparent
             };
             // Catching up on UNPAUSE is the whole point, and it was missing: FlushPending
@@ -322,7 +347,7 @@ namespace AutoClicker.UI
 
             _problemsOnly = new CheckBox
             {
-                Left = 348, Top = 9, AutoSize = true, Text = Utils.Localization.T("Problems only"),
+                AutoSize = true, Margin = StripCheckMargin, Text = Utils.Localization.T("Problems only"),
                 ForeColor = theme.Text, BackColor = Color.Transparent
             };
             _problemsOnly.CheckedChanged += Safe("problemsOnly", ReloadFromRing);
@@ -335,7 +360,7 @@ namespace AutoClicker.UI
             // isn't quietly flooded afterwards.
             _trace = new CheckBox
             {
-                Left = 466, Top = 9, AutoSize = true, Text = Utils.Localization.T("Caption trace"),
+                AutoSize = true, Margin = StripCheckMargin, Text = Utils.Localization.T("Caption trace"),
                 ForeColor = theme.Text, BackColor = Color.Transparent
             };
             _trace.CheckedChanged += Safe("captionTrace",
@@ -347,7 +372,7 @@ namespace AutoClicker.UI
             // is the only practical way to see WHY the character went the wrong way.
             _moveTrace = new CheckBox
             {
-                Left = 576, Top = 9, AutoSize = true, Text = Utils.Localization.T("Movement trace"),
+                AutoSize = true, Margin = StripCheckMargin, Text = Utils.Localization.T("Movement trace"),
                 ForeColor = theme.Text, BackColor = Color.Transparent
             };
             _moveTrace.CheckedChanged += Safe("movementTrace",
@@ -358,14 +383,31 @@ namespace AutoClicker.UI
             // which made it useless for exactly the case it is most needed in.
             _onTop = new CheckBox
             {
-                Left = 706, Top = 9, AutoSize = true, Text = Utils.Localization.T("Always on top"),
+                AutoSize = true, Margin = StripCheckMargin, Text = Utils.Localization.T("Always on top"),
                 ForeColor = theme.Text, BackColor = Color.Transparent
             };
             _onTop.CheckedChanged += Safe("alwaysOnTop", () => TopMost = _onTop.Checked);
             bottom.Controls.Add(_onTop);
 
-            var copyBtn = MakeButton(theme, "Copy", 10);
-            copyBtn.Top = 40;
+            // Colour each event by which subsystem it came from (captions, movement,
+            // audio, input, …) so the stream can be read at a glance. On by default;
+            // untick for the plain severity-only colouring. The legend strip above the
+            // log shows what each colour means. It sits with the other view options now,
+            // and the buttons start a row of their own after it.
+            _colourByKind = new CheckBox
+            {
+                AutoSize = true, Margin = StripCheckMargin,
+                Text = Utils.Localization.T("Colour by category"), Checked = true,
+                ForeColor = theme.Text, BackColor = Color.Transparent
+            };
+            _colourByKind.CheckedChanged += Safe("colourByKind", () =>
+            {
+                BuildLegend();
+                ReloadFromRing();
+            });
+            bottom.Controls.Add(_colourByKind);
+
+            var copyBtn = MakeButton(theme, "Copy");
             copyBtn.Click += Safe("copy", () =>
             {
                 // The clipboard genuinely refuses sometimes — another app can hold it
@@ -389,40 +431,20 @@ namespace AutoClicker.UI
             });
             bottom.Controls.Add(copyBtn);
 
-            var saveBtn = MakeButton(theme, "Save…", 96);
-            saveBtn.Top = 40;
+            var saveBtn = MakeButton(theme, "Save…");
             saveBtn.Click += Safe("save", SaveToFile);
             bottom.Controls.Add(saveBtn);
 
-            var clearBtn = MakeButton(theme, "Clear view", 182);
-            clearBtn.Top = 40;
+            var clearBtn = MakeButton(theme, "Clear view");
             clearBtn.Click += Safe("clear", () => { _log.Clear(); _shownLines = 0; });
             bottom.Controls.Add(clearBtn);
 
-            var hint = new Label
-            {
-                Left = 272, Top = 45, AutoSize = true,
-                Text = Utils.Localization.T("Copy/Save include the stats above + the recent events."),
-                ForeColor = theme.TextMuted, BackColor = Color.Transparent
-            };
-            bottom.Controls.Add(hint);
-
-            // Colour each event by which subsystem it came from (captions, movement,
-            // audio, input, …) so the stream can be read at a glance. On by default;
-            // untick for the plain severity-only colouring. The legend strip above the
-            // log shows what each colour means.
-            _colourByKind = new CheckBox
-            {
-                Left = 640, Top = 42, AutoSize = true,
-                Text = Utils.Localization.T("Colour by category"), Checked = true,
-                ForeColor = theme.Text, BackColor = Color.Transparent
-            };
-            _colourByKind.CheckedChanged += Safe("colourByKind", () =>
-            {
-                BuildLegend();
-                ReloadFromRing();
-            });
-            bottom.Controls.Add(_colourByKind);
+            // What Copy and Save put in the report, on the buttons themselves. It was a line of text
+            // beside them, which in French alone needed 434 px — a whole extra row of the strip,
+            // taken from the event log.
+            string exportHint = Utils.Localization.T("Copy/Save include the stats above + the recent events.");
+            _tips.SetToolTip(copyBtn, exportHint);
+            _tips.SetToolTip(saveBtn, exportHint);
 
             _infoColor = theme.Text;
             _log = new RichTextBox
@@ -479,6 +501,7 @@ namespace AutoClicker.UI
                 try { _statsTimer.Stop(); _statsTimer.Dispose(); } catch { }
                 try { _flushTimer?.Stop(); _flushTimer?.Dispose(); _flushTimer = null; } catch { }
                 try { _filterDebounce?.Stop(); _filterDebounce?.Dispose(); _filterDebounce = null; } catch { }
+                try { _tips.Dispose(); } catch { }
                 lock (_pendingLock) { _pending.Clear(); _pendingOverflow = false; }
                 // Nobody is watching any more — stop both trace streams, or they would
                 // quietly flood the log ring for the rest of the session.
@@ -510,6 +533,7 @@ namespace AutoClicker.UI
                     AppendChip("clicker", ClickColor);
                     AppendChip("scripts", ScriptColor);
                     AppendChip("system", SysColor);
+                    AppendChip("accounts", AcctColor);
                     AppendChip("trace", TraceColor);
                 }
             }
@@ -529,17 +553,69 @@ namespace AutoClicker.UI
             _legend.AppendText("● " + Utils.Localization.T(label) + "   ");   // ● swatch + name
         }
 
-        private static Button MakeButton(Theme theme, string text, int left)
+        private static Button MakeButton(Theme theme, string text)
         {
             var b = new Button
             {
-                Left = left, Top = 6, Width = 80, Height = 26,
+                // Sized to its caption, never narrower than 80. A fixed 80 cut off "Limpiar la
+                // vista", "Ansicht leeren", "Svuota la vista", "Limpar a vista" and "Effacer la vue".
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(80, 26),
+                Padding = new Padding(6, 0, 6, 0),
+                Margin = new Padding(4, 4, 4, 4),
                 Text = Utils.Localization.T(text),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = theme.Surface2, ForeColor = theme.Text
             };
             b.FlatAppearance.BorderColor = theme.Border;
             return b;
+        }
+
+        // The view options' spacing in the control strip: a gap after each, nudged down to sit
+        // level with the filter box.
+        private static readonly Padding StripCheckMargin = new Padding(4, 8, 10, 4);
+
+        private FlowLayoutPanel _controlStrip;
+        private bool _fittingStrip;
+        private readonly ToolTip _tips = new ToolTip();
+
+        // The stats pane's full height, and the least it gives up to on a short window.
+        private const int StatsFullHeight = 196;
+        private const int StatsLeastHeight = 96;
+
+        /// <summary>
+        /// Gives the control strip the height its wrapped rows need at the window's current width,
+        /// then shares what is left between the stats pane and the event log.
+        ///
+        /// A docked FlowLayoutPanel does not size itself to its own wrap — AutoSize measures the
+        /// controls as one unbroken row — so the height is asked for at the real width and applied
+        /// here, from the strip's Layout (a resize, a longer caption such as "Copied ✓"). The stats
+        /// pane used to keep a fixed 196 px however short the window, which at the minimum size left
+        /// the event log 91 px; now it gives way until the two are even.
+        /// </summary>
+        private void FitControlStrip()
+        {
+            var strip = _controlStrip;
+            if (strip == null || strip.IsDisposed || _fittingStrip) { return; }
+            try
+            {
+                _fittingStrip = true;
+                int width = strip.ClientSize.Width;
+                if (width <= 0) { return; }
+                int want = strip.GetPreferredSize(new Size(width, 0)).Height;
+                if (want > 0 && want != strip.Height) { strip.Height = want; }
+
+                if (_stats != null && !_stats.IsDisposed)
+                {
+                    int legend = _legend != null ? _legend.Height : 0;
+                    int shared = ClientSize.Height - legend - strip.Height;
+                    int stats = Math.Max(StatsLeastHeight, Math.Min(StatsFullHeight, shared / 2));
+                    if (shared > 0 && stats != _stats.Height) { _stats.Height = stats; }
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("DebugForm.FitControlStrip", ex); }
+            finally { _fittingStrip = false; }
         }
 
         /// <summary>
@@ -670,7 +746,12 @@ namespace AutoClicker.UI
             if (line.StartsWith("✗", StringComparison.Ordinal)) { return _errorColor; }
             if (line.StartsWith("Health: ✓", StringComparison.Ordinal) ||
                 line.StartsWith("✓", StringComparison.Ordinal)) { return _goodColor; }
-            if (line.StartsWith("⚠", StringComparison.Ordinal) ||
+            // Indented warnings count too. Detail lines such as "  ⚠ the watched window
+            // returns a BLANK image" used to fall through to the indentation rule below
+            // and render MUTED — the one kind of line meant to stand out came out
+            // quieter than the heading above it.
+            string lead = line.TrimStart(' ');
+            if (lead.StartsWith("⚠", StringComparison.Ordinal) ||
                 line.StartsWith("Health: ⚠", StringComparison.Ordinal)) { return _warnColor; }
             if (line.IndexOf("DROPPED", StringComparison.Ordinal) >= 0 ||
                 line.IndexOf("too slow", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -840,6 +921,25 @@ namespace AutoClicker.UI
                 ["window"] = LineKind.System,
                 ["perf"] = LineKind.System,
                 ["Debug"] = LineKind.System,
+                // [Data] is restore points: the copy taken when a new build first starts, and a
+                // scheduled restore. It belongs with [Store] — "where did my data go" again.
+                ["Data"] = LineKind.System,
+                // [WebUI] is the experimental HTML Settings page; [Drag] is the window move loop
+                // (the drag-lag work); [crash] is the crash-count warning at startup.
+                ["WebUI"] = LineKind.System,
+                ["Drag"] = LineKind.System,
+                ["crash"] = LineKind.System,
+
+                // The Roblox account manager, which arrived with ninety-odd log lines and no entry
+                // here, so every one of them rendered uncoloured and the stats header listed five
+                // "uncategorised" tags: the vault, sign-in through a real browser, launching and the
+                // multi-instance lock closer, and the local API. It is the subsystem people now run
+                // live beside a game, so it gets its own colour rather than a share of System's.
+                ["Accounts"] = LineKind.Accounts,
+                ["Vault"] = LineKind.Accounts,
+                ["Roblox"] = LineKind.Accounts,
+                ["RobloxLogin"] = LineKind.Accounts,
+                ["AccountApi"] = LineKind.Accounts,
 
                 // High-frequency chatter, dimmed so the events above stand out.
                 ["Trace"] = LineKind.Trace,
@@ -919,6 +1019,7 @@ namespace AutoClicker.UI
                 case LineKind.Clicker: return ClickColor;
                 case LineKind.Script: return ScriptColor;
                 case LineKind.System: return SysColor;
+                case LineKind.Accounts: return AcctColor;
                 case LineKind.Trace: return TraceColor;
                 default: return _infoColor;
             }

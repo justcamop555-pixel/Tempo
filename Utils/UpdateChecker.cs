@@ -63,6 +63,13 @@ namespace AutoClicker.Utils
             public Version LatestVersion { get; set; }
             public string DownloadUrl { get; set; }
             public string Sha256Url { get; set; }
+
+            /// <summary>
+            /// GitHub's SHA-256 for the asset at <see cref="DownloadUrl"/>, or null. Every asset has one,
+            /// so a download can always be verified — unlike <see cref="Sha256Url"/>, a separate .sha256
+            /// file the releases stopped carrying, which left in-app updates unverified.
+            /// </summary>
+            public string DownloadSha256 { get; set; }
             public string Notes { get; set; }
             public DateTime? ReleaseDate { get; set; }
         }
@@ -246,7 +253,10 @@ namespace AutoClicker.Utils
                 result.Notes = string.IsNullOrWhiteSpace(release.body) ? release.name : release.body;
                 result.DownloadUrl = PickDownloadUrl(release);
                 result.Sha256Url = PickChecksumUrl(release);
-                result.UpdateAvailable = latest > CurrentVersion;
+                result.DownloadSha256 = DigestFor(release, result.DownloadUrl);
+                // Both sides normalised: comparing a 3-part tag with a 4-part assembly version directly
+                // is the part-count trap described on Normalize.
+                result.UpdateAvailable = Normalize(latest) > Normalize(CurrentVersion);
 
                 if (!string.IsNullOrWhiteSpace(release.published_at) &&
                     DateTime.TryParse(release.published_at,
@@ -340,6 +350,39 @@ namespace AutoClicker.Utils
             return result;
         }
 
+        /// <summary>
+        /// A version with every part defined, so two of them can be compared without the part-count
+        /// trap. <c>Version.TryParse("1.0.321")</c> leaves Revision = -1, while an assembly version is
+        /// always four parts (1.0.321.0) — so the release compares as OLDER than the identical build it
+        /// was cut from, and their <c>ToString()</c>s are different strings. That is precisely how
+        /// "you are on the latest" turned into "update available".
+        /// </summary>
+        public static Version Normalize(Version v)
+        {
+            if (v == null) { return new Version(0, 0, 0, 0); }
+            return new Version(Math.Max(0, v.Major), Math.Max(0, v.Minor),
+                               Math.Max(0, v.Build), Math.Max(0, v.Revision));
+        }
+
+        /// <summary>
+        /// True when <paramref name="version"/> — a release tag, or the cached "latest seen" string — is
+        /// genuinely newer than <paramref name="current"/>. Takes the current version explicitly so the
+        /// rule can be exercised without being the running build.
+        /// </summary>
+        public static bool IsNewerThan(string version, Version current)
+        {
+            return TryParseTag(version, out Version parsed) && Normalize(parsed) > Normalize(current);
+        }
+
+        /// <summary>
+        /// True when that version is newer than the build running now. THE single place this is decided,
+        /// so the sidebar note, the Settings line and the launch check can never disagree with each other.
+        /// </summary>
+        public static bool IsNewerThanCurrent(string version)
+        {
+            return IsNewerThan(version, CurrentVersion);
+        }
+
         /// <summary>Parses a release tag such as "v1.0.26" or "1.0.26" into a Version.</summary>
         private static bool TryParseTag(string tag, out Version version)
         {
@@ -408,6 +451,27 @@ namespace AutoClicker.Utils
             }
 
             return string.IsNullOrWhiteSpace(release.html_url) ? ReleasesPageUrl : release.html_url;
+        }
+
+        /// <summary>The hex SHA-256 GitHub holds for the asset served at <paramref name="url"/>, or null.</summary>
+        internal static string DigestFor(GitHubRelease release, string url)
+        {
+            if (release?.assets == null || string.IsNullOrWhiteSpace(url)) { return null; }
+            foreach (GitHubAsset asset in release.assets)
+            {
+                if (asset == null || !string.Equals(asset.browser_download_url, url, StringComparison.Ordinal)) { continue; }
+                string d = (asset.digest ?? "").Trim();
+                const string prefix = "sha256:";
+                if (!d.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { return null; }
+                string hex = d.Substring(prefix.Length);
+                if (hex.Length != 64) { return null; }
+                foreach (char c in hex)
+                {
+                    if (!Uri.IsHexDigit(c)) { return null; }
+                }
+                return hex;
+            }
+            return null;
         }
 
         /// <summary>

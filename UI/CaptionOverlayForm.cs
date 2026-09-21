@@ -140,9 +140,9 @@ namespace AutoClicker.UI
         // offline). Slamming the whole chunk onto the bar at once reads as a wall
         // of text appearing from nowhere; revealing it ONE WORD AT A TIME, each
         // word fading in with a little rise, reads like live speech being heard —
-        // the Windows 11 captions feel. The pacing (~90 ms/word) finishes a normal
-        // chunk comfortably before the next one lands; if the next chunk arrives
-        // early, its words simply queue behind and the reveal never stalls.
+        // the Windows 11 captions feel. The pacing (RevealPaceFor) reads at 280 ms a
+        // word and speeds up only as far as it must to keep every word within
+        // RevealDeadlineMs of arriving; words that arrive early simply queue behind.
         private string[] _targetWords = Array.Empty<string>();
         private int _revealed;                    // words currently on the bar
         private long _lastRevealTick;
@@ -158,15 +158,48 @@ namespace AutoClicker.UI
         // their place on the bar longer, so the eye gets to finish them.
         private const int RevealBaseMs = 280;     // ≈ 210 wpm
         private const int RevealRushMs = 80;      // flood ceiling (backlog very deep)
+        // Catching up never goes faster than this (~500 wpm, and only for as long as it takes)...
+        private const int RevealFloorMs = 120;
+        // ...and aims to put every word on the bar within this long of it arriving.
+        private const int RevealDeadlineMs = 1500;
 
-        /// <summary>Per-word reveal delay for the CURRENT backlog depth.</summary>
+        // When each word of _targetWords arrived (TickCount64), index for index.
+        private long[] _wordArrival = Array.Empty<long>();
+
+        // How long words wait between reaching the bar and appearing on it: smoothed, ms (−1 = none yet).
+        private int _revealLagMs = -1;
+
+        /// <summary>
+        /// Per-word reveal delay: reading pace, unless words already waiting would otherwise
+        /// appear more than <see cref="RevealDeadlineMs"/> after they arrived.
+        ///
+        /// It used to be chosen from the queue's LENGTH alone — 280 ms a word until more than
+        /// eight were waiting — so a fast talker's chunk of eight words took two seconds to
+        /// finish appearing, on top of the delay the speech engine already has, and the next
+        /// chunk queued behind it. Words that are about to be late now speed the reveal up;
+        /// ordinary speech still reads at 280 ms a word.
+        /// </summary>
+        internal static int RevealPaceFor(long now, long[] arrival, int revealed, int total)
+        {
+            int backlog = total - revealed;
+            if (backlog <= 0) { return RevealBaseMs; }
+            if (backlog > 24) { return RevealRushMs; }                     // a flood — rush it
+            int pace = RevealBaseMs;
+            for (int k = 0; k < backlog; k++)
+            {
+                int i = revealed + k;
+                if (arrival == null || i >= arrival.Length) { break; }
+                // The (k+1)-th word still waiting shows about (k+1) paces from now.
+                long fits = (arrival[i] + RevealDeadlineMs - now) / (k + 1);
+                if (fits < pace) { pace = (int)Math.Max(RevealFloorMs, fits); }
+            }
+            return pace;
+        }
+
+        /// <summary>Per-word reveal delay right now.</summary>
         private int CurrentPaceMs()
         {
-            int backlog = _targetWords.Length - _revealed;
-            if (backlog > 24) { return RevealRushMs; }        // way behind — rush
-            if (backlog > 16) { return 130; }
-            if (backlog > 8) { return 190; }                  // a chunk queued — brisk
-            return RevealBaseMs;                              // normal speech — readable
+            return RevealPaceFor(Environment.TickCount64, _wordArrival, _revealed, _targetWords.Length);
         }
 
         /// <summary>The pace currently in force, for Live debug.</summary>
@@ -176,6 +209,23 @@ namespace AutoClicker.UI
         public int RevealShownWords => Math.Min(_revealed, _targetWords.Length);
         /// <summary>Total words of the current caption target (Live debug).</summary>
         public int RevealTotalWords => _targetWords.Length;
+
+        /// <summary>
+        /// How long words have been waiting on the bar before appearing, smoothed over the last
+        /// few words, in ms; −1 before any word has been revealed. This is the bar's share of
+        /// caption delay — the engine's share is TempoTranscriber.MeasuredDelaySeconds.
+        /// </summary>
+        public int RevealLagMs => _revealLagMs;
+
+        /// <summary>How long the oldest word still waiting to appear has waited, ms; 0 when none is.</summary>
+        public int RevealWaitingMs
+        {
+            get
+            {
+                if (_revealed >= _targetWords.Length || _revealed >= _wordArrival.Length) { return 0; }
+                return (int)Math.Max(0, Environment.TickCount64 - _wordArrival[_revealed]);
+            }
+        }
 
         /// <summary>
         /// Works out how many words of the NEW caption text are already on screen,
@@ -191,15 +241,22 @@ namespace AutoClicker.UI
             string[] nw = (newText ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             string[] ow = _targetWords;
             int carried;
+            // Where the old words sit in the new text, so a word still waiting to appear keeps
+            // the time it first ARRIVED rather than being timed as brand new with every update:
+            // indices below sameUpTo are unchanged, and after a front-trim old index + shift.
+            int sameUpTo = 0;
+            int shift = int.MinValue;
+            {
+                int lim = Math.Min(ow.Length, nw.Length);
+                while (sameUpTo < lim && ow[sameUpTo] == nw[sameUpTo]) { sameUpTo++; }
+            }
             if (ow.Length == 0 || _revealed <= 0)
             {
                 carried = 0;
             }
             else
             {
-                int lim = Math.Min(ow.Length, nw.Length);
-                int lcp = 0;
-                while (lcp < lim && ow[lcp] == nw[lcp]) { lcp++; }
+                int lcp = sameUpTo;
                 if (lcp >= Math.Min(_revealed, ow.Length))
                 {
                     carried = Math.Min(_revealed, nw.Length);   // pure append
@@ -222,10 +279,25 @@ namespace AutoClicker.UI
                         {
                             if (nw[p + k] != ow[Math.Min(_revealed, ow.Length) - take + k]) { match = false; break; }
                         }
-                        if (match) { carried = p + take; break; }
+                        if (match)
+                        {
+                            carried = p + take;
+                            shift = carried - Math.Min(_revealed, ow.Length);
+                            break;
+                        }
                     }
                 }
             }
+            long now = Environment.TickCount64;
+            var arrival = new long[nw.Length];
+            for (int k = 0; k < nw.Length; k++)
+            {
+                int old = k < sameUpTo ? k : (shift != int.MinValue ? k - shift : -1);
+                arrival[k] = old >= 0 && old < ow.Length && old < _wordArrival.Length && ow[old] == nw[k]
+                    ? _wordArrival[old]
+                    : now;
+            }
+            _wordArrival = arrival;
             _targetWords = nw;
             _revealed = Math.Min(carried, nw.Length);
             if (_revealed < nw.Length)
@@ -367,6 +439,7 @@ namespace AutoClicker.UI
             _pending = pending;
             if (pending)
             {
+                _revealLagMs = -1;          // a fresh session measures its own reveal delay
                 _text = "";
                 _fadeTarget = 1.0;
                 EnsureAnimating();
@@ -663,6 +736,11 @@ namespace AutoClicker.UI
                 int pace = CurrentPaceMs();
                 while (_revealed < _targetWords.Length && nowT - _lastRevealTick >= pace)
                 {
+                    if (_revealed < _wordArrival.Length)
+                    {
+                        int lag = (int)Math.Max(0, nowT - _wordArrival[_revealed]);
+                        _revealLagMs = _revealLagMs < 0 ? lag : (_revealLagMs * 7 + lag) / 8;
+                    }
                     _revealed++;
                     _lastRevealTick += pace;
                     _newWordFade = 0;         // the freshly revealed word fades in

@@ -53,7 +53,8 @@ namespace AutoClicker.UI
         public static Label Label(string text, int x, int y, FontStyle style = FontStyle.Regular, float size = 9f)
         {
             text = Localization.T(text);
-            return new Label
+            // EmojiLabel paints plain text exactly like a Label, and keeps an emoji (🔒, 🔊, 🎙) in colour.
+            return new EmojiLabel
             {
                 Text = text,
                 Left = x,
@@ -186,6 +187,33 @@ namespace AutoClicker.UI
             b.FlatAppearance.BorderSize = 0;
             b.FlatAppearance.MouseOverBackColor = theme.AccentHover;
             return b;
+        }
+
+        /// <summary>
+        /// Widen a button until its own text fits, keeping at least <paramref name="minWidth"/>.
+        ///
+        /// A width that fits the English word is a width that clips the German one — "Unmute"
+        /// becomes "Stummschaltung aufheben", "Re-check" becomes "Volver a comprobar". Measuring
+        /// the text that is actually on the button is the only version of this that survives a
+        /// translation, so it belongs here rather than being re-derived at each call site.
+        /// </summary>
+        public static Button FitToText(Button b, int minWidth = 0, int padding = 26)
+        {
+            if (b == null) { return null; }
+            try
+            {
+                int needed = TextRenderer.MeasureText(b.Text ?? "", b.Font).Width + padding;
+                b.Width = Math.Max(minWidth, needed);
+            }
+            catch { }
+            return b;
+        }
+
+        /// <summary>Right-align an auto-sized control so its right edge lands on <paramref name="rightEdge"/>.</summary>
+        public static T RightAlign<T>(T c, int rightEdge) where T : Control
+        {
+            if (c != null) { c.Left = Math.Max(0, rightEdge - c.PreferredSize.Width); }
+            return c;
         }
 
         public static GroupBox Group(string title, int x, int y, int width, int height)

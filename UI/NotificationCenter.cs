@@ -26,8 +26,25 @@ namespace AutoClicker.UI
         private readonly Func<int> _durationMs;      // AppSettings.NotificationDurationSeconds * 1000
 
         private readonly List<NotificationToastForm> _active = new List<NotificationToastForm>();
-        private readonly Queue<Pending> _queue = new Queue<Pending>();
+        // A list used as a FIFO, not a Queue: a repeat has to be able to find its twin
+        // among the waiting cards and count itself onto it, which needs indexing.
+        private readonly List<Pending> _queue = new List<Pending>();
         private const int MaxVisible = 5;
+
+        /// <summary>
+        /// How many cards may wait behind the visible five. The queue used to be
+        /// unbounded: one chatty app could leave dozens waiting, each holding its icon
+        /// and hero bitmap, and — since each card is on screen for seconds — they would
+        /// still be arriving minutes after the thing they were about.
+        /// </summary>
+        private const int MaxQueued = 12;
+
+        /// <summary>
+        /// A queued card older than this is not worth showing any more. "A run finished"
+        /// arriving a minute late is a lie about the present; the history keeps it.
+        /// </summary>
+        private const int StaleAfterMs = 60000;
+
         private bool _disposed;
 
         private struct Pending
@@ -37,6 +54,9 @@ namespace AutoClicker.UI
             public Image Icon;
             public Image Hero;
             public Action OnActivate;
+            public DateTime RaisedUtc;    // when it was RAISED, so the history stays honest
+            public long RaisedTick;       // monotonic, for the staleness test
+            public int Repeats;           // folded-in twins that arrived while it waited
         }
 
         /// <summary>Total cards shown this session (for Live Debug).</summary>
@@ -61,12 +81,27 @@ namespace AutoClicker.UI
         /// <summary>Why the last suppressed card was held back.</summary>
         public string LastSuppressedReason { get; private set; }
 
-        public NotificationCenter(Form owner, Func<Theme> theme, Func<int> corner, Func<int> durationMs)
+        /// <summary>
+        /// Cards that waited behind the visible stack and were then dropped rather than
+        /// shown — too old by the time there was room, or the screen had meanwhile gone
+        /// fullscreen. Surfaced in Live debug; every one is in the history with a reason.
+        /// </summary>
+        public int DroppedFromQueueCount { get; private set; }
+
+        /// <summary>
+        /// Called when someone right-clicks a MIRRORED card and chooses to mute that app.
+        /// Optional: without it the card's menu offers only "Dismiss".
+        /// </summary>
+        private readonly Action<string> _muteApp;
+
+        public NotificationCenter(Form owner, Func<Theme> theme, Func<int> corner, Func<int> durationMs,
+                                  Action<string> muteApp = null)
         {
             _owner = owner;
             _theme = theme ?? (() => Theme.ForKind(Models.ThemeKind.Dark));
             _corner = corner ?? (() => 0);
             _durationMs = durationMs ?? (() => 5000);
+            _muteApp = muteApp;
         }
 
         /// <summary>
@@ -162,17 +197,53 @@ namespace AutoClicker.UI
                 return _active[i];
             }
 
-            // Recorded here rather than in SpawnCard so a card that waits its turn in the
-            // queue is still written down at the moment it was raised — the history is
-            // about what Tempo had to say and when, not about window management.
-            Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
-                Utils.NotificationHistory.Outcome.Shown);
+            // …and the same for a card still WAITING behind the visible stack. Collapsing
+            // only against what was on screen meant a burst of one repeated warning filled
+            // the queue with identical copies, which then arrived one at a time — the very
+            // column of twins the collapsing exists to prevent, just delayed.
+            for (int i = 0; i < _queue.Count; i++)
+            {
+                Pending q = _queue[i];
+                if (!SameMessage(q.App, q.Title, q.Body, appName, title, body)) { continue; }
+                q.Repeats++;
+                _queue[i] = q;
+                RepeatsCollapsed++;
+                Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
+                    Utils.NotificationHistory.Outcome.Repeated);
+                icon?.Dispose();
+                if (hero != null && !ReferenceEquals(hero, icon)) { hero.Dispose(); }
+                return null;
+            }
 
             if (_active.Count >= MaxVisible)
             {
-                _queue.Enqueue(new Pending { App = appName, Title = title, Body = body, Kind = kind, Icon = icon, Hero = hero, OnActivate = onActivate });
+                // A queued card is NOT written to the history yet: it is not yet known
+                // whether it will be shown or dropped, and the entry carries the time it
+                // was raised either way (see RaisedUtc), so nothing is lost by waiting.
+                var pending = new Pending
+                {
+                    App = appName, Title = title, Body = body, Kind = kind,
+                    Icon = icon, Hero = hero, OnActivate = onActivate,
+                    RaisedUtc = DateTime.UtcNow, RaisedTick = Environment.TickCount64, Repeats = 1
+                };
+
+                // Full. Drop the OLDEST waiting card, not this one: in a burst the newest
+                // message is the one that still describes the present.
+                if (_queue.Count >= MaxQueued)
+                {
+                    Pending oldest = _queue[0];
+                    _queue.RemoveAt(0);
+                    DropPending(oldest, "a burst of notifications filled the queue");
+                }
+                _queue.Add(pending);
                 return null;
             }
+
+            // Recorded here rather than in SpawnCard so the entry is written at the moment
+            // the card was raised — the history is about what Tempo had to say and when,
+            // not about window management.
+            Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
+                Utils.NotificationHistory.Outcome.Shown);
             return SpawnCard(appName, title, body, kind, icon, hero, onActivate);
         }
 
@@ -225,7 +296,12 @@ namespace AutoClicker.UI
             // with Tempo's is the exact bug the per-app icon lookup exists to prevent.
             // "Tempo" is the literal every internal caller passes; it is the product name,
             // not a translated string, so matching it here is stable.
-            card.AnimateAppIcon = string.Equals(appName, "Tempo", StringComparison.Ordinal);
+            bool own = string.Equals(appName, "Tempo", StringComparison.Ordinal);
+            card.AnimateAppIcon = own;
+            // Only another app's card can be muted — a "mute Tempo" item on Tempo's own
+            // card would switch off the thing the user is looking at, from the thing they
+            // are looking at, with no obvious way back.
+            if (!own) { card.MuteAppRequested = _muteApp; }
             card.Dismissed += OnCardDismissed;
             _active.Add(card);
             ShownCount++;
@@ -273,13 +349,80 @@ namespace AutoClicker.UI
             _active.Remove(card);
             try { card.Dispose(); } catch { }
             Reflow();
+            DrainQueue();
+        }
 
-            // A slot freed up — release the next queued toast, if any.
-            if (_queue.Count > 0 && _active.Count < MaxVisible)
+        /// <summary>
+        /// A slot freed up — release the next waiting card, if it is still worth showing.
+        ///
+        /// Both tests here were missing, and both matter most in the situation Tempo is
+        /// built for. The queue was filled while five cards were up; by the time a slot
+        /// frees, a game may have gone fullscreen — and the queue walked straight past the
+        /// guard in ShowOrQueue and painted over it. And a card that has been waiting
+        /// minutes is no longer news; it arrives looking like something that just happened.
+        /// Dropped cards are written to the history with their ORIGINAL time and the reason.
+        /// </summary>
+        private void DrainQueue()
+        {
+            // Nothing may go on screen at all right now: drop the lot, exactly as a card
+            // raised during a game is dropped rather than queued. Holding them would only
+            // spill a burst of stale cards the moment the game closed.
+            if (_queue.Count > 0 && Utils.GamePresence.ShouldHoldNotifications(out string holdReason))
             {
-                var p = _queue.Dequeue();
-                SpawnCard(p.App, p.Title, p.Body, p.Kind, p.Icon, p.Hero, p.OnActivate);
+                SuppressedCount += _queue.Count;
+                LastSuppressedReason = holdReason;
+                for (int i = 0; i < _queue.Count; i++) { DropPending(_queue[i], holdReason); }
+                _queue.Clear();
+                return;
             }
+
+            while (_queue.Count > 0 && _active.Count < MaxVisible)
+            {
+                Pending p = _queue[0];
+                _queue.RemoveAt(0);
+
+                long waited = Environment.TickCount64 - p.RaisedTick;
+                if (waited > StaleAfterMs)
+                {
+                    DropPending(p, "it was still waiting " + (waited / 1000) + "s later");
+                    continue;
+                }
+
+                Utils.NotificationHistory.Add(p.App, p.Title, p.Body, p.Kind.ToString(),
+                    Utils.NotificationHistory.Outcome.Shown, "", p.RaisedUtc);
+                NotificationToastForm spawned =
+                    SpawnCard(p.App, p.Title, p.Body, p.Kind, p.Icon, p.Hero, p.OnActivate);
+
+                // Twins that arrived while it waited become the "×3" badge, so the card
+                // says what actually happened instead of arriving as a single event.
+                if (spawned != null && p.Repeats > 1)
+                {
+                    for (int r = 1; r < p.Repeats; r++) { spawned.Repeat(DurationFor(p.Title, p.Body)); }
+                }
+                break;      // one card per freed slot; the next dismissal releases the next
+            }
+        }
+
+        /// <summary>A waiting card that will never be shown: record it, free its bitmaps.</summary>
+        private void DropPending(Pending p, string reason)
+        {
+            DroppedFromQueueCount++;
+            LastSuppressedReason = reason;
+            Utils.Logger.Info("[Notify] queued card dropped (" + reason + "): "
+                              + (string.IsNullOrWhiteSpace(p.App) ? "?" : p.App.Trim())
+                              + ": " + (p.Title ?? "").Trim());
+            Utils.NotificationHistory.Add(p.App, p.Title, p.Body, p.Kind.ToString(),
+                Utils.NotificationHistory.Outcome.Missed, reason, p.RaisedUtc);
+            try { p.Icon?.Dispose(); } catch { }
+            try { if (p.Hero != null && !ReferenceEquals(p.Hero, p.Icon)) { p.Hero.Dispose(); } } catch { }
+        }
+
+        private static bool SameMessage(string app1, string title1, string body1,
+                                        string app2, string title2, string body2)
+        {
+            return string.Equals(app1 ?? "", app2 ?? "", StringComparison.Ordinal)
+                   && string.Equals(title1 ?? "", title2 ?? "", StringComparison.Ordinal)
+                   && string.Equals(body1 ?? "", body2 ?? "", StringComparison.Ordinal);
         }
 
         /// <summary>

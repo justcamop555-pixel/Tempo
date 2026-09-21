@@ -109,6 +109,13 @@ namespace AutoClicker.UI
         /// <summary>Column that shows the colour chip, or -1 for none.</summary>
         protected virtual int ChipColumn => -1;
 
+        /// <summary>
+        /// When true, a selected (accent-highlighted) row keeps its chip's own colour, ringed in white,
+        /// instead of flattening it to white. For lists where the chip IS the information: flattened,
+        /// the account list's session dot said nothing at all on the one row the user was looking at.
+        /// </summary>
+        protected virtual bool KeepChipColourWhenActive => false;
+
         /// <summary>Colour representing this row. Defaults to the ordinary text colour.</summary>
         protected virtual Color RowAccent(ListViewItem item) => _theme.Text;
 
@@ -504,24 +511,35 @@ namespace AutoClicker.UI
             if (column == ChipColumn && ChipColumn >= 0)
             {
                 var chip = new Rectangle(r.Left + 6, r.Top + (r.Height - 8) / 2, 8, 8);
+                bool keepColour = active && KeepChipColourWhenActive;
+                SmoothingMode old = g.SmoothingMode;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
                 using (var path = new GraphicsPath())
                 {
                     path.AddEllipse(chip);
-                    using (var fill = new SolidBrush(active ? Color.White : accent))
+                    using (var fill = new SolidBrush(!active ? accent : keepColour ? RowAccent(item) : Color.White))
                     {
-                        SmoothingMode old = g.SmoothingMode;
-                        g.SmoothingMode = SmoothingMode.AntiAlias;
                         g.FillPath(fill, path);
-                        g.SmoothingMode = old;
                     }
                 }
+                if (keepColour)
+                {
+                    // A white ring stands the real colour off the accent highlight behind it.
+                    using (var ring = new Pen(Color.White, 1.5f))
+                    {
+                        g.DrawEllipse(ring, Rectangle.Inflate(chip, 1, 1));
+                    }
+                }
+                g.SmoothingMode = old;
                 textLeft = chip.Right + 7;
             }
 
             var textRect = new Rectangle(textLeft, r.Top, r.Right - textLeft - 4, r.Height);
             using (var font = new Font(Font.FontFamily, Font.Size, style))
             {
-                TextRenderer.DrawText(g, text, font, textRect, textColour,
+                // Through ColorEmoji so an account's (or macro's) emoji keeps its colours — TextRenderer
+                // drew it as a flat silhouette in the row's text colour. Plain text draws as before.
+                ColorEmoji.DrawText(g, text, font, textRect, textColour,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
             }
         }

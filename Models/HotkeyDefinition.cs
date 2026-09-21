@@ -27,6 +27,10 @@ namespace AutoClicker.Models
     /// </summary>
     public sealed class HotkeyDefinition
     {
+        /// <summary>Fields written by a newer Tempo, kept so saving here cannot erase them. See AppSettings.UnknownFields.</summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public System.Collections.Generic.Dictionary<string, System.Text.Json.JsonElement> UnknownFields { get; set; }
+
         public bool Control { get; set; }
         public bool Alt { get; set; }
         public bool Shift { get; set; }

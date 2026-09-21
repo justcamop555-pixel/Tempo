@@ -16,6 +16,7 @@ namespace AutoClicker.UI
         private readonly string _url;
         private readonly string _destPath;
         private readonly string _sha256Url;
+        private readonly string _expectedSha256;
         private readonly Theme _theme;
         private volatile bool _cancelled;
         private Thread _worker;
@@ -28,7 +29,8 @@ namespace AutoClicker.UI
         public string DownloadedPath { get; private set; }
         public string Error { get; private set; }
 
-        public UpdateDownloadForm(Theme theme, string url, string destPath, Version version, string sha256Url = null)
+        public UpdateDownloadForm(Theme theme, string url, string destPath, Version version, string sha256Url = null,
+                                  string expectedSha256 = null)
         {
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
@@ -37,6 +39,7 @@ namespace AutoClicker.UI
             _url = url;
             _destPath = destPath;
             _sha256Url = sha256Url;
+            _expectedSha256 = expectedSha256;
 
             Text = Utils.Localization.T("Downloading update");
             Size = new Size(440, 176);
@@ -104,7 +107,8 @@ namespace AutoClicker.UI
                     () => _cancelled,
                     out string error,
                     isArchive ? null : _sha256Url,
-                    isArchive);
+                    isArchive,
+                    _expectedSha256);
 
                 BeginInvoke((Action)(() =>
                 {

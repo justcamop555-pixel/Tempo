@@ -29,6 +29,7 @@ namespace AutoClicker.UI
     {
         private Theme _theme;
         private int _hoverIndex = -1;
+        private int _dropLine = -1;
 
         private const int RowHeight = 40;
         private const int PadX = 10;
@@ -139,6 +140,39 @@ namespace AutoClicker.UI
             try { Invalidate(GetItemRectangle(index)); } catch { }
         }
 
+        /// <summary>
+        /// Where a drag would drop, as an INSERTION POINT: 0..Count, where Count means "after the last
+        /// row". -1 hides the line. Set while dragging; the line is drawn by <see cref="OnDrawItem"/>.
+        /// </summary>
+        public int DropLineIndex
+        {
+            get { return _dropLine; }
+            set
+            {
+                if (_dropLine == value) { return; }
+                _dropLine = value;
+                Invalidate();   // the line straddles two rows, so repaint rather than chase both
+            }
+        }
+
+        /// <summary>
+        /// The insertion point a drop at <paramref name="clientPoint"/> means. The upper half of a row
+        /// inserts BEFORE it and the lower half after, which is what makes dropping between two rows
+        /// feel exact; below the last row appends.
+        /// </summary>
+        public int DropIndexAt(Point clientPoint)
+        {
+            if (Items.Count == 0) { return 0; }
+            int index = IndexFromPoint(clientPoint);
+            if (index < 0)
+            {
+                // Past the last row (IndexFromPoint gives -1 there) → append; above the top → 0.
+                return clientPoint.Y > 0 ? Items.Count : 0;
+            }
+            Rectangle row = GetItemRectangle(index);
+            return clientPoint.Y > row.Y + row.Height / 2 ? index + 1 : index;
+        }
+
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
@@ -190,6 +224,24 @@ namespace AutoClicker.UI
                     using (var bar = new SolidBrush(th.Accent))
                     {
                         g.FillRectangle(bar, row.X + 1, row.Y + 6, 3, row.Height - 12);
+                    }
+                }
+            }
+
+            // The drop line for a drag-reorder. Drawn here because every pixel of the control is painted
+            // by OnDrawItem — there is no background left to draw it on — so it rides on the row above
+            // or below the insertion point, whichever this call is painting.
+            if (_dropLine >= 0)
+            {
+                using (var pen = new Pen(th.Accent, 2f))
+                {
+                    if (e.Index == _dropLine)
+                    {
+                        g.DrawLine(pen, e.Bounds.X + 3, e.Bounds.Y + 1, e.Bounds.Right - 3, e.Bounds.Y + 1);
+                    }
+                    else if (e.Index == _dropLine - 1)
+                    {
+                        g.DrawLine(pen, e.Bounds.X + 3, e.Bounds.Bottom - 1, e.Bounds.Right - 3, e.Bounds.Bottom - 1);
                     }
                 }
             }

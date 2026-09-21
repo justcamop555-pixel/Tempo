@@ -42,7 +42,8 @@ if /i "%A%"=="/purge"    set "OPT_PURGE=1"  & goto :pnext
 if /i "%A%"=="/backup"   set "OPT_BACKUP=1" & goto :pnext
 set "BADARG=%A%"
 :pnext
-shift
+REM  SHIFT /1 keeps argument zero (this script's own path) in place - see install.cmd for what a plain SHIFT cost.
+shift /1
 goto :parse
 :parsed
 
@@ -58,8 +59,18 @@ if defined BADARG (
 set "INSTALL_DIR=%LOCALAPPDATA%\Programs\TempoClicker"
 set "LEGACY_DIR=%LOCALAPPDATA%\Programs\Tempo"
 set "SM_LNK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Tempo.lnk"
-set "DESK_LNK=%USERPROFILE%\Desktop\Tempo.lnk"
+REM  The Desktop Windows actually shows - OneDrive's folder backup moves it out of the user profile.
+set "DESK_DIR="
+for /f "tokens=2,*" %%A in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" /v Desktop 2^>nul') do (
+  if /i "%%A"=="REG_EXPAND_SZ" call set "DESK_DIR=%%B"
+  if /i "%%A"=="REG_SZ" set "DESK_DIR=%%B"
+)
+if not defined DESK_DIR set "DESK_DIR=%USERPROFILE%\Desktop"
+set "DESK_LNK=%DESK_DIR%\Tempo.lnk"
+REM  An older install.cmd always wrote its Desktop shortcut here, wherever the real Desktop was.
+set "OLD_DESK_LNK=%USERPROFILE%\Desktop\Tempo.lnk"
 set "REGKEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Tempo"
+set "RUNKEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
 set "DATA_DIR=%LOCALAPPDATA%\AutoClicker"
 set "LOG=%TEMP%\tempo-uninstall-log.txt"
 
@@ -108,21 +119,33 @@ if not exist "%INSTALL_DIR%\Tempo.exe" if not exist "%SM_LNK%" (
 )
 
 REM --- close Tempo if it's running (best-effort) ---
-tasklist /fi "imagename eq Tempo.exe" 2>nul | find /i "Tempo.exe" >nul
+REM find by its full path: with Git's Unix tools on the PATH a bare find is GNU find, which would miss a running Tempo
+tasklist /fi "imagename eq Tempo.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "Tempo.exe" >nul
 if not errorlevel 1 (
   echo   Closing the running Tempo ...
   taskkill /im Tempo.exe /f >nul 2>&1
   >> "%LOG%" echo Killed : running Tempo.exe
-  timeout /t 1 >nul
+  "%SystemRoot%\System32\timeout.exe" /t 1 >nul
 )
 
 REM --- remove shortcuts ---
 set "REMOVED="
 if exist "%SM_LNK%"   ( del /f /q "%SM_LNK%"   >nul 2>&1 & set "REMOVED=1" )
 if exist "%DESK_LNK%" ( del /f /q "%DESK_LNK%" >nul 2>&1 & set "REMOVED=1" )
+if exist "%OLD_DESK_LNK%" ( del /f /q "%OLD_DESK_LNK%" >nul 2>&1 & set "REMOVED=1" )
 
 REM --- remove the Settings > Apps entry ---
 reg delete "%REGKEY%" /f >nul 2>&1
+
+REM --- remove start-with-Windows, but only the entry that starts THIS install ---
+REM  Tempo turns it off itself when it uninstalls; this script never did, so every uninstall through
+REM  it left Windows trying to start a Tempo.exe that was gone. An entry naming another copy of
+REM  Tempo (a portable one) belongs to that copy and stays.
+reg query "%RUNKEY%" /v Tempo 2>nul | "%SystemRoot%\System32\find.exe" /i "%INSTALL_DIR%\Tempo.exe" >nul
+if not errorlevel 1 (
+  reg delete "%RUNKEY%" /v Tempo /f >nul 2>&1
+  >> "%LOG%" echo Removed: start-with-Windows entry
+)
 
 echo   Removed shortcuts and the Settings ^> Apps entry.
 >> "%LOG%" echo Removed: shortcuts + registry entry
@@ -160,7 +183,8 @@ if defined DOPURGE (
     if not errorlevel 1 (
       set "BKZIP=%USERPROFILE%\Desktop\Tempo-settings-backup.zip"
       if exist "!BKZIP!" del /f /q "!BKZIP!" >nul 2>&1
-      powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '%DATA_DIR%\*' -DestinationPath '!BKZIP!' -Force" >nul 2>&1
+      REM The signed-in browser profiles stay out of the zip: each is a live Roblox session outside the vault.
+      powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = @(Get-ChildItem -LiteralPath '%DATA_DIR%' -Force | Where-Object { $_.Name -ne 'accountbrowsers' } | ForEach-Object { $_.FullName }); if ($p.Count) { Compress-Archive -LiteralPath $p -DestinationPath '!BKZIP!' -Force }" >nul 2>&1
       if exist "!BKZIP!" (
         echo   Backup saved to Desktop: Tempo-settings-backup.zip
         >> "%LOG%" echo Backup : !BKZIP!
@@ -171,6 +195,9 @@ if defined DOPURGE (
   echo   Saved settings removed.
   >> "%LOG%" echo Data   : purged
 ) else (
+  REM Kept data never includes the signed-in browser profiles: each holds a live Roblox session
+  REM outside the encrypted vault, which is why turning the Account Manager off deletes them too.
+  if exist "%DATA_DIR%\accountbrowsers" rd /s /q "%DATA_DIR%\accountbrowsers" >nul 2>&1
   echo   Saved settings were kept in:
   echo     %DATA_DIR%
   echo   ^(Run  uninstall.cmd /purge  later if you want to remove them too.^)
@@ -188,7 +215,7 @@ REM  folder from a different working directory. Use timeout (with a ping
 REM  fallback, in case timeout can't run without a console) for the delay.
 start "" /b cmd /c "cd /d %SystemRoot% & (timeout /t 2 /nobreak >nul 2>&1 || ping -n 3 127.0.0.1 >nul 2>&1) & rd /s /q ""%INSTALL_DIR%"""
 
-timeout /t 3 >nul
+"%SystemRoot%\System32\timeout.exe" /t 3 >nul
 endlocal
 exit /b 0
 

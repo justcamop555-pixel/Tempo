@@ -31,10 +31,10 @@ namespace AutoClicker.Utils
         /// installed 1.0.320.0: a hundred and eleven releases of drift, and the one place
         /// a user looks to answer "what version do I have?" was the one place that lied.
         ///
-        /// Deliberately only UPDATES an entry that already exists. Creating one would
-        /// register a portable copy in Settings → Apps behind the user's back, complete
-        /// with an Uninstall button pointing at an uninstall.cmd that was never installed
-        /// — the exact broken state RemoveShellIntegration below exists to clean up.
+        /// Runs only for the INSTALLED copy (see DeploymentInfo): it maintains the entry, and
+        /// creates it when an installed copy has none. A portable copy writes nothing at all —
+        /// neither registering itself behind the user's back, nor re-pointing an installed
+        /// app's existing entry at itself, which it used to do on every launch.
         ///
         /// FileVersion, not Application.ProductVersion: the latter carries the git hash
         /// ("1.0.320+cc37b4d…"), which is the right thing in the About box and the wrong
@@ -46,26 +46,53 @@ namespace AutoClicker.Utils
             {
                 DateTime? installedOnUtc = null;
                 string version = FileVersionInfo
-                    .GetVersionInfo(Application.ExecutablePath).FileVersion;
+                    .GetVersionInfo(RunningExe()).FileVersion;
                 if (string.IsNullOrWhiteSpace(version))
                 {
                     return;
                 }
 
+                bool hasEntry = false;
                 using (var root = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(UninstallRoot))
                 {
-                    if (root == null) { return; }
-
-                    // Not installed (portable, or uninstalled) — nothing to correct.
-                    using (var probe = root.OpenSubKey(EntryName))
+                    if (root != null)
                     {
-                        if (probe == null) { return; }   // portable / not installed
-
-                        // Read the key's timestamp HERE, through a read-only handle and
-                        // before a single write below. This is the install date, and the
-                        // first write in this method overwrites it forever.
-                        installedOnUtc = KeyLastWriteUtc(probe);
+                        using (var probe = root.OpenSubKey(EntryName))
+                        {
+                            if (probe != null)
+                            {
+                                hasEntry = true;
+                                // Read the key's timestamp HERE, through a read-only handle and
+                                // before a single write below. This is the install date, and the
+                                // first write in this method overwrites it forever.
+                                installedOnUtc = KeyLastWriteUtc(probe);
+                            }
+                        }
                     }
+                }
+
+                // The entry describes the INSTALLED copy, so only the installed copy may write it —
+                // to create it or to maintain it. Every other copy leaves it completely alone.
+                //
+                // This used to guard creation only. Maintenance ran for WHICHEVER copy was running,
+                // and RepairEntry rewrites DisplayIcon, InstallLocation and QuietUninstallString from
+                // the running exe unconditionally — so simply opening a second copy of Tempo once (a
+                // download, a USB stick, a build folder) re-pointed the installed app's Settings › Apps
+                // entry at that copy. Windows 11 prefers QuietUninstallString, so Uninstall then either
+                // ran a file the user had since deleted, or uninstalled the wrong copy: it deleted the
+                // portable exe, removed the entry, and left the real install orphaned — invisible in
+                // Settings › Apps, which is the very complaint this code exists to fix. The installed
+                // copy's next launch put the paths back, which is why nobody could catch it: on this
+                // project's own PC every install relaunch quietly healed what the layout suite broke.
+                if (!DeploymentInfo.IsInstalled) { return; }
+
+                if (!hasEntry)
+                {
+                    // The entry is missing for a copy that IS installed. install.cmd was the only thing
+                    // that ever created it, so an install whose entry was never written, or was later
+                    // deleted, stayed invisible to Windows no matter how often it ran.
+                    if (!RegisterInstalledCopy(RunningExe(), version)) { return; }
+                    Logger.Info("[Install] Tempo was installed but missing from Settings > Apps — added it.");
                 }
 
                 using (var entry = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
@@ -160,10 +187,84 @@ namespace AutoClicker.Utils
         ///  • VersionMajor / VersionMinor — what inventory and management tools read
         ///    instead of parsing DisplayVersion.
         /// </summary>
+        /// <summary>
+        /// The Tempo.exe that is actually running. Environment.ProcessPath, via DeploymentInfo:
+        /// StartupManager and UpdateInstaller both document that Application.ExecutablePath can name
+        /// the single-file extraction folder instead. On this project's own install the two agree
+        /// (the entry it maintains holds the real folder), but an Apps entry must never be written
+        /// from the one that can be wrong.
+        /// </summary>
+        private static string RunningExe() => DeploymentInfo.ExecutablePath;
+
+        /// <summary>
+        /// Creates Tempo's Settings → Apps entry for an INSTALLED copy, with the same values
+        /// install.cmd writes — so an entry made here cannot be told apart from one the script made,
+        /// and <see cref="RepairEntry"/> then maintains both identically.
+        /// </summary>
+        public static bool RegisterInstalledCopy(string exe, string version) =>
+            RegisterInstalledCopy(Microsoft.Win32.Registry.CurrentUser, UninstallRoot + "\\" + EntryName, exe, version);
+
+        /// <summary>
+        /// Test seam: the same write aimed at any key, so a harness can check every value without
+        /// touching the real entry of the Tempo installed on the machine it runs on.
+        /// </summary>
+        internal static bool RegisterInstalledCopy(Microsoft.Win32.RegistryKey hive, string keyPath,
+                                                   string exe, string version)
+        {
+            try
+            {
+                if (hive == null || string.IsNullOrEmpty(exe) || !File.Exists(exe)) { return false; }
+                string dir = Path.GetDirectoryName(exe) ?? "";
+
+                using (var entry = hive.CreateSubKey(keyPath, writable: true))
+                {
+                    if (entry == null) { return false; }
+
+                    entry.SetValue("DisplayName", "Tempo", Microsoft.Win32.RegistryValueKind.String);
+                    if (!string.IsNullOrWhiteSpace(version))
+                    {
+                        entry.SetValue("DisplayVersion", version, Microsoft.Win32.RegistryValueKind.String);
+                    }
+                    entry.SetValue("Publisher", "Tempo", Microsoft.Win32.RegistryValueKind.String);
+                    entry.SetValue("InstallLocation", dir, Microsoft.Win32.RegistryValueKind.String);
+                    entry.SetValue("DisplayIcon", exe, Microsoft.Win32.RegistryValueKind.String);
+
+                    // Same rule as install.cmd: the script only if it is really there, else the exe,
+                    // which cannot dangle because it is the thing being uninstalled.
+                    string cmd = dir.Length > 0 ? Path.Combine(dir, "uninstall.cmd") : null;
+                    string uninstall = cmd != null && File.Exists(cmd)
+                        ? "\"" + cmd + "\""
+                        : "\"" + exe + "\" --uninstall";
+                    entry.SetValue("UninstallString", uninstall, Microsoft.Win32.RegistryValueKind.String);
+                    entry.SetValue("QuietUninstallString", uninstall, Microsoft.Win32.RegistryValueKind.String);
+
+                    entry.SetValue("URLInfoAbout", "https://justcamop555-pixel.github.io/Tempo/",
+                                   Microsoft.Win32.RegistryValueKind.String);
+                    entry.SetValue("NoModify", 1, Microsoft.Win32.RegistryValueKind.DWord);
+                    entry.SetValue("NoRepair", 1, Microsoft.Win32.RegistryValueKind.DWord);
+
+                    // Today IS the install date for an entry created now. Never overwrite one that is
+                    // already there — see RepairEntry for how easily the real date is destroyed.
+                    if (entry.GetValue("InstallDate") == null)
+                    {
+                        entry.SetValue("InstallDate",
+                            DateTime.Now.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture),
+                            Microsoft.Win32.RegistryValueKind.String);
+                    }
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Install] could not write the Settings > Apps entry: " + ex.Message);
+                return false;
+            }
+        }
+
         private static void RepairEntry(Microsoft.Win32.RegistryKey entry, string version,
                                         bool recomputeSize, DateTime? installedOnUtc)
         {
-            string exe = Application.ExecutablePath;
+            string exe = RunningExe();
             string dir = Path.GetDirectoryName(exe) ?? "";
 
             SetIfDifferent(entry, "DisplayIcon", exe);
@@ -296,17 +397,51 @@ namespace AutoClicker.Utils
             catch { }
         }
 
-        /// <summary>Removes the "launch at startup" registry entry, if present.</summary>
+        /// <summary>
+        /// Removes the "launch at startup" entry — when it starts THIS copy, or a Tempo.exe that no longer
+        /// exists. It used to remove it whatever it pointed at, so uninstalling a portable copy switched off
+        /// start-with-Windows for the installed Tempo too.
+        /// </summary>
         public static void RemoveStartupEntry()
         {
             try
             {
+                string registered = StartupManager.RegisteredExePath();
+                if (registered == null) { return; }
+                if (!BelongsHereOrDangling(registered, RunningExe()))
+                {
+                    Logger.Info("[Uninstall] kept the sign-in entry: it starts another copy of Tempo (" + registered + ").");
+                    return;
+                }
                 StartupManager.SetEnabled(false);
             }
             catch (Exception ex)
             {
                 Logger.Warn("Could not remove startup entry during uninstall: " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// True when a path names this copy's exe, names an exe that is gone, or names nothing usable — the
+        /// only cases in which uninstalling this copy may remove the shortcut or entry that holds the path.
+        /// </summary>
+        internal static bool BelongsHereOrDangling(string pathItNames, string runningExe)
+        {
+            if (string.IsNullOrWhiteSpace(pathItNames)) { return true; }
+            string named = FullOrSelf(pathItNames);
+            if (!string.IsNullOrWhiteSpace(runningExe) &&
+                string.Equals(named, FullOrSelf(runningExe), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            try { return !File.Exists(named); }
+            catch { return true; }
+        }
+
+        private static string FullOrSelf(string path)
+        {
+            try { return Path.GetFullPath(path.Trim().Trim('"')); }
+            catch { return path; }
         }
 
         /// <summary>
@@ -327,24 +462,75 @@ namespace AutoClicker.Utils
         /// </summary>
         public static void RemoveShellIntegration()
         {
-            // Same three targets, and the same paths, uninstall.cmd uses.
-            TryDelete(Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "Microsoft", "Windows", "Start Menu", "Programs", "Tempo.lnk"), "Start Menu shortcut");
+            string appData = "", desktop = "";
+            try { appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData); } catch { }
+            try { desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory); } catch { }
 
-            TryDelete(Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-                "Tempo.lnk"), "Desktop shortcut");
+            // Same targets, and the same paths, uninstall.cmd uses.
+            RemoveShellIntegration(RunningExe(),
+                new[]
+                {
+                    (Path.Combine(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Tempo.lnk"), "Start Menu shortcut"),
+                    (Path.Combine(desktop, "Tempo.lnk"), "Desktop shortcut")
+                },
+                Microsoft.Win32.Registry.CurrentUser, UninstallRoot);
+        }
+
+        /// <summary>
+        /// The rule, and its test seam: remove only what belongs to THIS copy — a shortcut that opens it, an
+        /// Apps entry that describes it — or what points at a Tempo.exe that no longer exists.
+        ///
+        /// It used to remove all of them unconditionally. Uninstalling a portable copy that sits beside an
+        /// installed Tempo therefore took away the INSTALLED copy's Start Menu shortcut and its Settings › Apps
+        /// entry, leaving that install working but invisible to Windows.
+        /// </summary>
+        internal static int RemoveShellIntegration(string runningExe,
+            System.Collections.Generic.IEnumerable<(string path, string what)> shortcuts,
+            Microsoft.Win32.RegistryKey hive, string uninstallRoot)
+        {
+            int removed = 0;
+            if (shortcuts != null)
+            {
+                foreach (var (path, what) in shortcuts)
+                {
+                    if (string.IsNullOrEmpty(path) || !File.Exists(path)) { continue; }
+                    string target = SelfInstaller.ReadShortcutTarget(path);
+                    if (!BelongsHereOrDangling(target, runningExe))
+                    {
+                        Logger.Info("[Uninstall] kept the " + what + ": it opens another copy of Tempo (" + target + ").");
+                        continue;
+                    }
+                    TryDelete(path, what);
+                    removed++;
+                }
+            }
 
             try
             {
-                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    UninstallRoot, writable: true))
+                string named = null;
+                bool present = false;
+                using (var entry = hive?.OpenSubKey(uninstallRoot + "\\" + EntryName))
                 {
-                    if (key != null && key.OpenSubKey(EntryName) != null)
+                    if (entry != null)
                     {
-                        key.DeleteSubKeyTree(EntryName, throwOnMissingSubKey: false);
+                        present = true;
+                        named = EntryExe(entry);
+                    }
+                }
+                if (present)
+                {
+                    if (BelongsHereOrDangling(named, runningExe))
+                    {
+                        using (var root = hive.OpenSubKey(uninstallRoot, writable: true))
+                        {
+                            root?.DeleteSubKeyTree(EntryName, throwOnMissingSubKey: false);
+                        }
+                        removed++;
                         Logger.Info("[Uninstall] removed the Settings > Apps entry.");
+                    }
+                    else
+                    {
+                        Logger.Info("[Uninstall] kept the Settings > Apps entry: it belongs to the copy at " + named + ".");
                     }
                 }
             }
@@ -352,6 +538,23 @@ namespace AutoClicker.Utils
             {
                 Logger.Warn("Uninstall: could not remove the Settings > Apps entry: " + ex.Message);
             }
+            return removed;
+        }
+
+        /// <summary>The Tempo.exe an Apps entry describes: its icon, else its install folder, else its uninstall command.</summary>
+        private static string EntryExe(Microsoft.Win32.RegistryKey entry)
+        {
+            string icon = entry.GetValue("DisplayIcon") as string;
+            if (!string.IsNullOrWhiteSpace(icon))
+            {
+                icon = icon.Trim().Trim('"');
+                int comma = icon.LastIndexOf(',');
+                if (comma > 0 && int.TryParse(icon.Substring(comma + 1), out _)) { icon = icon.Substring(0, comma); }
+                return icon.Trim().Trim('"');
+            }
+            string dir = entry.GetValue("InstallLocation") as string;
+            if (!string.IsNullOrWhiteSpace(dir)) { return Path.Combine(dir.Trim(), "Tempo.exe"); }
+            return StartupManager.ExePathFromCommand(entry.GetValue("UninstallString") as string);
         }
 
         private static void TryDelete(string path, string what)
@@ -371,70 +574,43 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
-        /// Writes and launches a helper that waits for this process to exit, deletes
-        /// the data folder and (optionally) the program file, then removes itself.
-        /// The caller should exit the application immediately after this returns true.
+        /// Writes and launches the helper that finishes an uninstall once Tempo has exited. It removes the
+        /// program (and what shipped beside it), and removes the data folder and the logs ONLY when
+        /// <paramref name="deleteData"/> is true. With the data kept it still removes the signed-in browser
+        /// profiles: each holds a live Roblox session outside the encrypted vault. The caller exits right after
+        /// this returns true.
+        ///
+        /// The data used to be deleted every time — the script removed the whole folder unconditionally and
+        /// only the program was optional — so the default answer to Uninstall wiped every profile and macro.
         /// </summary>
-        public static bool LaunchCleanupAndExitHelper(bool deleteExe, out string error)
+        public static bool LaunchCleanupAndExitHelper(bool deleteData, bool deleteExe, out string error)
         {
             error = null;
 
             try
             {
                 string dataDir = Persistence.SettingsManager.GetSettingsDirectory();
-                string exe = deleteExe ? Application.ExecutablePath : string.Empty;
+                string exe = deleteExe ? RunningExe() : string.Empty;
+                string logsDir = "";
+                try { logsDir = Path.GetDirectoryName(Logger.GetLogPath()) ?? ""; } catch { }
                 int pid = Process.GetCurrentProcess().Id;
                 string scriptPath = Path.Combine(Path.GetTempPath(),
                     "tempo_uninstall_" + Guid.NewGuid().ToString("N") + ".bat");
 
-                string script =
-                    "@echo off\r\n" +
-                    "setlocal enabledelayedexpansion\r\n" +
-                    "set \"DATA=%~1\"\r\n" +
-                    "set \"EXE=%~2\"\r\n" +
-                    "set \"PID=%~3\"\r\n" +
-                    ":wait\r\n" +
-                    "tasklist /fi \"PID eq %PID%\" 2>nul | find \"%PID%\" >nul\r\n" +
-                    "if not errorlevel 1 ( ping -n 2 127.0.0.1 >nul & goto wait )\r\n" +
-                    "if exist \"%DATA%\" rmdir /s /q \"%DATA%\" >nul 2>&1\r\n" +
-                    "if not \"%EXE%\"==\"\" (\r\n" +
-                    "  set /a n=0\r\n" +
-                    "  :del\r\n" +
-                    "  del /q \"%EXE%\" >nul 2>&1\r\n" +
-                    "  if exist \"%EXE%\" ( set /a n+=1 & if !n! lss 15 ( ping -n 2 127.0.0.1 >nul & goto del ) )\r\n" +
-                    // Tidy up what shipped ALONGSIDE the exe. Deleting Tempo.exe alone
-                    // left the install folder behind holding Tempo.exe.sha256, the
-                    // install/uninstall scripts, the readme and the runtimes folder —
-                    // after a dialog that offered to "remove everything".
-                    //
-                    // ONLY these known names are touched, and the folder itself is then
-                    // removed with a plain rd, which REFUSES to delete a non-empty
-                    // directory. A portable copy living in Downloads or on the Desktop
-                    // beside the user's own files therefore cannot lose anything: if
-                    // anything we did not put there remains, the folder simply stays.
-                    "  set \"DIR=%~dp2\"\r\n" +
-                    "  del /q \"!DIR!Tempo.exe.sha256\" >nul 2>&1\r\n" +
-                    "  del /q \"!DIR!INSTALL-README.txt\" >nul 2>&1\r\n" +
-                    "  del /q \"!DIR!install.cmd\" >nul 2>&1\r\n" +
-                    "  del /q \"!DIR!uninstall.cmd\" >nul 2>&1\r\n" +
-                    "  if exist \"!DIR!runtimes\" rmdir /s /q \"!DIR!runtimes\" >nul 2>&1\r\n" +
-                    "  rd \"!DIR!\" >nul 2>&1\r\n" +
-                    ")\r\n" +
-                    "del /q \"%~f0\" >nul 2>&1\r\n";
-
-                File.WriteAllText(scriptPath, script);
+                File.WriteAllText(scriptPath, CleanupScript);
 
                 var psi = new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = "/c \"\"" + scriptPath + "\" \"" + dataDir + "\" \"" + exe + "\" " + pid + "\"",
+                    Arguments = CleanupArguments(scriptPath, dataDir, exe, pid, logsDir, keepData: !deleteData),
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
 
                 Process.Start(psi);
-                Logger.Info("[Uninstall] cleanup helper launched (deleteExe=" + deleteExe + ").");
+                Logger.Info("[Uninstall] cleanup helper launched (program " + (deleteExe ? "removed" : "kept")
+                            + ", data " + (deleteData ? "DELETED" : "kept") + ").");
                 return true;
             }
             catch (Exception ex)
@@ -444,5 +620,74 @@ namespace AutoClicker.Utils
                 return false;
             }
         }
+
+        /// <summary>The command line that runs <see cref="CleanupScript"/>. Also the harness's way in.</summary>
+        internal static string CleanupArguments(string scriptPath, string dataDir, string exe, int pid,
+                                                string logsDir, bool keepData)
+        {
+            return "/c \"\"" + scriptPath + "\" \"" + (dataDir ?? "") + "\" \"" + (exe ?? "") + "\" " + pid
+                   + " \"" + (logsDir ?? "") + "\" " + (keepData ? "1" : "0") + "\"";
+        }
+
+        /// <summary>
+        /// The cleanup script. Arguments: data folder, exe ("" = keep the program), PID to wait for, logs
+        /// folder, and 1 to keep the data.
+        ///
+        /// Written without delayed expansion, so a folder name containing "!" is used as it is instead of
+        /// being mangled; with no labels inside parenthesised blocks, so every retry is a plain goto; and with
+        /// a bounded wait, so a PID that never goes away cannot keep it running for ever.
+        ///
+        /// tasklist, find and ping are called by their full System32 paths. With Git for Windows' "optional Unix
+        /// tools" (or Cygwin / MSYS2) on the PATH, a bare "find" is GNU find, which takes "12345" for a file name
+        /// and fails — so the wait decided at once that Tempo had already exited. Measured in exactly that
+        /// environment: the script finished in 156 ms instead of waiting for the process.
+        ///
+        /// Tidying beside the exe touches ONLY the names Tempo ships, and the folder itself is removed with a
+        /// plain rd, which refuses a folder that still holds anything: a portable copy living in Downloads
+        /// beside the user's own files cannot take any of them with it.
+        /// </summary>
+        internal const string CleanupScript =
+            "@echo off\r\n" +
+            "setlocal\r\n" +
+            "set \"DATA=%~1\"\r\n" +
+            "set \"EXE=%~2\"\r\n" +
+            "set \"PID=%~3\"\r\n" +
+            "set \"LOGS=%~4\"\r\n" +
+            "set \"KEEP=%~5\"\r\n" +
+            "set /a w=0\r\n" +
+            ":wait\r\n" +
+            "\"%SystemRoot%\\System32\\tasklist.exe\" /fi \"PID eq %PID%\" 2>nul | \"%SystemRoot%\\System32\\find.exe\" \"%PID%\" >nul\r\n" +
+            "if errorlevel 1 goto gone\r\n" +
+            "set /a w+=1\r\n" +
+            "if %w% geq 150 goto gone\r\n" +
+            "\"%SystemRoot%\\System32\\PING.EXE\" -n 2 127.0.0.1 >nul\r\n" +
+            "goto wait\r\n" +
+            ":gone\r\n" +
+            "if \"%KEEP%\"==\"1\" goto keepdata\r\n" +
+            "if not \"%DATA%\"==\"\" if exist \"%DATA%\" rmdir /s /q \"%DATA%\" >nul 2>&1\r\n" +
+            "if not \"%LOGS%\"==\"\" if exist \"%LOGS%\" rmdir /s /q \"%LOGS%\" >nul 2>&1\r\n" +
+            "if not \"%LOGS%\"==\"\" rd \"%LOGS%\\..\" >nul 2>&1\r\n" +
+            "goto program\r\n" +
+            ":keepdata\r\n" +
+            "if not \"%DATA%\"==\"\" if exist \"%DATA%\\accountbrowsers\" rmdir /s /q \"%DATA%\\accountbrowsers\" >nul 2>&1\r\n" +
+            ":program\r\n" +
+            "if \"%EXE%\"==\"\" goto done\r\n" +
+            "set /a n=0\r\n" +
+            ":delexe\r\n" +
+            "del /q \"%EXE%\" >nul 2>&1\r\n" +
+            "if not exist \"%EXE%\" goto tidy\r\n" +
+            "set /a n+=1\r\n" +
+            "if %n% geq 15 goto tidy\r\n" +
+            "\"%SystemRoot%\\System32\\PING.EXE\" -n 2 127.0.0.1 >nul\r\n" +
+            "goto delexe\r\n" +
+            ":tidy\r\n" +
+            "del /q \"%~dp2Tempo.exe.sha256\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2INSTALL-README.txt\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2install.cmd\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2uninstall.cmd\" >nul 2>&1\r\n" +
+            "if exist \"%~dp2runtimes\" rmdir /s /q \"%~dp2runtimes\" >nul 2>&1\r\n" +
+            "rd \"%~dp2.\" >nul 2>&1\r\n" +
+            ":done\r\n" +
+            "del /q \"%~f0\" >nul 2>&1\r\n";
     }
 }

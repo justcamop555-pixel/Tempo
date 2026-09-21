@@ -114,7 +114,11 @@ namespace AutoClicker.Native
                         bool injected = (data.flags & NativeMethods.LLKHF_INJECTED) != 0;
                         var args = new KeyboardHookEventArgs(
                             (int)data.vkCode, isDown, data.time, injected);
+                        // TIMED: Windows judges this callback against LowLevelHooksTimeout and
+                        // removes the hook without a word when it is missed — see HookHealth.
+                        long started = System.Diagnostics.Stopwatch.GetTimestamp();
                         KeyEvent?.Invoke(this, args);
+                        HookHealth.NoteCallback("keyboard", started);
 
                         // A listener claimed this key. Returning non-zero (instead of
                         // chaining) is what actually stops it reaching the focused app.

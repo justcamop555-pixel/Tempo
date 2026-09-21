@@ -69,27 +69,38 @@ namespace AutoClicker.Persistence
             _macros.Clear();
             LoadRecycleBin();
 
+            bool recovered = false;
             try
             {
                 string path = GetMacrosPath();
+                // A MISSING file is left alone: the data folder's README tells people they can delete a
+                // file to reset just that part, and bringing it back from ".1" would undo their choice.
                 if (File.Exists(path))
                 {
-                    string json = File.ReadAllText(path);
-                    if (!string.IsNullOrWhiteSpace(json))
+                    List<Macro> loaded = TryParseMacros(File.ReadAllText(path));
+                    if (loaded == null)
                     {
-                        var loaded = JsonSerializer.Deserialize<List<Macro>>(json, Options);
-                        if (loaded != null)
+                        // The file is there but empty or unreadable — what a hard freeze or a failed write
+                        // leaves. Settings have always recovered from their ".1" here; macros never did, so
+                        // the user saw no macros at all while the previous good save sat right beside them,
+                        // and an EMPTY file was not even set aside: the next save copied it over that ".1"
+                        // and destroyed the only backup there was.
+                        string previous = PersistenceHelper.ReadPreviousIfUsable(path, t => TryParseMacros(t) != null);
+                        loaded = TryParseMacros(previous);
+                        PersistenceHelper.BackupCorruptFile(path);
+                        recovered = loaded != null;
+                    }
+                    if (loaded != null)
+                    {
+                        foreach (var m in loaded)
                         {
-                            foreach (var m in loaded)
+                            if (m != null)
                             {
-                                if (m != null)
+                                if (m.Actions == null)
                                 {
-                                    if (m.Actions == null)
-                                    {
-                                        m.Actions = new List<MacroAction>();
-                                    }
-                                    _macros.Add(m);
+                                    m.Actions = new List<MacroAction>();
                                 }
+                                _macros.Add(m);
                             }
                         }
                     }
@@ -102,9 +113,21 @@ namespace AutoClicker.Persistence
                 _macros.Clear();
             }
 
+            // Put the recovered macros straight back on disk. The damaged file was set aside, so until
+            // this save there is no macros.json at all — and a crash in that gap would come back to none.
+            if (recovered) { Save(); }
+
             Logger.Info($"[Macro] loaded {_macros.Count} macro(s).");
             UI.SplashForm.Report(1, _macros.Count + " " +
                 Utils.Localization.T(_macros.Count == 1 ? "macro" : "macros"));
+        }
+
+        /// <summary>The macro list in <paramref name="json"/>, or null when it is empty or not a macro list.</summary>
+        private static List<Macro> TryParseMacros(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) { return null; }
+            try { return JsonSerializer.Deserialize<List<Macro>>(json, Options); }
+            catch { return null; }
         }
 
         public bool Save()
@@ -323,6 +346,31 @@ namespace AutoClicker.Persistence
             Macro temp = _macros[index];
             _macros[index] = _macros[target];
             _macros[target] = temp;
+            return true;
+        }
+
+        /// <summary>
+        /// Moves a macro to <paramref name="targetIndex"/> — the insertion point (0..Count) measured
+        /// against the list AS IT STANDS NOW, i.e. "put it before whatever is at targetIndex"; Count
+        /// means the very end. This is what a drag-and-drop drop needs, which <see cref="Move"/> (a
+        /// one-step swap) cannot express. Returns false when the name is unknown or the drop would not
+        /// change the order.
+        /// </summary>
+        public bool MoveTo(string name, int targetIndex)
+        {
+            int cur = IndexOf(name);
+            if (cur < 0) { return false; }
+
+            // Pulling the item out shifts everything after it down one, so a target past the old slot
+            // moves back by one. Dropping on itself (or just after itself) is a no-op.
+            int insertAt = targetIndex > cur ? targetIndex - 1 : targetIndex;
+            if (insertAt < 0) { insertAt = 0; }
+            if (insertAt > _macros.Count - 1) { insertAt = _macros.Count - 1; }
+            if (insertAt == cur) { return false; }
+
+            Macro moved = _macros[cur];
+            _macros.RemoveAt(cur);
+            _macros.Insert(insertAt, moved);
             return true;
         }
 

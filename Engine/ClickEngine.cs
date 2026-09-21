@@ -745,9 +745,18 @@ namespace AutoClicker.Engine
                     {
                         nextPos = 0;
                     }
+                    else if (pos < 0)
+                    {
+                        // First visit of the run (or the current point was disabled): START at the
+                        // first point. This used to set pos = 0 and then step +1, so ping-pong began
+                        // on the SECOND point and point 1 was never clicked on the opening pass —
+                        // 2, 3, 2, 1 instead of the documented 1, 2, 3, 2, 1. Sequential and Reverse
+                        // both start on their first point; this is the same promise.
+                        _mpDirection = 1;
+                        nextPos = 0;
+                    }
                     else
                     {
-                        if (pos < 0) { pos = 0; _mpDirection = 1; }
                         nextPos = pos + _mpDirection;
                         if (nextPos >= enabled.Count)
                         {

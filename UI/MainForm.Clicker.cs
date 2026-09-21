@@ -322,7 +322,13 @@ namespace AutoClicker.UI
             _notifyFinishCheck = UiFactory.Toggle("Notify when a fixed run finishes", 16, 506);
             _notifyFinishCheck.CheckedChanged += (s, e) =>
             {
-                if (_settings == null) return;
+                // The suppression guards every other settings handler has, and this one lacked:
+                // LoadAntiFreezeIntoUi() writes this box from the settings file (a start, a reset,
+                // an import, a profile switch), which fired this handler and SAVED the file in the
+                // middle of loading it. The value written back happened to match, so nothing broke
+                // — but a handler that writes to disk while settings are being read into the UI is
+                // one reordering away from persisting a half-applied state.
+                if (_settings == null || _suppressSettingsEvents || _suppressAntiFreeze) { return; }
                 _settings.NotifyOnRepeatFinish = _notifyFinishCheck.Checked;
                 SettingsManager.Save(_settings);
             };
@@ -607,6 +613,12 @@ namespace AutoClicker.UI
         /// <summary>Shows the effective click rate beneath the interval fields.</summary>
         private void UpdateIntervalHint()
         {
+            // The Multi-Point tab's "about N per cycle" is built from the same interval, hold and
+            // style — but it was only ever recomputed when the point LIST changed, so editing any of
+            // them left that line describing the old rate. This is the one path all of those edits
+            // already go through. First, so none of this method's early returns can skip it.
+            UpdateCycleInfo();
+
             if (_intervalHint == null)
             {
                 return;
@@ -1174,6 +1186,8 @@ namespace AutoClicker.UI
 
             _settings.AntiFreezeEnabled = _antiFreezeCheck.Checked;
             _settings.MaxClicksPerSecond = (int)_maxCpsNum.Value;
+            // The Multi-Point tab's cycle time is floored by this cap, so it must hear about it.
+            UpdateCycleInfo();
             _settings.AntiFreezeCpuThreshold = (int)_cpuThresholdNum.Value;
 
             // Apply live (engine reads these properties on the fly) and persist.
@@ -1429,6 +1443,9 @@ namespace AutoClicker.UI
             {
                 _profileDirtyLabel.Visible = dirty;
             }
+            // The Multi-Point tab edits this same profile, and its points are just as lost on a profile
+            // switch — so it shows the same state, next to a Save of its own.
+            UpdatePointsSaveState(dirty);
             // Keep the accent colour after theme switches (ThemeManager resets labels).
             if (dirty && _theme != null && _profileDirtyLabel.ForeColor != _theme.Accent)
             {

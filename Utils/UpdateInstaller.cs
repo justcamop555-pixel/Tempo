@@ -195,7 +195,7 @@ namespace AutoClicker.Utils
         /// </summary>
         public static bool Download(string url, string destPath,
             Action<long, long> onProgress, Func<bool> isCancelled, out string error,
-            string sha256Url = null, bool isArchive = false)
+            string sha256Url = null, bool isArchive = false, string expectedSha256 = null)
         {
             error = null;
 
@@ -286,13 +286,32 @@ namespace AutoClicker.Utils
                     }
                 }
 
+                // GitHub's own SHA-256 for this asset, from the same API response as the update
+                // itself. Every release asset has one — unlike the .sha256 file checked below,
+                // which the releases stopped carrying, so until this an in-app update installed
+                // whatever bytes arrived. It is the digest of the asset itself, so it covers a zip
+                // as well as a bare exe. A mismatch is never skipped.
+                if (!string.IsNullOrWhiteSpace(expectedSha256))
+                {
+                    string actual = ComputeSha256(destPath);
+                    if (!string.Equals(expectedSha256.Trim(), actual, StringComparison.OrdinalIgnoreCase))
+                    {
+                        error = Localization.T("The download does not match the file GitHub published for this release, so it was not installed. Please try again.");
+                        Logger.Warn("[Update] SHA-256 mismatch against GitHub's digest: expected " + expectedSha256.Trim()
+                                    + ", got " + actual + ".");
+                        TryDelete(destPath);
+                        return false;
+                    }
+                    Logger.Info("[Update] SHA-256 matches GitHub's digest for the release asset.");
+                }
+
                 // If the release publishes a SHA-256 checksum, verify the download
                 // against it. If the checksum can't be fetched or parsed we simply
                 // skip the check (so a checksum hiccup never blocks a real update),
                 // but a definite mismatch aborts the update. Skipped for a zip (the
                 // published checksum is for Tempo.exe, not the zip) - the extracted
                 // exe is verified against it separately.
-                if (!isArchive && !string.IsNullOrWhiteSpace(sha256Url))
+                else if (!isArchive && !string.IsNullOrWhiteSpace(sha256Url))
                 {
                     string expected = TryFetchExpectedSha(sha256Url);
                     if (!string.IsNullOrEmpty(expected))
@@ -311,6 +330,10 @@ namespace AutoClicker.Utils
                     {
                         Logger.Info("[Update] checksum unavailable; skipped SHA-256 verification.");
                     }
+                }
+                else if (!isArchive)
+                {
+                    Logger.Warn("[Update] no checksum is published for this download, so it could not be verified.");
                 }
 
                 Logger.Info($"[Update] downloaded to {destPath} ({info.Length} bytes).");
@@ -351,14 +374,16 @@ namespace AutoClicker.Utils
                     "set \"OLD=%~1\"\r\n" +
                     "set \"NEW=%~2\"\r\n" +
                     "set \"PID=%~3\"\r\n" +
-                    "ping -n 2 127.0.0.1 >nul\r\n" +
+                    "\"%SystemRoot%\\System32\\PING.EXE\" -n 2 127.0.0.1 >nul\r\n" +
                     "set /a w=0\r\n" +
                     ":wait\r\n" +
-                    "tasklist /fi \"PID eq %PID%\" 2>nul | find \"%PID%\" >nul\r\n" +
+                    // Full System32 paths: with Git's Unix tools on the PATH, a bare "find" is GNU find, which
+                    // fails on "12345" — and the wait would decide at once that Tempo had already exited.
+                    "\"%SystemRoot%\\System32\\tasklist.exe\" /fi \"PID eq %PID%\" 2>nul | \"%SystemRoot%\\System32\\find.exe\" \"%PID%\" >nul\r\n" +
                     "if errorlevel 1 goto gone\r\n" +
                     "set /a w+=1\r\n" +
                     "if !w! geq 90 goto gone\r\n" +
-                    "ping -n 2 127.0.0.1 >nul\r\n" +
+                    "\"%SystemRoot%\\System32\\PING.EXE\" -n 2 127.0.0.1 >nul\r\n" +
                     "goto wait\r\n" +
                     ":gone\r\n" +
                     "set /a n=0\r\n" +
@@ -366,7 +391,7 @@ namespace AutoClicker.Utils
                     "copy /y \"%NEW%\" \"%OLD%\" >nul 2>&1\r\n" +
                     "if not errorlevel 1 goto done\r\n" +
                     "set /a n+=1\r\n" +
-                    "if !n! lss 30 ( ping -n 2 127.0.0.1 >nul & goto copy )\r\n" +
+                    "if !n! lss 30 ( \"%SystemRoot%\\System32\\PING.EXE\" -n 2 127.0.0.1 >nul & goto copy )\r\n" +
                     ":done\r\n" +
                     "del /q \"%NEW%\" >nul 2>&1\r\n" +
                     "start \"\" /d \"%~dp1\" \"%OLD%\"\r\n" +
@@ -391,6 +416,88 @@ namespace AutoClicker.Utils
             {
                 error = "Couldn't start the updater: " + ex.Message;
                 Logger.Warn("Update swap helper failed: " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Repairs an altered unpacked copy of Tempo. A helper waits for this process to exit, deletes
+        /// the folder the .NET host unpacked Tempo into, then starts Tempo again — which unpacks a clean
+        /// copy from Tempo.exe. It cannot be done from inside: the running process holds those files.
+        ///
+        /// Only ever deletes a folder INSIDE %TEMP%\.net\, checked here before anything is written;
+        /// any other path is refused. The caller exits right after this returns true.
+        /// </summary>
+        public static bool LaunchRepairUnpackHelper(string unpackDir, out string error)
+        {
+            error = null;
+            try
+            {
+                string full = Path.GetFullPath(unpackDir ?? "").TrimEnd('\\');
+                string netRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), ".net")).TrimEnd('\\');
+                if (full.Length <= netRoot.Length + 1 ||
+                    !full.StartsWith(netRoot + "\\", StringComparison.OrdinalIgnoreCase) ||
+                    !Directory.Exists(full))
+                {
+                    error = "the unpack folder is not where Tempo expects it (" + unpackDir + ")";
+                    Logger.Warn("[Integrity] repair refused: " + error);
+                    return false;
+                }
+
+                string exe = RunningExePath();
+                int pid = Process.GetCurrentProcess().Id;
+                string scriptPath = Path.Combine(Path.GetTempPath(),
+                    "tempo_repair_" + Guid.NewGuid().ToString("N") + ".bat");
+
+                // Wait (bounded) for this PID to exit, delete the folder with retries while the
+                // last mapped files are released, then relaunch from the exe's own folder.
+                string script =
+                    "@echo off\r\n" +
+                    "setlocal enabledelayedexpansion\r\n" +
+                    "set \"DIR=%~1\"\r\n" +
+                    "set \"EXE=%~2\"\r\n" +
+                    "set \"PID=%~3\"\r\n" +
+                    "set /a w=0\r\n" +
+                    ":wait\r\n" +
+                    // Full System32 paths: with Git's Unix tools on the PATH, a bare "find" is GNU find, which
+                    // fails on "12345" — and the wait would decide at once that Tempo had already exited.
+                    "\"%SystemRoot%\\System32\\tasklist.exe\" /fi \"PID eq %PID%\" 2>nul | \"%SystemRoot%\\System32\\find.exe\" \"%PID%\" >nul\r\n" +
+                    "if errorlevel 1 goto gone\r\n" +
+                    "set /a w+=1\r\n" +
+                    "if !w! geq 90 goto gone\r\n" +
+                    "\"%SystemRoot%\\System32\\PING.EXE\" -n 2 127.0.0.1 >nul\r\n" +
+                    "goto wait\r\n" +
+                    ":gone\r\n" +
+                    "set /a n=0\r\n" +
+                    ":remove\r\n" +
+                    "if not exist \"%DIR%\" goto done\r\n" +
+                    "rmdir /s /q \"%DIR%\" >nul 2>&1\r\n" +
+                    "if not exist \"%DIR%\" goto done\r\n" +
+                    "set /a n+=1\r\n" +
+                    "if !n! lss 30 ( \"%SystemRoot%\\System32\\PING.EXE\" -n 2 127.0.0.1 >nul & goto remove )\r\n" +
+                    ":done\r\n" +
+                    "start \"\" /d \"%~dp2\" \"%EXE%\"\r\n" +
+                    "del /q \"%~f0\" >nul 2>&1\r\n";
+
+                File.WriteAllText(scriptPath, script);
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c \"\"" + scriptPath + "\" \"" + full + "\" \"" + exe + "\" " + pid + "\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+
+                Process.Start(psi);
+                Logger.Warn("[Integrity] repair helper launched — removing " + full + " and restarting Tempo.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                Logger.Warn("[Integrity] repair helper failed: " + ex.Message);
                 return false;
             }
         }

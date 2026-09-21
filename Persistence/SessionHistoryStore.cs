@@ -36,6 +36,7 @@ namespace AutoClicker.Persistence
         public void Load()
         {
             _records.Clear();
+            bool recovered = false;
             try
             {
                 string path = GetPath();
@@ -44,13 +45,17 @@ namespace AutoClicker.Persistence
                     return;
                 }
 
-                string json = File.ReadAllText(path);
-                if (string.IsNullOrWhiteSpace(json))
+                List<SessionRecord> list = TryParseRecords(File.ReadAllText(path));
+                if (list == null)
                 {
-                    return;
+                    // Empty or unreadable: recover the previous save, the way settings do. An empty file
+                    // used to return quietly with no history, and the next run's save then copied that
+                    // empty file over sessions.json.1 — the one copy that still held it.
+                    string previous = PersistenceHelper.ReadPreviousIfUsable(path, t => TryParseRecords(t) != null);
+                    list = TryParseRecords(previous);
+                    PersistenceHelper.BackupCorruptFile(path);
+                    recovered = list != null;
                 }
-
-                var list = JsonSerializer.Deserialize<List<SessionRecord>>(json, Options);
                 if (list != null)
                 {
                     _records.AddRange(list);
@@ -64,6 +69,16 @@ namespace AutoClicker.Persistence
                 Logger.Error("Failed to load session history.", ex);
                 try { PersistenceHelper.BackupCorruptFile(GetPath()); } catch { }
             }
+
+            if (recovered) { Save(); }
+        }
+
+        /// <summary>The records in <paramref name="json"/>, or null when it is empty or not a record list.</summary>
+        private static List<SessionRecord> TryParseRecords(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) { return null; }
+            try { return JsonSerializer.Deserialize<List<SessionRecord>>(json, Options); }
+            catch { return null; }
         }
 
         public bool Save()
