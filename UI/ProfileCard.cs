@@ -51,6 +51,12 @@ namespace AutoClicker.UI
         /// <summary>True when this profile also restores keybinds or appearance.</summary>
         public bool CarriesExtras { get; set; }
 
+        /// <summary>
+        /// What the card's tooltip says: the whole name and description (the card has room for
+        /// about 20 characters of a name that may have 60) and what switching to it restores.
+        /// </summary>
+        public string TipText { get; set; } = "";
+
         // Theme colours, pushed in by the tab so the card owns no theme lookup.
         public Color CardColor { get; set; } = Color.FromArgb(24, 27, 39);
         public Color TextColor { get; set; } = Color.FromArgb(232, 236, 246);
@@ -144,11 +150,21 @@ namespace AutoClicker.UI
             get
             {
                 var card = CardRect;
-                return new Rectangle(card.Right - 32, card.Top + 6, 26, 26);
+                return new Rectangle(card.Right - S(32), card.Top + S(6), S(26), S(26));
             }
         }
 
-        private Rectangle CardRect => new Rectangle(1, 1, Width - 4, Height - 6);
+        private Rectangle CardRect => new Rectangle(1, 1, Width - S(4), Height - S(6));
+
+        /// <summary>
+        /// The card's scale: how much bigger than its 232×108 design it is. Every offset and box it
+        /// paints is multiplied by this. They were fixed pixels, so on a 125%/150% screen — where the
+        /// grid makes the card bigger and its fonts grow on their own — the name was cut in its 20 px
+        /// strip and the description in its 16, a third of the card left empty.
+        /// </summary>
+        private float K => Math.Max(0.5f, Math.Min(4f, Height / (float)CardHeight));
+
+        private int S(int v) => (int)Math.Round(v * K);
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
@@ -234,13 +250,13 @@ namespace AutoClicker.UI
             if (Width < 40 || Height < 30) { return; }
 
             Rectangle card = CardRect;
-            const int radius = 12;
+            int radius = S(12);
             Color surface = _hover ? Lighten(CardColor, 0.05) : CardColor;
 
             // 1) Drop shadow, lifted a little further while hovered so the card
             //    reads as picked up rather than merely recoloured.
             using (var shadowPath = Rounded(
-                       new Rectangle(card.Left + 1, card.Top + (_hover ? 5 : 4), card.Width, card.Height), radius))
+                       new Rectangle(card.Left + 1, card.Top + S(_hover ? 5 : 4), card.Width, card.Height), radius))
             using (var sh = new SolidBrush(Color.FromArgb(_hover ? 52 : 38, 0, 0, 0)))
             {
                 g.FillPath(sh, shadowPath);
@@ -260,7 +276,7 @@ namespace AutoClicker.UI
                 // hairline. Focus borrows the active ring so keyboard position is
                 // never ambiguous.
                 bool ring = IsActive || Focused;
-                using (var border = new Pen(ring ? AccentColor : BorderColor, ring ? 2f : 1f))
+                using (var border = new Pen(ring ? AccentColor : BorderColor, ring ? 2f * K : 1f))
                 {
                     var inset = ring
                         ? new Rectangle(card.Left + 1, card.Top + 1, card.Width - 2, card.Height - 2)
@@ -279,15 +295,15 @@ namespace AutoClicker.UI
                 g.SetClip(clip, CombineMode.Intersect);
                 using (var tag = new SolidBrush(EffectiveTag))
                 {
-                    g.FillRectangle(tag, card.Left, card.Top, 4, card.Height);
+                    g.FillRectangle(tag, card.Left, card.Top, S(4), card.Height);
                 }
                 g.Clip = saved;
             }
 
-            int left = card.Left + 14;
+            int left = card.Left + S(14);
 
             // 4) Glyph badge.
-            var badge = new Rectangle(left, card.Top + 12, 30, 30);
+            var badge = new Rectangle(left, card.Top + S(12), S(30), S(30));
             using (var bb = new SolidBrush(Color.FromArgb(38, EffectiveTag)))
             {
                 g.FillEllipse(bb, badge);
@@ -305,17 +321,19 @@ namespace AutoClicker.UI
                 }
             }
 
-            int textLeft = badge.Right + 10;
-            int textRight = card.Right - 36;          // keep clear of the star
+            int textLeft = badge.Right + S(10);
+            int textRight = card.Right - S(36);       // keep clear of the star
             int textWidth = Math.Max(20, textRight - textLeft);
 
-            // 5) Name.
+            // 5) Name. Every text on the card is the user's own or carries it, and is drawn
+            //    with NoPrefix: without it DrawText reads "&" as an access-key marker, so
+            //    "Slow & steady" was drawn "Slow _steady" with the s underlined.
             using (var nameFont = new Font("Segoe UI", 10f, FontStyle.Bold))
             {
                 TextRenderer.DrawText(g, ProfileName, nameFont,
-                    new Rectangle(textLeft, card.Top + 12, textWidth, 20), TextColor,
+                    new Rectangle(textLeft, card.Top + S(12), textWidth, S(20)), TextColor,
                     TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding |
-                    TextFormatFlags.VerticalCenter);
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
 
             // 6) Description, or a muted placeholder so the card never looks broken.
@@ -323,30 +341,31 @@ namespace AutoClicker.UI
             using (var descFont = new Font("Segoe UI", 8.25f))
             {
                 TextRenderer.DrawText(g, desc, descFont,
-                    new Rectangle(textLeft, card.Top + 31, textWidth, 16), MutedColor,
+                    new Rectangle(textLeft, card.Top + S(31), textWidth, S(16)), MutedColor,
                     TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding |
-                    TextFormatFlags.VerticalCenter);
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix |
+                    TextFormatFlags.SingleLine);
             }
 
             // 7) Footer: category chip, then the usage line in the space that is left.
-            int footerY = card.Bottom - 28;
+            int footerY = card.Bottom - S(28);
             int chipRight = left;
             if (!string.IsNullOrEmpty(CategoryText))
             {
                 using (var chipFont = new Font("Segoe UI", 8.5f, FontStyle.Bold))
                 {
                     Size sz = TextRenderer.MeasureText(CategoryText, chipFont,
-                        new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
-                    var chip = new Rectangle(left, footerY, sz.Width + 16, 18);
-                    using (var cp = Rounded(chip, 9))
+                        new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                    var chip = new Rectangle(left, footerY, sz.Width + S(16), S(18));
+                    using (var cp = Rounded(chip, S(9)))
                     using (var cb = new SolidBrush(Color.FromArgb(30, EffectiveTag)))
                     {
                         g.FillPath(cb, cp);
                     }
                     TextRenderer.DrawText(g, CategoryText, chipFont, chip, ReadableTag,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-                        TextFormatFlags.NoPadding);
-                    chipRight = chip.Right + 8;
+                        TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                    chipRight = chip.Right + S(8);
                 }
             }
 
@@ -357,11 +376,11 @@ namespace AutoClicker.UI
                 using (var xf = new Font("Segoe UI Symbol", 8f))
                 {
                     TextRenderer.DrawText(g, "⚭", xf,
-                        new Rectangle(chipRight, footerY, 16, 18), MutedColor,
+                        new Rectangle(chipRight, footerY, S(16), S(18)), MutedColor,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
                         TextFormatFlags.NoPadding);
                 }
-                chipRight += 18;
+                chipRight += S(18);
             }
 
             if (!string.IsNullOrEmpty(UsageText))
@@ -369,10 +388,10 @@ namespace AutoClicker.UI
                 using (var useFont = new Font("Segoe UI", 8.5f))
                 {
                     TextRenderer.DrawText(g, UsageText, useFont,
-                        new Rectangle(chipRight, footerY, Math.Max(10, card.Right - 14 - chipRight), 18),
+                        new Rectangle(chipRight, footerY, Math.Max(10, card.Right - S(14) - chipRight), S(18)),
                         MutedColor,
                         TextFormatFlags.EndEllipsis | TextFormatFlags.Right |
-                        TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
                 }
             }
 
@@ -383,8 +402,9 @@ namespace AutoClicker.UI
 
         private void DrawStar(Graphics g, Rectangle box)
         {
-            // Centre a 15px star inside the padded hit box.
-            var b = new RectangleF(box.X + (box.Width - 15) / 2f, box.Y + (box.Height - 15) / 2f, 15, 15);
+            // Centre a 15px star (at the card's scale) inside the padded hit box.
+            float side = 15f * K;
+            var b = new RectangleF(box.X + (box.Width - side) / 2f, box.Y + (box.Height - side) / 2f, side, side);
             using (var star = StarPath(b))
             {
                 if (Favorite)

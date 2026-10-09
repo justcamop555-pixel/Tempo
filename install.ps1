@@ -157,12 +157,14 @@ if ($expected) {
 if ($Portable -or (-not $zipAsset)) {
     if ($Dir) { $target = $Dir } else { $target = Join-Path $HOME 'Downloads' }
     New-Item -ItemType Directory -Path $target -Force | Out-Null
-    $final = Join-Path $target 'Tempo.exe'
+    # Saved as TempoClicker.exe, not Tempo.exe: Discord lists a Steam game called "Tempo" whose
+    # program is tempo.exe, and showed Tempo users as playing it.
+    $final = Join-Path $target 'TempoClicker.exe'
     Copy-Item $download $final -Force
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 
     Step "Done."
-    Say ("Tempo.exe is in " + $target)
+    Say ("TempoClicker.exe is in " + $target)
     Say "It is self-contained - double-click it and it runs. Settings live in your AppData folder."
     if (-not $NoLaunch) { Start-Process $final }
     Write-Host ""
@@ -196,7 +198,11 @@ if ($code -ne 0) {
     Fail ("The installer stopped with exit code " + $code + ". Nothing was left running.")
 }
 
-$installed = Join-Path $env:LOCALAPPDATA 'Programs\TempoClicker\Tempo.exe'
+# TempoClicker.exe since the Discord rename; a release from before installs Tempo.exe.
+$installed = Join-Path $env:LOCALAPPDATA 'Programs\TempoClicker\TempoClicker.exe'
+if (-not (Test-Path $installed)) {
+    $installed = Join-Path $env:LOCALAPPDATA 'Programs\TempoClicker\Tempo.exe'
+}
 if (-not (Test-Path $installed)) {
     Fail ("The installer finished but Tempo is not where it should be (" + $installed + ").")
 }

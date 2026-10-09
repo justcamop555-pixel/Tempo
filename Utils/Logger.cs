@@ -70,6 +70,39 @@ namespace AutoClicker.Utils
             }
         }
 
+        // Every line written this session, counted: the ring's first line is number _written - Ring.Count.
+        // Lets a reader say "everything up to here" and mean the same lines later — Live debug's Clear view,
+        // which every rebuild of its log used to undo.
+        private static long _written;
+
+        /// <summary>How many lines have been logged this session (the number the next one is past).</summary>
+        public static long WrittenCount
+        {
+            get { lock (Sync) { return _written; } }
+        }
+
+        /// <summary>Copy of the ring, oldest first, with the session-wide number of its first line.</summary>
+        public static string[] Snapshot(out long firstNumber)
+        {
+            lock (Sync)
+            {
+                firstNumber = _written - Ring.Count;
+                return Ring.ToArray();
+            }
+        }
+
+        /// <summary>
+        /// How many lines the ring is holding, without copying it.
+        ///
+        /// Live debug shows "142 of 2,310" beside its filter and refreshes it as lines
+        /// arrive; asking through <see cref="Snapshot"/> would allocate a 2,310-element
+        /// array several times a second to learn one number.
+        /// </summary>
+        public static int BufferedCount
+        {
+            get { lock (Sync) { return Ring.Count; } }
+        }
+
         /// <summary>When false, nothing is written to the log file (privacy option).</summary>
         public static bool Enabled { get; set; } = true;
 
@@ -181,6 +214,7 @@ namespace AutoClicker.Utils
                 // Always feed the in-memory ring (the Live Debug view), even when
                 // FILE logging is off — nothing leaves the process either way.
                 Ring.Enqueue(line);
+                _written++;
                 while (Ring.Count > RingCapacity)
                 {
                     Ring.Dequeue();

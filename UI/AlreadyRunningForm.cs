@@ -33,6 +33,8 @@ namespace AutoClicker.UI
 
         public AlreadyRunningForm(Theme theme, string version)
         {
+            // Built in 100% units and scaled with the screen at the end (UiFactory.ScaleToScreen); text is
+            // measured in 100% units to match (UiFactory.Measure96).
             var t = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = "Tempo" + (string.IsNullOrEmpty(version) ? "" : " " + version);
@@ -147,6 +149,7 @@ namespace AutoClicker.UI
             };
             autoClose.Start();
             FormClosed += (s, e) => { autoClose.Stop(); autoClose.Dispose(); };
+            UiFactory.ScaleToScreen(this);
         }
 
         /// <summary>Adds a wrapped paragraph measured to its text. Returns the y below it.</summary>
@@ -164,11 +167,7 @@ namespace AutoClicker.UI
                 ForeColor = colour,
                 Font = UiFactory.BodyFont
             };
-            using (var g = CreateGraphics())
-            {
-                l.Height = Math.Max(18, TextRenderer.MeasureText(
-                    g, text, l.Font, new Size(TextWidth, 0), TextFormatFlags.WordBreak).Height + 2);
-            }
+            l.Height = Math.Max(18, UiFactory.Measure96(text, l.Font, TextWidth, TextFormatFlags.Default).Height + 2);
             Controls.Add(l);
             return y + l.Height + 10;
         }

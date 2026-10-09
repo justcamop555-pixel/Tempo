@@ -202,11 +202,174 @@ namespace AutoClicker.UI
             if (b == null) { return null; }
             try
             {
-                int needed = TextRenderer.MeasureText(b.Text ?? "", b.Font).Width + padding;
+                // Every caption it can show (LayoutFitter.DeclareCaptions), not only the one it has
+                // now: sized for "Testing…" as well as "Test", or it clipped the moment its caption
+                // changed. Measured as drawn — a RoundedButton shows an "&" as written.
+                TextFormatFlags flags = b is RoundedButton || !b.UseMnemonic ? TextFormatFlags.NoPrefix : TextFormatFlags.Default;
+                int needed = padding;
+                foreach (string caption in LayoutFitter.CaptionsOf(b))
+                {
+                    needed = Math.Max(needed, TextRenderer.MeasureText(caption, b.Font, new Size(int.MaxValue, int.MaxValue), flags).Width + padding);
+                }
                 b.Width = Math.Max(minWidth, needed);
             }
             catch { }
             return b;
+        }
+
+        /// <summary>
+        /// <see cref="FitToText"/> for a window that AutoScaleMode.Dpi scales AFTER this runs — a dialog's
+        /// constructor, or an account screen built before it is brought to the window's scale. Such a
+        /// layout is written in 100% (96-dpi) units, so the text is measured in them too.
+        ///
+        /// THE CONFLICT THIS FIXES. FitToText measures in the screen's pixels. On a 150% laptop that is
+        /// 1.5× the units the dialog is written in, and the window then scales every size by 1.5 again:
+        /// each button sized this way came out about 1.5× too wide for its caption, and the rows packed
+        /// from both ends (OK / Cancel against Test / Copy test URL) closed in on each other. At 100% the
+        /// two are identical.
+        /// </summary>
+        public static Button FitToText96(Button b, int minWidth = 0, int padding = 26)
+        {
+            if (b == null) { return null; }
+            try
+            {
+                TextFormatFlags flags = b is RoundedButton || !b.UseMnemonic ? TextFormatFlags.NoPrefix : TextFormatFlags.Default;
+                int needed = padding;
+                foreach (string caption in LayoutFitter.CaptionsOf(b))
+                {
+                    needed = Math.Max(needed, Measure96(caption, b.Font, 0, flags).Width + padding);
+                }
+                b.Width = Math.Max(minWidth, needed);
+            }
+            catch { }
+            return b;
+        }
+
+        /// <summary>
+        /// Text's size in 100% (96-dpi) units, for a layout AutoScaleMode.Dpi scales after it is built: the
+        /// screen-pixel measurement divided by the screen's scale (see <see cref="FitToText96"/>).
+        /// <paramref name="width96"/> above 0 wraps the words at that width; 0 measures one line.
+        /// </summary>
+        internal static Size Measure96(string text, Font font, int width96 = 0, TextFormatFlags flags = TextFormatFlags.NoPrefix)
+        {
+            return MeasureIn(1f / BuildScale, text, font, width96, flags);
+        }
+
+        /// <summary>
+        /// Text's size in a layout's own units, where one screen pixel is <paramref name="unitsPerPixel"/>
+        /// of them: 1 / 1.5 while a window that will be scaled ×1.5 is still being built (its numbers are
+        /// 100% ones), 1 once it has been scaled. <paramref name="width"/> above 0 wraps the words at that
+        /// width, in the same units; 0 measures one line.
+        /// </summary>
+        internal static Size MeasureIn(float unitsPerPixel, string text, Font font, int width = 0, TextFormatFlags flags = TextFormatFlags.NoPrefix)
+        {
+            float u = unitsPerPixel > 0.05f ? unitsPerPixel : 1f;
+            Size proposed = new Size(int.MaxValue, int.MaxValue);
+            if (width > 0)
+            {
+                flags |= TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl;
+                proposed = new Size(Math.Max(1, (int)Math.Round(width / u)), int.MaxValue);
+            }
+            Size real = TextRenderer.MeasureText(text ?? string.Empty, font, proposed, flags);
+            if (u == 1f) { return real; }
+            return new Size((int)Math.Ceiling(real.Width * u), (int)Math.Ceiling(real.Height * u));
+        }
+
+        /// <summary>
+        /// The screen's scale while windows are built: 1 at 100%, 1.5 at 150%. Tempo is System-DPI-aware,
+        /// so this is one number for the life of the process.
+        /// </summary>
+        internal static float BuildScale
+        {
+            get
+            {
+                if (_buildScale <= 0f)
+                {
+                    try
+                    {
+                        using (Graphics g = Graphics.FromHwnd(IntPtr.Zero)) { _buildScale = Math.Max(1f, g.DpiX / 96f); }
+                    }
+                    catch { _buildScale = 1f; }
+                }
+                return _buildScale;
+            }
+        }
+
+        private static float _buildScale;
+
+        /// <summary>
+        /// Scales a window built in 100% numbers to the screen — everything in it, once, now. Call it at the
+        /// END of the constructor, after the last control is added, and never inside SuspendLayout (the
+        /// scaling would wait for the ResumeLayout).
+        ///
+        /// WinForms scales an AutoScaleMode.Dpi window when its AutoScaleDimensions are declared — at once,
+        /// or at the ResumeLayout that ends a suspended block — and only the controls the window holds AT
+        /// THAT MOMENT: nothing added afterwards is ever scaled. Every Tempo window declared them in its
+        /// first lines and built its controls after, so on a 125% or 150% screen none was scaled at all —
+        /// its text grew (fonts are points) and every box, row and button kept its 100% size. The main
+        /// window declared them inside its first build step, which scaled the frame and the sidebar and
+        /// none of the nine tabs. A 100% screen cannot show that, and the ×1.5 test could not either: it
+        /// declared 64 dpi AFTER the constructor, which scales everything. Telling WinForms the screen is
+        /// 144 dpi from the start shows it (scratchpad mainscan / dialogscan "fake150").
+        ///
+        /// Give such a window its CLIENT size, not its window size. The frame is not scaled with the rest
+        /// — it is 16×39 px at 100% and 22×56 at 150% — so a window size written for 100% leaves 1.5 ×
+        /// (160 − 56) = 156 px of room on a 150% screen where 1.5 × (160 − 39) = 181 was meant, and the
+        /// buttons along the bottom of the key-capture dialog were cut off.
+        /// </summary>
+        internal static void ScaleToScreen(ContainerControl window)
+        {
+            if (window == null || window.IsDisposed) { return; }
+            // Once: declared a second time, the window would be scaled a second time.
+            if (ScaledWindows.TryGetValue(window, out _)) { return; }
+            window.AutoScaleMode = AutoScaleMode.Dpi;
+            window.AutoScaleDimensions = new SizeF(96F, 96F);
+            ScaledWindows.AddOrUpdate(window, null);
+            FitAutoSizedTicks(window);
+        }
+
+        /// <summary>
+        /// Whether <paramref name="window"/> has been through <see cref="ScaleToScreen"/>: its numbers are the
+        /// screen's pixels from then on, 100% ones before. Its window handle says nothing about it — the
+        /// scaling now happens in the constructor, before there is one.
+        /// </summary>
+        internal static bool IsScaledToScreen(Control window) => window != null && ScaledWindows.TryGetValue(window, out _);
+
+        /// <summary>
+        /// What one of <paramref name="window"/>'s own 100% numbers is in its units of the moment: 1 while it
+        /// is built, the screen's scale once <see cref="ScaleToScreen"/> has run — for code that lays it out
+        /// again later (a re-fit on a resize, a section shown or hidden).
+        /// </summary>
+        internal static float ScaleOf(Control window) => IsScaledToScreen(window) ? BuildScale : 1f;
+
+        /// <summary>How many of <paramref name="window"/>'s units one screen pixel of text is (for <see cref="MeasureIn"/>).</summary>
+        internal static float UnitsPerPixel(Control window) => ScaleOf(window) / BuildScale;
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, object> ScaledWindows =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<Control, object>();
+
+        /// <summary>
+        /// Sets each auto-sized native tick box and option button to its own size again. The scaling sets
+        /// every control to 1.5× its bounds, and one that had measured itself keeps that until its container
+        /// happens to be laid out again: a box half as wide again as its words, its caption lower than its
+        /// row. (Labels refuse any other size by themselves, and so do Tempo's own tick boxes — SelfSize.)
+        /// </summary>
+        private static void FitAutoSizedTicks(Control parent)
+        {
+            foreach (Control c in parent.Controls)
+            {
+                if ((c is CheckBox || c is RadioButton) && SelfSize.Applies(c))
+                {
+                    try
+                    {
+                        Size p = c.GetPreferredSize(Size.Empty);
+                        bool fromRight = (c.Anchor & (AnchorStyles.Left | AnchorStyles.Right)) == AnchorStyles.Right;
+                        c.SetBounds(fromRight ? c.Right - p.Width : c.Left, c.Top, p.Width, p.Height);
+                    }
+                    catch { }
+                }
+                if (c.HasChildren) { FitAutoSizedTicks(c); }
+            }
         }
 
         /// <summary>Right-align an auto-sized control so its right edge lands on <paramref name="rightEdge"/>.</summary>

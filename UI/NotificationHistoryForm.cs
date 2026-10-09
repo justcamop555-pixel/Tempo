@@ -27,11 +27,11 @@ namespace AutoClicker.UI
         {
             _theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
 
             Text = Localization.T("Notification history");
-            Size = new Size(760, 480);
+            // The client area (was a 760×480 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(744, 441);
             MinimumSize = new Size(560, 320);
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
@@ -50,7 +50,8 @@ namespace AutoClicker.UI
             help.ForeColor = _theme.TextMuted;
             Controls.Add(help);
 
-            _list = new ListView
+            // Columns that scale with the window at 125%/150% (a plain ListView's stay at 100%).
+            _list = new ColumnScalingListView
             {
                 Left = 16,
                 Top = 56,
@@ -100,8 +101,45 @@ namespace AutoClicker.UI
             close.Click += (s, e) => Close();
             Controls.Add(close);
 
+            // Right-aligned from their captions: "Effacer l'historique" and "Cancella
+            // cronologia" were cut off at a fixed 106 px. Close keeps the right edge; Clear
+            // sits to its left at whatever width its own words need.
+            UiFactory.FitToText96(close, 106, 22);
+            UiFactory.FitToText96(clear, 106, 22);
+            close.Left = 728 - close.Width;
+            clear.Left = close.Left - 8 - clear.Width;
+
             ThemeManager.Apply(this, _theme);
             Reload();
+
+            // Live while it is open. It was a snapshot taken when the window opened, so a
+            // card missed while you were reading it never appeared, and neither did the
+            // "Nothing recorded yet" after the history was cleared from somewhere else.
+            NotificationHistory.Changed += OnHistoryChanged;
+            FormClosed += (s, e) => NotificationHistory.Changed -= OnHistoryChanged;
+            UiFactory.ScaleToScreen(this);
+        }
+
+        /// <summary>1 while a reload is already queued, so a burst of entries costs one rebuild.</summary>
+        private int _reloadQueued;
+
+        /// <summary>
+        /// NotificationHistory.Changed, raised on whichever thread added the entry and possibly
+        /// many times in a row — marshalled to the UI thread and coalesced.
+        /// </summary>
+        private void OnHistoryChanged()
+        {
+            if (IsDisposed || !IsHandleCreated) { return; }
+            if (System.Threading.Interlocked.Exchange(ref _reloadQueued, 1) == 1) { return; }
+            try
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    System.Threading.Interlocked.Exchange(ref _reloadQueued, 0);
+                    if (!IsDisposed) { Reload(); }
+                }));
+            }
+            catch { System.Threading.Interlocked.Exchange(ref _reloadQueued, 0); }
         }
 
         private void Reload()
@@ -109,6 +147,14 @@ namespace AutoClicker.UI
             try
             {
                 List<NotificationHistory.Entry> items = NotificationHistory.Recent();
+
+                // Keep the reader's place. New entries arrive at the TOP (newest first), so a
+                // plain rebuild would drop someone reading further down back to the start
+                // every time anything was recorded — and in a burst, again and again.
+                int oldCount = _list.Items.Count;
+                int oldTop = _list.TopItem != null ? _list.TopItem.Index : 0;
+                object selectedEntry = _list.SelectedItems.Count > 0 ? _list.SelectedItems[0].Tag : null;
+
                 _list.BeginUpdate();
                 _list.Items.Clear();
 
@@ -122,6 +168,9 @@ namespace AutoClicker.UI
                     }
 
                     var row = new ListViewItem(e.WhenLocal.ToString("ddd HH:mm, d MMM"));
+                    // The entry itself, so a selection survives a reload: Recent() copies the
+                    // LIST, not the entries, so the same notification is the same object.
+                    row.Tag = e;
                     row.SubItems.Add(string.IsNullOrEmpty(e.Source) ? "Tempo" : e.Source);
                     row.SubItems.Add(message);
 
@@ -146,10 +195,22 @@ namespace AutoClicker.UI
                             row.ToolTipText = message;
                             break;
                     }
+                    // A list row's tip is as wide as the screen allows too, and a notification's
+                    // text can be a paragraph: broken into lines like every other tip.
+                    row.ToolTipText = TipStyle.Wrap(row.ToolTipText);
                     _list.Items.Add(row);
+                    if (selectedEntry != null && ReferenceEquals(e, selectedEntry)) { row.Selected = true; }
                 }
 
                 _list.EndUpdate();
+
+                // Only when the reader had actually scrolled, and only when entries were ADDED —
+                // after a clear or a trim there is no old place to go back to.
+                if (oldTop > 0 && items.Count >= oldCount && _list.Items.Count > 0)
+                {
+                    int newTop = Math.Min(_list.Items.Count - 1, oldTop + (items.Count - oldCount));
+                    try { _list.TopItem = _list.Items[newTop]; } catch { }
+                }
 
                 _summary.Text = items.Count == 0
                     ? Localization.T("Nothing recorded yet.")

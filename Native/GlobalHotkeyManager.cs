@@ -65,6 +65,20 @@ namespace AutoClicker.Native
         private int _nextId = 0xA000;
         private bool _disposed;
 
+        // The Shift / Ctrl / Shift+Ctrl versions of reserved bindings (RegisterShiftCtrlVariants), by
+        // registration id. Name is the binding they fire. Kept apart from _registrations so a binding's
+        // route, the conflict report and the self-collision check all keep seeing one entry per action.
+        private readonly Dictionary<int, Registration> _variants = new Dictionary<int, Registration>();
+
+        /// <summary>
+        /// Bindings that tolerate it (HotkeyDefinition.ToleratesExtraShiftCtrl) also fire with Shift
+        /// and/or Ctrl held on top of their own modifiers — in the keyboard hook, the mouse hook and
+        /// for watched combinations. A reserved binding needs <see cref="RegisterShiftCtrlVariants"/>
+        /// as well, because Windows only ever delivers the exact combination it was given. A
+        /// combination bound exactly to something always goes to that.
+        /// </summary>
+        public bool ExtraShiftCtrl { get; set; }
+
         // Mouse-button hotkeys are handled with a low-level hook rather than
         // RegisterHotKey (which only supports keyboard keys). The hook is created
         // lazily the first time a mouse binding is registered.
@@ -84,6 +98,48 @@ namespace AutoClicker.Native
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public event EventHandler<HotkeyPressedEventArgs> HotkeyPressed;
+
+        // Watched, not bound: combinations that are NOT delivered and NOT reserved — the key keeps
+        // reaching whatever app is in front — but whose press is still noticed. Used while Tempo sleeps in
+        // the tray: its start hotkeys are given back to other programs, and a press of one used to vanish
+        // without a trace ("my keybind sometimes doesn't work"). Now it wakes Tempo up and says so.
+        private readonly Dictionary<string, HotkeyDefinition> _watched =
+            new Dictionary<string, HotkeyDefinition>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _watchHeld = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>A watched combination was pressed (see <see cref="Watch"/>). Raised on the hook's thread.</summary>
+        public event EventHandler<HotkeyPressedEventArgs> WatchedHotkeyPressed;
+
+        /// <summary>
+        /// Notice presses of <paramref name="def"/> without delivering or reserving it: the key passes
+        /// through untouched and <see cref="WatchedHotkeyPressed"/> fires once per press. Needs a low-level
+        /// hook, installed only while something is watched and removed by <see cref="UnregisterAll"/>.
+        /// </summary>
+        public bool Watch(string name, HotkeyDefinition def)
+        {
+            ThrowIfDisposed();
+            if (name == null || def == null || !def.IsValid) { return false; }
+            _watched[name] = def.Clone();
+            _watchHeld.Remove(name);
+            if (def.IsMouse)
+            {
+                if (_mouseHook == null)
+                {
+                    _mouseHook = new MouseHotkeyHook();
+                    _mouseHook.ButtonDown += OnMouseHotkey;
+                }
+                if (_mouseHook.IsRunning || _mouseHook.Start()) { return true; }
+            }
+            else if (EnsureKeyHook())
+            {
+                return true;
+            }
+            _watched.Remove(name);
+            return false;
+        }
+
+        /// <summary>How many combinations are being watched (for Live debug and the tests).</summary>
+        public int WatchedCount => _watched.Count;
 
         public GlobalHotkeyManager()
         {
@@ -123,8 +179,7 @@ namespace AutoClicker.Native
             // Kept out of HotkeyDefinition.GetModifierFlags deliberately: this is a
             // registration detail, not part of the combination, and Registration.Modifiers
             // below is bookkeeping that should keep describing the combination itself.
-            bool ok = NativeMethods.RegisterHotKey(
-                _window.Handle, id, modifiers | NativeMethods.MOD_NOREPEAT, virtualKey);
+            bool ok = Reserve(id, modifiers, virtualKey);
 
             var reg = new Registration
             {
@@ -192,16 +247,42 @@ namespace AutoClicker.Native
                 }
             }
 
-            bool ok = Register(name, mods, vk);
-            if (!ok && heldBy != null)
+            // The same question for a combination another Tempo action already catches with the
+            // keyboard HOOK (Windows refused it to both — another program owns it). The check above
+            // only saw reserved ones, so the second action got a hook route of its own and one press
+            // ran BOTH: the very outcome the check exists to prevent, on the route where the user
+            // already has one surprise (the key also works in the other program).
+            if (heldBy == null)
+            {
+                foreach (var kv in _keyboardFallbacks)
+                {
+                    if (!string.Equals(kv.Key, name, StringComparison.Ordinal) &&
+                        kv.Value.GetModifierFlags() == mods && kv.Value.GetVirtualKey() == vk)
+                    {
+                        Unregister(name);
+                        _selfCollisions[name] = kv.Key;
+                        Logger.Warn($"[Hotkeys] '{name}' collides with Tempo's own '{kv.Key}' on the same " +
+                                    "combination (caught by the keyboard hook); left unbound rather than doubling up on one key.");
+                        return false;
+                    }
+                }
+            }
+
+            if (heldBy != null)
             {
                 // Deliberately no hook fallback: adding one is what made both actions
                 // fire. Left unbound and reported, so the Keybinds tab can say the truth.
+                // Decided here, not by asking Windows: while a Keybinds field listens the
+                // reservations are lifted (DeliveryPaused), and Windows would hand the same
+                // combination out a second time.
+                Unregister(name);
                 _selfCollisions[name] = heldBy;
                 Logger.Warn($"[Hotkeys] '{name}' collides with Tempo's own '{heldBy}' on the same " +
                             "combination; left unbound rather than doubling up on one key.");
                 return false;
             }
+
+            bool ok = Register(name, mods, vk);
 
             if (!ok)
             {
@@ -222,6 +303,67 @@ namespace AutoClicker.Native
                 ok = true;
             }
             return ok;
+        }
+
+        /// <summary>
+        /// Reserves a binding's Shift / Ctrl / Shift+Ctrl versions for it as well, so F6 fires while
+        /// Shift is held for sprinting. Skips every combination in <paramref name="taken"/> — bound
+        /// exactly to some action, or already given to a more specific binding — and adds the ones it
+        /// takes, so callers should go from the most specific binding to the least. Only for a binding
+        /// Windows reserved; hooked and mouse bindings match loosely in their hooks instead. Best
+        /// effort: a version another program owns is left to that program. Returns how many it took.
+        /// </summary>
+        public int RegisterShiftCtrlVariants(string name, HotkeyDefinition def, ISet<string> taken)
+        {
+            ThrowIfDisposed();
+            if (!ExtraShiftCtrl || name == null || def == null || def.IsMouse) { return 0; }
+            if (RouteOf(name) != BindRoute.Registered) { return 0; }
+
+            int took = 0;
+            foreach (HotkeyDefinition v in def.ExtraShiftCtrlVariants())
+            {
+                string identity = v.ToIdentityString();
+                if (taken != null && taken.Contains(identity)) { continue; }
+                uint mods = v.GetModifierFlags();
+                uint vk = v.GetVirtualKey();
+                int id = _nextId++;
+                if (Reserve(id, mods, vk))
+                {
+                    _variants[id] = new Registration { Id = id, Name = name, Modifiers = mods, VirtualKey = vk, Active = true };
+                    taken?.Add(identity);
+                    took++;
+                }
+            }
+            if (took > 0)
+            {
+                Logger.Info($"[Hotkeys] '{name}' also fires with Shift/Ctrl held ({took} more combination(s) reserved).");
+            }
+            return took;
+        }
+
+        /// <summary>How many Shift/Ctrl versions are reserved (Live debug and the tests).</summary>
+        public int VariantCount => _variants.Count;
+
+        /// <summary>
+        /// True when pressing <paramref name="trigger"/>'s key or button with the modifiers held NOW is
+        /// exactly one of Tempo's combinations — reserved, a Shift/Ctrl version, hooked or watched.
+        /// Hold mode asks before engaging with extra Shift/Ctrl held, so one press never runs two things.
+        /// </summary>
+        public bool IsExactlyBoundNow(HotkeyDefinition trigger)
+        {
+            if (trigger == null || !trigger.IsValid) { return false; }
+            if (trigger.IsMouse)
+            {
+                foreach (var set in new[] { _mouseBindings, _watched })
+                {
+                    foreach (HotkeyDefinition d in set.Values)
+                    {
+                        if (d.IsMouse && d.MouseButton == trigger.MouseButton && d.ModifiersMatch(IsKeyDown)) { return true; }
+                    }
+                }
+                return false;
+            }
+            return ExactlyBound(CurrentModifiers(), trigger.GetVirtualKey());
         }
 
         /// <summary>Names left unbound because another Tempo action already holds the combo.</summary>
@@ -256,37 +398,106 @@ namespace AutoClicker.Native
         private void OnKeyHookEvent(object sender, KeyboardHookEventArgs e)
         {
             // Runs for every key, so keep it cheap and bail fast.
-            if (_keyboardFallbacks.Count == 0 || DeliveryPaused)
+            if (_keyboardFallbacks.Count == 0 && _watched.Count == 0)
             {
                 return;
             }
 
-            foreach (var pair in _keyboardFallbacks)
+            // Paused (a Keybinds field is listening): nothing fires — but a RELEASE still ends the press
+            // it belongs to. Ignoring releases as well left a key that went down before the pause marked
+            // as held, so the first press after the field let go was taken for auto-repeat and did
+            // nothing. (Showing Tempo with its hotkey can land focus straight in a capture field.)
+            if (DeliveryPaused || !e.IsKeyDown)
+            {
+                if (!e.IsKeyDown) { ForgetHeld(e.VirtualKey); }
+                return;
+            }
+
+            // Watched combinations: noticed, never swallowed — by the same rules a bound hotkey
+            // follows, so what wakes Tempo is exactly what would have fired. Once per press.
+            string watched = BestKeyMatch(_watched, e.VirtualKey);
+            if (watched != null && _watchHeld.Add(watched))
+            {
+                WatchedHotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(-1, watched));
+            }
+
+            // Hooked bindings: once per press — auto-repeat finds the name still held.
+            string bound = BestKeyMatch(_keyboardFallbacks, e.VirtualKey);
+            if (bound != null && _comboHeld.Add(bound))
+            {
+                HotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(-1, bound));
+            }
+        }
+
+        /// <summary>
+        /// Which of <paramref name="set"/> a press of <paramref name="virtualKey"/> fires now, or null.
+        /// The binding whose modifiers are EXACTLY the ones held wins outright. Failing that, with
+        /// <see cref="ExtraShiftCtrl"/> on, the most specific binding that tolerates Shift/Ctrl on
+        /// top — but only when no Tempo combination is exactly this press: a reserved one is being
+        /// delivered through WM_HOTKEY at this moment, and one press must not run two actions.
+        /// </summary>
+        private string BestKeyMatch(Dictionary<string, HotkeyDefinition> set, int virtualKey)
+        {
+            string loose = null;
+            int looseRank = -1;
+            foreach (var pair in set)
             {
                 HotkeyDefinition def = pair.Value;
-                if (e.VirtualKey != (int)def.GetVirtualKey())
+                if (def.IsMouse || (int)def.GetVirtualKey() != virtualKey) { continue; }
+                if (def.ModifiersMatch(IsKeyDown)) { return pair.Key; }
+                if (ExtraShiftCtrl && def.ModifierCount() > looseRank && def.ModifiersMatch(IsKeyDown, true))
                 {
-                    continue;
+                    loose = pair.Key;
+                    looseRank = def.ModifierCount();
                 }
+            }
+            if (loose != null && ExactlyBound(CurrentModifiers(), (uint)virtualKey)) { return null; }
+            return loose;
+        }
 
-                string nm = pair.Key;
-                if (e.IsKeyDown)
-                {
-                    // Fire once per press: ignore auto-repeat while the key is held.
-                    // ModifiersMatch is exact, so at most one binding on a given key
-                    // fires for the current modifier state.
-                    if (!_comboHeld.Contains(nm) && def.ModifiersMatch(IsKeyDown))
-                    {
-                        _comboHeld.Add(nm);
-                        HotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(-1, nm));
-                    }
-                }
-                else
-                {
-                    _comboHeld.Remove(nm);
-                }
-                // Keep checking: another binding may use this same key with a
-                // different modifier combination.
+        /// <summary>True when any Tempo combination — reserved, a Shift/Ctrl version, hooked or watched — is exactly this.</summary>
+        private bool ExactlyBound(uint mods, uint virtualKey)
+        {
+            foreach (Registration r in _registrations.Values)
+            {
+                if (r.Active && r.Modifiers == mods && r.VirtualKey == virtualKey) { return true; }
+            }
+            foreach (Registration r in _variants.Values)
+            {
+                if (r.Modifiers == mods && r.VirtualKey == virtualKey) { return true; }
+            }
+            foreach (HotkeyDefinition d in _keyboardFallbacks.Values)
+            {
+                if (d.GetModifierFlags() == mods && d.GetVirtualKey() == virtualKey) { return true; }
+            }
+            foreach (HotkeyDefinition d in _watched.Values)
+            {
+                if (!d.IsMouse && d.GetModifierFlags() == mods && d.GetVirtualKey() == virtualKey) { return true; }
+            }
+            return false;
+        }
+
+        /// <summary>The modifiers held now, as RegisterHotKey flags.</summary>
+        private static uint CurrentModifiers()
+        {
+            uint mods = 0;
+            if (IsKeyDown(0x11)) { mods |= 0x0002; }                      // MOD_CONTROL
+            if (IsKeyDown(0x12)) { mods |= 0x0001; }                      // MOD_ALT
+            if (IsKeyDown(0x10)) { mods |= 0x0004; }                      // MOD_SHIFT
+            if (IsKeyDown(0x5B) || IsKeyDown(0x5C)) { mods |= 0x0008; }   // MOD_WIN
+            return mods;
+        }
+
+        /// <summary>Ends the "held" state of every hooked or watched combination on this key.</summary>
+        private void ForgetHeld(int virtualKey)
+        {
+            foreach (var pair in _keyboardFallbacks)
+            {
+                if ((int)pair.Value.GetVirtualKey() == virtualKey) { _comboHeld.Remove(pair.Key); }
+            }
+            foreach (var pair in _watched)
+            {
+                if (!pair.Value.IsMouse && (int)pair.Value.GetVirtualKey() == virtualKey) { _watchHeld.Remove(pair.Key); }
             }
         }
         public bool RegisterMouse(string name, HotkeyDefinition def)
@@ -296,6 +507,22 @@ namespace AutoClicker.Native
             if (def == null || !def.IsMouse)
             {
                 return false;
+            }
+
+            // One button combination, one action. A press only ever ran the FIRST binding on it (see
+            // OnMouseHotkey), so a second one was silently dead while it reported a working route and
+            // the Keybinds tab said nothing. Refused and reported the way a keyboard clash is.
+            _selfCollisions.Remove(name);
+            foreach (var kv in _mouseBindings)
+            {
+                if (!string.Equals(kv.Key, name, StringComparison.Ordinal) && kv.Value.SameCombination(def))
+                {
+                    _mouseBindings.Remove(name);
+                    _selfCollisions[name] = kv.Key;
+                    Logger.Warn($"[Hotkeys] mouse hotkey '{name}' collides with Tempo's own '{kv.Key}' on " +
+                                $"{def.ToDisplayString()}; left unbound rather than doubling up on one button.");
+                    return false;
+                }
             }
 
             _mouseBindings[name] = def.Clone();
@@ -324,16 +551,89 @@ namespace AutoClicker.Native
         }
 
         /// <summary>
-        /// While true, bound hotkeys are not delivered. Set by the Keybinds tab for as
-        /// long as a capture field has focus.
+        /// While true, bound hotkeys are not delivered — and Windows' reservations are lifted, so
+        /// the keys reach the field. Set by the Keybinds tab for as long as a capture field has focus.
         ///
         /// Without it a mouse button could be bound exactly once and never changed: click
         /// into the field to rebind X2, and the hook — which runs before the click ever
         /// reaches the field — matched the EXISTING X2 binding, suppressed the click and
         /// fired the old action instead. The rebind was unreachable by the only gesture
         /// that performs it, and the action fired every time you tried.
+        ///
+        /// The keyboard had the same trap one layer down. A combination reserved with RegisterHotKey
+        /// is taken by Windows before ANY window sees it — Tempo's own included (measured with
+        /// scratchpad/hkprobe: WM_HOTKEY 1, the focused text box's KeyDown 0). Not delivering
+        /// WM_HOTKEY was not enough: pressing a bound key in a field produced nothing at all, so a
+        /// saved key could not be moved to another action by pressing it there, and "that key was
+        /// taken from another action" could never happen for one. The reservations are released
+        /// while a field listens and taken back when it stops.
         /// </summary>
-        public bool DeliveryPaused { get; set; }
+        public bool DeliveryPaused
+        {
+            get => _paused;
+            set
+            {
+                if (_paused == value) { return; }
+                _paused = value;
+                if (_disposed) { return; }
+                if (value) { LiftReservations(); } else { RestoreReservations(); }
+            }
+        }
+        private bool _paused;
+
+        private void LiftReservations()
+        {
+            foreach (Registration r in _registrations.Values)
+            {
+                if (r.Active) { NativeMethods.UnregisterHotKey(_window.Handle, r.Id); }
+            }
+            foreach (Registration r in _variants.Values)
+            {
+                NativeMethods.UnregisterHotKey(_window.Handle, r.Id);
+            }
+        }
+
+        private void RestoreReservations()
+        {
+            foreach (Registration r in _registrations.Values)
+            {
+                if (!r.Active || NativeMethods.RegisterHotKey(_window.Handle, r.Id, r.Modifiers | NativeMethods.MOD_NOREPEAT, r.VirtualKey))
+                {
+                    continue;
+                }
+                // Another program took the combination in the seconds a field was listening. Catch
+                // it with the keyboard hook instead — what Register would have done in the first place.
+                r.Active = false;
+                if (EnsureKeyHook())
+                {
+                    _keyboardFallbacks[r.Name] = DefinitionOf(r.Modifiers, r.VirtualKey);
+                    Logger.Warn($"[Hotkeys] '{r.Name}' was taken by another program while a Keybinds field listened; using the keyboard hook.");
+                }
+                else
+                {
+                    Logger.Warn($"[Hotkeys] '{r.Name}' was taken by another program while a Keybinds field listened, and the hook would not install.");
+                }
+            }
+            var lost = new List<int>();
+            foreach (var kv in _variants)
+            {
+                Registration r = kv.Value;
+                if (!NativeMethods.RegisterHotKey(_window.Handle, r.Id, r.Modifiers | NativeMethods.MOD_NOREPEAT, r.VirtualKey)) { lost.Add(kv.Key); }
+            }
+            foreach (int id in lost) { _variants.Remove(id); }   // a Shift/Ctrl version is best effort
+        }
+
+        /// <summary>Registers with Windows — and lets go again at once while a Keybinds field is listening.</summary>
+        private bool Reserve(int id, uint modifiers, uint virtualKey)
+        {
+            bool ok = NativeMethods.RegisterHotKey(_window.Handle, id, modifiers | NativeMethods.MOD_NOREPEAT, virtualKey);
+            if (ok && _paused) { NativeMethods.UnregisterHotKey(_window.Handle, id); }   // RestoreReservations takes it
+            return ok;
+        }
+
+        private static HotkeyDefinition DefinitionOf(uint modifiers, uint virtualKey) =>
+            new HotkeyDefinition((Keys)virtualKey, control: (modifiers & 0x0002) != 0, alt: (modifiers & 0x0001) != 0,
+                                 shift: (modifiers & 0x0004) != 0, win: (modifiers & 0x0008) != 0);
 
         private void OnMouseHotkey(object sender, MouseHotkeyEventArgs e)
         {
@@ -348,34 +648,65 @@ namespace AutoClicker.Native
                 return;
             }
 
-            foreach (var pair in _mouseBindings)
+            // Watched mouse combinations: noticed, and the click is left alone.
+            string watched = BestMouseMatch(_watched, e.Button);
+            if (watched != null)
             {
-                HotkeyDefinition def = pair.Value;
-                if (def.MouseButton != e.Button)
-                {
-                    continue;
-                }
-
-                if (!def.ModifiersMatch(IsKeyDown))
-                {
-                    continue;
-                }
-
-                // Consume side/middle buttons (and any modified left/right) so the
-                // bound button does not also do its normal job. A bare left/right
-                // is left to pass through as a safety measure.
-                bool bareLeftRight =
-                    (def.MouseButton == HotkeyMouseButton.Left || def.MouseButton == HotkeyMouseButton.Right)
-                    && !def.Control && !def.Alt && !def.Shift && !def.Win;
-
-                if (!bareLeftRight)
-                {
-                    e.Suppress = true;
-                }
-
-                HotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(-1, pair.Key));
+                WatchedHotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(-1, watched));
                 return;
             }
+
+            string bound = BestMouseMatch(_mouseBindings, e.Button);
+            if (bound == null)
+            {
+                return;
+            }
+            HotkeyDefinition def = _mouseBindings[bound];
+
+            // Consume side/middle buttons (and any modified left/right) so the
+            // bound button does not also do its normal job. A bare left/right
+            // is left to pass through as a safety measure.
+            bool bareLeftRight =
+                (def.MouseButton == HotkeyMouseButton.Left || def.MouseButton == HotkeyMouseButton.Right)
+                && !def.Control && !def.Alt && !def.Shift && !def.Win;
+
+            if (!bareLeftRight)
+            {
+                e.Suppress = true;
+            }
+
+            HotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(-1, bound));
+        }
+
+        /// <summary>
+        /// The mouse twin of <see cref="BestKeyMatch"/>: an exact match wins; otherwise, with
+        /// <see cref="ExtraShiftCtrl"/>, the most specific binding on this button that tolerates
+        /// Shift/Ctrl on top — unless some mouse combination of Tempo's is exactly this press.
+        /// </summary>
+        private string BestMouseMatch(Dictionary<string, HotkeyDefinition> set, HotkeyMouseButton button)
+        {
+            string loose = null;
+            int looseRank = -1;
+            foreach (var pair in set)
+            {
+                HotkeyDefinition def = pair.Value;
+                if (!def.IsMouse || def.MouseButton != button) { continue; }
+                if (def.ModifiersMatch(IsKeyDown)) { return pair.Key; }
+                if (ExtraShiftCtrl && def.ModifierCount() > looseRank && def.ModifiersMatch(IsKeyDown, true))
+                {
+                    loose = pair.Key;
+                    looseRank = def.ModifierCount();
+                }
+            }
+            if (loose == null) { return null; }
+            foreach (var other in new[] { _mouseBindings, _watched })
+            {
+                foreach (HotkeyDefinition d in other.Values)
+                {
+                    if (d.IsMouse && d.MouseButton == button && d.ModifiersMatch(IsKeyDown)) { return null; }
+                }
+            }
+            return loose;
         }
 
         private static bool IsKeyDown(int vk)
@@ -403,6 +734,19 @@ namespace AutoClicker.Native
 
                 _registrations.Remove(id);
                 _nameToId.Remove(name);
+            }
+
+            // And its Shift/Ctrl versions: left behind, they would keep firing an action that has
+            // been rebound — or, worse, hold a combination its new binding needs.
+            var versions = new List<int>();
+            foreach (var kv in _variants)
+            {
+                if (string.Equals(kv.Value.Name, name, StringComparison.OrdinalIgnoreCase)) { versions.Add(kv.Key); }
+            }
+            foreach (int vid in versions)
+            {
+                NativeMethods.UnregisterHotKey(_window.Handle, vid);
+                _variants.Remove(vid);
             }
 
             // Also drop any keyboard-hook fallback registered under this name.
@@ -475,6 +819,8 @@ namespace AutoClicker.Native
                       .Append(" — key not reserved, another app owns it)");
                 }
                 if (mouse > 0) { sb.Append(", ").Append(mouse).Append(" mouse-button"); }
+                if (_variants.Count > 0) { sb.Append(", ").Append(_variants.Count).Append(" Shift/Ctrl version(s) reserved"); }
+                if (ExtraShiftCtrl) { sb.Append(" · extra Shift/Ctrl allowed"); }
                 return sb.ToString();
             }
             catch { return ""; }
@@ -512,8 +858,13 @@ namespace AutoClicker.Native
                     NativeMethods.UnregisterHotKey(_window.Handle, reg.Id);
                 }
             }
+            foreach (var reg in _variants.Values)
+            {
+                NativeMethods.UnregisterHotKey(_window.Handle, reg.Id);
+            }
 
             _registrations.Clear();
+            _variants.Clear();
             _nameToId.Clear();
             _selfCollisions.Clear();
 
@@ -526,6 +877,10 @@ namespace AutoClicker.Native
             _keyboardFallbacks.Clear();
             _comboHeld.Clear();
             _keyHook?.Stop();
+
+            // And the watched ones — the hooks above are down, so nothing can notice them any more.
+            _watched.Clear();
+            _watchHeld.Clear();
         }
 
         private void OnHotkeyMessage(int id)
@@ -541,6 +896,11 @@ namespace AutoClicker.Native
             if (_registrations.TryGetValue(id, out var reg))
             {
                 HotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(reg.Id, reg.Name));
+            }
+            else if (_variants.TryGetValue(id, out var version))
+            {
+                // A Shift/Ctrl version: it fires the binding it belongs to.
+                HotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(version.Id, version.Name));
             }
         }
 

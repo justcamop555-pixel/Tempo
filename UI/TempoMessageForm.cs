@@ -39,6 +39,10 @@ namespace AutoClicker.UI
                                  WinForms.MessageBoxButtons buttons, WinForms.MessageBoxIcon icon,
                                  WinForms.MessageBoxDefaultButton defaultButton)
         {
+            // Scaled with the screen at the end of this constructor (UiFactory.ScaleToScreen). On a 150%
+            // laptop the window kept its 100% size around 150% text, and the 19 pt glyph overflowed its
+            // 38 px badge. Its layout is written in 100% units, so text is measured in them too
+            // (UiFactory.Measure96) — measured in screen pixels and then scaled, it would count twice.
             var t = theme ?? CurrentTheme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = string.IsNullOrEmpty(caption) ? "Tempo" : Localization.T(caption);
@@ -85,14 +89,13 @@ namespace AutoClicker.UI
                 Text = body,
                 ForeColor = t.Text,
                 AutoSize = false,
+                // Shown as written, as MessageBox shows its text: with shortcut markers on, a lone "&"
+                // in a message ("…?placeId=1&linkCode=…") vanished and underlined the letter after it.
+                UseMnemonic = false,
                 Location = new Point(left, y),
                 Width = width
             };
-            using (var g = CreateGraphics())
-            {
-                label.Height = Math.Max(38, TextRenderer.MeasureText(
-                    g, body, label.Font, new Size(width, 0), TextFormatFlags.WordBreak).Height + 4);
-            }
+            label.Height = Math.Max(38, UiFactory.Measure96(body, Font, width, TextFormatFlags.NoPrefix).Height + 4);
             Controls.Add(label);
 
             y += Math.Max(badge.Height, label.Height) + 18;
@@ -122,6 +125,7 @@ namespace AutoClicker.UI
             }
 
             ClientSize = new Size(Width0, y + 34 + 20);
+            UiFactory.ScaleToScreen(this);
         }
 
         private static bool IsDefault(int count, int index, WinForms.MessageBoxDefaultButton def)
@@ -193,8 +197,9 @@ namespace AutoClicker.UI
                 Font = new Font("Segoe UI", 9.75f)
             };
             b.FlatAppearance.BorderColor = primary ? t.Accent : t.Border;
-            // Sized to its own translated caption, never below a comfortable minimum.
-            b.Width = Math.Max(96, TextRenderer.MeasureText(text, b.Font).Width + 28);
+            // Sized to its own translated caption, never below a comfortable minimum — in 100% units,
+            // like the rest of the layout (the window is scaled after it is built).
+            b.Width = Math.Max(96, UiFactory.Measure96(text, b.Font, 0, TextFormatFlags.Default).Width + 28);
             return b;
         }
 
@@ -208,10 +213,21 @@ namespace AutoClicker.UI
             {
                 using (var dlg = new TempoMessageForm(CurrentTheme, text, caption, buttons, icon, defaultButton))
                 {
-                    // CenterParent needs a visible owner; fall back to centring on screen.
+                    // CenterParent needs a visible owner. A hidden or minimised one — the main window
+                    // in the tray — has nothing to centre on, so the window the person is actually
+                    // using takes its place when it is one of Tempo's (the Accounts window beside a
+                    // game, say); only failing that does the message centre on the screen. It used to
+                    // go straight to the screen with no owner at all: on the primary monitor, behind a
+                    // Tempo window kept on top, while that window sat disabled by a dialog out of sight.
                     var ownerForm = owner as Form;
-                    if (ownerForm == null || !ownerForm.Visible)
+                    if (ownerForm == null || !ownerForm.Visible || ownerForm.WindowState == FormWindowState.Minimized)
                     {
+                        Form active = Form.ActiveForm;
+                        if (active != null && !ReferenceEquals(active, dlg) && active.Visible
+                            && active.WindowState != FormWindowState.Minimized)
+                        {
+                            return dlg.ShowDialog(active);
+                        }
                         dlg.StartPosition = FormStartPosition.CenterScreen;
                         return dlg.ShowDialog();
                     }

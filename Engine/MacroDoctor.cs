@@ -107,8 +107,13 @@ namespace AutoClicker.Engine
             }
 
             // ── 2. Coordinates that land off every monitor ───────────────────────
+            // Only the positions playback actually goes to. A release or a scroll happens
+            // wherever the pointer already is, so their stored X/Y are never used — and a
+            // release synthesised at the end of a take without mouse movement used to store
+            // int.MinValue there, which flagged a perfectly playable macro as broken and put
+            // it in the "won't play correctly" notice.
             Rectangle desktop = VirtualDesktop();
-            int offScreen = a.Count(s => UsesPosition(s.Type) && !desktop.Contains(s.X, s.Y));
+            int offScreen = PositionsPlayed(a).Count(s => !desktop.Contains(s.X, s.Y));
             if (offScreen > 0)
             {
                 found.Add(new MacroFinding
@@ -191,7 +196,10 @@ namespace AutoClicker.Engine
             // Same reasoning as the timing check: find the most-repeated pixel instead of
             // insisting every click shares it, so one stray click elsewhere in the macro
             // doesn't mask a hundred landing on an identical spot.
-            var clicks = a.Where(s => IsPress(s.Type)).ToList();
+            // Only presses playback aims: after a camera turn a press happens wherever the
+            // pointer is, so in a camera take every click "hits the same pixel" — the locked
+            // pointer's — and the finding would be noise.
+            var clicks = PositionsPlayed(a).Where(s => IsPress(s.Type)).ToList();
             if (clicks.Count >= 4)
             {
                 var hotspot = clicks.GroupBy(s => (s.X, s.Y)).OrderByDescending(g => g.Count()).First();
@@ -263,9 +271,9 @@ namespace AutoClicker.Engine
                     case MacroFixKind.ClampOffScreen:
                     {
                         Rectangle desktop = VirtualDesktop();
-                        foreach (MacroAction s in macro.Actions)
+                        foreach (MacroAction s in PositionsPlayed(macro.Actions))
                         {
-                            if (!UsesPosition(s.Type) || desktop.Contains(s.X, s.Y))
+                            if (desktop.Contains(s.X, s.Y))
                             {
                                 continue;
                             }
@@ -368,28 +376,41 @@ namespace AutoClicker.Engine
                    t == MacroActionType.Wheel;
         }
 
-        private static bool IsPress(MacroActionType t)
+        /// <summary>
+        /// The steps whose position playback moves the pointer to: moves, and presses — except
+        /// presses after a camera turn (MouseMoveRelative), which happen where the pointer is
+        /// until the next position move (see MacroPlayer).
+        /// </summary>
+        private static List<MacroAction> PositionsPlayed(List<MacroAction> actions)
         {
-            return t == MacroActionType.LeftDown || t == MacroActionType.RightDown ||
-                   t == MacroActionType.MiddleDown;
-        }
-
-        private static bool IsRelease(MacroActionType t)
-        {
-            return t == MacroActionType.LeftUp || t == MacroActionType.RightUp ||
-                   t == MacroActionType.MiddleUp;
-        }
-
-        private static MacroActionType ReleaseFor(MacroActionType down)
-        {
-            switch (down)
+            var played = new List<MacroAction>();
+            bool camera = false;
+            foreach (MacroAction s in actions)
             {
-                case MacroActionType.LeftDown: return MacroActionType.LeftUp;
-                case MacroActionType.RightDown: return MacroActionType.RightUp;
-                case MacroActionType.MiddleDown: return MacroActionType.MiddleUp;
-                default: return down;
+                if (s.Type == MacroActionType.MouseMoveRelative)
+                {
+                    camera = true;
+                }
+                else if (s.Type == MacroActionType.MouseMove)
+                {
+                    camera = false;
+                    played.Add(s);
+                }
+                else if (!camera && IsPress(s.Type))
+                {
+                    played.Add(s);
+                }
             }
+            return played;
         }
+
+        // Every mouse button, the side buttons included, through the one shared list — a
+        // stuck X1 is as stuck as a stuck left button.
+        private static bool IsPress(MacroActionType t) => MacroAction.IsButtonPress(t);
+
+        private static bool IsRelease(MacroActionType t) => MacroAction.IsButtonRelease(t);
+
+        private static MacroActionType ReleaseFor(MacroActionType down) => MacroAction.ReleaseOf(down);
 
         /// <summary>
         /// Walks the macro tracking what is currently held, and reports how many inputs
@@ -404,12 +425,7 @@ namespace AutoClicker.Engine
             foreach (MacroAction s in actions)
             {
                 if (IsPress(s.Type)) { buttons.Add(s.Type); }
-                else if (IsRelease(s.Type))
-                {
-                    buttons.Remove(s.Type == MacroActionType.LeftUp ? MacroActionType.LeftDown
-                                 : s.Type == MacroActionType.RightUp ? MacroActionType.RightDown
-                                 : MacroActionType.MiddleDown);
-                }
+                else if (IsRelease(s.Type)) { buttons.Remove(MacroAction.PressOf(s.Type)); }
                 else if (s.Type == MacroActionType.KeyDown) { keys.Add(s.VirtualKey); }
                 else if (s.Type == MacroActionType.KeyUp) { keys.Remove(s.VirtualKey); }
             }
@@ -428,12 +444,7 @@ namespace AutoClicker.Engine
                 if (UsesPosition(s.Type)) { lastX = s.X; lastY = s.Y; }
 
                 if (IsPress(s.Type)) { buttons.Add(s.Type); }
-                else if (IsRelease(s.Type))
-                {
-                    buttons.Remove(s.Type == MacroActionType.LeftUp ? MacroActionType.LeftDown
-                                 : s.Type == MacroActionType.RightUp ? MacroActionType.RightDown
-                                 : MacroActionType.MiddleDown);
-                }
+                else if (IsRelease(s.Type)) { buttons.Remove(MacroAction.PressOf(s.Type)); }
                 else if (s.Type == MacroActionType.KeyDown) { keys.Add(s.VirtualKey); }
                 else if (s.Type == MacroActionType.KeyUp) { keys.Remove(s.VirtualKey); }
             }

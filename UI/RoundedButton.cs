@@ -48,12 +48,51 @@ namespace AutoClicker.UI
         public Color AccentColor { get; set; } = Color.DodgerBlue;
 
         /// <summary>
-        /// Optional keyboard hint drawn small and dimmed at the right edge (e.g. "1" for
-        /// Ctrl+1). Tempo has had Ctrl+1…9 tab jumping for ages with nothing in the UI to
-        /// reveal it; this surfaces the shortcut where the user's eye already is, without
-        /// competing with the label. Empty (the default) draws nothing.
+        /// The row's keyboard shortcut ("1" for Ctrl+1), shown in place of its icon while
+        /// <see cref="RevealShortcut"/> is on — the window turns it on while Ctrl is held.
+        ///
+        /// It used to be a dimmed digit in a column of its own at the right of every row.
+        /// That column took 32 px from a 164 px row, so the longer labels no longer fitted
+        /// and the layout checker shrank them one by one: every language had one to three
+        /// tabs in a smaller font than the rest ("Multi-Point" in English, "Configurações"
+        /// in Portuguese), and nine digits sat beside the labels all the time.
         /// </summary>
         public string ShortcutHint { get; set; }
+
+        /// <summary>Draw <see cref="ShortcutHint"/> as a key cap where the icon is (see there).</summary>
+        public bool RevealShortcut { get; set; }
+
+        /// <summary>
+        /// A row in the navigation rail: nothing of its own at rest — the rail shows through
+        /// (<see cref="BackdropPainter"/>) — a soft lift under the pointer, and the accent
+        /// wash with its bar while <see cref="Selected"/>. Every unselected tab used to be a
+        /// box of its own with a lighter top edge, so the list read as a stack of buttons.
+        /// </summary>
+        public bool NavRow { get; set; }
+
+        /// <summary>Paints what is behind a <see cref="NavRow"/> (the rail's own backdrop). Null: BackColor.</summary>
+        public Action<Graphics, Control> BackdropPainter { get; set; }
+
+        /// <summary>
+        /// A <see cref="NavRow"/> whose page lives in a window of its own (Accounts, when it is set
+        /// to): a small ↗ at the right says a click brings up that window rather than a page here.
+        /// </summary>
+        public bool OpensWindow { get; set; }
+
+        /// <summary>Room the ↗ of <see cref="OpensWindow"/> takes at the right of the row.</summary>
+        private const int OpensWindowRoom = 22;
+
+        /// <summary>A <see cref="NavRow"/>'s text under the pointer (brighter than its resting ForeColor).</summary>
+        public Color HotForeColor { get; set; } = Color.Empty;
+
+        /// <summary>A <see cref="NavRow"/>'s text when selected. Empty: <see cref="AccentColor"/>.</summary>
+        public Color SelectedForeColor { get; set; } = Color.Empty;
+
+        /// <summary>
+        /// A <see cref="NavRow"/>'s icon when selected — its <see cref="IconColor"/>, moved where
+        /// it would not stand out 3:1 from the accent wash under it. Empty: IconColor.
+        /// </summary>
+        public Color SelectedIconColor { get; set; } = Color.Empty;
 
         private bool _hover;
         private bool _down;
@@ -161,6 +200,98 @@ namespace AutoClicker.UI
         protected override void OnResize(EventArgs e) { base.OnResize(e); UpdateRegion(); }
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); UpdateRegion(); }
 
+        /// <summary>
+        /// The narrowest width at which this button draws its caption WITHOUT cutting it —
+        /// including whatever it paints beside the text: an action glyph, a nav icon, a
+        /// shortcut digit.
+        ///
+        /// Lives here, next to OnPaint, because it is the same geometry. The layout checker
+        /// used to measure only the text, so a glyph button — the Clicker tab's Start and
+        /// Stop — needed ~24 px more than it was told, and a translated caption could be
+        /// cut to "Démar…" while the check reported the button as fine.
+        /// </summary>
+        internal int CaptionWidthNeeded(int clipPad) => CaptionWidthNeeded(clipPad, Text);
+
+        /// <summary>
+        /// <see cref="CaptionWidthNeeded(int)"/> for a caption this button can show besides the one it
+        /// has now (Start / Stop, Show / Hide): the layout checks measure every one of them.
+        /// </summary>
+        internal int CaptionWidthNeeded(int clipPad, string caption)
+        {
+            int text = MeasureCaption(caption);
+
+            if (Glyph != ActionGlyph.None && IconKind == NavIconKind.None)
+            {
+                // The glyph gives way when it does not fit (see GlyphFits), so what the
+                // CAPTION needs to stay uncut is the text alone.
+                return text + clipPad;
+            }
+
+            if (IconKind != NavIconKind.None)
+            {
+                // Icon, gap, label, margin. The shortcut takes no room: it is drawn over the
+                // icon, and only while Ctrl is held (see ShortcutHint).
+                float iconSize = Math.Min(Height - 16, 20);
+                if (iconSize < 10) { iconSize = 10; }
+                return (int)Math.Ceiling(14 + iconSize + 8) + text + 8 + (OpensWindow ? OpensWindowRoom : 0);
+            }
+
+            return text + clipPad;
+        }
+
+        /// <summary>
+        /// The width at which the action glyph AND the caption both fit — what the button
+        /// would like, as opposed to <see cref="CaptionWidthNeeded"/>, what it must have.
+        /// Mirrors OnPaint: glyph (12–17 px) + 7 px gap + text, with 8 px either side.
+        /// </summary>
+        internal int CaptionWidthWanted() => CaptionWidthWanted(Text);
+
+        /// <summary><see cref="CaptionWidthWanted()"/> for another caption this button can show.</summary>
+        internal int CaptionWidthWanted(string caption)
+        {
+            if (Glyph == ActionGlyph.None || IconKind != NavIconKind.None) { return CaptionWidthNeeded(8, caption); }
+            return GlyphRowWidth(8, caption);
+        }
+
+        /// <summary>
+        /// Glyph + gap + caption, starting 8 px in (as OnPaint places it), plus
+        /// <paramref name="rightMargin"/> before the button's edge.
+        /// </summary>
+        private int GlyphRowWidth(int rightMargin, string caption = null)
+        {
+            int text = MeasureCaption(caption ?? Text);
+            float gsize = Math.Min(Height - 12, 17);
+            if (gsize < 12) { gsize = 12; }
+            return (int)Math.Ceiling(8 + gsize + 7 + text + rightMargin);
+        }
+
+        /// <summary>
+        /// A caption's width as OnPaint draws it: with NoPrefix, so an "&amp;" is a character. Measured
+        /// without it, "&amp;" was taken for a shortcut marker and left out — a caption with one was
+        /// measured a character narrower than it is drawn.
+        /// </summary>
+        private int MeasureCaption(string caption)
+        {
+            return TextRenderer.MeasureText(caption ?? string.Empty, Font, new Size(int.MaxValue, int.MaxValue),
+                TextFormatFlags.NoPrefix).Width;
+        }
+
+        /// <summary>
+        /// Whether the action glyph fits beside the caption at the current width.
+        ///
+        /// When it does not, the caption is drawn ALONE. A glyph is decoration and the words
+        /// are the meaning: French "Enregistrer" and German "Speichern" beside their save
+        /// icons needed ~100 px in 80 px buttons, so the text was cut to fit a picture of a
+        /// floppy disk. Now the picture goes first.
+        ///
+        /// The test is the PAINT's, not the comfortable width above: OnPaint starts the glyph
+        /// 8 px in and lets the caption run to the edge, so 4 px of air on the right is
+        /// enough. Using the 8 px comfort margin here dropped the icon from English
+        /// "Humanize", which had always fitted with 7 px to spare.
+        /// </summary>
+        internal bool GlyphFits => Glyph == ActionGlyph.None || IconKind != NavIconKind.None
+                                   || GlyphRowWidth(4) <= Width;
+
         // Clip to the rounded shape so the corners reveal whatever is behind the button.
         private void UpdateRegion()
         {
@@ -188,6 +319,88 @@ namespace AutoClicker.UI
                 BeginFade();
             }
 
+            if (NavRow)
+            {
+                PaintNavRowBackground(g, rect);
+            }
+            else
+            {
+                PaintButtonBackground(g, rect);
+            }
+
+            // Active-tab indicator: a rounded accent bar down the left edge.
+            // Grows out from the middle as the tab becomes active, rather than blinking
+            // into place at full height.
+            if (_selT > 0.01f && Enabled)
+            {
+                int full = Math.Max(12, (int)(Height * 0.52));
+                int bh = Math.Max(2, (int)(full * _selT));
+                int by = (Height - bh) / 2;
+                using (var barPath = Rounded(new Rectangle(0, by, 5, bh), 2))
+                using (var barBrush = new SolidBrush(AccentColor))
+                {
+                    g.FillPath(barBrush, barPath);
+                }
+            }
+
+            PaintContent(g, rect);
+
+            // Where the keyboard is, when it is being used: an accent outline. A nav row had
+            // no focus cue at all, so tabbing into the rail left you guessing which row Enter
+            // would open.
+            if (NavRow && Focused && ShowFocusCues && Enabled)
+            {
+                using (var pen = new Pen(AccentColor, 1.5f))
+                using (var path = Rounded(Rectangle.Inflate(rect, -1, -1), Math.Max(2, CornerRadius - 1)))
+                {
+                    g.DrawPath(pen, path);
+                }
+            }
+        }
+
+        /// <summary>
+        /// A <see cref="NavRow"/>: whatever is behind it at rest, then — faded in on the clock —
+        /// a lift under the pointer (lighter on a dark theme, darker on a light one, where
+        /// "lighter" was all but invisible) and the accent wash when selected.
+        /// </summary>
+        private void PaintNavRowBackground(Graphics g, Rectangle rect)
+        {
+            try
+            {
+                if (BackdropPainter != null) { BackdropPainter(g, this); }
+                else { g.Clear(BackColor); }
+            }
+            catch { g.Clear(BackColor); }
+
+            if (!Enabled) { return; }
+
+            bool light = BackColor.GetBrightness() > 0.5f;
+            Color lift = light ? Shade(BackColor, -0.06) : Shade(BackColor, 0.10);
+            Color wash = Mix(BackColor, AccentColor, 0.20 + 0.10 * _hoverT);
+            Color fill = Mix(lift, wash, _selT);
+            float strength = Math.Max(_hoverT, _selT);
+            if (_down)
+            {
+                // A press stays instant — feedback for your own click should never lag.
+                fill = Shade(fill, light ? -0.06 : -0.08);
+                strength = 1f;
+            }
+            if (strength <= 0.01f) { return; }
+
+            int a = (int)Math.Round(255 * Math.Min(1f, strength));
+            using (var path = Rounded(rect, CornerRadius))
+            using (var brush = new LinearGradientBrush(
+                new Rectangle(0, 0, Math.Max(1, Width), Math.Max(2, Height)),
+                Color.FromArgb(a, Shade(fill, 0.07)), Color.FromArgb(a, Shade(fill, -0.05)),
+                LinearGradientMode.Vertical))
+            {
+                g.FillPath(brush, path);
+            }
+        }
+
+        /// <summary>Every other button: its own fill, a little lighter at the top.</summary>
+        private void PaintButtonBackground(Graphics g, Rectangle rect)
+        {
             Color back = BackColor;
             if (!Enabled)
             {
@@ -236,35 +449,38 @@ namespace AutoClicker.UI
                     }
                 }
             }
+        }
 
-            // Active-tab indicator: a rounded accent bar down the left edge.
-            // Grows out from the middle as the tab becomes active, rather than blinking
-            // into place at full height.
-            if (_selT > 0.01f && Enabled)
+        /// <summary>The glyph or icon and the caption, in the colours of the current state.</summary>
+        private void PaintContent(Graphics g, Rectangle rect)
+        {
+            Color fore;
+            if (!Enabled)
             {
-                int full = Math.Max(12, (int)(Height * 0.52));
-                int bh = Math.Max(2, (int)(full * _selT));
-                int by = (Height - bh) / 2;
-                using (var barPath = Rounded(new Rectangle(0, by, 5, bh), 2))
-                using (var barBrush = new SolidBrush(AccentColor))
-                {
-                    g.FillPath(barBrush, barPath);
-                }
+                fore = Mix(ForeColor, Color.Gray, 0.5);
+            }
+            else if (NavRow)
+            {
+                // Resting ink, brighter under the pointer, the selected colour when open.
+                Color hot = HotForeColor.IsEmpty ? ForeColor : HotForeColor;
+                Color sel = SelectedForeColor.IsEmpty ? AccentColor : SelectedForeColor;
+                fore = Mix(Mix(ForeColor, hot, _hoverT), sel, _selT);
+            }
+            else
+            {
+                fore = Mix(ForeColor, AccentColor, _selT);
             }
 
-            Color fore = Enabled
-                ? Mix(ForeColor, AccentColor, _selT)
-                : Mix(ForeColor, Color.Gray, 0.5);
-
             // Action glyph + centred label (New, Save, Start, …): draw the icon and the
-            // text together, centred as a group.
-            if (Glyph != ActionGlyph.None && IconKind == NavIconKind.None)
+            // text together, centred as a group — when both fit. When they do not, this
+            // falls through to the plain caption below and the glyph is left out.
+            if (Glyph != ActionGlyph.None && IconKind == NavIconKind.None && GlyphFits)
             {
-                Size ts = TextRenderer.MeasureText(Text ?? string.Empty, Font);
+                int textWidth = MeasureCaption(Text);
                 float gsize = Math.Min(Height - 12, 17);
                 if (gsize < 12) gsize = 12;
                 const float gap = 7f;
-                float totalW = gsize + gap + ts.Width;
+                float totalW = gsize + gap + textWidth;
                 float startX = (Width - totalW) / 2f;
                 if (startX < 8) startX = 8;
                 var gbox = new RectangleF(startX, (Height - gsize) / 2f, gsize, gsize);
@@ -283,58 +499,53 @@ namespace AutoClicker.UI
                 float iconSize = Math.Min(Height - 16, 20);
                 if (iconSize < 10) iconSize = 10;
                 var iconBox = new RectangleF(14f, (Height - iconSize) / 2f, iconSize, iconSize);
-                // The icon's own hue when one is set (disabled still greys out).
-                Color iconFore = IconColor.IsEmpty || !Enabled ? fore : IconColor;
-                NavIcons.Draw(g, IconKind, iconBox, iconFore);
+                // The icon's own hue when one is set (disabled still greys out). A nav row keeps
+                // it calm at rest — 72% of the way from its muted text to the hue — and shows the
+                // full hue under the pointer and when open.
+                Color iconFore;
+                if (IconColor.IsEmpty || !Enabled) { iconFore = fore; }
+                else if (NavRow)
+                {
+                    Color open = SelectedIconColor.IsEmpty ? IconColor : SelectedIconColor;
+                    iconFore = Mix(Mix(Mix(ForeColor, IconColor, 0.72), IconColor, _hoverT), open, _selT);
+                }
+                else { iconFore = IconColor; }
+
+                if (RevealShortcut && !string.IsNullOrEmpty(ShortcutHint) && Enabled)
+                {
+                    DrawKeyTip(g, iconBox, iconFore);
+                }
+                else
+                {
+                    NavIcons.Draw(g, IconKind, iconBox, iconFore);
+                }
                 textLeftPad = (int)(iconBox.Right + 8f);
             }
 
-            // Keyboard hint at the right edge, drawn BEFORE the label so the label's
-            // rectangle can be shortened to clear it (no overlap, ellipsis stays honest).
-            // Drawn with TextRenderer, like the label: GDI+ DrawString adds its own
-            // padding around the glyph and could push the digit past its rectangle and
-            // into the label (or clip it against the rounded edge). TextRenderer with
-            // NoPadding places it exactly where we measure it.
-            int hintReserve = 0;
-            if (!string.IsNullOrEmpty(ShortcutHint) && Enabled)
+            // The ↗ of a page that opens in its own window, at the right; the label stops short of it.
+            int trailing = 0;
+            if (NavRow && OpensWindow && Enabled)
             {
-                using (var hintFont = new Font(Font.FontFamily, Math.Max(6.5f, Font.Size - 2.5f), FontStyle.Regular))
+                float s = Math.Max(8f, Math.Min(11f, Height * 0.26f));
+                float ax = rect.Right - 12 - s, ay = (Height - s) / 2f;
+                var prevMode = g.SmoothingMode;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var pen = new Pen(Color.FromArgb(215, fore), 1.6f)
+                       { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                 {
-                    const TextFormatFlags hintFlags =
-                        TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter |
-                        TextFormatFlags.Right | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
-
-                    Size hs = TextRenderer.MeasureText(g, ShortcutHint, hintFont,
-                        new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
-
-                    // Clearance from the rounded right edge, so the digit never sits on
-                    // the border, and a wide gap before the label so the two never touch.
-                    int edgeGap = Math.Max(10, Padding.Right + 6);
-                    int labelGap = 14;
-
-                    var hintRect = new Rectangle(rect.Right - edgeGap - hs.Width, rect.Y,
-                                                 hs.Width, rect.Height);
-
-                    // A hint, not a badge — but it still has to be READABLE. `fore` is
-                    // already the muted text colour, so layering a low alpha on top
-                    // dimmed it twice and left the digit at ~1.1:1 against the row
-                    // (measured #224449 on #19403F — invisible). These values keep it
-                    // clearly quieter than the label while staying legible.
-                    // Rides the same eased values, so the shortcut digit brightens with
-                    // the row instead of stepping between three fixed alphas.
-                    int alpha = (int)(165 + 45 * _hoverT + 25 * _selT);
-                    TextRenderer.DrawText(g, ShortcutHint, hintFont, hintRect,
-                                          Color.FromArgb(alpha, fore), hintFlags);
-
-                    hintReserve = hs.Width + edgeGap + labelGap;
+                    g.DrawLine(pen, ax, ay + s, ax + s, ay);
+                    g.DrawLines(pen, new[]
+                    {
+                        new PointF(ax + s * 0.40f, ay), new PointF(ax + s, ay), new PointF(ax + s, ay + s * 0.60f)
+                    });
                 }
+                g.SmoothingMode = prevMode;
+                trailing = OpensWindowRoom;
             }
 
             TextFormatFlags flags = TextFormatFlags.VerticalCenter |
                 TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
-            var rectForText = new Rectangle(rect.X, rect.Y,
-                Math.Max(0, rect.Width - hintReserve), rect.Height);
-            var textRect = rectForText;
+            var textRect = new Rectangle(rect.X, rect.Y, Math.Max(0, rect.Width - trailing), rect.Height);
             switch (TextAlign)
             {
                 case ContentAlignment.TopLeft:
@@ -342,14 +553,14 @@ namespace AutoClicker.UI
                 case ContentAlignment.BottomLeft:
                     flags |= TextFormatFlags.Left;
                     textRect = new Rectangle(rect.X + textLeftPad, rect.Y,
-                        rect.Width - textLeftPad, rect.Height);
+                        Math.Max(0, rect.Width - textLeftPad - trailing), rect.Height);
                     break;
                 case ContentAlignment.TopRight:
                 case ContentAlignment.MiddleRight:
                 case ContentAlignment.BottomRight:
                     flags |= TextFormatFlags.Right;
                     textRect = new Rectangle(rect.X, rect.Y,
-                        rect.Width - Math.Max(0, Padding.Right), rect.Height);
+                        Math.Max(0, rect.Width - Math.Max(0, Padding.Right) - trailing), rect.Height);
                     break;
                 default:
                     flags |= TextFormatFlags.HorizontalCenter;
@@ -360,6 +571,29 @@ namespace AutoClicker.UI
             // TextRenderer painted it as a flat silhouette in the button's text colour.
             ColorEmoji.DrawText(g, Text, Font, textRect, fore, flags);
         }
+
+        /// <summary>
+        /// The row's shortcut digit on a key cap in the icon's colour, where the icon was — so
+        /// holding Ctrl turns the rail into a numbered keypad without moving anything.
+        /// </summary>
+        private void DrawKeyTip(Graphics g, RectangleF box, Color hue)
+        {
+            var r = Rectangle.Round(RectangleF.Inflate(box, 1f, 1f));
+            using (var path = Rounded(r, Math.Max(3, r.Height / 4)))
+            using (var cap = new SolidBrush(hue))
+            {
+                g.FillPath(cap, path);
+            }
+            using (var digit = new Font(Font.FontFamily, Math.Max(8f, r.Height * 0.66f), FontStyle.Bold, GraphicsUnit.Pixel))
+            {
+                TextRenderer.DrawText(g, ShortcutHint, digit, r, Theme.ReadableOn(hue),
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                    TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+            }
+        }
+
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); if (NavRow) { Invalidate(); } }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); if (NavRow) { Invalidate(); } }
 
         // Crisp little line/solid glyphs for the action buttons, drawn inside box.
         private static void DrawActionGlyph(Graphics g, ActionGlyph glyph, RectangleF box, Color color)

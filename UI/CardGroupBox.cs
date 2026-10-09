@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -18,10 +19,11 @@ namespace AutoClicker.UI
     public enum CardIcon
     {
         None, Clock, Cursor, Target, Repeat, Bolt, Wave, Gauge, Shield,
-        List, Play, Chart, Keyboard, Gear, Caption, Folder, Star, Pin
+        List, Play, Chart, Keyboard, Gear, Caption, Folder, Star, Pin, People,
+        Key, Lock
     }
 
-    public sealed class CardGroupBox : GroupBox
+    public sealed class CardGroupBox : GroupBox, IPaintedText
     {
         private Color _surface = Color.FromArgb(37, 37, 38);
         private Color _border = Color.FromArgb(64, 64, 64);
@@ -106,43 +108,110 @@ namespace AutoClicker.UI
             // Title: drawn UPPERCASE with light letter-spacing (tracking) for a clean
             // "section header" look, preceded by either a thin accent bar or a rounded
             // icon badge. (Undo the "&&" mnemonic escaping GroupBox text uses.)
-            string title = (Text ?? string.Empty).Replace("&&", "&").ToUpperInvariant();
+            string title = TitleText;
             if (title.Length > 0)
             {
-                float th = Font.GetHeight(g);
-                if (Icon == CardIcon.None)
+                bool badge = TitleGeometry(g, out Rectangle mark, out PointF at);
+                if (!badge)
                 {
-                    var bar = new Rectangle(12, 5, 3, 14);
-                    using (var barPath = Rounded(bar, 1))
+                    using (var barPath = Rounded(mark, 1))
                     using (var accentBar = new SolidBrush(_accent))
                     {
                         g.FillPath(accentBar, barPath);
-                    }
-                    using (var tb = new SolidBrush(_title))
-                    {
-                        DrawTracked(g, title, Font, tb, 22f, 5f + (14f - th) / 2f, 0.9f);
                     }
                 }
                 else
                 {
                     // A rounded icon badge with a tinted accent fill, then the title.
-                    var chip = new Rectangle(12, 4, 22, 22);
-                    using (var chipPath = Rounded(chip, 7))
+                    using (var chipPath = Rounded(mark, 7))
                     using (var chipFill = new SolidBrush(Blend(_accent, _surface, 0.28f)))
                     {
                         g.FillPath(chipFill, chipPath);
                     }
-                    DrawGlyph(g, Icon, chip, _accent);
-                    using (var tb = new SolidBrush(_title))
-                    {
-                        DrawTracked(g, title, Font, tb, chip.Right + 9f, chip.Top + (chip.Height - th) / 2f, 0.9f);
-                    }
+                    DrawGlyph(g, Icon, mark, _accent);
+                }
+                using (var tb = new SolidBrush(_title))
+                {
+                    DrawTracked(g, title, Font, tb, at.X, at.Y, TitleTracking);
                 }
             }
         }
 
+        private const float TitleTracking = 0.9f;
+
+        // The title's painted width, kept until the title or the font changes: measured a letter at a
+        // time, and asked on every paint.
+        private string _titleWidthFor;
+        private Font _titleWidthFont;
+        private float _titleWidth;
+
+        private float TitleTextWidth(Graphics g)
+        {
+            string title = TitleText;
+            if (!ReferenceEquals(_titleWidthFont, Font) || !string.Equals(_titleWidthFor, title, StringComparison.Ordinal))
+            {
+                _titleWidth = DrawTracked(g, title, Font, null, 0f, 0f, TitleTracking) - TitleTracking;
+                _titleWidthFor = title;
+                _titleWidthFont = Font;
+            }
+            return _titleWidth;
+        }
+
+        /// <summary>The title as painted: upper-case, with GroupBox's "&amp;&amp;" escaping undone.</summary>
+        private string TitleText => (Text ?? string.Empty).Replace("&&", "&").ToUpperInvariant();
+
+        /// <summary>
+        /// The accent bar or icon badge before the title, and where the title's text starts. True when
+        /// it is the badge.
+        ///
+        /// The badge is decoration and the title is the meaning: when the two do not both fit the card,
+        /// the title keeps the room and the plain accent bar stands in — as a button leaves its icon
+        /// off for its caption. German "VERWALTEN" ran into the border of the 124 px Manage card.
+        /// </summary>
+        private bool TitleGeometry(Graphics g, out Rectangle mark, out PointF text, bool? withBadge = null)
+        {
+            float th = Font.GetHeight(g);
+            // Painting, the card is its real size in pixels; the layout check can decide for itself in
+            // the window's units (see PaintedTexts) and say so here.
+            bool badge = withBadge ?? (Icon != CardIcon.None && 43f + TitleTextWidth(g) <= Width - 8);
+            if (!badge)
+            {
+                mark = new Rectangle(12, 5, 3, 14);
+                text = new PointF(22f, 5f + (14f - th) / 2f);
+            }
+            else
+            {
+                mark = new Rectangle(12, 4, 22, 22);
+                text = new PointF(mark.Right + 9f, mark.Top + (mark.Height - th) / 2f);
+            }
+            return badge;
+        }
+
+        /// <summary>
+        /// The title row — badge or bar, then the letter-spaced words — for the layout checks. Nothing
+        /// clips the title short of the card's own edge, so a long one runs into the rounded corner and
+        /// off the card; the room ends a little inside the border.
+        /// </summary>
+        IEnumerable<PaintedText> IPaintedText.PaintedTexts(Graphics g, float unitsPerPixel)
+        {
+            string title = TitleText;
+            if (title.Length == 0 || g == null) { yield break; }
+            float u = unitsPerPixel > 0f ? unitsPerPixel : 1f;
+            // The badge (or bar) and the title are painted in pixels; the card's width is a layout number.
+            int badgeRoom = (int)Math.Ceiling((43f + TitleTextWidth(g)) * u);
+            bool badge = Icon != CardIcon.None && badgeRoom <= Width - (int)Math.Ceiling(8 * u);
+            TitleGeometry(g, out Rectangle mark, out PointF at, badge);
+            float th = Font.GetHeight(g);
+            float right = at.X + TitleTextWidth(g);
+            var ink = Rectangle.FromLTRB((int)(mark.Left * u), (int)Math.Floor(Math.Min(mark.Top, at.Y) * u),
+                                         (int)Math.Ceiling(right * u), (int)Math.Ceiling(Math.Max(mark.Bottom, at.Y + th) * u));
+            var room = Rectangle.FromLTRB(ink.Left, 0, Math.Max(ink.Left, Width - (int)Math.Ceiling(8 * u)), ink.Bottom + 2);
+            yield return new PaintedText(title, ink, room);
+        }
+
         // Draws text with a little extra space between letters (tracking), used for the
-        // uppercase card titles. Returns the x just past the last glyph.
+        // uppercase card titles. Returns the x just past the last glyph. With no brush it only
+        // measures, by the same steps.
         private static float DrawTracked(Graphics g, string text, Font font, Brush brush, float x, float y, float tracking)
         {
             StringFormat sf = StringFormat.GenericTypographic; // shared static — do not dispose
@@ -158,7 +227,7 @@ namespace AutoClicker.UI
                     continue;
                 }
                 string s = ch.ToString();
-                g.DrawString(s, font, brush, x, y, sf);
+                if (brush != null) { g.DrawString(s, font, brush, x, y, sf); }
                 x += g.MeasureString(s, font, PointF.Empty, sf).Width + tracking;
             }
             return x;
@@ -172,14 +241,17 @@ namespace AutoClicker.UI
                 (int)(a.B * t + b.B * (1 - t)));
         }
 
-        // Minimal, crisp line glyphs drawn inside the given chip rectangle.
-        private static void DrawGlyph(Graphics g, CardIcon icon, Rectangle chip, Color color)
+        // Minimal, crisp line glyphs drawn inside the given chip rectangle. Shared with IconChip, so
+        // a glyph means the same thing on a card's title and beside a line of text. The padding and
+        // the stroke follow the chip's size (5 px and 1.6 px on the title's 22 px chip).
+        internal static void DrawGlyph(Graphics g, CardIcon icon, Rectangle chip, Color color)
         {
             var prev = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             // Inner drawing area, padded inside the chip.
-            var r = Rectangle.Inflate(chip, -5, -5);
-            using (var pen = new Pen(color, 1.6f))
+            int inset = Math.Max(5, (int)Math.Round(chip.Width * 5 / 22f));
+            var r = Rectangle.Inflate(chip, -inset, -inset);
+            using (var pen = new Pen(color, Math.Max(1.6f, chip.Width * 1.6f / 22f)))
             using (var br = new SolidBrush(color))
             {
                 pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; pen.LineJoin = LineJoin.Round;
@@ -282,6 +354,38 @@ namespace AutoClicker.UI
                         g.DrawEllipse(pen, cx - 3, r.Top, 6, 6);
                         g.DrawLine(pen, cx, r.Top + 6, cx, r.Bottom);
                         break;
+                    case CardIcon.People:
+                        // Two heads and shoulders, the one in front a little larger.
+                        g.DrawEllipse(pen, r.Left + 1, r.Top + 1, 4, 4);
+                        g.DrawArc(pen, r.Left - 1, r.Top + 6, 8, 8, 200, 140);
+                        g.DrawEllipse(pen, cx, r.Top, 5, 5);
+                        g.DrawArc(pen, cx - 2, r.Top + 6, 10, 9, 200, 140);
+                        break;
+                    case CardIcon.Key:
+                    {
+                        // A ring at the left, the shaft to the right, two teeth hanging from it.
+                        float ring = r.Height * 0.62f;
+                        var bow = new RectangleF(r.Left, cy - ring / 2f, ring, ring);
+                        g.DrawEllipse(pen, bow);
+                        float shaftY = cy;
+                        g.DrawLine(pen, bow.Right, shaftY, r.Right, shaftY);
+                        float tooth = r.Height * 0.26f;
+                        g.DrawLine(pen, r.Right - r.Width * 0.08f, shaftY, r.Right - r.Width * 0.08f, shaftY + tooth);
+                        g.DrawLine(pen, r.Right - r.Width * 0.30f, shaftY, r.Right - r.Width * 0.30f, shaftY + tooth * 0.75f);
+                        break;
+                    }
+                    case CardIcon.Lock:
+                    {
+                        // A body in the lower part and the shackle's arch above it.
+                        float bodyTop = r.Top + r.Height * 0.42f;
+                        var body = new RectangleF(r.Left + r.Width * 0.08f, bodyTop, r.Width * 0.84f, r.Bottom - bodyTop);
+                        g.DrawRectangle(pen, body.X, body.Y, body.Width, body.Height);
+                        float sw = body.Width * 0.62f;
+                        var shackle = new RectangleF(cx - sw / 2f, r.Top, sw, (bodyTop - r.Top) * 2f);
+                        g.DrawArc(pen, shackle, 180, 180);
+                        g.FillEllipse(br, cx - 1.2f, body.Y + body.Height * 0.38f, 2.4f, 2.4f);
+                        break;
+                    }
                 }
             }
             g.SmoothingMode = prev;

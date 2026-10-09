@@ -48,6 +48,8 @@ namespace AutoClicker.UI
         private readonly ComboBox _category;
         private readonly CheckBox _keybinds;
         private readonly CheckBox _appearance;
+        private readonly CheckBox _updateKeybinds;     // only when the profile already has a snapshot
+        private readonly CheckBox _updateAppearance;
         private readonly Label _preview;
 
         private readonly List<Button> _glyphButtons = new List<Button>();
@@ -65,10 +67,15 @@ namespace AutoClicker.UI
         public bool CaptureKeybinds => _keybinds.Checked;
         public bool CaptureAppearance => _appearance.Checked;
 
+        /// <summary>Replace the keybinds already saved with the profile by the ones in use now.</summary>
+        public bool UpdateKeybinds => _updateKeybinds != null && _updateKeybinds.Checked;
+
+        /// <summary>Replace the look already saved with the profile by the one in use now.</summary>
+        public bool UpdateAppearance => _updateAppearance != null && _updateAppearance.Checked;
+
         public ProfileDetailsForm(Theme theme, ClickProfile profile)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             _theme = theme ?? Theme.ForKind(ThemeKind.Dark);
             profile = profile ?? new ClickProfile("New Profile");
 
@@ -76,7 +83,8 @@ namespace AutoClicker.UI
             _colorArgb = profile.ColorTagArgb;
 
             Text = Localization.T("Profile details");
-            Size = new Size(486, 512);
+            // The client area (was a 486×512 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(470, 473);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -90,17 +98,21 @@ namespace AutoClicker.UI
             // ── Name ──────────────────────────────────────────────────────────
             Controls.Add(UiFactory.Label("Name", 18, y, FontStyle.Bold));
             _name = UiFactory.Text(18, y + 20, 434, profile.Name);
-            _name.MaxLength = 60;
+            _name.MaxLength = ClickProfile.MaxNameLength;
             Controls.Add(_name);
             y += 54;
 
             // ── Description ───────────────────────────────────────────────────
-            Controls.Add(UiFactory.Label("Description", 18, y, FontStyle.Bold));
-            var descHint = UiFactory.Caption("Shown under the name on the profile card.", 90, y + 2);
+            var descLabel = UiFactory.Label("Description", 18, y, FontStyle.Bold);
+            Controls.Add(descLabel);
+            // After the label, not at a fixed x=90: the bold German "Beschreibung" ran 11 px
+            // into the hint.
+            var descHint = UiFactory.Caption("Shown under the name on the profile card.",
+                                             Math.Max(90, descLabel.Right + 8), y + 2);
             descHint.ForeColor = _theme.TextMuted;
             Controls.Add(descHint);
             _description = UiFactory.Text(18, y + 20, 434, profile.Description ?? "");
-            _description.MaxLength = 120;
+            _description.MaxLength = ClickProfile.MaxDescriptionLength;
             Controls.Add(_description);
             y += 54;
 
@@ -160,8 +172,18 @@ namespace AutoClicker.UI
             y += 40;
 
             // ── Colour tag ────────────────────────────────────────────────────
-            Controls.Add(UiFactory.Label("Colour tag", 18, y + 6, FontStyle.Bold));
+            var colourLabel = UiFactory.Label("Colour tag", 18, y + 6, FontStyle.Bold);
+            Controls.Add(colourLabel);
+            // The nine swatches exactly fill the row after an English label, so a longer one
+            // ("Etiqueta de color", "Étiquette de couleur", "Farbmarkierung") ran up to 34 px
+            // under the first swatch. When the label needs the room, the swatches take their
+            // own line beneath it — the way the Icon grid above already sits.
             int sx = 96;
+            if (colourLabel.Right + 8 > sx)
+            {
+                sx = 18;
+                y += 24;
+            }
             for (int i = 0; i < Swatches.Length; i++)
             {
                 Color c = Swatches[i];
@@ -199,10 +221,32 @@ namespace AutoClicker.UI
             Controls.Add(_keybinds);
             y += 24;
 
+            // A snapshot, once taken, is kept as it was: re-taking it on every Save replaced the
+            // profile's saved keys and look with whatever happened to be in use, silently, when the
+            // dialog was only opened to change an emoji. Updating it is a choice of its own, and
+            // these boxes are the only way to make it — before, it took unticking, saving,
+            // reopening and ticking again.
+            if (profile.Keybinds != null)
+            {
+                _updateKeybinds = UiFactory.Check("Update the saved keybinds to the ones I use now", 38, y, false);
+                Controls.Add(_updateKeybinds);
+                _keybinds.CheckedChanged += (s, e) => _updateKeybinds.Enabled = _keybinds.Checked;
+                y += 24;
+            }
+
             _appearance = UiFactory.Check("Also restore my theme, overlay and caption look", 18, y,
                 profile.AppSettings != null);
             Controls.Add(_appearance);
-            y += 26;
+            y += 24;
+
+            if (profile.AppSettings != null)
+            {
+                _updateAppearance = UiFactory.Check("Update the saved look to the one I use now", 38, y, false);
+                Controls.Add(_updateAppearance);
+                _appearance.CheckedChanged += (s, e) => _updateAppearance.Enabled = _appearance.Checked;
+                y += 24;
+            }
+            y += 2;
 
             const int NoteWidth = 434;
             var note = UiFactory.Caption(
@@ -217,10 +261,8 @@ namespace AutoClicker.UI
             // ended up underneath it. Measuring the translated text at the width it
             // will actually occupy, then placing the buttons below whatever came back
             // and sizing the window to match, makes the dialog fit in any language.
-            int noteHeight = TextRenderer.MeasureText(
-                note.Text, note.Font,
-                new Size(NoteWidth, int.MaxValue),
-                TextFormatFlags.WordBreak).Height;
+            // In 100% units: the window is scaled after it is built (UiFactory.Measure96).
+            int noteHeight = UiFactory.Measure96(note.Text, note.Font, NoteWidth, TextFormatFlags.Default).Height;
 
             note.Size = new Size(NoteWidth, noteHeight);
             Controls.Add(note);
@@ -233,6 +275,12 @@ namespace AutoClicker.UI
 
             var cancel = UiFactory.Button("Cancel", 366, buttonsY, 86, 32);
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
+
+            // Right-aligned from their own captions ("Enregistrer" was cut at 86 px).
+            UiFactory.FitToText96(ok, 86, 22);
+            UiFactory.FitToText96(cancel, 86, 22);
+            cancel.Left = 452 - cancel.Width;
+            ok.Left = cancel.Left - 8 - ok.Width;
 
             Controls.Add(ok);
             Controls.Add(cancel);
@@ -255,6 +303,7 @@ namespace AutoClicker.UI
             }
             HighlightGlyphs();
             HighlightSwatches();
+            UiFactory.ScaleToScreen(this);
         }
 
         private void OnSave(object sender, EventArgs e)
@@ -326,13 +375,23 @@ namespace AutoClicker.UI
                 {
                     profile.Keybinds = null;              // explicitly turned off
                 }
-                else if (!hadSnapshot && live != null)
+                else if ((!hadSnapshot || form.UpdateKeybinds) && live != null)
                 {
-                    profile.Keybinds = ProfileKeybinds.CaptureFrom(live);   // newly ticked
+                    profile.Keybinds = ProfileKeybinds.CaptureFrom(live);   // newly ticked, or asked to
                 }
-                profile.AppSettings = form.CaptureAppearance && live != null
-                    ? ProfileAppSettings.CaptureFrom(live)
-                    : null;
+
+                // The look by the same rule. It was re-captured on every OK — the exact bug fixed
+                // above for keybinds, left in the line below it: changing a profile's emoji while
+                // another theme was on replaced the look this profile existed to restore.
+                bool hadLook = profile.AppSettings != null;
+                if (!form.CaptureAppearance)
+                {
+                    profile.AppSettings = null;
+                }
+                else if ((!hadLook || form.UpdateAppearance) && live != null)
+                {
+                    profile.AppSettings = ProfileAppSettings.CaptureFrom(live);
+                }
 
                 return true;
             }

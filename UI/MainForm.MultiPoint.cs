@@ -76,12 +76,14 @@ namespace AutoClicker.UI
             // and a vertical scrollbar — so the last "Rep" column is never clipped once the
             // list has enough rows to scroll (it used to be cut off at the right edge).
             _pointsList.Columns.Add("#", 36);
-            _pointsList.Columns.Add(Utils.Localization.T("Label"), 130);
+            // Dwell 58, not 54 (Label gives up the 4): French "Attente" needed 46 px of the 42 its title
+            // had, and was cut for as long as the list was on screen.
+            _pointsList.Columns.Add(Utils.Localization.T("Label"), 126);
             _pointsList.Columns.Add("X", 56, HorizontalAlignment.Right);
             _pointsList.Columns.Add("Y", 56, HorizontalAlignment.Right);
             _pointsList.Columns.Add(Utils.Localization.T("Button"), 72);
             _pointsList.Columns.Add(Utils.Localization.T("Type"), 72);
-            _pointsList.Columns.Add(Utils.Localization.T("Dwell"), 54, HorizontalAlignment.Right);
+            _pointsList.Columns.Add(Utils.Localization.T("Dwell"), 58, HorizontalAlignment.Right);
             _pointsList.Columns.Add(Utils.Localization.T("Rep"), 52, HorizontalAlignment.Right);
             // The columns add up to 24px less than the control, leaving dead space at
             // the right edge. ThemedListView's own OnSizeChanged fires when Width is
@@ -200,6 +202,7 @@ namespace AutoClicker.UI
             };
             page.Controls.Add(_pointsEmptyHint);
             _pointsEmptyHint.BringToFront();
+            LayoutFitter.DeclareOverlay(_pointsEmptyHint, "drawn on top of the points list while it is empty");
 
             // The two things that stop this page's sequence working, given room to say
             // themselves. They started life spliced onto the cycle summary at the top,
@@ -231,7 +234,7 @@ namespace AutoClicker.UI
             page.Controls.Add(_pointsSaveBtn);
             page.Controls.Add(_pointsSaveNote);
 
-            ShiftBelowIntro(page, help, helpText, 720, firstRowY: 52);
+            ShiftBelowIntro(page, help, 720, firstRowY: 52);
 
             _tabs.TabPages.Add(page);
         }
@@ -285,9 +288,9 @@ namespace AutoClicker.UI
                     // aligned, so "3000 ⚠" ellipsised to "3000 …" — a marker you cannot
                     // see is worse than none, because the row still looks ordinary.
                     item.SubItems[1].Text = "⚠ " + p.Label;
-                    item.ToolTipText = Utils.Localization.T(
+                    item.ToolTipText = TipStyle.Wrap(Utils.Localization.T(
                         "This point is not on any monitor. The click will be clamped to the "
-                        + "screen edge and land somewhere you didn't choose.");
+                        + "screen edge and land somewhere you didn't choose."));
                 }
 
                 if (!p.Enabled)
@@ -870,7 +873,7 @@ namespace AutoClicker.UI
             }
 
             var confirm = MessageBox.Show(this,
-                "Remove all points?",
+                Utils.Localization.T("Remove all points?"),
                 "Tempo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
@@ -1003,6 +1006,12 @@ namespace AutoClicker.UI
 
             ApplyAntiFreezeToEngine();
             SettingsManager.Save(_settings);
+
+            // The checkbox's event is suppressed above, so the lines that quote the cap would
+            // otherwise keep saying "max 200" with protection off (or nothing, with it on).
+            UpdateIntervalHint();
+            RepaintSpeedLabel();
+
             _statusState.Text = Utils.Localization.T(
                 _settings.AntiFreezeEnabled ? "Anti-freeze on" : "Anti-freeze off");
         }

@@ -35,11 +35,42 @@ namespace AutoClicker.Engine
         private readonly IntervalScheduler _scheduler = new IntervalScheduler();
 
         private Thread _worker;
+        // The CURRENT run's stop signal. Each run gets its own (see Start): a worker that
+        // outlives its run keeps the signal that was set for it, instead of sharing one that
+        // the next Start resets underneath it.
         private ManualResetEventSlim _stopSignal = new ManualResetEventSlim(false);
         private volatile bool _running;
         private volatile bool _paused;
         private volatile bool _resyncScheduler;
         private EngineState _state = EngineState.Idle;
+
+        /// <summary>
+        /// Bumped by every Start. A worker belongs to exactly one generation and gives up the
+        /// moment it is no longer the current one.
+        ///
+        /// Stop waits only 2 s for the worker. When that ran out — a long "hold each click" was
+        /// uninterruptible — and Start was pressed again, the OLD worker found the engine running
+        /// again and simply carried on: two workers clicking at once, the old one with the old
+        /// profile. And its exit path cleared the running flag, stopping the NEW run under the
+        /// user's feet.
+        /// </summary>
+        private int _runGeneration;
+
+        /// <summary>What one run's worker needs of its own: which run it is, and its stop signal.</summary>
+        private sealed class RunContext
+        {
+            public readonly int Generation;
+            public readonly ManualResetEventSlim Stop;
+            public RunContext(int generation, ManualResetEventSlim stop) { Generation = generation; Stop = stop; }
+        }
+
+        /// <summary>
+        /// Real clicks per press for the actuation just made — 2 for a double click, 4 for a
+        /// quadruple, 1 for a key. The rate cap and the reported rate are in CLICKS, like every
+        /// other "CPS" in Tempo; the cap used to count presses, so a double click at "max 200"
+        /// sent 400 clicks a second.
+        /// </summary>
+        private volatile int _lastPressClicks = 1;
 
         // ── Anti-freeze protection ────────────────────────────────────────────
         private readonly CpuMonitor _cpuMonitor = new CpuMonitor();
@@ -54,7 +85,10 @@ namespace AutoClicker.Engine
         /// <summary>Latest measured process CPU usage (0–100%).</summary>
         public double MeasuredCpuPercent => _measuredCpu;
 
-        /// <summary>The actual click rate the engine is currently issuing.</summary>
+        /// <summary>
+        /// The actual click rate the engine is currently issuing, in real CLICKS a second (a
+        /// double click counts two) — the same count as the live CPS and the statistics.
+        /// </summary>
         public double EffectiveClicksPerSecond => _effectiveCps;
 
         /// <summary>True while anti-freeze is actively slowing the configured rate.</summary>
@@ -130,7 +164,11 @@ namespace AutoClicker.Engine
                 // when the run stops (useful for Fixed / Multi-Point modes).
                 _cursorStartValid = ScreenGeometry.TryGetCursorPosition(out _cursorStartX, out _cursorStartY);
 
-                _stopSignal.Reset();
+                // A fresh signal for this run rather than resetting the shared one: a worker from
+                // an earlier run may not have seen its signal yet, and a Reset would un-stop it.
+                _stopSignal = new ManualResetEventSlim(false);
+                var run = new RunContext(Interlocked.Increment(ref _runGeneration), _stopSignal);
+                _lastPressClicks = 1;
                 _running = true;
                 _paused = false;
                 LastRunCompletedNaturally = true;   // Stop() flips this off.
@@ -145,7 +183,7 @@ namespace AutoClicker.Engine
                 _mpDirection = 1;
                 _mpRepeatLeft = 0;
 
-                _worker = new Thread(WorkerLoop)
+                _worker = new Thread(() => WorkerLoop(run))
                 {
                     IsBackground = true,
                     Name = "AutoClicker.Worker"
@@ -295,11 +333,17 @@ namespace AutoClicker.Engine
         //  Worker
         // ─────────────────────────────────────────────────────────────────────
 
-        private void WorkerLoop()
+        /// <summary>True while <paramref name="run"/> is the engine's current, running run.</summary>
+        private bool IsCurrent(RunContext run)
         {
+            return _running && Volatile.Read(ref _runGeneration) == run.Generation;
+        }
+
+        private void WorkerLoop(RunContext run)
+        {
+            ClickProfile p = null;
             try
             {
-                ClickProfile p;
                 lock (_sync)
                 {
                     p = _activeProfile;
@@ -313,10 +357,10 @@ namespace AutoClicker.Engine
                 switch (p.Mode)
                 {
                     case ClickMode.Burst:
-                        RunBurstLoop(p);
+                        RunBurstLoop(p, run);
                         break;
                     default:
-                        RunIntervalLoop(p);
+                        RunIntervalLoop(p, run);
                         break;
                 }
             }
@@ -326,43 +370,66 @@ namespace AutoClicker.Engine
             }
             finally
             {
-                _running = false;
-
-                // Ensure the state flag returns to Idle even when the run ended on
-                // its own (e.g. a fixed repeat count completed) rather than via
-                // Stop(). Without this, a subsequent Start() would not raise a
-                // state-change because the stored state would still read Running.
-                lock (_sync)
+                if (!FinishRun(p, run))
                 {
-                    _statistics.EndRun();
-                    SetState(EngineState.Idle);
+                    // A newer run started after this one was stopped. The running flag, the
+                    // state, the statistics, the cursor and "run completed" all belong to THAT
+                    // run now, so this worker left them alone.
+                    Logger.Warn("[Clicker] a stopped run's worker ended after a new run had started; it left the new run untouched.");
                 }
-
-                // Optionally return the cursor to where it was before the run, for
-                // Fixed / Multi-Point modes that moved it away. Skipped in background
-                // ("don't move my mouse") mode — the cursor was never moved, so
-                // restoring it would instead YANK the user's real mouse back to where
-                // it was when they started, which is exactly what the mode avoids.
-                try
-                {
-                    if (_cursorStartValid && _activeProfile != null && _activeProfile.RestoreCursorOnStop &&
-                        !_activeProfile.BackgroundClick &&
-                        (_activeProfile.PositionMode == PositionMode.FixedPosition ||
-                         _activeProfile.PositionMode == PositionMode.MultiPoint))
-                    {
-                        InputSimulator.MoveTo(_cursorStartX, _cursorStartY);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.Warn("[Clicker] could not restore cursor position: " + ex.Message);
-                }
-
-                RunCompleted?.Invoke(this, EventArgs.Empty);
             }
         }
 
-        private void RunIntervalLoop(ClickProfile p)
+        /// <summary>
+        /// The end of <paramref name="run"/>: idle state, statistics, the cursor, and the event.
+        /// Returns false, having touched nothing, when a newer run has already started.
+        /// </summary>
+        private bool FinishRun(ClickProfile p, RunContext run)
+        {
+            // Ensure the state flag returns to Idle even when the run ended on
+            // its own (e.g. a fixed repeat count completed) rather than via
+            // Stop(). Without this, a subsequent Start() would not raise a
+            // state-change because the stored state would still read Running.
+            //
+            // Checked and cleared under the lock Start takes to begin a run, so a Start can't
+            // land between "is this still my run?" and clearing the running flag — which would
+            // stop the brand-new run as it began.
+            lock (_sync)
+            {
+                if (Volatile.Read(ref _runGeneration) != run.Generation)
+                {
+                    return false;
+                }
+                _running = false;
+                _statistics.EndRun();
+                SetState(EngineState.Idle);
+            }
+
+            // Optionally return the cursor to where it was before the run, for
+            // Fixed / Multi-Point modes that moved it away. Skipped in background
+            // ("don't move my mouse") mode — the cursor was never moved, so
+            // restoring it would instead YANK the user's real mouse back to where
+            // it was when they started, which is exactly what the mode avoids.
+            try
+            {
+                if (_cursorStartValid && p != null && p.RestoreCursorOnStop &&
+                    !p.BackgroundClick &&
+                    (p.PositionMode == PositionMode.FixedPosition ||
+                     p.PositionMode == PositionMode.MultiPoint))
+                {
+                    InputSimulator.MoveTo(_cursorStartX, _cursorStartY);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Clicker] could not restore cursor position: " + ex.Message);
+            }
+
+            RunCompleted?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        private void RunIntervalLoop(ClickProfile p, RunContext run)
         {
             long performed = 0;
             long max = p.RepeatMode == RepeatMode.FixedCount ? p.RepeatCount : long.MaxValue;
@@ -372,7 +439,7 @@ namespace AutoClicker.Engine
 
             _scheduler.Start();
 
-            while (_running && performed < max)
+            while (IsCurrent(run) && performed < max)
             {
                 // Stop once the configured run duration has elapsed.
                 if (durationMs > 0 && _runClock.ElapsedMilliseconds >= durationMs)
@@ -381,7 +448,7 @@ namespace AutoClicker.Engine
                 }
 
                 // Block here while paused; realign the schedule on resume.
-                if (WaitWhilePaused())
+                if (WaitWhilePaused(run))
                 {
                     break;
                 }
@@ -391,11 +458,11 @@ namespace AutoClicker.Engine
                     _resyncScheduler = false;
                 }
 
-                long interval = PerformOneActuation(p);
+                long interval = PerformOneActuation(p, run);
                 performed++;
                 System.Threading.Interlocked.Increment(ref _runPerformed);
 
-                if (!_running || performed >= max)
+                if (!IsCurrent(run) || performed >= max)
                 {
                     break;
                 }
@@ -411,14 +478,14 @@ namespace AutoClicker.Engine
                 // Wait the remaining time until the next scheduled slot rather than
                 // a fixed interval, so click execution time does not slow the rate.
                 double wait = _scheduler.NextWait(effInterval);
-                if (WaitInterruptible(wait))
+                if (WaitInterruptible(wait, run))
                 {
                     break; // stop requested
                 }
             }
         }
 
-        private void RunBurstLoop(ClickProfile p)
+        private void RunBurstLoop(ClickProfile p, RunContext run)
         {
             long performed = 0;
             long max = p.RepeatMode == RepeatMode.FixedCount ? p.RepeatCount : long.MaxValue;
@@ -426,14 +493,14 @@ namespace AutoClicker.Engine
                 ? (long)p.RepeatDurationSeconds * 1000L : 0;
             // run clock: engine-level _runClock, restarted in Start()
 
-            while (_running && performed < max)
+            while (IsCurrent(run) && performed < max)
             {
                 if (durationMs > 0 && _runClock.ElapsedMilliseconds >= durationMs)
                 {
                     break;
                 }
 
-                if (WaitWhilePaused())
+                if (WaitWhilePaused(run))
                 {
                     break;
                 }
@@ -444,14 +511,14 @@ namespace AutoClicker.Engine
                 _scheduler.Start();
                 _resyncScheduler = false;
 
-                for (int i = 0; i < burst && _running && performed < max
+                for (int i = 0; i < burst && IsCurrent(run) && performed < max
                      && (durationMs == 0 || _runClock.ElapsedMilliseconds < durationMs); i++)
                 {
-                    long interval = PerformOneActuation(p);
+                    long interval = PerformOneActuation(p, run);
                     performed++;
                     System.Threading.Interlocked.Increment(ref _runPerformed);
 
-                    if (i < burst - 1 && _running && performed < max)
+                    if (i < burst - 1 && IsCurrent(run) && performed < max)
                     {
                         // Anti-freeze applies to bursts EXACTLY as it does to the
                         // interval loop. It used to be missing here entirely, which
@@ -472,14 +539,14 @@ namespace AutoClicker.Engine
                         double effInterval = ApplyAntiFreeze(desired);
 
                         double wait = _scheduler.NextWait(effInterval);
-                        if (WaitInterruptible(wait))
+                        if (WaitInterruptible(wait, run))
                         {
                             return;
                         }
                     }
                 }
 
-                if (!_running || performed >= max)
+                if (!IsCurrent(run) || performed >= max)
                 {
                     break;
                 }
@@ -497,7 +564,7 @@ namespace AutoClicker.Engine
                 // rate cap as well. Otherwise a burst size of 1 with a 0 ms pause would
                 // never once hit the in-burst wait above and would sail straight past
                 // anti-freeze again — the same hole, just one level down.
-                if (WaitInterruptible(ApplyAntiFreeze(burstPause)))
+                if (WaitInterruptible(ApplyAntiFreeze(burstPause), run))
                 {
                     break;
                 }
@@ -519,7 +586,8 @@ namespace AutoClicker.Engine
         /// same batched <see cref="InputSimulator"/> calls as before (no behaviour
         /// change). When it's positive, the button is held down for that long.
         /// </summary>
-        private static void Actuate(bool move, int x, int y, MouseButtonType button, ClickStyle style, int holdMs, bool background = false)
+        private static void Actuate(bool move, int x, int y, MouseButtonType button, ClickStyle style, int holdMs,
+                                    ManualResetEventSlim stop, bool background = false)
         {
             // Background mode: post the click to the window at (x, y) WITHOUT moving
             // the real cursor (the "second mouse"). Only meaningful when a target point
@@ -528,7 +596,7 @@ namespace AutoClicker.Engine
             {
                 if (holdMs > 0)
                 {
-                    InputSimulator.BackgroundClickHeld(x, y, button, style, holdMs);
+                    InputSimulator.BackgroundClickHeld(x, y, button, style, holdMs, stop);
                 }
                 else
                 {
@@ -543,7 +611,9 @@ namespace AutoClicker.Engine
                 {
                     InputSimulator.MoveTo(x, y);
                 }
-                InputSimulator.ClickStyledHeld(button, style, holdMs);
+                // The hold waits on the run's stop signal, so Stop cuts it short — and the
+                // button is released either way.
+                InputSimulator.ClickStyledHeld(button, style, holdMs, stop);
             }
             else if (move)
             {
@@ -555,7 +625,7 @@ namespace AutoClicker.Engine
             }
         }
 
-        private long PerformOneActuation(ClickProfile p)
+        private long PerformOneActuation(ClickProfile p, RunContext run)
         {
             MouseButtonType button = p.Button;
             ClickStyle style = p.Style;
@@ -585,13 +655,16 @@ namespace AutoClicker.Engine
             // silently left-click instead. With no key set it simply does nothing.
             if (p.Target == ClickTarget.Key)
             {
+                _lastPressClicks = 1;
                 int vk = p.KeyVirtualKey;
                 if (vk != 0)
                 {
                     if (hold > 0)
                     {
                         InputSimulator.KeyDown(vk);
-                        System.Threading.Thread.Sleep(hold);
+                        // On the run's stop signal, like the mouse holds: a stop mid-hold lets
+                        // the key go at once instead of up to 5 s later.
+                        run.Stop.Wait(hold);
                         InputSimulator.KeyUp(vk);
                     }
                     else
@@ -622,7 +695,7 @@ namespace AutoClicker.Engine
                         _random.JitterPosition(ref x, ref y, p.PositionJitterPixels);
                     }
 
-                    Actuate(true, x, y, point.Button, point.Style, hold, p.BackgroundClick);
+                    Actuate(true, x, y, point.Button, point.Style, hold, run.Stop, p.BackgroundClick);
                     style = point.Style;
                     actuatedButton = point.Button;
 
@@ -641,7 +714,7 @@ namespace AutoClicker.Engine
                     _random.JitterPosition(ref x, ref y, p.PositionJitterPixels);
                 }
 
-                Actuate(true, x, y, button, style, hold, p.BackgroundClick);
+                Actuate(true, x, y, button, style, hold, run.Stop, p.BackgroundClick);
             }
             else if (p.RandomizePosition)
             {
@@ -650,22 +723,23 @@ namespace AutoClicker.Engine
                 if (ScreenGeometry.TryGetCursorPosition(out int cx, out int cy))
                 {
                     _random.JitterPosition(ref cx, ref cy, p.PositionJitterPixels);
-                    Actuate(true, cx, cy, button, style, hold);
+                    Actuate(true, cx, cy, button, style, hold, run.Stop);
                 }
                 else
                 {
-                    Actuate(false, 0, 0, button, style, hold);
+                    Actuate(false, 0, 0, button, style, hold, run.Stop);
                 }
             }
             else
             {
                 // Pure "click where the cursor is" — no move event needed.
-                Actuate(false, 0, 0, button, style, hold);
+                Actuate(false, 0, 0, button, style, hold, run.Stop);
             }
 
             // Count every real mouse click, not just the actuation. A double-click
             // style produces two clicks, a triple three, and so on.
             int clicks = StyleToClicks(style);
+            _lastPressClicks = clicks;
             _statistics.RecordClicks(clicks, actuatedButton);
             ClickPerformed?.Invoke(this, EventArgs.Empty);
 
@@ -839,20 +913,26 @@ namespace AutoClicker.Engine
             // Absolute floor enforced REGARDLESS of the anti-freeze setting. Without
             // this, disabling anti-freeze and asking for an enormous rate makes the
             // worker thread spin with almost no gap, pegging a CPU core and freezing
-            // the UI / system. 0.5 ms == 2000 CPS, which is already extreme.
+            // the UI / system. 0.5 ms == 2000 presses a second, which is already extreme.
             double baseInterval = Math.Max(0.5, interval);
+
+            // The rate is counted in CLICKS: a double click is two. Both the cap and the
+            // reported rate follow that, the same count the live "CPS" and the statistics use.
+            int perPress = Math.Max(1, _lastPressClicks);
 
             if (!AntiFreezeEnabled)
             {
                 _measuredCpu = 0;
                 _throttleFactor = 1.0;
-                _effectiveCps = baseInterval > 0 ? (float)(1000.0 / baseInterval) : 0f;
+                _effectiveCps = baseInterval > 0 ? (float)(perPress * 1000.0 / baseInterval) : 0f;
                 return baseInterval;
             }
 
-            // Hard cap: never faster than MaxClicksPerSecond.
+            // Hard cap: never more than MaxClicksPerSecond CLICKS a second. It used to be applied
+            // to presses, so a Quadruple click at "max 200" sent 800 clicks a second, while the
+            // rate line above it said "max 200".
             int cap = MaxClicksPerSecond < 1 ? 1 : MaxClicksPerSecond;
-            double minInterval = 1000.0 / cap;
+            double minInterval = 1000.0 * perPress / cap;
             if (minInterval < 0.5) minInterval = 0.5;
 
             double effective = Math.Max(baseInterval, minInterval);
@@ -863,7 +943,7 @@ namespace AutoClicker.Engine
             effective = effective * _throttleFactor;
             if (effective < minInterval) effective = minInterval;
 
-            _effectiveCps = effective > 0 ? (float)(1000.0 / effective) : 0f;
+            _effectiveCps = effective > 0 ? (float)(perPress * 1000.0 / effective) : 0f;
             return effective;
         }
 
@@ -897,10 +977,10 @@ namespace AutoClicker.Engine
         /// Blocks while the engine is paused, returning promptly if a stop is
         /// requested. Returns true if the engine is no longer running.
         /// </summary>
-        private bool WaitWhilePaused()
+        private bool WaitWhilePaused(RunContext run)
         {
             bool froze = false;
-            while (_running && _paused)
+            while (IsCurrent(run) && _paused)
             {
                 if (!froze)
                 {
@@ -909,26 +989,26 @@ namespace AutoClicker.Engine
                     froze = true;
                 }
                 // Poll in short slices so both resume and stop react quickly.
-                if (_stopSignal.Wait(40))
+                if (run.Stop.Wait(40))
                 {
                     return true;
                 }
             }
 
-            if (froze && _running)
+            if (froze && IsCurrent(run))
             {
                 _runClock.Start();
             }
 
-            return !_running;
+            return !IsCurrent(run);
         }
 
         /// <summary>
         /// Waits for approximately <paramref name="ms"/> milliseconds or until a
         /// stop is requested, with sub-millisecond accuracy. Returns true if a stop
-        /// was requested (or the engine is no longer running).
+        /// was requested (or this run is no longer the current one).
         /// </summary>
-        private bool WaitInterruptible(double ms)
+        private bool WaitInterruptible(double ms, RunContext run)
         {
             if (ms <= 0)
             {
@@ -937,15 +1017,15 @@ namespace AutoClicker.Engine
                 // freeze the UI / the whole system. Yield the remainder of our time
                 // slice so other threads (including the UI) still get to run.
                 System.Threading.Thread.Yield();
-                return !_running;
+                return !IsCurrent(run);
             }
 
-            if (PreciseWait.Wait(ms, _stopSignal))
+            if (PreciseWait.Wait(ms, run.Stop))
             {
                 return true;
             }
 
-            return !_running;
+            return !IsCurrent(run);
         }
 
         private void SetState(EngineState newState)

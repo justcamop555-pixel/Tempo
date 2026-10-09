@@ -26,6 +26,7 @@ namespace AutoClicker.UI
 
         public ModelDownloadForm(Theme theme, WhisperModelInfo model)
         {
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             _model = model;
             var t = theme ?? Theme.ForKind(ThemeKind.Dark);
 
@@ -80,6 +81,7 @@ namespace AutoClicker.UI
                 _status.Text = Localization.T("Cancelling…");
             };
             Controls.Add(_cancelBtn);
+            UiFactory.ScaleToScreen(this);
         }
 
         protected override void OnShown(EventArgs e)

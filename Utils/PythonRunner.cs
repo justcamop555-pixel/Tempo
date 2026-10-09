@@ -132,7 +132,18 @@ namespace AutoClicker.Utils
             string venv = FindVenvFor(scriptPath);
             if (venv != null) { return (venv, Array.Empty<string>(), "virtual environment beside the script"); }
 
-            return (InterpreterPath, _cachedArgsPrefix ?? Array.Empty<string>(), "found on this PC");
+            // Both halves under the one lock: reading the prefix after the path, outside it,
+            // could pair "py" with a Rescan's cleared prefix — and "py" without "-3" can pick
+            // a Python 2 still installed on the machine.
+            string exe;
+            string[] pre;
+            lock (_probeLock)
+            {
+                if (!_probed) { Probe(); }
+                exe = _cachedExe;
+                pre = _cachedArgsPrefix;
+            }
+            return (exe, pre ?? Array.Empty<string>(), "found on this PC");
         }
 
         /// <summary>A .venv/venv interpreter beside the script, or null.</summary>
@@ -182,17 +193,9 @@ namespace AutoClicker.Utils
             }
         }
 
-        /// <summary>A one-line description for the UI: the interpreter and its version.</summary>
-        internal static string DescribeInterpreter()
-        {
-            string exe = InterpreterPath;
-            if (string.IsNullOrEmpty(exe))
-            {
-                return Localization.T("No Python interpreter found on this PC.");
-            }
-            string version = ProbeVersion(exe, _cachedArgsPrefix);
-            return string.IsNullOrEmpty(version) ? exe : version + "  ·  " + exe;
-        }
+        // DescribeInterpreter lived here: no caller anywhere, and it ran a version probe
+        // synchronously every time it was asked — on whatever thread asked, which for a
+        // description is the UI thread. Removed rather than left as a trap.
 
         /// <summary>
         /// Finds an interpreter. The py launcher first: on Windows it is the one thing
@@ -252,10 +255,22 @@ namespace AutoClicker.Utils
             Logger.Info("[Python] no interpreter found (tried py -3, python3, python, and the usual install folders).");
         }
 
+        /// <summary>How long one candidate may take to report its version.</summary>
+        private const int ProbeTimeoutMs = 4000;
+
         /// <summary>
         /// Runs "-V" and returns what it printed, or null if this candidate is not a
         /// usable interpreter. The Store stub is filtered out here: it exits non-zero
         /// (or prints nothing) rather than reporting a version.
+        ///
+        /// THE TIMEOUT USED TO BE DECORATIVE. The old version read stdout to the end, then
+        /// stderr to the end, and only THEN waited up to 4 s for the process — but a read to
+        /// the end does not return until the process closes the pipe, which a candidate that
+        /// never exits never does. Measured with one that waits on stdin: still blocked after
+        /// 12 s, and it would have stayed blocked for ever. This runs under the probe lock,
+        /// and the Script step dialog asks for the interpreter, so one bad candidate on PATH
+        /// could freeze Tempo outright. Now: stdin is closed at once (nothing will ever type
+        /// at it), both pipes are read asynchronously, and the wait is the real limit.
         /// </summary>
         private static string ProbeVersion(string exe, string[] prefix)
         {
@@ -268,15 +283,25 @@ namespace AutoClicker.Utils
                 using (var p = Process.Start(psi))
                 {
                     if (p == null) { return null; }
-                    string outText = p.StandardOutput.ReadToEnd();
-                    string errText = p.StandardError.ReadToEnd();
-                    if (!p.WaitForExit(4000))
+                    try { p.StandardInput.Close(); } catch { }
+
+                    System.Threading.Tasks.Task<string> outTask = p.StandardOutput.ReadToEndAsync();
+                    System.Threading.Tasks.Task<string> errTask = p.StandardError.ReadToEndAsync();
+
+                    if (!p.WaitForExit(ProbeTimeoutMs))
                     {
                         KillTree(p, null);
+                        Logger.Info("[Python] " + exe + " did not answer -V within " + ProbeTimeoutMs +
+                                    " ms — skipped.");
                         return null;
                     }
                     if (p.ExitCode != 0) { return null; }
-                    string v = (outText + errText).Trim();       // 2.x printed to stderr
+
+                    // The process has exited; its pipes close with it. A short bounded wait
+                    // collects what it printed without trusting that to happen instantly.
+                    System.Threading.Tasks.Task.WaitAll(new System.Threading.Tasks.Task[] { outTask, errTask }, 1000);
+                    string v = ((outTask.IsCompleted ? outTask.Result : "") +
+                                (errTask.IsCompleted ? errTask.Result : "")).Trim();   // 2.x printed to stderr
                     return v.StartsWith("Python", StringComparison.OrdinalIgnoreCase) ? v : null;
                 }
             }
@@ -301,12 +326,28 @@ namespace AutoClicker.Utils
             };
         }
 
+        /// <summary>Optional extras for one run.</summary>
+        internal sealed class RunOptions
+        {
+            /// <summary>
+            /// Called with each line of output AS IT ARRIVES, on a pipe-reader thread. The
+            /// macro player logs through this so a long script shows its progress in Live
+            /// debug while it runs — which is what running Python with -u was always for,
+            /// and what nothing actually did until now.
+            /// </summary>
+            public Action<string> OnLine;
+
+            /// <summary>Extra environment variables for the script (e.g. TEMPO_MACRO).</summary>
+            public IDictionary<string, string> Environment;
+        }
+
         /// <summary>
         /// Runs <paramref name="scriptPath"/> and waits for it, up to
         /// <paramref name="timeoutMs"/> or until <paramref name="stopSignal"/> fires.
         /// Never throws; every failure comes back as an <see cref="Outcome"/>.
         /// </summary>
-        internal static Result Run(string scriptPath, int timeoutMs, ManualResetEventSlim stopSignal)
+        internal static Result Run(string scriptPath, int timeoutMs, ManualResetEventSlim stopSignal,
+                                   RunOptions options = null)
         {
             var result = new Result();
             var clock = Stopwatch.StartNew();
@@ -336,6 +377,7 @@ namespace AutoClicker.Utils
             int dropped = 0;
             object sync = new object();
 
+            Action<string> onLine = options?.OnLine;
             void Capture(string line)
             {
                 if (line == null) { return; }
@@ -343,6 +385,10 @@ namespace AutoClicker.Utils
                 {
                     if (captured.Length < OutputCap) { captured.AppendLine(line); }
                     else { dropped++; }
+                }
+                if (onLine != null)
+                {
+                    try { onLine(line); } catch { /* a listener must never break the run */ }
                 }
             }
 
@@ -363,6 +409,35 @@ namespace AutoClicker.Utils
                 // Relative paths inside the script resolve next to the script, which is
                 // what someone writing it expects — not next to Tempo.exe.
                 try { psi.WorkingDirectory = Path.GetDirectoryName(scriptPath) ?? ""; } catch { }
+
+                // UTF-8 on the pipes. Measured: a script that printed "café ✓" or an emoji
+                // CRASHED under Tempo with UnicodeEncodeError, while running perfectly in a
+                // terminal. A terminal is a console, which Python writes as UTF-8; Tempo reads
+                // a PIPE, which Python encodes in the ANSI code page unless told otherwise —
+                // and cp1252 has no emoji. Tempo already decodes the pipes as UTF-8, so this
+                // makes the two ends agree. Only the standard streams: PYTHONUTF8 would also
+                // change how the script's own files are opened, which is not ours to change.
+                psi.Environment["PYTHONIOENCODING"] = "utf-8";
+
+                // What the script might want to know about the step it is running in, as
+                // plain environment variables — no argument syntax to learn, no change to
+                // how a macro is saved, and a script that ignores them is unaffected.
+                psi.Environment["TEMPO_SCRIPT"] = scriptPath;
+                psi.Environment["TEMPO_VERSION"] = TempoVersion();
+                try
+                {
+                    System.Drawing.Point cur = System.Windows.Forms.Cursor.Position;
+                    psi.Environment["TEMPO_CURSOR_X"] = cur.X.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    psi.Environment["TEMPO_CURSOR_Y"] = cur.Y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+                catch { /* no desktop (a service session): leave them unset rather than lie */ }
+                if (options?.Environment != null)
+                {
+                    foreach (KeyValuePair<string, string> kv in options.Environment)
+                    {
+                        if (!string.IsNullOrEmpty(kv.Key)) { psi.Environment[kv.Key] = kv.Value ?? ""; }
+                    }
+                }
 
                 proc = new Process { StartInfo = psi, EnableRaisingEvents = false };
                 proc.OutputDataReceived += (s, e) => Capture(e.Data);
@@ -391,12 +466,17 @@ namespace AutoClicker.Utils
                 // input() gets EOF and ends, instead of blocking until the timeout.
                 try { proc.StandardInput.Close(); } catch { }
 
-                // Wait on the process AND the stop signal together, in short slices.
-                var handles = stopSignal != null
-                    ? new WaitHandle[] { GetHandle(proc), stopSignal.WaitHandle }
-                    : new WaitHandle[] { GetHandle(proc) };
-
-                int signalled = WaitHandle.WaitAny(handles, timeoutMs);
+                // Wait on the process AND the stop signal together. The process's wait
+                // handle is a wrapper that does not own the handle; it is disposed here
+                // rather than left to the finalizer on every script step.
+                int signalled;
+                using (WaitHandle procHandle = GetHandle(proc))
+                {
+                    var handles = stopSignal != null
+                        ? new WaitHandle[] { procHandle, stopSignal.WaitHandle }
+                        : new WaitHandle[] { procHandle };
+                    signalled = WaitHandle.WaitAny(handles, timeoutMs);
+                }
 
                 if (signalled == WaitHandle.WaitTimeout)
                 {
@@ -419,7 +499,9 @@ namespace AutoClicker.Utils
                     result.Outcome = result.ExitCode == 0 ? Outcome.Ok : Outcome.ScriptError;
                     if (result.Outcome == Outcome.ScriptError)
                     {
-                        result.Detail = Localization.F("The script exited with code {0}.", result.ExitCode);
+                        string text;
+                        lock (sync) { text = captured.ToString(); }
+                        result.Detail = ExplainFailure(text, result.ExitCode, exe, prefix);
                     }
                 }
             }
@@ -464,6 +546,113 @@ namespace AutoClicker.Utils
         {
             try { return p.ExitCode; }
             catch { return -1; }
+        }
+
+        private static string TempoVersion()
+        {
+            try
+            {
+                Version v = typeof(PythonRunner).Assembly.GetName().Version;
+                return v == null ? "" : v.Major + "." + v.Minor + "." + v.Build;
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>
+        /// Module names that are NOT what you pip-install. A hint telling someone to run
+        /// "pip install cv2" sends them to an error of its own, so the common mismatches are
+        /// named here; anything not listed is installed under its own name, which is the
+        /// usual case.
+        /// </summary>
+        private static readonly Dictionary<string, string> PipNameFor =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["cv2"] = "opencv-python",
+                ["PIL"] = "Pillow",
+                ["yaml"] = "PyYAML",
+                ["win32api"] = "pywin32",
+                ["win32con"] = "pywin32",
+                ["win32gui"] = "pywin32",
+                ["win32clipboard"] = "pywin32",
+                ["pywintypes"] = "pywin32",
+                ["sklearn"] = "scikit-learn",
+                ["bs4"] = "beautifulsoup4",
+                ["dotenv"] = "python-dotenv",
+                ["serial"] = "pyserial",
+                ["Crypto"] = "pycryptodome",
+                ["dateutil"] = "python-dateutil",
+                ["fitz"] = "PyMuPDF",
+                ["docx"] = "python-docx",
+            };
+
+        /// <summary>
+        /// Why a script failed, in words someone can act on.
+        ///
+        /// It used to be "The script exited with code 1." — true, and useless: the answer was
+        /// sitting in the traceback Tempo had just captured. The last line of a Python
+        /// traceback IS the reason ("ValueError: bad input 42"), so that is what is reported
+        /// now. And the most common failure of all — a package installed into a different
+        /// Python from the one Tempo ran — gets the exact command that fixes it, for the
+        /// interpreter that actually ran the script.
+        /// </summary>
+        internal static string ExplainFailure(string output, int exitCode, string exe, string[] prefix)
+        {
+            string reason = LastExceptionLine(output);
+            if (string.IsNullOrEmpty(reason))
+            {
+                return Localization.F("The script exited with code {0}.", exitCode);
+            }
+
+            var m = System.Text.RegularExpressions.Regex.Match(reason,
+                @"^(?:ModuleNotFoundError|ImportError): No module named '([^']+)'");
+            if (m.Success)
+            {
+                string module = m.Groups[1].Value.Split('.')[0];
+                string package = PipNameFor.TryGetValue(module, out string p) ? p : module;
+                string run = QuoteIfNeeded(exe);
+                if (prefix != null && prefix.Length > 0) { run += " " + string.Join(" ", prefix); }
+                return reason + Environment.NewLine + Localization.F(
+                    "The Python that ran it ({0}) doesn't have this package. Install it with: {1}",
+                    exe, run + " -m pip install " + package);
+            }
+            return reason;
+        }
+
+        /// <summary>
+        /// The "ExceptionType: message" line that ends a Python traceback, or null when the
+        /// output holds no traceback (a plain sys.exit(1), say).
+        /// </summary>
+        internal static string LastExceptionLine(string output)
+        {
+            if (string.IsNullOrEmpty(output)) { return null; }
+            string[] lines = output.Replace("\r", "").Split('\n');
+            int tb = -1;
+            for (int i = lines.Length - 1; i >= 0; i--)
+            {
+                if (lines[i].StartsWith("Traceback (most recent call last):", StringComparison.Ordinal)) { tb = i; break; }
+            }
+            if (tb < 0) { return null; }
+
+            // The exception line is the first UNINDENTED line after the frames: every frame
+            // line is indented, and a chained traceback starts again with its own header.
+            for (int i = tb + 1; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                if (line.Length == 0 || line[0] == ' ' || line[0] == '\t') { continue; }
+                if (System.Text.RegularExpressions.Regex.IsMatch(line, @"^[A-Za-z_][\w.]*(: .*)?$"))
+                {
+                    return line.Length > 300 ? line.Substring(0, 299) + "…" : line;
+                }
+            }
+            return null;
+        }
+
+        private static string QuoteIfNeeded(string path)
+        {
+            if (string.IsNullOrEmpty(path)) { return path; }
+            return path.IndexOf(' ') >= 0 && !path.StartsWith("\"", StringComparison.Ordinal)
+                ? "\"" + path + "\""
+                : path;
         }
 
         /// <summary>

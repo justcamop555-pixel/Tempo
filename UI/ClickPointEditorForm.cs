@@ -25,12 +25,12 @@ namespace AutoClicker.UI
 
         public ClickPointEditorForm(Theme theme, ClickPoint existing)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             _theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = Utils.Localization.T(existing == null ? "Add Click Point" : "Edit Click Point");
-            Size = new Size(340, 360);
+            // The client area (was a 340×360 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(324, 321);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -88,6 +88,7 @@ namespace AutoClicker.UI
             CancelButton = cancel;
 
             ThemeManager.Apply(this, _theme);
+            UiFactory.ScaleToScreen(this);
         }
 
         private void OnPick(object sender, EventArgs e)

@@ -189,13 +189,6 @@ namespace AutoClicker.UI
             if (_hotBtn != -1) { _hotBtn = -1; Invalidate(); }
         }
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern bool ReleaseCapture();
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
-        private const int WM_NCLBUTTONDOWN = 0x00A1;
-        private const int HTCAPTION_MSG = 2;
-
         private const int WM_NCHITTEST_MSG = 0x0084;
         private const int HTTRANSPARENT = -1;
 

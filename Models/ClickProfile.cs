@@ -32,9 +32,16 @@ namespace AutoClicker.Models
 
         // ── Library timestamps &amp; usage stats ───────────────────────────────
         public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
+
+        /// <summary>When a run last started with this profile.</summary>
         public DateTime LastUsedUtc { get; set; } = DateTime.MinValue;
 
-        /// <summary>How many times this profile has been set active.</summary>
+        /// <summary>
+        /// How many runs have started with this profile. It counted switches made from the
+        /// Profiles tab and the tray — clicking the card already active counted again — while
+        /// switching with the Clicker dropdown or the profile hotkeys never counted. A run is
+        /// the same thing whichever way you got to the profile.
+        /// </summary>
         public int TimesUsed { get; set; } = 0;
 
         /// <summary>Cumulative clicking runtime under this profile, in seconds.</summary>
@@ -227,10 +234,51 @@ namespace AutoClicker.Models
             return null;
         }
 
+        /// <summary>
+        /// Takes over everything the Clicker tab does NOT edit — the library entry (description,
+        /// category, icon, colour tag, favourite star), the history (created, last used, use
+        /// count, run time), the keybind and appearance snapshots, and any fields a newer Tempo
+        /// wrote — from the stored copy this profile is about to replace.
+        ///
+        /// WHY: the Clicker tab's Save builds a fresh profile from its controls and replaces the
+        /// stored one with it. Those controls carry only the clicking setup, so every press of
+        /// Save (or of the Multi-Point tab's Save) wiped the rest back to defaults — the icon
+        /// went back to 🎯, the star went out, "used 48× · 6h" became "never used", and a
+        /// profile's saved keybinds were thrown away, silently.
+        /// </summary>
+        public void KeepLibraryDataOf(ClickProfile stored)
+        {
+            if (stored == null || ReferenceEquals(stored, this)) { return; }
+            Description = stored.Description;
+            Category = stored.Category;
+            Icon = stored.Icon;
+            ColorTagArgb = stored.ColorTagArgb;
+            Favorite = stored.Favorite;
+            CreatedUtc = stored.CreatedUtc;
+            LastUsedUtc = stored.LastUsedUtc;
+            TimesUsed = stored.TimesUsed;
+            TotalRuntimeSeconds = stored.TotalRuntimeSeconds;
+            Keybinds = stored.Keybinds;
+            AppSettings = stored.AppSettings;
+            UnknownFields = stored.UnknownFields;
+        }
+
+        /// <summary>
+        /// A deep copy. EVERY property belongs in here: the click engine runs a Clone of the
+        /// profile it is given, so a property this leaves out is silently switched off inside
+        /// the engine. That is exactly what happened to BackgroundClick — "Click without moving
+        /// my cursor" saved, loaded and showed its tick correctly, and the engine never saw it,
+        /// so every run moved the real pointer. scratchpad/clonecheck sets every property and
+        /// checks the copy.
+        /// </summary>
         public ClickProfile Clone()
         {
             var copy = new ClickProfile
             {
+                // Fields a newer Tempo wrote: kept on the copy too, as on the original.
+                UnknownFields = UnknownFields != null
+                    ? new Dictionary<string, System.Text.Json.JsonElement>(UnknownFields)
+                    : null,
                 Name = Name,
                 Description = Description,
                 Category = Category,
@@ -256,6 +304,7 @@ namespace AutoClicker.Models
                 PositionMode = PositionMode,
                 FixedX = FixedX,
                 FixedY = FixedY,
+                BackgroundClick = BackgroundClick,
                 RepeatMode = RepeatMode,
                 RepeatCount = RepeatCount,
                 RepeatDurationSeconds = RepeatDurationSeconds,
@@ -279,6 +328,116 @@ namespace AutoClicker.Models
             }
 
             return copy;
+        }
+
+        /// <summary>Longest name the editors accept.</summary>
+        public const int MaxNameLength = 60;
+
+        /// <summary>Longest description the details dialog accepts.</summary>
+        public const int MaxDescriptionLength = 120;
+
+        /// <summary>
+        /// Puts every value back inside what the editors can show, and returns true when
+        /// anything had to change. For data that did NOT come through the editors: a
+        /// hand-edited or damaged profiles.json, a file written by a newer Tempo, an import.
+        ///
+        /// An enum value this build does not have (a newer click style, say) set a combo's
+        /// SelectedIndex out of range, and loading the profile threw half-way through — the
+        /// Clicker tab was left showing a mix of two profiles. A null point crashed the load
+        /// the same way. Numbers out of range (a negative interval part, a zero repeat count)
+        /// never reached the clicker — it runs from the Clicker tab's controls, which clamp
+        /// them on load — but the file kept them, and everything else that reads a stored
+        /// profile saw them. The names are not touched here (they are identities; see
+        /// ProfileManager for how clashes are resolved), nor is anything the user could have
+        /// set on purpose.
+        ///
+        /// <paramref name="imported"/>: false when loading this PC's own file. An enum value this
+        /// build does not know most likely came from a NEWER Tempo, and rewriting it would
+        /// erase that build's choice for good; the Clicker tab shows the nearest thing it has
+        /// instead (LoadProfileIntoUi), and only an explicit Save replaces it. A long
+        /// description is the user's own text and stays whole. An import is someone else's
+        /// file, so it gets the full treatment.
+        /// </summary>
+        public bool Sanitize(bool imported = true)
+        {
+            bool changed = false;
+            int Fix(int v, int min, int max) { int r = v < min ? min : v > max ? max : v; if (r != v) { changed = true; } return r; }
+            long FixL(long v, long min, long max) { long r = v < min ? min : v > max ? max : v; if (r != v) { changed = true; } return r; }
+            TEnum FixE<TEnum>(TEnum v, TEnum fallback) where TEnum : struct, Enum
+            {
+                if (!imported || Enum.IsDefined(typeof(TEnum), v)) { return v; }
+                changed = true;
+                return fallback;
+            }
+
+            if (Description == null) { Description = string.Empty; changed = true; }
+            if (imported && Description.Length > MaxDescriptionLength)
+            {
+                Description = Description.Substring(0, MaxDescriptionLength);
+                changed = true;
+            }
+            // An icon is one glyph (an emoji can be a few UTF-16 units); anything longer is not one.
+            if (string.IsNullOrEmpty(Icon) || Icon.Length > 16) { Icon = "🎯"; changed = true; }
+
+            Category = FixE(Category, ProfileCategory.Custom);
+            Button = FixE(Button, MouseButtonType.Left);
+            Style = FixE(Style, ClickStyle.Single);
+            Mode = FixE(Mode, ClickMode.Interval);
+            Target = FixE(Target, ClickTarget.Mouse);
+            PositionMode = FixE(PositionMode, PositionMode.CurrentPosition);
+            PointOrder = FixE(PointOrder, MultiPointOrder.Sequential);
+            RepeatMode = FixE(RepeatMode, RepeatMode.UntilStopped);
+
+            IntervalHours = Fix(IntervalHours, 0, 999);
+            IntervalMinutes = Fix(IntervalMinutes, 0, 59);
+            IntervalSeconds = Fix(IntervalSeconds, 0, 59);
+            IntervalMilliseconds = Fix(IntervalMilliseconds, 0, 999);
+            if (double.IsNaN(ManualPreciseIntervalMs) || double.IsInfinity(ManualPreciseIntervalMs) || ManualPreciseIntervalMs < 0)
+            {
+                ManualPreciseIntervalMs = 0;
+                changed = true;
+            }
+            KeyVirtualKey = Fix(KeyVirtualKey, 0, 255);
+            FixedX = Fix(FixedX, -100000, 100000);
+            FixedY = Fix(FixedY, -100000, 100000);
+            RepeatCount = FixL(RepeatCount, 1, 100000000);
+            RepeatDurationSeconds = Fix(RepeatDurationSeconds, 1, 86400);
+            BurstSize = Fix(BurstSize, 1, 100000);
+            BurstPauseMilliseconds = Fix(BurstPauseMilliseconds, 0, 3600000);
+            IntervalJitterMilliseconds = Fix(IntervalJitterMilliseconds, 0, 100000);
+            PositionJitterPixels = Fix(PositionJitterPixels, 0, 1000);
+            ClickHoldMilliseconds = Fix(ClickHoldMilliseconds, 0, 5000);
+            TimesUsed = Fix(TimesUsed, 0, int.MaxValue);
+            TotalRuntimeSeconds = FixL(TotalRuntimeSeconds, 0, long.MaxValue);
+
+            if (Points == null) { Points = new List<ClickPoint>(); changed = true; }
+            for (int i = Points.Count - 1; i >= 0; i--)
+            {
+                ClickPoint pt = Points[i];
+                if (pt == null) { Points.RemoveAt(i); changed = true; continue; }
+                pt.X = Fix(pt.X, -100000, 100000);
+                pt.Y = Fix(pt.Y, -100000, 100000);
+                pt.Button = FixE(pt.Button, MouseButtonType.Left);
+                pt.Style = FixE(pt.Style, ClickStyle.Single);
+                pt.DwellMilliseconds = Fix(pt.DwellMilliseconds, 0, 3600000);
+                pt.Repeat = Fix(pt.Repeat, 1, 100000);
+                if (pt.Label == null) { pt.Label = "Point"; changed = true; }
+            }
+            if (Keybinds != null && Keybinds.Bindings == null) { Keybinds.Bindings = new List<HotkeyBinding>(); changed = true; }
+            return changed;
+        }
+
+        /// <summary>
+        /// Clears the usage history, for a profile that is new to this library: a copy, or an
+        /// import. It is the NEW profile's history that starts now — an import used to arrive
+        /// "used 48× · 6h", counted on somebody else's PC, and sorted to the top as recently used.
+        /// </summary>
+        public void StartHistoryNow()
+        {
+            CreatedUtc = DateTime.UtcNow;
+            LastUsedUtc = DateTime.MinValue;
+            TimesUsed = 0;
+            TotalRuntimeSeconds = 0;
         }
 
         public override string ToString()

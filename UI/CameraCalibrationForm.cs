@@ -58,6 +58,8 @@ namespace AutoClicker.UI
 
         public CameraCalibrationForm(Theme theme, double current)
         {
+            // Built in 100% units and scaled with the screen at the end (UiFactory.ScaleToScreen); its
+            // buttons are fitted in 100% units to match (UiFactory.FitToText96).
             theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
             _theme = theme;
 
@@ -96,9 +98,17 @@ namespace AutoClicker.UI
             };
             Controls.Add(_instructions);
 
+            // As tall as its words, and everything below it moves down by what it grows. A line of text
+            // is not 1.5× taller on a 150% screen but 25 px for 100%'s 15: the eight lines needed 200 px
+            // of the 177 the 118 px box became, and the last sentence was not drawn. Measured in 100% units,
+            // as the box is (UiFactory.Measure96).
+            int grow = Math.Max(0, UiFactory.Measure96(_instructions.Text, _instructions.Font, 528, TextFormatFlags.Default).Height + 2 - 118);
+            _instructions.Height += grow;
+            ClientSize = new Size(560, 300 + grow);
+
             _liveCount = new Label
             {
-                Left = 16, Top = 140, Width = 528, Height = 34,
+                Left = 16, Top = 140 + grow, Width = 528, Height = 34,
                 Font = new Font("Consolas", 13f, FontStyle.Bold),
                 ForeColor = theme.TextMuted,
                 Text = Utils.Localization.F("Hold {0} and turn…", HoldKeyName)
@@ -107,30 +117,39 @@ namespace AutoClicker.UI
 
             _result = new Label
             {
-                Left = 16, Top = 178, Width = 528, Height = 46,
+                Left = 16, Top = 178 + grow, Width = 528, Height = 46,
                 ForeColor = theme.TextMuted,
                 Text = Utils.Localization.F("Current setting: {0} °/count", current.ToString("0.####"))
             };
             Controls.Add(_result);
 
-            _acceptBtn = UiFactory.PrimaryButton("Use this value", 16, 236, 150, 34, theme);
+            _acceptBtn = UiFactory.PrimaryButton("Use this value", 16, 236 + grow, 150, 34, theme);
             _acceptBtn.Enabled = false;
             _acceptBtn.Click += (s, e) => { DialogResult = DialogResult.OK; Close(); };
             Controls.Add(_acceptBtn);
 
-            var retryBtn = UiFactory.Button("Try again", 176, 236, 110, 34);
+            var retryBtn = UiFactory.Button("Try again", 176, 236 + grow, 110, 34);
             retryBtn.Click += (s, e) => Reset();
             Controls.Add(retryBtn);
 
-            var cancelBtn = UiFactory.Button("Cancel", 434, 236, 110, 34);
+            var cancelBtn = UiFactory.Button("Cancel", 434, 236 + grow, 110, 34);
             cancelBtn.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             Controls.Add(cancelBtn);
+
+            // Each as wide as its words — German "Diesen Wert übernehmen" needs 186 px of the 150 — the
+            // first two packed from the left, Cancel from the right.
+            UiFactory.FitToText96(_acceptBtn, 150);
+            UiFactory.FitToText96(retryBtn, 110);
+            retryBtn.Left = _acceptBtn.Right + 10;
+            UiFactory.FitToText96(cancelBtn, 110);
+            cancelBtn.Left = 544 - cancelBtn.Width;
 
             _tick = new System.Windows.Forms.Timer { Interval = 60 };
             _tick.Tick += (s, e) => Pump();
 
             Load += (s, e) => StartCapture();
             FormClosed += (s, e) => StopCapture();
+            UiFactory.ScaleToScreen(this);
         }
 
         private void StartCapture()

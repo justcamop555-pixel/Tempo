@@ -189,19 +189,59 @@ namespace AutoClicker.UI
         {
             base.OnEnter(e);
             ShowListening();
-
-            // Stop the bound hotkeys firing while we are listening. Otherwise pressing
-            // the combination you want to CHANGE also performs its action — and for a
-            // mouse binding it was worse than noise: the hook consumed the click before
-            // the field ever saw it, so an already-bound button could never be rebound.
-            try { PauseHotkeys?.Invoke(true); } catch { }
         }
 
         protected override void OnLeave(EventArgs e)
         {
             base.OnLeave(e);
             UpdateText();
-            try { PauseHotkeys?.Invoke(false); } catch { }
+        }
+
+        // Stop the bound hotkeys firing while we are listening. Otherwise pressing the combination
+        // you want to CHANGE also performs its action — and for a mouse binding it was worse than
+        // noise: the hook consumed the click before the field ever saw it, so an already-bound button
+        // could never be rebound.
+        //
+        // On the window's REAL keyboard focus (GotFocus / LostFocus), not Enter / Leave. Enter and Leave
+        // only report focus moving between controls INSIDE Tempo's window, so clicking a keybind field
+        // and then going back to a game — or Tempo hiding to the tray — never raised Leave: the field
+        // was still the window's active control, and EVERY hotkey stayed silenced until you came back
+        // and clicked something else. That is a keybind that "sometimes doesn't work" with nothing to
+        // show why. Windows takes the real focus away the moment the window is not the active one.
+        protected override void OnGotFocus(EventArgs e)
+        {
+            base.OnGotFocus(e);
+            SetListening(true);
+        }
+
+        protected override void OnLostFocus(EventArgs e)
+        {
+            base.OnLostFocus(e);
+            SetListening(false);
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            SetListening(false);   // a field torn down while listening must not leave the hotkeys off
+            base.OnHandleDestroyed(e);
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            // Hidden — the window went to the tray, or the tab changed — is not listening. Hiding a window
+            // does not always take the keyboard focus from it (measured: an inactive window hidden with the
+            // field focused kept it), so this does not rely on LostFocus.
+            if (!Visible) { SetListening(false); }
+        }
+
+        // Every call goes through, repeated or not: the pause is one flag on the hotkey manager, and the
+        // window can clear it behind this field's back (MainForm resets it when it hides or deactivates,
+        // because hiding a window tells the focused field nothing at all). Skipping a "repeated" pause
+        // would then leave a field that has focus again not listening.
+        private void SetListening(bool on)
+        {
+            try { PauseHotkeys?.Invoke(on); } catch { }
         }
 
         /// <summary>The idle prompt shown while the field is focused and waiting.</summary>

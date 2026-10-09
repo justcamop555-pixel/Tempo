@@ -44,8 +44,7 @@ namespace AutoClicker.UI
         public CpsTestForm(Theme theme, double allTimeBest)
         {
             AllTimeBest = allTimeBest;
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             _theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
 
             Text = Utils.Localization.T("CPS Test");
@@ -74,7 +73,25 @@ namespace AutoClicker.UI
             _timeLabel.TextAlign = ContentAlignment.MiddleCenter;
 
             _clickArea = UiFactory.PrimaryButton("CLICK!", 60, 90, 260, 120, _theme);
-            _clickArea.Font = new Font("Segoe UI", 18f, FontStyle.Bold);
+            // "Press SPACE!" in keyboard mode: measured both ways.
+            LayoutFitter.DeclareCaptions(_clickArea, Utils.Localization.T("CLICK!"), Utils.Localization.T("Press SPACE!"));
+            // The biggest of three sizes at which BOTH captions fit: French "Appuyez sur ESPACE !" needed
+            // 272 px at 18 pt in the 260 px the pad has, and lost its "!" every time keyboard mode was on.
+            float clickSize = 14f;
+            foreach (float size in new[] { 18f, 16f, 14f })
+            {
+                using (var trial = new Font("Segoe UI", size, FontStyle.Bold))
+                {
+                    // In 100% units, like the pad's width: the window is scaled after it is built.
+                    int widest = 0;
+                    foreach (string caption in LayoutFitter.CaptionsOf(_clickArea))
+                    {
+                        widest = Math.Max(widest, UiFactory.Measure96(caption, trial).Width);
+                    }
+                    if (widest + 16 <= _clickArea.Width) { clickSize = size; break; }
+                }
+            }
+            _clickArea.Font = new Font("Segoe UI", clickSize, FontStyle.Bold);
             _clickArea.MouseDown += OnClickAreaMouseDown;
 
             _timeBar = new ThemedProgressBar
@@ -103,6 +120,11 @@ namespace AutoClicker.UI
             _cpsLabel = UiFactory.Label(Utils.Localization.F("CPS: {0:0.0}", 0.0), 0, 252, FontStyle.Bold, 16f);
             _cpsLabel.Width = 360;
             _cpsLabel.AutoSize = false;
+            // A whole 16 pt line (30 px): switching AutoSize off left it the default 23, which
+            // clipped the line top and bottom — a French "0,0" lost the tail of its comma.
+            // Still clear of the Best line at 288.
+            // (In 100% units: the window is scaled after it is built — UiFactory.Measure96.)
+            _cpsLabel.Height = UiFactory.Measure96("Ag", _cpsLabel.Font, 0, TextFormatFlags.Default).Height;
             _cpsLabel.TextAlign = ContentAlignment.MiddleCenter;
             _cpsLabel.ForeColor = _theme.AccentText;
 
@@ -183,8 +205,61 @@ namespace AutoClicker.UI
             HighlightMouseButtons();
             UpdateTitleForButton(title);
 
+            // Both rows were laid out at fixed x: the label at 60, the buttons from 150 and 104.
+            // "Duración de la prueba:" ran 36 px into the "5s" button, "Entrada:" / "Eingang:" /
+            // "Ingresso:" under the first input button, and 58 px buttons cut "Izquierdo",
+            // "Esquerdo" — and "⌨ Space" even in English. Each row is now sized from its own
+            // words and centred as a group, which is also how the rest of this window sits.
+            LayOutRow(durLabel, _durationButtons, 40, 6);
+            LayOutRow(mbLabel, _mbButtons, 52, 4);
+
             _timer = new System.Windows.Forms.Timer { Interval = 100 };
             _timer.Tick += OnTick;
+            UiFactory.ScaleToScreen(this);
+        }
+
+        /// <summary>
+        /// Lays out "label  [b1] [b2] …" as one row: every button as wide as its own caption
+        /// needs (never below <paramref name="minWidth"/>), the whole group centred in the
+        /// window. If it still does not fit, the buttons drop to a smaller font first — the
+        /// same last resort the main window's layout pass uses — rather than overlapping.
+        /// </summary>
+        private void LayOutRow(Label label, Button[] buttons, int minWidth, int gap)
+        {
+            if (label == null || buttons == null || buttons.Length == 0) { return; }
+            int avail = ClientSize.Width - 16;
+
+            // In 100% units, like ClientSize here: this runs in the constructor, before the window is
+            // scaled, and measured in screen pixels a row was 1.5× too wide on a 150% laptop — its
+            // buttons dropped to the small font for nothing and the row ran off the window once scaled.
+            int Measure()
+            {
+                int w = UiFactory.Measure96(label.Text, label.Font, 0, TextFormatFlags.Default).Width + 8 + gap * (buttons.Length - 1);
+                foreach (Button b in buttons)
+                {
+                    b.Width = Math.Max(minWidth, UiFactory.Measure96(b.Text, b.Font, 0, TextFormatFlags.Default).Width + 16);
+                    w += b.Width;
+                }
+                return w;
+            }
+
+            int total = Measure();
+            if (total > avail)
+            {
+                foreach (Button b in buttons) { b.Font = new Font(b.Font.FontFamily, 8.25f, b.Font.Style); }
+                total = Measure();
+            }
+
+            int x = Math.Max(8, (ClientSize.Width - total) / 2);
+            label.Left = x;
+            // Past the label's 100% width, not its Right: an AutoSize label is already as wide as its
+            // screen-pixel text, and scaling the buttons' x with the window then counted that twice.
+            x = label.Left + UiFactory.Measure96(label.Text, label.Font, 0, TextFormatFlags.Default).Width + 8;
+            foreach (Button b in buttons)
+            {
+                b.Left = x;
+                x += b.Width + gap;
+            }
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -430,15 +505,54 @@ namespace AutoClicker.UI
             if (_keyboardMode)
             {
                 title.Text = Utils.Localization.T("Press SPACE as fast as you can!");
-                return;
             }
-            // One whole sentence per button rather than splicing the button name into a
-            // frame — "left/right/middle" inflects with the noun in several languages.
-            title.Text = _testButton == MouseButtons.Middle
-                ? Utils.Localization.T("Click as fast as you can!  (middle button)")
-                : _testButton == MouseButtons.Right
-                    ? Utils.Localization.T("Click as fast as you can!  (right button)")
-                    : Utils.Localization.T("Click as fast as you can!  (left button)");
+            else
+            {
+                // One whole sentence per button rather than splicing the button name into a
+                // frame — "left/right/middle" inflects with the noun in several languages.
+                title.Text = _testButton == MouseButtons.Middle
+                    ? Utils.Localization.T("Click as fast as you can!  (middle button)")
+                    : _testButton == MouseButtons.Right
+                        ? Utils.Localization.T("Click as fast as you can!  (right button)")
+                        : Utils.Localization.T("Click as fast as you can!  (left button)");
+            }
+            FitTitle(title);
+        }
+
+        /// <summary>
+        /// One line, at the largest size that fits it. The title is one line tall, and in
+        /// Spanish, French, Italian and Portuguese "Click as fast as you can!  (left button)"
+        /// is wider than the dialog at 13 pt: the second line was simply not drawn, taking
+        /// the button's name with it. The font steps down, to 9 pt at the least, until it fits.
+        /// </summary>
+        private static void FitTitle(Label title)
+        {
+            // Measured the way the label DRAWS it (word-wrapped, with its padding): "one line"
+            // means the wrapped text is no taller than a single line. A single-line width with
+            // no padding looked like a fit a size too early, and Portuguese still wrapped.
+            const TextFormatFlags drawn = TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl;
+            float size = 13f;
+            Font font = UiFactory.FontFor(size, FontStyle.Bold);
+            var unbounded = new Size(int.MaxValue, int.MaxValue);
+            // The width it will really have on screen. Run from the constructor, before the window is
+            // scaled, the label is still in 100% units while the text is measured in the screen's
+            // pixels: on a 150% laptop the title was wrapped at two-thirds of its width and given a
+            // smaller font than it needed. (Later, choosing another button, both are screen pixels.)
+            // Asked of the window, not of its handle: it is scaled at the end of its constructor.
+            Form owner = title.FindForm();
+            float k = UiFactory.IsScaledToScreen(owner) ? 1f : UiFactory.BuildScale;
+            int width = Math.Max(1, (int)Math.Round(title.Width * k));
+            while (size > 9f)
+            {
+                // One line's height with no width to wrap in — Size.Empty with WordBreak is a
+                // width of NOTHING, which breaks even "Ag" in two and makes everything "fit".
+                int line = TextRenderer.MeasureText("Ag", font, unbounded, drawn).Height;
+                int need = TextRenderer.MeasureText(title.Text, font, new Size(width, int.MaxValue), drawn).Height;
+                if (need <= line) { break; }
+                size -= 0.5f;
+                font = UiFactory.FontFor(size, FontStyle.Bold);
+            }
+            title.Font = font;
         }
 
         private void StartTest()

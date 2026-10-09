@@ -246,19 +246,85 @@ namespace AutoClicker.Utils
             {
                 if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { return null; }
 
+                byte[] cached = ReadIconCache(path);
+                if (cached != null)
+                {
+                    try { return IconFromIcoBytes(cached); }
+                    catch { /* a damaged cache: build it again below */ }
+                }
+
                 byte[] bytes;
                 using (var src = Image.FromFile(path))
                 {
                     bytes = BuildIcoBytes(src);
                 }
 
-                return IconFromIcoBytes(bytes);
+                Icon icon = IconFromIcoBytes(bytes);
+                WriteIconCache(path, bytes);
+                return icon;
             }
             catch (Exception ex)
             {
                 Logger.Warn("[Icon] the custom logo could not be used as a window icon: " + ex.Message);
                 return null;
             }
+        }
+
+        // ── The custom logo's icon, kept from last time ───────────────────────────────
+        //
+        // Building it — decode the image, find where its ink is, render and encode every size —
+        // was 34 ms of every start (profiled with a 3.3 MB GIF), for a file that almost never
+        // changes. The finished icon is kept beside the settings, behind a header naming the logo
+        // file, its length and its time, and the build: a new logo, a changed one, or a build that
+        // may draw icons differently all miss the cache and build it afresh.
+        //
+        // NOT named customlogo.*: CustomLogo.GetPath takes any file by that name as the logo.
+
+        private static string IconCachePath =>
+            System.IO.Path.Combine(Persistence.SettingsManager.GetSettingsDirectory(), "logo-icon.cache");
+
+        private static byte[] IconCacheKey(string logoPath)
+        {
+            var fi = new System.IO.FileInfo(logoPath);
+            string key = "TempoIcon|" + typeof(AppIcon).Assembly.ManifestModule.ModuleVersionId.ToString("N") + "|"
+                       + fi.Name + "|" + fi.Length + "|" + fi.LastWriteTimeUtc.Ticks + "\n";
+            return System.Text.Encoding.UTF8.GetBytes(key);
+        }
+
+        private static byte[] ReadIconCache(string logoPath)
+        {
+            try
+            {
+                string cache = IconCachePath;
+                if (!System.IO.File.Exists(cache)) { return null; }
+                byte[] all = System.IO.File.ReadAllBytes(cache);
+                byte[] key = IconCacheKey(logoPath);
+                if (all.Length <= key.Length) { return null; }
+                for (int i = 0; i < key.Length; i++)
+                {
+                    if (all[i] != key[i]) { return null; }
+                }
+                var ico = new byte[all.Length - key.Length];
+                Buffer.BlockCopy(all, key.Length, ico, 0, ico.Length);
+                return ico;
+            }
+            catch { return null; }
+        }
+
+        private static void WriteIconCache(string logoPath, byte[] ico)
+        {
+            try
+            {
+                byte[] key = IconCacheKey(logoPath);
+                string cache = IconCachePath, tmp = cache + ".tmp";
+                using (var fs = new System.IO.FileStream(tmp, System.IO.FileMode.Create, System.IO.FileAccess.Write))
+                {
+                    fs.Write(key, 0, key.Length);
+                    fs.Write(ico, 0, ico.Length);
+                }
+                System.IO.File.Move(tmp, cache, true);
+            }
+            catch (Exception ex) { Logger.Swallow("AppIcon.WriteIconCache", ex); }
         }
 
         public static Icon Get()

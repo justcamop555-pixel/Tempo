@@ -20,6 +20,23 @@ namespace AutoClicker.Persistence
             WriteIndented = true
         };
 
+        /// <summary>
+        /// Builds the JSON description of profiles ahead of the first Load — see
+        /// SettingsManager.WarmUp. 26 of the 32 ms reading the 2 KB recycle bin at start-up was this.
+        /// </summary>
+        internal static void WarmUp()
+        {
+            try
+            {
+                // A round trip, so every property's accessors are made too (see SettingsManager.WarmUp).
+                var p = new ClickProfile("warm-up");
+                p.Points.Add(new ClickPoint());
+                string json = JsonSerializer.Serialize(new List<ClickProfile> { p }, Options);
+                JsonSerializer.Deserialize<List<ClickProfile>>(json, Options);
+            }
+            catch (Exception ex) { Logger.Swallow("ProfileManager.WarmUp", ex); }
+        }
+
         private readonly List<ClickProfile> _profiles = new List<ClickProfile>();
 
         /// <summary>Soft-deleted profiles, newest last. Kept so they can be restored.</summary>
@@ -57,6 +74,7 @@ namespace AutoClicker.Persistence
             LoadRecycleBin();
 
             bool recovered = false;
+            bool sanitized = false;
             try
             {
                 string path = GetProfilesPath();
@@ -80,10 +98,9 @@ namespace AutoClicker.Persistence
                         {
                             if (p != null)
                             {
-                                if (p.Points == null)
-                                {
-                                    p.Points = new List<ClickPoint>();
-                                }
+                                // Damage the editors cannot show — see ClickProfile.Sanitize (enum
+                                // values are left for a newer Tempo that may have written them).
+                                if (p.Sanitize(imported: false)) { sanitized = true; }
                                 _profiles.Add(p);
                             }
                         }
@@ -97,8 +114,21 @@ namespace AutoClicker.Persistence
                 _profiles.Clear();
             }
 
+            // Names are the identity every lookup goes by (GetByName, the Clicker combo, the tray,
+            // LastProfileName), compared without case. Two profiles called "Fast" and "fast", or
+            // one with no name at all, left the second unreachable: choosing it loaded the first.
+            // Only a hand-edited or damaged file can hold one — every path in the app keeps names
+            // unique — but it was taken on trust. The FIRST keeps its name; the rest are renamed,
+            // and the file is saved so the fix sticks.
+            bool renamed = MakeLoadedNamesUnique();
+            if (sanitized)
+            {
+                Logger.Warn("[Profiles] some profile values were outside what Tempo can show (a hand-edited "
+                            + "or damaged file, or one from a newer Tempo) and were brought back into range.");
+            }
+
             // Recovered profiles go straight back to disk (the damaged file was set aside).
-            if (recovered && _profiles.Count > 0) { Save(); }
+            if ((recovered || renamed || sanitized) && _profiles.Count > 0) { Save(); }
 
             if (_profiles.Count == 0)
             {
@@ -111,6 +141,39 @@ namespace AutoClicker.Persistence
             // right-hand detail column isn't the one English thing left on the screen.
             UI.SplashForm.Report(0, _profiles.Count + " " +
                 Utils.Localization.T(_profiles.Count == 1 ? "profile" : "profiles"));
+        }
+
+        /// <summary>
+        /// Gives every loaded profile a name of its own: blank names become "Profile", and a
+        /// name already taken (ignoring case) gets a number. Returns true when anything changed.
+        /// </summary>
+        private bool MakeLoadedNamesUnique()
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool changed = false;
+            foreach (ClickProfile p in _profiles)
+            {
+                string original = p.Name;
+                // Not trimmed: a name is matched against LastProfileName as stored, and
+                // tidying one would quietly change which profile opens at start-up.
+                string name = string.IsNullOrWhiteSpace(original) ? "Profile" : original;
+                if (seen.Contains(name))
+                {
+                    int n = 2;
+                    string candidate;
+                    do { candidate = name + " " + n; n++; } while (seen.Contains(candidate));
+                    name = candidate;
+                }
+                seen.Add(name);
+                if (!string.Equals(name, original, StringComparison.Ordinal))
+                {
+                    Logger.Warn("[Profiles] a profile named '" + (original ?? "") + "' clashed with another "
+                                + "(or had no name) — renamed to '" + name + "' so it can be chosen.");
+                    p.Name = name;
+                    changed = true;
+                }
+            }
+            return changed;
         }
 
         /// <summary>The profile list in <paramref name="json"/>, or null when it is empty or not a profile list.</summary>
@@ -164,7 +227,7 @@ namespace AutoClicker.Persistence
                 foreach (var p in loaded)
                 {
                     if (p == null) { continue; }
-                    if (p.Points == null) { p.Points = new List<ClickPoint>(); }
+                    p.Sanitize(imported: false);    // restored later, it is loaded like any profile
                     _recycleBin.Add(p);
                 }
 
@@ -284,16 +347,24 @@ namespace AutoClicker.Persistence
         /// <summary>Restores a profile from the recycle bin back into the library.</summary>
         public ClickProfile RestoreFromRecycleBin(string name)
         {
-            var found = _recycleBin.FindLast(p =>
-                p != null && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
-            if (found == null)
+            return RestoreFromRecycleBin(_recycleBin.FindLast(p =>
+                p != null && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        /// <summary>
+        /// Restores exactly this binned profile. By name was ambiguous: delete "Fishing", make a
+        /// new "Fishing" and delete that too, and the bin holds two — choosing the older one in
+        /// the bin brought back the newer.
+        /// </summary>
+        public ClickProfile RestoreFromRecycleBin(ClickProfile binned)
+        {
+            if (binned == null || !_recycleBin.Remove(binned))
             {
                 return null;
             }
-            _recycleBin.Remove(found);
-            found.Name = MakeUniqueName(found.Name); // avoid clashing with a new same-name profile
-            _profiles.Add(found);
-            return found;
+            binned.Name = MakeUniqueName(binned.Name); // avoid clashing with a new same-name profile
+            _profiles.Add(binned);
+            return binned;
         }
 
         /// <summary>Permanently clears the recycle bin.</summary>
@@ -312,8 +383,8 @@ namespace AutoClicker.Persistence
         }
 
         /// <summary>
-        /// Records that a profile was just activated: bumps its use count and
-        /// last-used timestamp. Call when the user sets a profile active.
+        /// Records that a run just started with a profile: bumps its use count and last-used
+        /// timestamp. Call when a run starts (see ClickProfile.TimesUsed for why not on switch).
         /// </summary>
         public void MarkUsed(string name)
         {
@@ -323,11 +394,16 @@ namespace AutoClicker.Persistence
             p.LastUsedUtc = DateTime.UtcNow;
         }
 
-        /// <summary>Adds clicking runtime (seconds) to a profile's cumulative total.</summary>
+        /// <summary>
+        /// Adds clicking runtime (seconds) to a profile's cumulative total. A profile deleted
+        /// while its run was going is found in the recycle bin, so the run is still there if it
+        /// is restored — it used to be dropped, the name matching nothing any more.
+        /// </summary>
         public void AddRuntime(string name, long seconds)
         {
             if (seconds <= 0) return;
-            var p = GetByName(name);
+            var p = GetByName(name) ?? _recycleBin.FindLast(b =>
+                b != null && string.Equals(b.Name, name, StringComparison.OrdinalIgnoreCase));
             if (p == null) return;
             p.TotalRuntimeSeconds += seconds;
         }
@@ -346,10 +422,12 @@ namespace AutoClicker.Persistence
         /// </summary>
         public static ClickProfile ParseExported(string json, out string error)
         {
+            // Every message in the user's language. The two with a detail used to be English
+            // glued to the detail, which no table can hold, so they stayed English everywhere.
             error = null;
             if (string.IsNullOrWhiteSpace(json))
             {
-                error = "The file is empty.";
+                error = Utils.Localization.T("The file is empty.");
                 return null;
             }
             try
@@ -357,21 +435,27 @@ namespace AutoClicker.Persistence
                 var p = JsonSerializer.Deserialize<ClickProfile>(json, Options);
                 if (p == null)
                 {
-                    error = "The file isn't a valid Tempo profile.";
+                    error = Utils.Localization.T("The file isn't a valid Tempo profile.");
                     return null;
                 }
-                if (p.Points == null) p.Points = new List<ClickPoint>();
+                // Someone else's file: everything back inside what the editors can show,
+                // unknown enum values included — see ClickProfile.Sanitize.
+                p.Sanitize();
+                if (!string.IsNullOrEmpty(p.Name) && p.Name.Length > ClickProfile.MaxNameLength)
+                {
+                    p.Name = p.Name.Substring(0, ClickProfile.MaxNameLength).TrimEnd();
+                }
                 string vErr = p.Validate();
                 if (vErr != null)
                 {
-                    error = "The profile failed validation: " + vErr;
+                    error = Utils.Localization.F("The profile failed validation: {0}", Utils.Localization.T(vErr));
                     return null;
                 }
                 return p;
             }
             catch (Exception ex)
             {
-                error = "Couldn't read the profile: " + ex.Message;
+                error = Utils.Localization.F("Couldn't read the profile: {0}", ex.Message);
                 return null;
             }
         }
@@ -389,22 +473,40 @@ namespace AutoClicker.Persistence
             if (incoming.Points == null) incoming.Points = new List<ClickPoint>();
 
             var clash = GetByName(incoming.Name);
-            if (clash == null)
+            if (clash != null && conflict == ImportConflict.Overwrite)
             {
-                _profiles.Add(incoming);
-                return incoming;
-            }
-
-            if (conflict == ImportConflict.Overwrite)
-            {
+                // Replacing updates the SAME entry in this library: its history and star stay,
+                // and the setup it had goes to the recycle bin — "Replace" used to drop it for
+                // good, the one way to lose a profile in Tempo that no undo could reach.
                 int idx = _profiles.IndexOf(clash);
                 incoming.Name = clash.Name; // keep the exact name
+                incoming.CreatedUtc = clash.CreatedUtc;
+                incoming.LastUsedUtc = clash.LastUsedUtc;
+                incoming.TimesUsed = clash.TimesUsed;
+                incoming.TotalRuntimeSeconds = clash.TotalRuntimeSeconds;
+                incoming.Favorite = clash.Favorite;
+                // So do the keybinds and look saved with it on this PC, unless the file brings its
+                // own (the user was asked about those): a file without them says nothing about them.
+                if (incoming.Keybinds == null) { incoming.Keybinds = clash.Keybinds?.Clone(); }
+                if (incoming.AppSettings == null) { incoming.AppSettings = clash.AppSettings?.Clone(); }
                 _profiles[idx] = incoming;
+                _recycleBin.Add(clash);
+                while (_recycleBin.Count > MaxRecycleBin)
+                {
+                    _recycleBin.RemoveAt(0);
+                }
                 return incoming;
             }
 
-            // Rename: give the import a unique name and keep both.
-            incoming.Name = MakeUniqueName(incoming.Name);
+            // A new entry: its history starts here, and the star is this user's to give. The file
+            // carried the exporting PC's use count, run time and dates.
+            incoming.StartHistoryNow();
+            incoming.Favorite = false;
+            if (clash != null)
+            {
+                // Rename: give the import a unique name and keep both.
+                incoming.Name = MakeUniqueName(incoming.Name);
+            }
             _profiles.Add(incoming);
             return incoming;
         }
@@ -439,7 +541,14 @@ namespace AutoClicker.Persistence
             }
 
             var copy = src.Clone();
-            copy.Name = MakeUniqueName(src.Name + " Copy");
+            // In the user's language ("Fishing (copia)"); the English form is unchanged.
+            copy.Name = MakeUniqueName(Utils.Localization.F("{0} Copy", src.Name));
+
+            // A copy is a NEW profile. Clone() carries the original's history across (the
+            // engine needs an exact copy), so a duplicate used to show "used 48× · 6h 12m"
+            // and sort as recently used before it had ever run once.
+            copy.StartHistoryNow();
+
             _profiles.Add(copy);
             return copy;
         }

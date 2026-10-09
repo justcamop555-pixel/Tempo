@@ -99,7 +99,28 @@ namespace AutoClicker.Models
         /// above: macros are serialised to JSON by this number, so a saved macro from an
         /// older Tempo has to keep meaning what it meant.
         /// </summary>
-        Script = 11
+        Script = 11,
+
+        /// <summary>
+        /// The mouse's side buttons: X1 (Back) and X2 (Forward) — "Mouse 4" and "Mouse 5" on
+        /// most gaming mice. Added after Script, so every older number keeps its meaning. An
+        /// older Tempo still loads a macro holding them (the file stores numbers, not names)
+        /// and simply skips these steps when it plays it.
+        /// </summary>
+        X1Down = 12,
+        X1Up = 13,
+        X2Down = 14,
+        X2Up = 15,
+
+        /// <summary>
+        /// Mouse movement as a CAMERA TURN: X and Y hold how far the mouse moved, in mouse
+        /// counts, not a position on screen. Played back as real relative mouse movement,
+        /// which is what a game turns its camera with; a jump to a screen position does
+        /// nothing to a camera. From a take recorded with "as camera turns", and it marks
+        /// that take's mode: after one, playback presses buttons where the pointer already
+        /// is instead of moving to a stored position (see MacroPlayer).
+        /// </summary>
+        MouseMoveRelative = 16
     }
 
     /// <summary>What playback does when a Script step fails.</summary>
@@ -180,5 +201,20 @@ namespace AutoClicker.Models
         German = 3,
         Italian = 4,
         Portuguese = 5
+    }
+
+    /// <summary>
+    /// Where the Roblox Account Manager appears. It is the one page people keep open
+    /// *beside* their work — watching session dots while a game loads, switching
+    /// accounts between rounds — which a tab cannot do, because selecting it hides
+    /// whatever they were on.
+    /// </summary>
+    public enum AccountsPlacement
+    {
+        /// <summary>The ninth page of the main window, as it has always been.</summary>
+        Tab = 0,
+
+        /// <summary>A separate, resizable window that can sit next to the game.</summary>
+        Window = 1
     }
 }

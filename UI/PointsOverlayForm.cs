@@ -11,6 +11,10 @@ namespace AutoClicker.UI
     /// A translucent full-virtual-screen overlay that draws numbered markers at
     /// each multi-point target so the user can see where the clicks will land.
     /// Dismissed by any click, key press, or automatically after a few seconds.
+    ///
+    /// Drawn with per-pixel alpha (see <see cref="LayeredSurface"/>): only the dim is
+    /// translucent. The whole form used to be 45% opaque, markers, numbers and banner
+    /// included, so everything it exists to show was washed out.
     /// </summary>
     public sealed class PointsOverlayForm : Form
     {
@@ -18,6 +22,10 @@ namespace AutoClicker.UI
         private readonly Theme _theme;
         private readonly Timer _autoClose;
         private readonly MultiPointOrder _order;
+        private LayeredSurface _surface;
+
+        /// <summary>The dim over the screen: 45% black, as the whole window used to be.</summary>
+        private const int DimAlpha = 115;
 
         public PointsOverlayForm(Theme theme, IEnumerable<ClickPoint> points)
             : this(theme, points, MultiPointOrder.Sequential)
@@ -40,10 +48,7 @@ namespace AutoClicker.UI
             Bounds = vs;
             _virtualOrigin = vs.Location;
 
-            BackColor = Color.Black;
-            Opacity = 0.45;
             TopMost = true;
-            DoubleBuffered = true;
             Cursor = Cursors.Hand;
 
             _autoClose = new Timer { Interval = 4000 };
@@ -55,6 +60,24 @@ namespace AutoClicker.UI
         private readonly Point _virtualOrigin;
 
         protected override bool ShowWithoutActivation => false;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                const int WS_EX_LAYERED = 0x00080000;
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= WS_EX_LAYERED;
+                return cp;
+            }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            // A layered window shows nothing until it is given its frame; this one never changes.
+            Render();
+        }
 
         protected override void OnShown(EventArgs e)
         {
@@ -69,21 +92,43 @@ namespace AutoClicker.UI
             OverlayTopmost.Unregister(Handle);
             _autoClose.Stop();
             _autoClose.Dispose();
+            _surface?.Dispose();
+            _surface = null;
             base.OnFormClosed(e);
         }
 
         protected override void OnMouseDown(MouseEventArgs e) => Close();
         protected override void OnKeyDown(KeyEventArgs e) => Close();
 
-        protected override void OnPaint(PaintEventArgs e)
+        private void Render()
         {
-            base.OnPaint(e);
-            Graphics g = e.Graphics;
+            try
+            {
+                _surface?.Dispose();
+                _surface = new LayeredSurface(Width, Height);
+                using (Graphics g = Graphics.FromImage(_surface.Bitmap))
+                {
+                    g.CompositingMode = CompositingMode.SourceCopy;
+                    g.Clear(Color.FromArgb(DimAlpha, 0, 0, 0));
+                    g.CompositingMode = CompositingMode.SourceOver;
+                    Draw(g);
+                }
+                _surface.Push(Handle, Bounds.Location);
+            }
+            catch (Exception ex)
+            {
+                Utils.Logger.Swallow("PointsOverlay.Render", ex);
+            }
+        }
+
+        private void Draw(Graphics g)
+        {
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            // Greyscale: ClearType fringes on a canvas that is not opaque.
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
             // Banner with instructions.
-            using (var bannerBrush = new SolidBrush(Color.FromArgb(220, _theme.Surface)))
+            using (var bannerBrush = new SolidBrush(Color.FromArgb(235, _theme.Surface)))
             using (var textBrush = new SolidBrush(_theme.Text))
             using (var font = new Font("Segoe UI", 11f, FontStyle.Bold))
             {

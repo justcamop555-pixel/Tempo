@@ -17,7 +17,16 @@ namespace AutoClicker.Native
         RightUp,
         MiddleDown,
         MiddleUp,
-        Wheel
+        Wheel,
+
+        /// <summary>The side buttons: X1 (Back) and X2 (Forward), "Mouse 4 / Mouse 5".</summary>
+        XButton1Down,
+        XButton1Up,
+        XButton2Down,
+        XButton2Up,
+
+        /// <summary>The tilt wheel (horizontal scroll); <see cref="MouseHookEventArgs.WheelDelta"/> &gt; 0 is right.</summary>
+        HWheel
     }
 
     /// <summary>
@@ -154,6 +163,21 @@ namespace AutoClicker.Native
                             // High word of mouseData is the signed wheel delta.
                             wheel = (short)((data.mouseData >> 16) & 0xFFFF);
                             break;
+                        case NativeMethods.WM_MOUSEHWHEEL:
+                            type = MouseHookEventType.HWheel;
+                            wheel = (short)((data.mouseData >> 16) & 0xFFFF);
+                            break;
+                        case NativeMethods.WM_XBUTTONDOWN:
+                        case NativeMethods.WM_XBUTTONUP:
+                        {
+                            // High word of mouseData says which side button.
+                            bool second = ((data.mouseData >> 16) & 0xFFFF) == NativeMethods.XBUTTON2;
+                            bool down = message == NativeMethods.WM_XBUTTONDOWN;
+                            type = second
+                                ? (down ? MouseHookEventType.XButton2Down : MouseHookEventType.XButton2Up)
+                                : (down ? MouseHookEventType.XButton1Down : MouseHookEventType.XButton1Up);
+                            break;
+                        }
                     }
 
                     if (type.HasValue)

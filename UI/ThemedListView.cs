@@ -6,6 +6,29 @@ using System.Windows.Forms;
 namespace AutoClicker.UI
 {
     /// <summary>
+    /// A plain ListView whose columns scale with the window at 125%/150%, as ThemedListView's do
+    /// (WinForms scales the list's size but not its columns).
+    /// </summary>
+    internal sealed class ColumnScalingListView : ListView
+    {
+        protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
+        {
+            base.ScaleControl(factor, specified);
+            try
+            {
+                if ((specified & BoundsSpecified.Width) != 0 && Math.Abs(factor.Width - 1f) > 0.01f)
+                {
+                    foreach (ColumnHeader column in Columns)
+                    {
+                        column.Width = Math.Max(1, (int)Math.Round(column.Width * factor.Width));
+                    }
+                }
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
     /// A ListView that Tempo draws itself, so it can actually follow the theme.
     ///
     /// A stock ListView is only ever half-themed: BackColor/ForeColor colour the rows,
@@ -145,6 +168,19 @@ namespace AutoClicker.UI
                             (IntPtr)LVS_EX_DOUBLEBUFFER, (IntPtr)LVS_EX_DOUBLEBUFFER);
             }
             catch { }
+
+            // A snap that was waiting for this window: after this message, once the rows are in it.
+            if (_snapWhenCreated)
+            {
+                try
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (!IsDisposed && IsHandleCreated) { RefreshLayout(); }
+                    }));
+                }
+                catch { }
+            }
         }
 
         public int HighlightIndex
@@ -206,6 +242,30 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
+        /// The columns scale with the window. WinForms scales a list's size when a window is shown at
+        /// 125% or 150%, but not its columns: the list grew while every column but the last (which takes
+        /// the leftover room) kept its 100% width around 150% text — measured with the window scaled
+        /// ×1.5 (scratchpad/mainscan "dpi"), the points list went 552 → 828 px, its columns 36 / 126 /
+        /// 56 / … unchanged. The same holds when an account screen is brought to the window's scale.
+        /// </summary>
+        protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
+        {
+            base.ScaleControl(factor, specified);
+            try
+            {
+                if ((specified & BoundsSpecified.Width) != 0 && Math.Abs(factor.Width - 1f) > 0.01f)
+                {
+                    foreach (ColumnHeader column in Columns)
+                    {
+                        column.Width = Math.Max(1, (int)Math.Round(column.Width * factor.Width));
+                    }
+                    FitLastColumn();
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
         /// Gives the last column the leftover width. Call AFTER rows are added: an empty
         /// list has no vertical scrollbar, so fitting the columns before rows exist
         /// leaves the last one a scrollbar's width too wide and the list grows a useless
@@ -252,9 +312,21 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>A snap asked for before the list had a window, done once it has one.</summary>
+        private bool _snapWhenCreated;
+
         /// <summary>Stops the last visible row being sliced in half, which reads as a fault.</summary>
         private void SnapHeightToWholeRows()
         {
+            // Row rectangles come from the native list, and asking for one CREATES its window: at
+            // start-up that was the Statistics history list's window, 32 ms, for a tab nobody had
+            // opened. Wait for the real window instead (OnHandleCreated).
+            if (!IsHandleCreated)
+            {
+                _snapWhenCreated = true;
+                return;
+            }
+            _snapWhenCreated = false;
             try
             {
                 if (Items.Count == 0)
@@ -380,14 +452,40 @@ namespace AutoClicker.UI
                 g.DrawLine(line, r.Left, r.Bottom - 1, r.Right, r.Bottom - 1);
             }
 
-            var textRect = new Rectangle(r.Left + 8, r.Top, r.Width - 12, r.Height);
-            using (var font = new Font(Font.FontFamily, 8.25f, FontStyle.Bold))
+            var textRect = new Rectangle(r.Left + HeaderTextLeft, r.Top, r.Width - HeaderTextLeft - HeaderTextRight, r.Height);
+            using (var font = new Font(Font.FontFamily, HeaderFontSize, FontStyle.Bold))
             {
                 TextRenderer.DrawText(g, e.Header.Text, font, textRect,
-                    Readable(_theme.Accent, _theme.Surface),
-                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+                    Readable(_theme.Accent, _theme.Surface), HeaderFlags);
             }
         }
+
+        // Where a column title is painted, shared with the layout check that measures it.
+        private const int HeaderTextLeft = 8, HeaderTextRight = 4;
+        private const float HeaderFontSize = 8.25f;
+        // NoPrefix: a title, like a row, is shown as written — an "&" is a character, not a shortcut marker.
+        private const TextFormatFlags HeaderFlags =
+            TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+
+        /// <summary>How wide <paramref name="column"/>'s title is as painted (for the layout checks).</summary>
+        internal int HeaderTextNeed(ColumnHeader column)
+        {
+            using (var font = new Font(Font.FontFamily, HeaderFontSize, FontStyle.Bold))
+            {
+                return TextRenderer.MeasureText(column?.Text ?? string.Empty, font, new Size(int.MaxValue, int.MaxValue),
+                    HeaderFlags & ~TextFormatFlags.EndEllipsis).Width;
+            }
+        }
+
+        /// <summary>The room <paramref name="column"/>'s title is painted in.</summary>
+        internal int HeaderTextRoom(ColumnHeader column) => (column?.Width ?? 0) - HeaderTextLeft - HeaderTextRight;
+
+        /// <summary>
+        /// <see cref="HeaderTextRoom"/> in a layout's units, where a painted pixel is
+        /// <paramref name="unitsPerPixel"/> of them (LayoutFitter.SetUnitsPerPixel).
+        /// </summary>
+        internal int HeaderTextRoomIn(ColumnHeader column, float unitsPerPixel) =>
+            (column?.Width ?? 0) - (int)Math.Ceiling((HeaderTextLeft + HeaderTextRight) * unitsPerPixel);
 
         protected override void OnDrawItem(DrawListViewItemEventArgs e)
         {
@@ -539,8 +637,10 @@ namespace AutoClicker.UI
             {
                 // Through ColorEmoji so an account's (or macro's) emoji keeps its colours — TextRenderer
                 // drew it as a flat silhouette in the row's text colour. Plain text draws as before.
+                // NoPrefix: these are the user's names, and a lone "&" in one ("Jump & Run") was taken for
+                // a shortcut marker — dropped, with the space after it underlined.
                 ColorEmoji.DrawText(g, text, font, textRect, textColour,
-                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             }
         }
     }

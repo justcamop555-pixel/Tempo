@@ -23,8 +23,7 @@ namespace AutoClicker.UI
 
         public MasterPasswordDialog(Theme theme)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = Utils.Localization.T("Change master password");
@@ -38,22 +37,39 @@ namespace AutoClicker.UI
             ForeColor = theme.Text;
             Font = UiFactory.BodyFont;
 
-            const int lx = 18, fx = 160, fw = 250;
+            const int lx = 18, fw = 250;
+            Label currentLabel = UiFactory.Label(Utils.Localization.T("Current password"), lx, 0, FontStyle.Bold);
+            Label nextLabel = UiFactory.Label(Utils.Localization.T("New password"), lx, 0, FontStyle.Bold);
+            Label confirmLabel = UiFactory.Label(Utils.Localization.T("Confirm new password"), lx, 0, FontStyle.Bold);
+            // The fields start after the longest label in this language, and the window widens to
+            // match: at a fixed x = 160, French "Confirmer le nouveau mot de passe" ran 62 px into its
+            // field (Spanish, German and Italian 12–22 px).
+            // (In 100% units: the window is scaled after it is built — UiFactory.Measure96.)
+            int widest = 0;
+            foreach (Label l in new[] { currentLabel, nextLabel, confirmLabel })
+            {
+                widest = Math.Max(widest, UiFactory.Measure96(l.Text, l.Font, 0, TextFormatFlags.Default).Width);
+            }
+            int fx = Math.Max(160, lx + widest + 12);
+            ClientSize = new Size(Math.Max(430, fx + fw + 20), 236);
             int y = 20;
 
-            Controls.Add(UiFactory.Label(Utils.Localization.T("Current password"), lx, y + 3, FontStyle.Bold));
+            currentLabel.Top = y + 3;
+            Controls.Add(currentLabel);
             _current = UiFactory.Text(fx, y, fw);
             _current.UseSystemPasswordChar = true;
             Controls.Add(_current);
             y += 36;
 
-            Controls.Add(UiFactory.Label(Utils.Localization.T("New password"), lx, y + 3, FontStyle.Bold));
+            nextLabel.Top = y + 3;
+            Controls.Add(nextLabel);
             _next = UiFactory.Text(fx, y, fw);
             _next.UseSystemPasswordChar = true;
             Controls.Add(_next);
             y += 36;
 
-            Controls.Add(UiFactory.Label(Utils.Localization.T("Confirm new password"), lx, y + 3, FontStyle.Bold));
+            confirmLabel.Top = y + 3;
+            Controls.Add(confirmLabel);
             _confirm = UiFactory.Text(fx, y, fw);
             _confirm.UseSystemPasswordChar = true;
             _confirm.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { OnOk(); } };
@@ -96,6 +112,7 @@ namespace AutoClicker.UI
             CancelButton = cancel;
 
             ThemeManager.Apply(this, theme);
+            UiFactory.ScaleToScreen(this);
         }
 
         private void OnOk()

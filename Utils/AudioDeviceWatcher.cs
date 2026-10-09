@@ -1,5 +1,6 @@
 using System;
 using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
 
 namespace AutoClicker.Utils
 {
@@ -14,15 +15,41 @@ namespace AutoClicker.Utils
     /// (b) lets captions AUTO-RECOVER when a speaker appears or returns, instead
     /// of needing Live Captions toggled off and on by hand.
     ///
-    /// Polls every 3 s with a cheap default-endpoint query; events fire on a
-    /// worker thread — UI subscribers must marshal.
+    /// Windows says when something changes (IMMNotificationClient), and a change is looked at
+    /// ~150 ms later. A 2 s poll stays as the safety net: a notification can be missed (the audio
+    /// service restarting, a registration that failed), and the null-read debounce below needs a
+    /// second look anyway. Events fire on a worker thread — UI subscribers must marshal.
+    ///
+    /// COST. Every poll used to read every device's NAME, and the name is the expensive part of an
+    /// endpoint: NAudio opens the device's whole property store and walks every key to find it.
+    /// Measured on this project's PC (two speakers, one microphone): 194 ms per poll, 96 ms of CPU
+    /// every second — a tenth of a core for as long as Tempo ran, hidden in the tray with captions
+    /// off included, which was nearly all of what an idle Tempo cost. A name is now read once per
+    /// endpoint and kept (<see cref="FriendlyNameOf"/>); a poll reads only ids and states, and a
+    /// rename is caught by its notification.
     /// </summary>
     public sealed class AudioDeviceWatcher : IDisposable
     {
+        private const int PollMs = 2000;
+
+        /// <summary>
+        /// How long after a notification to look. Plugging in a headset raises several at once
+        /// (added, state, default, properties); each one pushes this back, so the burst is read once.
+        /// </summary>
+        private const int PokeDelayMs = 150;
+
         private readonly System.Threading.Timer _timer;
         private MMDeviceEnumerator _enum;
         private volatile bool _disposed;
         private int _guard;
+
+        private DeviceNotifications _notifications;
+        private MMDeviceEnumerator _notificationsOn;   // the enumerator they are registered with
+
+        /// <summary>Friendly names by endpoint id — see <see cref="FriendlyNameOf"/>.</summary>
+        private readonly System.Collections.Generic.Dictionary<string, string> _names =
+            new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly object _namesLock = new object();
 
         private string _speaker;          // friendly name, null = none
         private bool _speakerKnown;       // first tick fires events for initial state
@@ -52,13 +79,13 @@ namespace AutoClicker.Utils
         private System.Collections.Generic.List<AudioEndpointInfo>
             _micList = new System.Collections.Generic.List<AudioEndpointInfo>();
 
-        /// <summary>Every speaker Windows knows about, usable or not, refreshed ~2 s.</summary>
+        /// <summary>Every speaker Windows knows about, usable or not, refreshed on a change.</summary>
         public System.Collections.Generic.List<AudioEndpointInfo> Speakers
         {
             get { lock (_listLock) { return new System.Collections.Generic.List<AudioEndpointInfo>(_speakerList); } }
         }
 
-        /// <summary>Every microphone Windows knows about, usable or not, refreshed ~2 s.</summary>
+        /// <summary>Every microphone Windows knows about, usable or not, refreshed on a change.</summary>
         public System.Collections.Generic.List<AudioEndpointInfo> Microphones
         {
             get { lock (_listLock) { return new System.Collections.Generic.List<AudioEndpointInfo>(_micList); } }
@@ -70,9 +97,44 @@ namespace AutoClicker.Utils
         public AudioDeviceWatcher()
         {
             try { _enum = new MMDeviceEnumerator(); } catch { _enum = null; }
-            // 2 s poll: quick enough that plugging in a microphone or speaker gets
-            // noticed (and acted on) promptly, still a trivial enumeration cost.
-            _timer = new System.Threading.Timer(Tick, null, 250, 2000);
+            _timer = new System.Threading.Timer(Tick, null, 250, PollMs);
+            EnsureNotifications();
+        }
+
+        /// <summary>
+        /// Asks Windows to say when a device changes. Best-effort: without it the poll still sees
+        /// everything, only later — and a rename not at all, until Tempo restarts.
+        /// </summary>
+        private void EnsureNotifications()
+        {
+            try
+            {
+                if (_disposed || _enum == null || ReferenceEquals(_notificationsOn, _enum)) { return; }
+                var client = _notifications ?? new DeviceNotifications(this);
+                if (_enum.RegisterEndpointNotificationCallback(client) == 0)
+                {
+                    _notifications = client;
+                    _notificationsOn = _enum;
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Look soon rather than at the next poll. Runs on Windows' notification thread, which must
+        /// not be kept waiting, so this only moves the timer.
+        /// </summary>
+        private void Poke()
+        {
+            if (_disposed) { return; }
+            try { _timer.Change(PokeDelayMs, PollMs); } catch { }   // disposed under us
+        }
+
+        /// <summary>A renamed device: read its name again the next time it is asked for.</summary>
+        private void ForgetName(string id)
+        {
+            if (string.IsNullOrEmpty(id)) { return; }
+            lock (_namesLock) { _names.Remove(id); }
         }
 
         private void Tick(object state)
@@ -88,10 +150,11 @@ namespace AutoClicker.Utils
                 if (_enum == null)
                 {
                     try { _enum = new MMDeviceEnumerator(); } catch { _enum = null; }
+                    EnsureNotifications();
                 }
 
-                string speaker = QuerySpeakerName();
-                string mic = QueryMicName();
+                string speaker = QueryDefaultName(DataFlow.Render, "Speaker");
+                string mic = QueryDefaultName(DataFlow.Capture, "Microphone");
 
                 // Transient-null debounce: keep the last known speaker through one
                 // failed read; only two consecutive nulls mean it's really gone.
@@ -127,21 +190,40 @@ namespace AutoClicker.Utils
             }
         }
 
-        private string QuerySpeakerName()
+        /// <summary>
+        /// The default device's name for a flow, <paramref name="unnamed"/> when it reports none, or
+        /// null when there is no default device (or it could not be read — see the debounce).
+        /// </summary>
+        private string QueryDefaultName(DataFlow flow, string unnamed)
         {
             try
             {
                 if (_enum == null) { return null; }
-                using (MMDevice dev = _enum.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia))
+                using (MMDevice dev = _enum.GetDefaultAudioEndpoint(flow, Role.Multimedia))
                 {
-                    string name = dev?.FriendlyName;
-                    return string.IsNullOrWhiteSpace(name) ? "Speaker" : name;
+                    string name = dev == null ? null : FriendlyNameOf(dev, dev.ID);
+                    return string.IsNullOrWhiteSpace(name) ? unnamed : name;
                 }
             }
             catch
             {
-                return null;                       // no active playback device
+                return null;                       // no active device for this flow
             }
+        }
+
+        /// <summary>
+        /// An endpoint's friendly name, read once per id and kept. Throws when it cannot be read, and
+        /// then nothing is kept, so the next look tries again: queries fail transiently mid-change.
+        /// </summary>
+        private string FriendlyNameOf(MMDevice dev, string id)
+        {
+            lock (_namesLock)
+            {
+                if (_names.TryGetValue(id, out string known)) { return known; }
+            }
+            string name = dev.FriendlyName;
+            lock (_namesLock) { _names[id] = name; }
+            return name;
         }
 
         /// <summary>
@@ -185,10 +267,12 @@ namespace AutoClicker.Utils
                             if (id.Length == 0) { continue; }
                             DeviceState state;
                             try { state = dev.State; } catch { continue; }
+                            string name = null;
+                            try { name = FriendlyNameOf(dev, id); } catch { }
                             target.Add(new AudioEndpointInfo
                             {
                                 Id = id,
-                                Name = AudioDeviceSelection.NameOf(dev, flow),
+                                Name = AudioDeviceSelection.NameOrUnknown(name, flow),
                                 State = state,
                             });
                         }
@@ -239,29 +323,51 @@ namespace AutoClicker.Utils
             return true;
         }
 
-        private string QueryMicName()
-        {
-            try
-            {
-                if (_enum == null) { return null; }
-                using (MMDevice dev = _enum.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia))
-                {
-                    string name = dev?.FriendlyName;
-                    return string.IsNullOrWhiteSpace(name) ? "Microphone" : name;
-                }
-            }
-            catch
-            {
-                return null;                       // no active capture device
-            }
-        }
-
         public void Dispose()
         {
             _disposed = true;
+            try
+            {
+                if (_notifications != null && _notificationsOn != null)
+                {
+                    _notificationsOn.UnregisterEndpointNotificationCallback(_notifications);
+                }
+            }
+            catch { }
+            _notificationsOn = null;
             try { _timer.Dispose(); } catch { }
             try { _enum?.Dispose(); } catch { }
             _enum = null;
+        }
+
+        /// <summary>
+        /// Windows' own word that a device changed. Every callback only schedules a look: they run
+        /// on the audio service's notification thread, which must not be kept waiting, and calling
+        /// back into the enumerator from inside one is not allowed.
+        /// </summary>
+        private sealed class DeviceNotifications : IMMNotificationClient
+        {
+            private readonly AudioDeviceWatcher _owner;
+
+            public DeviceNotifications(AudioDeviceWatcher owner) { _owner = owner; }
+
+            public void OnDeviceStateChanged(string deviceId, DeviceState newState) => _owner.Poke();
+            public void OnDeviceAdded(string pwstrDeviceId) => _owner.Poke();
+            public void OnDeviceRemoved(string deviceId) => _owner.Poke();
+            public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId) => _owner.Poke();
+
+            public void OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key)
+            {
+                // Endpoints raise this for many properties, some of them all the time (formats,
+                // levels). Only the ones a device's name is made of matter here.
+                if (key.formatId != PropertyKeys.PKEY_Device_FriendlyName.formatId &&
+                    key.formatId != PropertyKeys.PKEY_DeviceInterface_FriendlyName.formatId)
+                {
+                    return;
+                }
+                _owner.ForgetName(pwstrDeviceId);
+                _owner.Poke();
+            }
         }
     }
 }

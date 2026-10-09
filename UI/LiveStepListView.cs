@@ -46,11 +46,18 @@ namespace AutoClicker.UI
                 case MacroActionType.MiddleDown:
                 case MacroActionType.MiddleUp:
                     return Color.FromArgb(176, 133, 245);   // violet
+                case MacroActionType.X1Down:
+                case MacroActionType.X1Up:
+                case MacroActionType.X2Down:
+                case MacroActionType.X2Up:
+                    return Color.FromArgb(244, 114, 182);   // pink — the side buttons
                 case MacroActionType.KeyDown:
                 case MacroActionType.KeyUp:
                     return Color.FromArgb(255, 209, 102);   // amber — keystrokes
                 case MacroActionType.MouseMove:
                     return Color.FromArgb(79, 168, 255);    // blue — travel
+                case MacroActionType.MouseMoveRelative:
+                    return Color.FromArgb(45, 212, 191);    // teal — a camera turn
                 case MacroActionType.Wheel:
                     return Color.FromArgb(34, 211, 238);    // cyan
                 case MacroActionType.Delay:

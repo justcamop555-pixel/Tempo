@@ -24,6 +24,8 @@ namespace AutoClicker.UI
     {
         public ModelDetailsForm(Theme theme, WhisperModelManager.WhisperModelFacts facts)
         {
+            // Built in 100% units and scaled with the screen at the end (UiFactory.ScaleToScreen); text is
+            // measured in 100% units to match.
             var t = theme ?? Theme.ForKind(ThemeKind.Dark);
             bool ok = facts != null && facts.Valid;
 
@@ -91,22 +93,30 @@ namespace AutoClicker.UI
                 Controls.Add(close);
                 CancelButton = close;
                 AcceptButton = close;
+                UiFactory.ScaleToScreen(this);
                 return;
+            }
+
+            // The name column as wide as its longest name in this language (German "Geschwindigkeit" is
+            // wider than the 84 px it was given), the values taking what is left.
+            using (var bold = new Font("Segoe UI", 9f, FontStyle.Bold))
+            {
+                foreach (string name in new[] { "Speed", "Precision", "Languages", "File" })
+                {
+                    _labelWidth = Math.Max(_labelWidth, UiFactory.Measure96(Utils.Localization.T(name), bold, 0, TextFormatFlags.Default).Width + 2);
+                }
             }
 
             int y = 92;
             y = AddRow(t, "Speed", facts.SpeedHint, y);
             y = AddRow(t, "Precision", facts.PrecisionHint, y);
-            y = AddRow(t, "Languages", facts.IsMultilingual
+            y = AddRow(t, "Languages", Utils.Localization.T(facts.IsMultilingual
                 ? "Handles any language, and can auto-detect which is being spoken."
-                : "English only. Tempo's spoken-language setting will have no effect on it.", y);
+                : "English only. Tempo's spoken-language setting will have no effect on it."), y);
             y = AddRow(t, "File", facts.FileName + "\n" + Folder(facts.Path), y);
 
-            // Now that the rows have measured themselves, the window can be exactly as
-            // tall as it needs to be: footer, buttons, and a consistent bottom margin.
-            ClientSize = new Size(520, y + 14 + 20 + 12 + 32 + 20);
-
-            // The raw shape, for anyone who wants to confirm the identification itself.
+            // The raw shape, for anyone who wants to confirm the identification itself. As tall as
+            // its words: two lines in every language but English, where a one-line box cut the second.
             var tech = new Label
             {
                 Text = Utils.Localization.F(
@@ -119,7 +129,12 @@ namespace AutoClicker.UI
                 Font = new Font("Segoe UI", 8.25f),
                 ForeColor = t.TextMuted
             };
+            tech.Height = Math.Max(20, UiFactory.Measure96(tech.Text, tech.Font, 476, TextFormatFlags.Default).Height + 2);
             Controls.Add(tech);
+
+            // Now that the rows have measured themselves, the window can be exactly as
+            // tall as it needs to be: footer, buttons, and a consistent bottom margin.
+            ClientSize = new Size(520, tech.Bottom + 12 + 32 + 20);
 
             var use = MakeButton("Use this model", t, primary: true);
             use.Left = ClientSize.Width - use.Width - 22;
@@ -135,36 +150,44 @@ namespace AutoClicker.UI
 
             AcceptButton = use;
             CancelButton = cancel;
+            UiFactory.ScaleToScreen(this);
         }
 
         /// <summary>A labelled fact. Returns the y for the next one.</summary>
         private int AddRow(Theme t, string label, string value, int y)
         {
+            // Translated here: the four names went in raw, so the rows read "Speed", "Precision",
+            // "Languages", "File" in every language.
             var l = new Label
             {
-                Text = label,
+                Text = Utils.Localization.T(label),
                 Left = 22,
                 Top = y,
-                Width = 84,
+                Width = _labelWidth,
                 Height = 20,
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
                 ForeColor = t.TextMuted
             };
             Controls.Add(l);
 
-            int lines = value.Contains("\n") ? 2 : (value.Length > 62 ? 2 : 1);
+            // Measured, not guessed: the old rule ("over 62 characters is two lines") cut the third
+            // line of every hint once it was translated.
+            int left = 22 + _labelWidth + 6;
             var v = new Label
             {
                 Text = value,
-                Left = 112,
+                Left = left,
                 Top = y,
-                Width = 386,
-                Height = lines * 18 + 4,
+                Width = 498 - left,
                 ForeColor = t.Text
             };
             Controls.Add(v);
+            v.Height = UiFactory.Measure96(value, v.Font, v.Width, TextFormatFlags.Default).Height + 4;
             return y + Math.Max(28, v.Height + 8);
         }
+
+        /// <summary>The name column's width: the 84 px it always had, or the longest name in this language.</summary>
+        private int _labelWidth = 84;
 
         private static string Folder(string path)
         {
@@ -174,9 +197,11 @@ namespace AutoClicker.UI
 
         private static Button MakeButton(string text, Theme t, bool primary)
         {
+            // Translated here, and as wide as the translation: "Use this model", "Cancel" and "Close"
+            // were shown in English in every language.
             var b = new Button
             {
-                Text = text,
+                Text = Utils.Localization.T(text),
                 Width = primary ? 136 : 96,
                 Height = 32,
                 FlatStyle = FlatStyle.Flat,
@@ -185,6 +210,7 @@ namespace AutoClicker.UI
                 Font = new Font("Segoe UI", 9.75f)
             };
             b.FlatAppearance.BorderColor = primary ? t.Accent : t.Border;
+            UiFactory.FitToText96(b, b.Width, 24);
             return b;
         }
     }

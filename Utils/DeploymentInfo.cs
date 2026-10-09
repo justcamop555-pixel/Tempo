@@ -45,6 +45,23 @@ namespace AutoClicker.Utils
         private const string InstallFolderName = "TempoClicker";
         private const string LegacyInstallFolderName = "Tempo";
 
+        /// <summary>
+        /// The INSTALLED program's file name — deliberately not "Tempo.exe".
+        ///
+        /// Discord's game detection lists the Steam game "Tempo" (Steam app 1445240, Discord
+        /// application 1124354831117729802) as tempo/tempo.exe, and shows anyone running a matching
+        /// program as playing it. Moving the install into a folder called TempoClicker was meant to
+        /// break that match and did not: Discord went on showing Tempo users as playing that game.
+        /// A different FILE name cannot match however Discord compares folders. Release downloads are
+        /// still called Tempo.exe (the release process, the web installer and every older copy's
+        /// updater look for that name); installing names the copy this, and an install made before is
+        /// renamed on its next start (<see cref="RenameInstalledExe"/>).
+        /// </summary>
+        public const string InstalledExeName = "TempoClicker.exe";
+
+        /// <summary>What the installed program was called before, and what downloads are still called.</summary>
+        public const string LegacyExeName = "Tempo.exe";
+
         private static string LocalAppData
         {
             get
@@ -97,8 +114,8 @@ namespace AutoClicker.Utils
         public static string LegacyInstalledDirectory =>
             Path.Combine(LocalAppData, "Programs", LegacyInstallFolderName);
 
-        /// <summary>The installed Tempo.exe, whether or not it exists.</summary>
-        public static string InstalledExePath => Path.Combine(InstalledDirectory, "Tempo.exe");
+        /// <summary>The installed program, whether or not it exists.</summary>
+        public static string InstalledExePath => Path.Combine(InstalledDirectory, InstalledExeName);
 
         /// <summary>How the running copy is deployed. Re-evaluated on every read — installing changes it.</summary>
         public static DeploymentKind Kind
@@ -109,7 +126,9 @@ namespace AutoClicker.Utils
                 {
                     bool installedCopyExists =
                         File.Exists(InstalledExePath) ||
-                        File.Exists(Path.Combine(LegacyInstalledDirectory, "Tempo.exe"));
+                        File.Exists(Path.Combine(InstalledDirectory, LegacyExeName)) ||
+                        File.Exists(Path.Combine(LegacyInstalledDirectory, LegacyExeName)) ||
+                        File.Exists(Path.Combine(LegacyInstalledDirectory, InstalledExeName));
                     return Classify(ExecutableDirectory, LocalAppData, TempFolders(), installedCopyExists);
                 }
                 catch
@@ -127,6 +146,131 @@ namespace AutoClicker.Utils
 
         /// <summary>True when this copy may offer to install itself.</summary>
         public static bool CanOfferInstall => Kind == DeploymentKind.Portable;
+
+        /// <summary>
+        /// Renames an installed copy still called Tempo.exe to <see cref="InstalledExeName"/>, and moves
+        /// what points at it — the sign-in entry, Start Menu and Desktop shortcuts, taskbar pins — along
+        /// with it. True when it did: the caller must then hand over to <paramref name="renamedTo"/>.
+        /// To Discord THIS process is still Tempo.exe. Measured (scratchpad/installtest) on a running
+        /// program whose file was renamed: QueryFullProcessImageName and .NET's ProcessName follow the
+        /// new name, but GetProcessImageFileName — the call Discord's process scan is documented to use —
+        /// goes on returning the name the process started under until it exits.
+        ///
+        /// Windows lets a running program's file be renamed (though not deleted), which is what makes
+        /// this possible from inside. Only ever the INSTALLED copy: a portable one is the user's file,
+        /// where they put it, under the name they gave it. Never when both names are present — that
+        /// is not a state Tempo makes, so nothing is guessed about which file is which.
+        /// </summary>
+        public static bool RenameInstalledExe(out string renamedTo)
+        {
+            renamedTo = null;
+            try
+            {
+                string exe = ExecutablePath;
+                if (string.IsNullOrEmpty(exe) || !IsInstalled) { return false; }
+                if (!RenameExeFile(exe, InstalledExeName, out string target)) { return false; }
+                renamedTo = target;
+                int moved = RepointToRenamedExe(exe, target);
+                Logger.Info("[Install] renamed the installed " + LegacyExeName + " to " + InstalledExeName
+                            + " so Discord no longer takes Tempo for the Steam game \"Tempo\"; "
+                            + moved + " shortcut(s) and sign-in entry moved with it.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Install] could not rename the installed program: " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// The rename itself, apart from anything Windows-wide, so it can be tested on throwaway files:
+        /// renames <paramref name="exe"/> — if it is called <see cref="LegacyExeName"/> — to
+        /// <paramref name="newName"/> in the same folder. False, touching nothing, for any other name or
+        /// when the new name is already taken.
+        /// </summary>
+        internal static bool RenameExeFile(string exe, string newName, out string target)
+        {
+            target = null;
+            if (string.IsNullOrEmpty(exe) || !File.Exists(exe)) { return false; }
+            if (!string.Equals(Path.GetFileName(exe), LegacyExeName, StringComparison.OrdinalIgnoreCase)) { return false; }
+            string dir = Path.GetDirectoryName(exe);
+            if (string.IsNullOrEmpty(dir)) { return false; }
+            string to = Path.Combine(dir, newName);
+            if (File.Exists(to))
+            {
+                Logger.Warn("[Install] both " + LegacyExeName + " and " + newName + " are in " + dir
+                            + " — left as they are.");
+                return false;
+            }
+            File.Move(exe, to);
+            target = to;
+            return true;
+        }
+
+        /// <summary>
+        /// For the installed copy running under its new name: shortcuts, taskbar pins and the sign-in
+        /// entry still aimed at the old <see cref="LegacyExeName"/> beside it — which install.cmd leaves
+        /// behind when it renames by installing the new name — move to this file. Only when that old
+        /// file is really gone: a real Tempo.exe there is not a leftover to point away from. Runs on
+        /// its own STA thread (shell links are apartment-threaded), off the startup path.
+        /// </summary>
+        public static void RepointLeftoversOfOldNameInBackground()
+        {
+            try
+            {
+                var t = new System.Threading.Thread(() =>
+                {
+                    try
+                    {
+                        string exe = ExecutablePath;
+                        if (string.IsNullOrEmpty(exe) || !IsInstalled ||
+                            !string.Equals(Path.GetFileName(exe), InstalledExeName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return;
+                        }
+                        string old = Path.Combine(Path.GetDirectoryName(exe) ?? "", LegacyExeName);
+                        if (File.Exists(old)) { return; }
+                        int moved = RepointToRenamedExe(old, exe);
+                        if (moved > 0)
+                        {
+                            Logger.Info("[Install] " + moved + " shortcut(s) still opening the old " + LegacyExeName
+                                        + " now open " + InstalledExeName + ".");
+                        }
+                    }
+                    catch (Exception ex) { Logger.Swallow("RepointLeftoversOfOldName", ex); }
+                });
+                t.SetApartmentState(System.Threading.ApartmentState.STA);
+                t.IsBackground = true;
+                t.Start();
+            }
+            catch (Exception ex) { Logger.Swallow("RepointLeftoversOfOldName (thread)", ex); }
+        }
+
+        /// <summary>
+        /// Moves the sign-in entry and every Start Menu / Desktop shortcut and taskbar pin that opens
+        /// <paramref name="oldExe"/> over to <paramref name="newExe"/>. Anything pointing elsewhere is
+        /// left alone. Also run by the installed copy at every start (off the startup path), because
+        /// install.cmd renames by installing the new name — and a pin made for the old file would
+        /// otherwise open nothing. Returns how many shortcuts moved.
+        /// </summary>
+        public static int RepointToRenamedExe(string oldExe, string newExe)
+        {
+            int moved = 0;
+            try
+            {
+                string registered = StartupManager.ExePathFromCommand(StartupManager.RegisteredCommand());
+                if (!string.IsNullOrEmpty(registered) &&
+                    string.Equals(Normalize(registered), Normalize(oldExe), StringComparison.OrdinalIgnoreCase))
+                {
+                    StartupManager.RepointTo(newExe);
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("RepointToRenamedExe (sign-in entry)", ex); }
+            try { moved = SelfInstaller.RepointShortcuts(oldExe, newExe, SelfInstaller.ShortcutFolders()); }
+            catch (Exception ex) { Logger.Swallow("RepointToRenamedExe (shortcuts)", ex); }
+            return moved;
+        }
 
         /// <summary>
         /// Classifies a running folder. Pure — every input is a parameter — so each case can be

@@ -111,6 +111,30 @@ namespace AutoClicker.UI
         // with the actual words.
         private static readonly Color SourceTagColor = Color.FromArgb(170, 178, 192);
 
+        /// <summary>
+        /// The colour "Speaker <paramref name="speaker"/>:" has on the bar — the one place that
+        /// decides it, so the Captions tab's speaker chips match the bar.
+        /// </summary>
+        internal static Color SpeakerColor(int speaker)
+        {
+            int n = Math.Max(1, speaker) - 1;
+            return SpeakerPalette[n % SpeakerPalette.Length];
+        }
+
+        /// <summary>
+        /// The name the user gave a speaker, drawn in place of "Speaker N" (same colour), or null for
+        /// the number. Set once by MainForm; read while painting, on the UI thread. The text handed to
+        /// the bar keeps "Speaker N:" — only what is DRAWN changes — so turn-taking, the reveal and the
+        /// transcript's own copy are untouched by a rename.
+        /// </summary>
+        internal static Func<int, string> SpeakerNameFor;
+
+        /// <summary>Repaints, so a speaker named just now shows under the new name straight away.</summary>
+        public void RefreshSpeakerNames()
+        {
+            Repaint();
+        }
+
         /// <summary>One word (or an atomic "Speaker N:" label) with its colour.</summary>
         private struct TextRun
         {
@@ -403,6 +427,21 @@ namespace AutoClicker.UI
             catch { }
         }
 
+        /// <summary>
+        /// Back to the default place — the bottom middle of the monitor the bar is on now ("Default
+        /// place" in its move-mode menu).
+        /// </summary>
+        public void ResetToDefault()
+        {
+            try
+            {
+                _homeScreen = Screen.FromControl(this);
+                LayoutToBottom();
+                Repaint();
+            }
+            catch { }
+        }
+
         // ── Public surface (unchanged signatures) ───────────────────────────
         public void SetCaption(string text)
         {
@@ -412,6 +451,10 @@ namespace AutoClicker.UI
             if (_pending && text.Length > 0)
             {
                 _pending = false;
+            }
+            if (text.Length > 0)
+            {
+                _captionsOff = false;
             }
             if (text != _text)
             {
@@ -439,6 +482,7 @@ namespace AutoClicker.UI
             _pending = pending;
             if (pending)
             {
+                _captionsOff = false;       // "listening" means captions are on
                 _revealLagMs = -1;          // a fresh session measures its own reveal delay
                 _text = "";
                 _fadeTarget = 1.0;
@@ -446,6 +490,31 @@ namespace AutoClicker.UI
             }
             Repaint();
         }
+
+        // True while captions are switched off: an empty bar then says so, instead of the
+        // "Captions on · listening…" it showed when "Show caption bar" put it up with captions off.
+        private bool _captionsOff;
+
+        /// <summary>
+        /// Captions switched off (true) or on (false). Off clears the words and the listening cue, so a
+        /// bar shown while captions are off says "Captions are off" rather than an old sentence or a
+        /// promise that it is listening.
+        /// </summary>
+        public void SetCaptionsOff(bool off)
+        {
+            if (off == _captionsOff) { return; }
+            _captionsOff = off;
+            if (off)
+            {
+                _pending = false;
+                SetCaption("");
+                _captionsOff = true;        // SetCaption("") leaves it, but be explicit
+            }
+            Repaint();
+        }
+
+        /// <summary>True when the bar holds caption words (not a cue or a placeholder).</summary>
+        public bool HasText => !string.IsNullOrEmpty(_text);
 
         // How many lines of text the bar keeps on screen. Was a hard-coded 3, which is
         // why a phrase survived only a few seconds: the next couple of chunks wrapped
@@ -606,6 +675,8 @@ namespace AutoClicker.UI
 
         public void SetMovable(bool movable)
         {
+            // Every show now passes the current mode; only a real change touches the window.
+            if (movable == _movable) { return; }
             _movable = movable;
             if (IsHandleCreated)
             {
@@ -623,21 +694,62 @@ namespace AutoClicker.UI
             Repaint();
         }
 
+        /// <summary>True while the bar can be dragged (move mode).</summary>
+        public bool Movable => _movable;
+
         public event Action<Point> PositionChanged;
 
-        private const int WM_NCHITTEST = 0x0084;
-        private const int HTCAPTION = 2;
-        private const int WM_EXITSIZEMOVE = 0x0232;
+        /// <summary>Double-clicked while movable: "I'm done moving".</summary>
+        public event Action LockRequested;
+
+        /// <summary>Right-clicked while movable, at this screen point.</summary>
+        public event Action<Point> ContextRequested;
+
+        /// <summary>The other caption window's bounds while it is showing, to snap to.</summary>
+        internal Func<Rectangle?> SnapPartner;
+
+        private Point _moveStart;
 
         protected override void WndProc(ref Message m)
         {
-            if (_movable && m.Msg == WM_NCHITTEST)
+            if (_movable)
             {
-                m.Result = (IntPtr)HTCAPTION;
-                return;
+                switch (m.Msg)
+                {
+                    case CaptionWindowChrome.WM_NCHITTEST:
+                        m.Result = (IntPtr)CaptionWindowChrome.HTCAPTION;
+                        return;
+                    case CaptionWindowChrome.WM_MOVING:
+                    {
+                        Rectangle? partner = null;
+                        try { partner = SnapPartner?.Invoke(); } catch { }
+                        if (CaptionWindowChrome.SnapMoving(ref m, Dpi, partner)) { return; }
+                        break;
+                    }
+                    case CaptionWindowChrome.WM_NCLBUTTONDBLCLK:
+                        // Never to Windows: a double-click on a "caption" maximises a window whose
+                        // style has WS_MAXIMIZEBOX — the same bit as the WS_TABSTOP every WinForms
+                        // form carries — so it would blow the bar up to the whole screen.
+                        m.Result = IntPtr.Zero;
+                        LockRequested?.Invoke();
+                        return;
+                    case CaptionWindowChrome.WM_NCRBUTTONUP:
+                        m.Result = IntPtr.Zero;
+                        ContextRequested?.Invoke(CaptionWindowChrome.PointFromLParam(m.LParam));
+                        return;
+                    case CaptionWindowChrome.WM_CONTEXTMENU:
+                        m.Result = IntPtr.Zero;
+                        return;
+                }
+            }
+            if (m.Msg == CaptionWindowChrome.WM_ENTERSIZEMOVE)
+            {
+                _moveStart = Location;
             }
             base.WndProc(ref m);
-            if (m.Msg == WM_EXITSIZEMOVE)
+            // Only when it actually moved: a move loop can end where it began (a click without a
+            // drag), and that is no new place to save.
+            if (m.Msg == CaptionWindowChrome.WM_EXITSIZEMOVE && Location != _moveStart)
             {
                 // Wherever the user dropped it is now home — font resizes and layout
                 // must respect THAT monitor, not the primary.
@@ -821,6 +933,17 @@ namespace AutoClicker.UI
 
         private void DrawContent(Graphics g)
         {
+            DrawCaption(g);
+            if (_movable)
+            {
+                CaptionWindowChrome.DrawMoveChrome(g, Size, _theme, MoveHint, Dpi, 18, resizeGrip: false);
+            }
+        }
+
+        private static string MoveHint => Utils.Localization.T("Drag to move · double-click when done");
+
+        private void DrawCaption(Graphics g)
+        {
             g.Clear(Color.Transparent);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAlias;
@@ -849,6 +972,9 @@ namespace AutoClicker.UI
             // full bar - not a tiny pill - so the bar is its usual size from the start
             // and there's no empty-panel flash. The first real caption replaces it.
             string drawText = _text;
+            // How strongly the words are drawn, as a share of the caption's own opacity: a
+            // placeholder is softer than a caption.
+            double wordsStrength = 1.0;
             if (_pending && !_movable)
             {
                 // Translated. It reaches the screen through a local and a DrawString, so
@@ -865,6 +991,20 @@ namespace AutoClicker.UI
                 // sliding sideways/up as each word appears (the old revealed-only
                 // layout re-centred every line ~3.5\u00d7/second while the user was reading).
                 drawText = string.Join(" ", _targetWords);
+            }
+            else if (_movable && string.IsNullOrEmpty(_text))
+            {
+                // Being placed with nothing to show: a sample in the caption's own font, size and
+                // colour, so the spot is chosen for what will really appear there. It said "Drag me
+                // \u2014 caption bar" in English in every language, written into the bar's text by the
+                // tray, which then had to guess what to put back afterwards.
+                drawText = Utils.Localization.T("Captions appear here");
+                wordsStrength = 0.8;
+            }
+            else if (_captionsOff && string.IsNullOrEmpty(_text))
+            {
+                drawText = Utils.Localization.T("Captions are off");
+                wordsStrength = 0.55;
             }
             int revealCount = _pending ? int.MaxValue
                             : (!_movable && _targetWords.Length > 0
@@ -906,12 +1046,8 @@ namespace AutoClicker.UI
                 DrawAccent(g, rect, baseColor, globalFade);
             }
 
-            if (_movable && string.IsNullOrEmpty(_text))
-            {
-                DrawHint(g, rect, textA);
-                return;
-            }
             if (string.IsNullOrEmpty(drawText)) return;
+            textA = (int)Math.Round(textA * wordsStrength);
 
             // Small "where this audio comes from" tag in the top-right corner. Full
             // text alpha — the bar's background is colour-keyed, so faded pixels turn
@@ -921,6 +1057,16 @@ namespace AutoClicker.UI
             // Text area leaves room for the accent line.
             var layout = new RectangleF(rect.Left + 26, rect.Top + 10,
                 rect.Width - 52, rect.Height - 28);
+            if (_movable)
+            {
+                // Below the move chip, so it never sits on the first line.
+                Rectangle chip = CaptionWindowChrome.ChipRect(g, Size, MoveHint, Dpi);
+                float top = chip.IsEmpty ? layout.Top : chip.Bottom + 4 * Dpi;
+                if (top > layout.Top)
+                {
+                    layout = new RectangleF(layout.Left, top, layout.Width, Math.Max(1f, layout.Bottom - top));
+                }
+            }
 
             // See SafeFallbackFamily: NEVER let the shared generic family reach `using`.
             //
@@ -1217,12 +1363,16 @@ namespace AutoClicker.UI
                 if (w == Utils.SpeakerTurnLabeler.SpeakerWord && i + 1 < words.Length && words[i + 1].Length == 2 &&
                     words[i + 1][1] == ':' && words[i + 1][0] >= '1' && words[i + 1][0] <= '9')
                 {
-                    int n = words[i + 1][0] - '1';
                     consumed += 2;   // two words fold into one label token
+                    int speaker = words[i + 1][0] - '0';
+                    string name = null;
+                    try { name = SpeakerNameFor?.Invoke(speaker); } catch { name = null; }
                     toks.Add(new TextRun
                     {
-                        Text = Utils.SpeakerTurnLabeler.SpeakerWord + " " + words[i + 1],
-                        Color = SpeakerPalette[n % SpeakerPalette.Length],
+                        Text = string.IsNullOrWhiteSpace(name)
+                            ? Utils.SpeakerTurnLabeler.SpeakerWord + " " + words[i + 1]
+                            : name.Trim() + ":",
+                        Color = SpeakerColor(speaker),
                         RevealAt = consumed
                     });
                     i++;
@@ -1286,18 +1436,6 @@ namespace AutoClicker.UI
                 (int)(c.R * (1 - amount)),
                 (int)(c.G * (1 - amount)),
                 (int)(c.B * (1 - amount)));
-        }
-
-        private void DrawHint(Graphics g, Rectangle rect, int textA)
-        {
-            using (var f = new Font("Segoe UI", Math.Max(11, _fontPoints * 0.6f), FontStyle.Bold))
-            using (var b = new SolidBrush(Color.FromArgb(Math.Max(textA, 200), 235, 238, 245)))
-            using (var fmt = new StringFormat
-            { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-            {
-                g.DrawString(Utils.Localization.T("Drag me where you want captions, then turn move mode off"),
-                    f, b, rect, fmt);
-            }
         }
 
         private static GraphicsPath RoundedRect(Rectangle r, int radius)

@@ -26,9 +26,9 @@
     <LangVersion>12.0</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\tempo.ico</ApplicationIcon>
-    <Version>1.0.322</Version>
-    <AssemblyVersion>1.0.322.0</AssemblyVersion>
-    <FileVersion>1.0.322.0</FileVersion>
+    <Version>1.0.323</Version>
+    <AssemblyVersion>1.0.323.0</AssemblyVersion>
+    <FileVersion>1.0.323.0</FileVersion>
     <Company>Tempo Project</Company>
     <Product>Tempo</Product>
     <AssemblyTitle>Tempo</AssemblyTitle>
@@ -155,6 +155,12 @@
   <ItemGroup>
     <EmbeddedResource Include="Assets\tempo.ico" />
     <EmbeddedResource Include="Assets\tempo-about.gif" />
+    <!--
+      Silero VAD v5.1.2 in whisper.cpp's ggml conversion (885,098 bytes, SHA-256 29940d98…ea2cf,
+      huggingface.co/ggml-org/whisper-vad). Run by Utils/SileroVad.cs — NOT by Whisper.net, which only
+      has VAD from 1.9.1, the version pinned away from below. MIT (Silero Team; the ggml authors).
+    -->
+    <EmbeddedResource Include="Assets\ggml-silero-v5.1.2.bin" LogicalName="Tempo.ggml-silero-v5.1.2.bin" />
     <!-- Embedded, not copied beside the exe: publish is single-file. -->
     <EmbeddedResource Include="UI\Web\settings.html" />
     <!--

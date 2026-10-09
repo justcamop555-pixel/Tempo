@@ -212,14 +212,6 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
-        /// Builds a GitHub "new issue" URL pre-filled with the crash details.
-        /// </summary>
-        public static string BuildIssueUrl(Exception ex, string context)
-        {
-            return IssueUrlFromReport(ex, BuildReport(ex, context));
-        }
-
-        /// <summary>
         /// The machine facts that make a report actionable, one per line.
         ///
         /// ONE copy, used by every channel. The GitHub body and the email body used to
@@ -291,12 +283,6 @@ namespace AutoClicker.Utils
             return s;
         }
 
-        /// <summary>A blank bug-report issue link for proactive (non-crash) reports.</summary>
-        public static string BuildBlankIssueUrl()
-        {
-            return IssueUrlFromBody(BlankReportBody());
-        }
-
         /// <summary>
         /// A GitHub issue link carrying exactly <paramref name="body"/> — the text the
         /// user reviewed and possibly edited, not a body rebuilt behind their back.
@@ -330,31 +316,9 @@ namespace AutoClicker.Utils
                 + "&body=" + Uri.EscapeDataString(body.ToString());
         }
 
-        /// <summary>
-        /// Builds a "mailto:" link pre-addressed to the support email with the
-        /// crash details in the body. Opens the user's default email app — works
-        /// without a GitHub account.
-        /// </summary>
-        public static string BuildMailtoUrl(Exception ex, string context)
-        {
-            return MailtoUrlFromReport(ex, BuildReport(ex, context));
-        }
-
-        /// <summary>A blank bug-report email link for proactive (non-crash) reports.</summary>
-        public static string BuildBlankMailtoUrl() { return BuildMailtoUrlFor(BlankReportBody()); }
-
-        /// <summary>Opens a Gmail "compose" window in the browser, pre-filled.</summary>
-        public static string BuildGmailComposeUrl() { return BuildGmailComposeUrlFor(BlankReportBody()); }
-
-        /// <summary>Opens an Outlook-on-the-web "compose" window in the browser, pre-filled.</summary>
-        public static string BuildOutlookComposeUrl() { return BuildOutlookComposeUrlFor(BlankReportBody()); }
-
-        /// <summary>Opens a Yahoo Mail "compose" window in the browser, pre-filled.</summary>
-        public static string BuildYahooComposeUrl() { return BuildYahooComposeUrlFor(BlankReportBody()); }
-
-        // Each channel in a "…For(body)" form as well, so the composer can send the
-        // exact text the user reviewed. Without these the preview would be theatre:
-        // the user edits a box and the app sends something it rebuilt afterwards.
+        // Each channel takes the body as an argument, so the composer sends the exact text the
+        // user reviewed. (There were no-argument versions that rebuilt the body themselves; the
+        // preview would have been theatre with them, and nothing called them any more.)
 
         /// <summary>
         /// The practical ceiling on a "mailto:" URL. Windows hands it to the mail
@@ -405,10 +369,7 @@ namespace AutoClicker.Utils
                 + "&body=" + Uri.EscapeDataString(Sanitize(body ?? string.Empty));
         }
 
-        /// <summary>Plain-text report (recipient + subject + body) for copying to the clipboard.</summary>
-        public static string BuildBlankReportText() { return BuildReportTextFor(BlankReportBody()); }
-
-        /// <summary>Clipboard form of an explicit body.</summary>
+        /// <summary>Plain-text report (recipient + subject + body) of an explicit body, for the clipboard.</summary>
         public static string BuildReportTextFor(string body)
         {
             return Sanitize(

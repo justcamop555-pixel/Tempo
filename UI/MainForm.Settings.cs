@@ -12,6 +12,7 @@ namespace AutoClicker.UI
     {
         private bool _suppressSettingsEvents;
         private CheckBox _launchStartupCheck;
+        private CheckBox _openAtSignInCheck;
         private CheckBox _hideWhenClickingCheck;
         private CheckBox _checkUpdatesCheck;
         private CheckBox _writeLogCheck;
@@ -37,6 +38,37 @@ namespace AutoClicker.UI
         private Label _bgDimLabel;
         // Read-only summary of the display Tempo is on, in the Window & Display card.
         private Label _displayInfoLabel;
+        // Tab or its own window, for the Roblox Account Manager.
+        private ComboBox _accountsPlacementCombo;
+        private bool _updatingAccountsPlacement;
+
+        /// <summary>
+        /// Writes settings now, and never lets a disk problem reach the user as a crash — the
+        /// setting the click just changed is already live in memory either way. For the toggles
+        /// that must stick through a force-kill or a reboot rather than waiting for Save.
+        /// </summary>
+        private void SaveSettingsQuietly()
+        {
+            if (_settings == null) { return; }
+            try { SettingsManager.Save(_settings); }
+            catch (Exception ex) { Utils.Logger.Swallow("SaveSettingsQuietly", ex); }
+        }
+
+        /// <summary>Points the placement combo at what the setting actually says, without re-firing it.</summary>
+        private void SyncAccountsPlacementCombo()
+        {
+            if (_accountsPlacementCombo == null || _settings == null) { return; }
+            _updatingAccountsPlacement = true;
+            try
+            {
+                _accountsPlacementCombo.SelectedIndex =
+                    _settings.AccountsPlacement == AccountsPlacement.Window ? 1 : 0;
+            }
+            finally { _updatingAccountsPlacement = false; }
+            // The Accounts row's ↗ follows the setting (every change of it passes here or through
+            // the combo itself).
+            RefreshSidebarSelection();
+        }
         private NumericUpDown _captionLinesNum;
         // "(experimental)" normally; "file missing" when the configured background
         // image can no longer be read. Updated by ApplyBackgroundGif.
@@ -72,7 +104,9 @@ namespace AutoClicker.UI
             // 200, not 168: the logo row below was added under the background-image row.
             // 264, not 200: the HDR row and the display-colour line were added below the
             // logo row.
-            var appearance = UiFactory.Group(Localization.T("Appearance"), 12, 12, 696, 272, CardIcon.Star);
+            // 300, not 272: the display note under "Correct colours for HDR" has four lines of
+            // room now (facts, the correction's state, and the SDR-brightness advice).
+            var appearance = UiFactory.Group(Localization.T("Appearance"), 12, 12, 696, 300, CardIcon.Star);
             appearance.Controls.Add(UiFactory.Label("Theme", 16, 32));
             _themeCombo = UiFactory.Combo(120, 29, 150,
                 "Dark", "Light", "Midnight", "Ocean", "Forest", "Crimson",
@@ -170,15 +204,22 @@ namespace AutoClicker.UI
             appearance.Controls.Add(_accentContrastLabel);
 
             // Live preview.
-            appearance.Controls.Add(UiFactory.Label("Preview", 16, 104));
+            var previewLabel = UiFactory.Label("Preview", 16, 104);
+            appearance.Controls.Add(previewLabel);
+            // The swatches start after the label and share out whatever is left before the
+            // Accent button at 330. At a fixed x=90 the Portuguese "Pré-visualização" (92 px)
+            // ran 18 px under the first swatch.
+            // LayoutRight: the label sizes itself in screen pixels while the window is built.
+            int swatchLeft = Math.Max(90, LayoutRight(previewLabel) + 8);
+            int swatchStep = Math.Min(38, (330 - 8 - swatchLeft) / 6);
             _previewSwatches = new Panel[6];
             for (int i = 0; i < _previewSwatches.Length; i++)
             {
                 _previewSwatches[i] = new Panel
                 {
-                    Left = 90 + i * 38,
+                    Left = swatchLeft + i * swatchStep,
                     Top = 102,
-                    Width = 34,
+                    Width = Math.Max(18, swatchStep - 4),
                     Height = 24,
                     BorderStyle = BorderStyle.FixedSingle
                 };
@@ -224,10 +265,18 @@ namespace AutoClicker.UI
             _fullGifClearBtn.Click += OnClearFullGif;
             appearance.Controls.Add(_fullGifClearBtn);
 
-            appearance.Controls.Add(UiFactory.Label("Dim", 300, 140));
+            var dimLabel = UiFactory.Label("Dim", 300, 140);
+            appearance.Controls.Add(dimLabel);
+            // The slider starts where the label ENDS, not at a fixed 334. "Dim" is 26 px;
+            // "Atenuar", "Atténuer", "Attenua" and "Escurecer" are 45–59 px and "Abdunkeln"
+            // 65 — so in every language but English the slider was painted over the end of
+            // its own label (31 px of it in German). The layout check could not see it: the
+            // slider is a custom control, and it only knew about the framework's. It keeps
+            // its right edge, so the percentage beside it does not move.
+            int dimLeft = Math.Max(334, LayoutRight(dimLabel) + 6);
             _bgDimTrack = new SmoothTrackBar
             {
-                Left = 334, Top = 140, Width = 150, Height = 22,
+                Left = dimLeft, Top = 140, Width = Math.Max(80, 484 - dimLeft), Height = 22,
                 Minimum = 0, Maximum = 90, TickFrequency = 15,
                 SmallChange = 5, LargeChange = 10,
                 Value = _settings != null ? _settings.BackgroundDim : 55
@@ -280,18 +329,25 @@ namespace AutoClicker.UI
             // "The theme doesn't look like the colours you picked" has causes that live
             // entirely outside Tempo, and this card — where the user is standing when they
             // notice — said nothing about any of them. Windows HDR is the big one: Tempo
-            // is an SDR app, so the compositor tone-maps everything it paints, dark themes
-            // come out milky and greys lift. Nothing inside the process can see that; the
-            // pixels we drew are the pixels we asked for.
+            // is an SDR app, so the compositor converts everything it paints, dark themes
+            // come out milky and near-blacks lift. Nothing inside the process can see that;
+            // the pixels we drew are the pixels we asked for. The box pre-darkens the
+            // palette by exactly the curve Windows uses (Theme.ForHdr), per screen.
             _hdrCompensateCheck = UiFactory.Check("Correct colours for HDR", 200, 204);
             _hdrCompensateCheck.AutoSize = true;
             _hdrCompensateCheck.CheckedChanged += OnHdrCompensationToggled;
             appearance.Controls.Add(_hdrCompensateCheck);
 
-            _displayColourNote = UiFactory.Caption("", 16, 230);
-            _displayColourNote.AutoSize = false;
-            _displayColourNote.Width = 670;
-            _displayColourNote.Height = 30;
+            // One colour per line (NoteLabel): a single warning used to turn the whole note amber.
+            _displayColourNote = new NoteLabel
+            {
+                Left = 16,
+                Top = 230,
+                AutoSize = false,
+                Width = 670,
+                Height = 58,
+                Font = UiFactory.FontFor(8.25f, FontStyle.Regular)
+            };
             appearance.Controls.Add(_displayColourNote);
             RefreshDisplayColourNote();
 
@@ -302,17 +358,34 @@ namespace AutoClicker.UI
             appearance.Controls.Add(_animateLogoNote);
 
             // ── Startup & Window ───────────────────────────────────────────────
-            var startup = UiFactory.Group(Localization.T("Startup & Window"), 12, 192, 696, 114, CardIcon.Play);
+            var startup = UiFactory.Group(Localization.T("Startup & Window"), 12, 192, 696, 142, CardIcon.Play);
 
-            _launchStartupCheck = UiFactory.Check("Launch Tempo when I sign in to Windows (starts in the tray)", 16, 30);
-            _hideWhenClickingCheck = UiFactory.Check("Hide window to tray when clicking starts", 16, 58);
+            _launchStartupCheck = UiFactory.Check("Launch Tempo when I sign in to Windows", 16, 30);
+            _launchStartupCheck.CheckedChanged += (s, e) => SyncOpenAtSignInEnabled();
             startup.Controls.Add(_launchStartupCheck);
+
+            // Whether that sign-in launch opens the window or stays in the tray. It always stayed
+            // in the tray, and the caption above said so, so there was no way to have the window
+            // up after signing in. Indented because it only means something while the box above
+            // is ticked. Saved the moment it is clicked: the next sign-in is usually a reboot away,
+            // and Save may never be pressed before it.
+            _openAtSignInCheck = UiFactory.Check("Open the window at sign-in", 36, 58);
+            _openAtSignInCheck.AutoSize = true;
+            _openAtSignInCheck.CheckedChanged += (s, e) =>
+            {
+                if (_suppressSettingsEvents || _settings == null) { return; }
+                _settings.OpenWindowAtSignIn = _openAtSignInCheck.Checked;
+                try { SettingsManager.Save(_settings); } catch (Exception ex) { Logger.Swallow("OpenWindowAtSignIn.save", ex); }
+            };
+            startup.Controls.Add(_openAtSignInCheck);
+
+            _hideWhenClickingCheck = UiFactory.Check("Hide window to tray when clicking starts", 16, 86);
             startup.Controls.Add(_hideWhenClickingCheck);
 
             // Reopen where you left off. Matters most after an unattended run: Windows
             // reboots overnight, launch-at-startup brings Tempo back, and landing on
             // Clicker instead of the Macros tab you were using reads as a lost page.
-            _rememberTabCheck = UiFactory.Check("Reopen on the tab I used last", 16, 86);
+            _rememberTabCheck = UiFactory.Check("Reopen on the tab I used last", 16, 114);
             _rememberTabCheck.AutoSize = true;
             _rememberTabCheck.CheckedChanged += (s, e) =>
             {
@@ -369,8 +442,9 @@ namespace AutoClicker.UI
 
             // Safety: a forgotten Tempo in the tray shouldn't react to hotkeys.
             // Placed in the right column so the left column isn't over-stuffed (it used to
-            // run past the card edge and collide with the row above it).
-            _traySleepCheck = UiFactory.Check("Sleep in tray (pause hotkeys && cursor trail)", 360, 174);
+            // run past the card edge and collide with the row above it). At the bottom of it:
+            // its old row now holds the overlay's Customise button (see below).
+            _traySleepCheck = UiFactory.Check("Sleep in tray (pause hotkeys && cursor trail)", 360, 226);
             behaviour.Controls.Add(_traySleepCheck);
             behaviour.Controls.Add(_trayNotifyCheck);
             behaviour.Controls.Add(_confirmExitCheck);
@@ -384,8 +458,11 @@ namespace AutoClicker.UI
             behaviour.Controls.Add(_startDelayBeepCheck);
 
             // Update checking: the checkbox is the master on/off; the combo beside it
-            // sets how often the launch-time check may actually run.
-            _checkUpdatesCheck = UiFactory.Check("Check for updates on start", 16, 114);
+            // sets how often the automatic check may actually run. The row reads
+            // "Check for updates [Daily]". Not "… on start": it also runs while Tempo stays open,
+            // which for a tray app is most of the time. And short on purpose — the combo leaves it
+            // 184 px, and the longer captions ended in "…" (in five languages the old one did).
+            _checkUpdatesCheck = UiFactory.Check("Check for updates", 16, 114);
             _checkUpdatesCheck.AutoSize = true;
             _checkUpdatesCheck.CheckedChanged += (s, e) =>
             {
@@ -394,6 +471,9 @@ namespace AutoClicker.UI
             behaviour.Controls.Add(_checkUpdatesCheck);
             _updateFreqCombo = UiFactory.Combo(210, 111, 128,
                 Localization.T("Every launch"), Localization.T("Daily"), Localization.T("Weekly"));
+            // As wide as its longest choice (French "À chaque lancement" needed 116 px of the 104 it
+            // had), short of the "Write a log file" tick box at x = 360.
+            if (_updateFreqCombo is FlatComboBox freqBox) { freqBox.Width = Math.Min(142, freqBox.WidthForChoices96(128)); }
             behaviour.Controls.Add(_updateFreqCombo);
 
             _writeLogCheck = UiFactory.Check("Write a log file to disk", 360, 118);
@@ -405,7 +485,10 @@ namespace AutoClicker.UI
             _showIndicatorCheck = UiFactory.Check("Show on-screen overlay while running", 360, 146);
             _showIndicatorCheck.AutoSize = true;
             behaviour.Controls.Add(_showIndicatorCheck);
-            var overlayCustomizeBtn = UiFactory.Button("Customise…", 588, 143, 100, 26);
+            // Under the checkbox, not beside it. Beside it left the caption 218 px, and it needs
+            // more than that in every language — English included, where it always read "Show
+            // on-screen overlay whi…".
+            var overlayCustomizeBtn = UiFactory.Button("Customise…", 380, 171, 100, 26);
             overlayCustomizeBtn.Click += OnCustomiseOverlay;
             behaviour.Controls.Add(overlayCustomizeBtn);
 
@@ -481,8 +564,11 @@ namespace AutoClicker.UI
             };
             notify.Controls.Add(_mirrorNotifyCheck);
 
-            notify.Controls.Add(UiFactory.Label("Show (s):", 416, 60));
-            _notifyDurationNum = UiFactory.Numeric(486, 56, 56, 2, 20, 5);
+            var showLabel = UiFactory.Label("Show (s):", 416, 60);
+            notify.Controls.Add(showLabel);
+            // After its label, however wide that is. Text grows by more than the window does on a 150%
+            // screen (glyphs round to whole pixels): "Anzeigen (s):" came out 112 px, 7 into the box at 486.
+            _notifyDurationNum = UiFactory.Numeric(Math.Max(486, LayoutRight(showLabel) + 4), 56, 56, 2, 20, 5);
             _notifyDurationNum.ValueChanged += (s, e) =>
             {
                 if (_suppressSettingsEvents) { return; }
@@ -583,6 +669,13 @@ namespace AutoClicker.UI
             _notifyMissedLabel = UiFactory.Caption("", 214, 188);
             notify.Controls.Add(_notifyMissedLabel);
 
+            // Kept current as the history changes. It used to be set once, when settings were
+            // loaded, and never again: clearing the history left "3 you didn't see" sitting
+            // here until Tempo was restarted, and a notification missed DURING a game never
+            // added to it either. NotificationHistory.Changed was already raised for both —
+            // nothing had ever subscribed to it.
+            Utils.NotificationHistory.Changed += OnNotificationHistoryChanged;
+
             // One noisy app used to mean turning the whole mirror off. Muting happens on
             // the card (right-click it); this is where you take it back, and the count is
             // the only place a muted app is visible when no card is on screen.
@@ -608,8 +701,9 @@ namespace AutoClicker.UI
 
             // ── Live Captions ─────────────────────────────────────────────────
             // 436, not 400: the language row below needs a line of its own, and every
-            // other row in this card is already occupied edge to edge.
-            var captions = UiFactory.Group(Localization.T("Live Captions (accessibility)"), 12, 754, 696, 436, CardIcon.Caption);
+            // other row in this card is already occupied edge to edge. 468 for the lyrics
+            // row under it, for the same reason.
+            var captions = UiFactory.Group(Localization.T("Live Captions (accessibility)"), 12, 754, 696, 468, CardIcon.Caption);
 
             _captionOverlayCheck = UiFactory.Check("Show Tempo's caption overlay bar when Live Captions is on", 16, 30);
             // This switch had no handler at all, so the two options that only affect the
@@ -636,6 +730,10 @@ namespace AutoClicker.UI
                 Utils.Localization.T("Tempo's Live Captions (offline)"),
                 Utils.Localization.T("Auto \u2013 Tempo first, Windows fallback (recommended)"));
             _captionSourceCombo.SelectedIndexChanged += OnCaptionSourceChanged;
+            // The three caption boxes share two full rows and their choices describe themselves ("Large
+            // v3 (most accurate, GPU recommended)"): when chosen, a long one ends in "…" in the box, and
+            // the open list (as wide as its widest choice) and the hover show it whole.
+            LayoutFitter.DeclareShortenedChoices(_captionSourceCombo, "descriptive choices in a full row");
             captions.Controls.Add(_captionSourceCombo);
 
             // Pause-based speaker-turn labels ("Speaker 1:", "Speaker 2:") on the bar.
@@ -665,6 +763,7 @@ namespace AutoClicker.UI
             }
             _captionModelCombo = UiFactory.Combo(150, 95, 220, modelLabels.ToArray());
             _captionModelCombo.SelectedIndexChanged += (s2, e2) => UpdateCaptionSourceUi();
+            LayoutFitter.DeclareShortenedChoices(_captionModelCombo, "descriptive choices in a full row");
             captions.Controls.Add(_captionModelCombo);
 
             // Step 3 (Tempo engine only): what to listen to. Crucial when the PC has
@@ -676,6 +775,7 @@ namespace AutoClicker.UI
                 Utils.Localization.T("Auto (system audio, or mic if no speaker)"),
                 Utils.Localization.T("System audio (needs a speaker)"),
                 Utils.Localization.T("Microphone"));
+            LayoutFitter.DeclareShortenedChoices(_captionCaptureCombo, "descriptive choices in a full row");
             captions.Controls.Add(_captionCaptureCombo);
 
             _captionModelStatus = UiFactory.Caption("", 16, 124);
@@ -834,6 +934,21 @@ namespace AutoClicker.UI
             _captionLangHint.Height = 22;
             captions.Controls.Add(_captionLangHint);
 
+            // Lyrics: the voice detection (Silero VAD) skips sound with no voice in it, and
+            // singing can be heard as "no voice" — so the user decides whether music gets
+            // through. A row of its own, under the language. Applies to a running session at
+            // once and is saved at once, like the other switches that act immediately.
+            _captionLyricsCheck = UiFactory.Check("Caption song lyrics (lets music through, so more stray words)", 16, 432);
+            _captionLyricsCheck.AutoSize = true;
+            _captionLyricsCheck.CheckedChanged += (sLy, eLy) =>
+            {
+                if (_suppressSettingsEvents || _settings == null) { return; }
+                _settings.CaptionLyrics = _captionLyricsCheck.Checked;
+                ApplyCaptionLyricsLive();
+                PersistNotificationSettings();   // the shared "save settings now" helper
+            };
+            captions.Controls.Add(_captionLyricsCheck);
+
             // Same menu as the Captions tab's "Models…" button — one place to change, and
             // the two surfaces cannot drift apart on what a model source can be.
             var openModelsBtn = UiFactory.Button("Models folder…", 356, 244, 156, 28);
@@ -920,6 +1035,7 @@ namespace AutoClicker.UI
                         };
                         var bar = new Panel { Dock = DockStyle.Bottom, Height = 46, BackColor = _theme.Background };
                         var copyBtn = new Button { Text = Localization.T("Copy all"), Width = 110, Height = 30, Top = 8 };
+                        LayoutFitter.DeclareCaptions(copyBtn, Localization.T("Copy all"), Localization.T("Copied"), Localization.T("Copy failed"));
                         copyBtn.Left = dlg.ClientSize.Width - 242;
                         copyBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
                         // Copy the WHOLE report. This used to copy only the window dump,
@@ -1052,7 +1168,8 @@ namespace AutoClicker.UI
             // Tempo takes one by itself before a new version first touches the data. A backup nobody can
             // get back from is only a folder, so the way back sits right here beside "Back up all data".
             var restoreBtn = UiFactory.Button("Restore points…", 16, 228, 170, 28);
-            restoreBtn.Width = Math.Max(170, TextRenderer.MeasureText(restoreBtn.Text, restoreBtn.Font).Width + 28);
+            // In the window's units (MeasureLayout): this is built before the window is scaled.
+            FitButtonToText(restoreBtn, 170, 28);
             restoreBtn.Click += OnRestorePointsClicked;
             data.Controls.Add(restoreBtn);
 
@@ -1061,9 +1178,7 @@ namespace AutoClicker.UI
             restoreHint.ForeColor = _theme.TextMuted;
             restoreHint.AutoSize = false;
             restoreHint.Width = 680 - restoreHint.Left;
-            restoreHint.Height = Math.Max(16, TextRenderer.MeasureText(restoreHint.Text, restoreHint.Font,
-                new System.Drawing.Size(restoreHint.Width, int.MaxValue),
-                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height);
+            restoreHint.Height = Math.Max(16, MeasureLayout(restoreHint.Text, restoreHint.Font, restoreHint.Width, TextFormatFlags.Default).Height);
             data.Controls.Add(restoreHint);
             data.Height = Math.Max(266, Math.Max(restoreBtn.Bottom, restoreHint.Bottom) + 10);
 
@@ -1118,6 +1233,39 @@ namespace AutoClicker.UI
             _displayInfoLabel.Height = 34;   // two lines when several monitors are listed
             windowGroup.Controls.Add(_displayInfoLabel);
 
+            // ── Row 4: where the Roblox Account Manager lives ───────────────────
+            // Here rather than on the Accounts page itself, because the page is behind a
+            // locked vault half the time and this must be reachable either way — including
+            // from a window the user has just closed.
+            var acctPlacementLabel = UiFactory.Label("Roblox Accounts:", 16, 150);
+            windowGroup.Controls.Add(acctPlacementLabel);
+
+            _accountsPlacementCombo = UiFactory.Combo(150, 146, 250,
+                Localization.T("As a tab in this window"),
+                Localization.T("In its own window"));
+            _accountsPlacementCombo.SelectedIndexChanged += (s, e) =>
+            {
+                if (_suppressSettingsEvents || _updatingAccountsPlacement || _settings == null) { return; }
+                var want = _accountsPlacementCombo.SelectedIndex == 1
+                    ? AccountsPlacement.Window
+                    : AccountsPlacement.Tab;
+                if (_settings.AccountsPlacement == want) { return; }
+                _settings.AccountsPlacement = want;
+                SaveSettingsQuietly();
+                ApplyAccountsPlacement();
+                RefreshSidebarSelection();   // the Accounts row's ↗
+            };
+            windowGroup.Controls.Add(_accountsPlacementCombo);
+
+            var acctPlacementHint = UiFactory.Caption(
+                Localization.T("A separate window can sit beside your game and stay open while Tempo is minimised."),
+                410, 152);
+            acctPlacementHint.AutoSize = false;
+            acctPlacementHint.Width = 274;
+            acctPlacementHint.Height = 30;
+            windowGroup.Controls.Add(acctPlacementHint);
+            windowGroup.Height = 196;
+
             // ── Camera-relative movement ───────────────────────────────────────
             var movement = BuildMovementGroup();
 
@@ -1127,17 +1275,30 @@ namespace AutoClicker.UI
             // — burying Save/About/Check-for-updates UNDER that card for every user.
             // They are now the "tail": CaptureSettingsLayout records the gap each one
             // keeps from the bottom of the card stack, and they follow it from then on.
-            // The absolute Y here only has to preserve the gaps between them.
-            _saveSettingsBtn = UiFactory.PrimaryButton("Save Settings", 12, 1866, 150, 36, _theme);
+            // So the Y here is measured from the lowest card's bottom, 12 below it. It was a
+            // fixed 1866 — 12 below where the last card used to end — and the recorded "gap"
+            // came out negative the moment that card grew: the whole row sat 24 px inside it.
+            int tail0 = 0;
+            foreach (Control card in new Control[] { appearance, startup, behaviour, notify, captions, data, windowGroup, movement })
+            {
+                if (card.Bottom > tail0) { tail0 = card.Bottom; }
+            }
+            tail0 += 12;
+            _saveSettingsBtn = UiFactory.PrimaryButton("Save Settings", 12, tail0, 150, 36, _theme);
+            // It reads "Saved ✓" for a moment after a save (ConfirmOnButton): measured both ways.
+            LayoutFitter.DeclareCaptions(_saveSettingsBtn, Localization.T("Save Settings"), Localization.T("Saved  ✓"));
             _saveSettingsBtn.Click += OnSaveSettings;
 
-            var aboutBtn = UiFactory.Button("About…", 172, 1866, 120, 36);
+            var aboutBtn = UiFactory.Button("About…", 172, tail0, 120, 36);
             aboutBtn.Click += (s, e) => OpenAbout();
 
-            var checkUpdatesBtn = UiFactory.Button("Check for updates", 302, 1866, 160, 36);
+            var checkUpdatesBtn = UiFactory.Button("Check for updates", 302, tail0, 160, 36);
             checkUpdatesBtn.Click += OnCheckForUpdatesClicked;
+            // Kept so it can say "Checking…" for ANY check — the automatic one and the tray's too.
+            _checkUpdatesBtn = checkUpdatesBtn;
+            LayoutFitter.DeclareCaptions(checkUpdatesBtn, Localization.T("Check for updates"), Localization.T("Checking…"));
 
-            var resetBtn = UiFactory.Button("Reset to defaults", 560, 1866, 148, 36);
+            var resetBtn = UiFactory.Button("Reset to defaults", 560, tail0, 148, 36);
             resetBtn.Click += OnResetSettings;
 
             page.Controls.Add(appearance);
@@ -1155,10 +1316,12 @@ namespace AutoClicker.UI
 
             // "Last checked" sits BELOW the buttons row now (it used to hide behind
             // the Save button), and the notes stack under it without overlapping.
-            _lastCheckedLabel = UiFactory.Caption("", 12, 1910);
+            _lastCheckedLabel = UiFactory.Caption("", 12, tail0 + 44);
             _lastCheckedLabel.AutoSize = false;
             _lastCheckedLabel.Width = 696;
             _lastCheckedLabel.Height = 18;
+            // "Update available: v…" opens the update it names.
+            _lastCheckedLabel.Click += OnLastCheckedLabelClick;
             page.Controls.Add(_lastCheckedLabel);
             UpdateLastCheckedLabel();
 
@@ -1168,7 +1331,7 @@ namespace AutoClicker.UI
             // Control Panel and Settings › Apps. A copy beside an existing install, or one running
             // out of a zip, is told why it will not install instead of being offered something that
             // would go wrong.
-            int tailY = 1932;
+            int tailY = tail0 + 66;
             Utils.DeploymentKind deployKind = Utils.DeploymentInfo.Kind;
             string deployNote = null;
             switch (deployKind)
@@ -1195,9 +1358,8 @@ namespace AutoClicker.UI
                 // Measured rather than a fixed 64: every translation runs longer than the English,
                 // and a caption cut off at its last line loses exactly the sentence that says what to
                 // do. The layout suite checks overlaps and button captions, not a label's last line.
-                int needed = TextRenderer.MeasureText(portable.Text, portable.Font,
-                    new System.Drawing.Size(portable.Width, int.MaxValue),
-                    TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height;
+                // In the window's units (MeasureLayout): built before the window is scaled.
+                int needed = MeasureLayout(portable.Text, portable.Font, portable.Width, TextFormatFlags.Default).Height;
                 portable.Height = Math.Max(32, needed + 4);
                 page.Controls.Add(portable);
                 tailY += portable.Height + 6;
@@ -1205,25 +1367,20 @@ namespace AutoClicker.UI
                 if (deployKind == Utils.DeploymentKind.Portable)
                 {
                     var installBtn = UiFactory.Button("Install Tempo on this PC…", 12, tailY, 220, 30);
-                    installBtn.Width = Math.Max(220, TextRenderer.MeasureText(installBtn.Text, installBtn.Font).Width + 36);
+                    // Both captions first, then as wide as the wider, in the window's units.
+                    LayoutFitter.DeclareCaptions(installBtn, installBtn.Text, Localization.T("Installing…"));
+                    FitButtonToText(installBtn, 220, 36);
                     installBtn.Click += OnInstallTempoClicked;
                     page.Controls.Add(installBtn);
+                    _installTempoBtn = installBtn;
+                    _installTempoBtnText = installBtn.Text;
                     tailY += installBtn.Height + 10;
                 }
             }
 
             // The rest of the tail follows whatever the note above actually took up.
-            int privacyY = Math.Max(2000, tailY);
-            var privacyNote = UiFactory.Caption(
-                "Privacy: Tempo runs entirely on your PC. Your clicks, macros, profiles and " +
-                "statistics never leave your computer. The only network use is the optional " +
-                "update check (GitHub), which you can turn off under Behaviour.",
-                12, privacyY);
-            privacyNote.ForeColor = _theme.TextMuted;
-            privacyNote.AutoSize = false;
-            privacyNote.Width = 700;
-            privacyNote.Height = 48;
-            page.Controls.Add(privacyNote);
+            int privacyY = Math.Max(tail0 + 134, tailY);
+            int privacyBottom = BuildPrivacyPanel(page, privacyY);
 
             var asmVer = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             string verText = asmVer != null
@@ -1231,12 +1388,21 @@ namespace AutoClicker.UI
                 : "Tempo";
             // Build ID beside the version: the version is shared by a test build and the
             // release it came from, so on its own it cannot tell you which this is.
-            verText += "   ·   " + Utils.BuildInfo.Short;
+            if (!Utils.BuildInfo.IsUnstamped) { verText += "   ·   build " + Utils.BuildInfo.Id; }
             // True bottom of the page — the old y=724 had ended up BEHIND the cards
-            // as the page grew over the releases.
-            var versionLabel = UiFactory.Caption(verText, 12, privacyY + 54);
-            versionLabel.ForeColor = _theme.TextMuted;
-            page.Controls.Add(versionLabel);
+            // as the page grew over the releases. Set after construction: the factory looks its
+            // text up as a phrase, and a version number is not one (it counted as untranslated).
+            _versionLine = UiFactory.Label("", 12, privacyBottom + 12, FontStyle.Regular, 9.25f);
+            _versionLine.Font = new Font("Segoe UI Semibold", 9.25f);
+            _versionLine.Text = verText;
+            page.Controls.Add(_versionLine);
+
+            // What the build IS, said in words and colour — "TEST" at the end of the line above was
+            // easy to miss and meant nothing to someone who has not met a test build before.
+            _buildStatus = UiFactory.Label("", 12, privacyBottom + 12 + 22, FontStyle.Regular, 9.25f);
+            _buildStatus.UseMnemonic = false;
+            page.Controls.Add(_buildStatus);
+            RefreshPrivacyPanel();
 
             // Last thing in the method, on purpose: anything added after this is not in
             // the tail and gets left behind the moment a card above it changes height.
@@ -1271,6 +1437,180 @@ namespace AutoClicker.UI
                 host.Start();
                 Utils.Logger.Info("[WebUI] Settings tab is rendering from HTML (ExperimentalWebUi).");
             }
+        }
+
+        // ── The privacy panel and the version at the foot of Settings ────────────────────────────
+
+        private InfoCallout _privacyCallout;
+        private Label _privacyTitle, _privacyBody, _privacyLead, _versionLine, _buildStatus;
+        private static readonly Color PrivacyBlue = Color.FromArgb(92, 168, 255);
+        private static readonly Color PrivacyViolet = Color.FromArgb(178, 140, 255);
+        private readonly System.Collections.Generic.List<(Label Name, Label Text, Func<Theme, Color> Hue)> _privacyRows =
+            new System.Collections.Generic.List<(Label, Label, Func<Theme, Color>)>();
+
+        /// <summary>
+        /// The privacy statement at the foot of Settings, as a tinted panel: what stays on this PC, then
+        /// each thing that goes online — what it is, when, and where it is switched off. Returns its bottom.
+        ///
+        /// It was one muted 8.25 pt caption: small, thin and grey (on Monokai, #9B9B8D on #272822), which
+        /// people said they could not read. And it was no longer true. "The only network use is the update
+        /// check" left out the release check — IntegrityCheck asks GitHub once per version with a switch
+        /// of its own, so it still ran with "Check for updates" off — and everything that goes online when
+        /// used: speech models, a logo from a web address, the Roblox account manager.
+        /// </summary>
+        private int BuildPrivacyPanel(Control page, int top)
+        {
+            const int width = 696, pad = 16, gap = 14;
+            int inner = width - pad * 2;
+            var callout = new InfoCallout
+            {
+                ThemeSource = () => _theme,
+                // Green: the panel is good news, and it reads apart from the amber warnings above it.
+                Tone = t => t.SuccessText,
+                Left = 12,
+                Top = top,
+                Width = width,
+            };
+            _privacyCallout = callout;
+
+            var titleFont = new Font("Segoe UI Semibold", 10.5f);
+            var nameFont = new Font("Segoe UI Semibold", 9.25f);
+            Font bodyFont = UiFactory.FontFor(9.25f, FontStyle.Regular);
+
+            int y = 11;
+            Label Add(string english, Font font, int x, int w)
+            {
+                Label l = UiFactory.Label(english, x, y, FontStyle.Regular, 9.25f);
+                l.Font = font;
+                l.UseMnemonic = false;
+                l.AutoSize = false;
+                l.Width = w;
+                // Measured in the window's units, so it wraps in every language with no last line cut off.
+                l.Height = MeasureLayout(l.Text, font, w).Height + 2;
+                callout.Controls.Add(l);
+                return l;
+            }
+
+            // Through T() at each site as well as in the factory, so the translation audit sees every phrase.
+            _privacyTitle = Add(Localization.T("🔒 Privacy: your data stays on this PC"), titleFont, pad, inner);
+            y = _privacyTitle.Bottom + 4;
+            _privacyBody = Add(Localization.T("Your clicks, macros, profiles, statistics and settings are stored only on this PC. "
+                               + "There is no sign-up, no tracking and no analytics."), bodyFont, pad, inner);
+            y = _privacyBody.Bottom + 8;
+            _privacyLead = Add(Localization.T("Tempo goes online only for these, and each can be switched off or simply left unused:"),
+                               bodyFont, pad, inner);
+            y = _privacyLead.Bottom + 6;
+
+            // Name | what it does, when, and where it is switched off. The names column is as wide as the
+            // widest name in this language, so the descriptions line up.
+            // Each name its own hue, the same in every theme: blue, green, amber, violet. The theme's accent
+            // was used at first, and Monokai's accent IS its green — three green names and an amber one.
+            // RefreshPrivacyPanel fits each hue to the panel (Theme.Readable keeps the hue, moves lightness).
+            var rows = new (string Name, string Text, Func<Theme, Color> Hue)[]
+            {
+                (Localization.T("Update check"),
+                 Localization.T("Asks GitHub whether a newer version is out. Switch it off with “Check for updates” in Behaviour."),
+                 t => PrivacyBlue),
+                (Localization.T("Release check"),
+                 Localization.T("Compares a new release with the copy GitHub published, once per version. "
+                 + "Switch it off with “Check that Tempo hasn't been tampered with” in Data & Backup."),
+                 t => t.SuccessText),
+                (Localization.T("When you use them"),
+                 Localization.T("Downloading a speech model (from Hugging Face), setting a logo from a web address, and the Roblox "
+                 + "account manager, which signs in, checks sessions and launches games through Roblox."),
+                 t => t.WarningText),
+                (Localization.T("Local API"),
+                 Localization.T("Answers only programs on this PC. Nothing on your network or the internet can reach it."),
+                 t => PrivacyViolet),
+            };
+            int nameWidth = 0;
+            foreach (var r in rows)
+            {
+                nameWidth = Math.Max(nameWidth, MeasureLayout(r.Name, nameFont).Width + 4);
+            }
+            nameWidth = Math.Min(nameWidth, inner / 3);
+            foreach (var r in rows)
+            {
+                Label name = Add(r.Name, nameFont, pad, nameWidth);
+                Label text = Add(r.Text, bodyFont, pad + nameWidth + gap, inner - nameWidth - gap);
+                _privacyRows.Add((name, text, r.Hue));
+                y = Math.Max(name.Bottom, text.Bottom) + 6;
+            }
+
+            callout.Height = y + 6;
+            page.Controls.Add(callout);
+            return callout.Bottom;
+        }
+
+        /// <summary>
+        /// Colours the privacy panel and the version lines for the current theme, and words the build
+        /// status. Called after every theming pass (ThemeManager gives a label its role's colour) and when
+        /// the integrity verdict arrives.
+        ///
+        /// Body text is held to 7:1 (WCAG AAA) on the panel and the page, and every coloured name and
+        /// status line to 4.5:1 — the colour keeps its hue and only its lightness moves (Theme.Readable).
+        /// </summary>
+        private void RefreshPrivacyPanel()
+        {
+            try
+            {
+                Theme t = _theme;
+                if (t == null || _privacyCallout == null || _privacyCallout.IsDisposed) { return; }
+                Color surface = _privacyCallout.SurfaceFor(t);
+                foreach (Control c in _privacyCallout.Controls) { c.BackColor = surface; }
+                _privacyTitle.ForeColor = _privacyCallout.InkFor(t);
+                _privacyBody.ForeColor = Theme.Readable(t.Text, surface, 7.0);
+                _privacyLead.ForeColor = Theme.Readable(t.TextMuted, surface, 7.0);
+                foreach (var row in _privacyRows)
+                {
+                    row.Name.ForeColor = Theme.Readable(row.Hue(t), surface, 4.5);
+                    row.Text.ForeColor = Theme.Readable(t.Text, surface, 7.0);
+                }
+                _privacyCallout.Invalidate();
+
+                if (_versionLine == null || _buildStatus == null) { return; }
+                Color page = t.Background;
+                _versionLine.ForeColor = Theme.Readable(t.Text, page, 7.0);
+
+                // What this build is, as far as it is KNOWN: "official" only once GitHub has confirmed this
+                // exact file — the rule the sidebar footer follows.
+                string status;
+                Color ink;
+                string officialId = Utils.IntegrityCheck.OfficialId;
+                if (Utils.BuildInfo.IsUnstamped)
+                {
+                    status = Localization.T("⚠ Development build: it was never published.");
+                    ink = t.WarningText;
+                }
+                else if (Utils.BuildInfo.IsTest)
+                {
+                    status = Localization.T("⚠ Test build: made for trying out changes, not an official release.");
+                    ink = t.WarningText;
+                }
+                else if (officialId != null)
+                {
+                    status = Localization.T("✓ Official release") + "   ·   " + officialId;
+                    ink = t.SuccessText;
+                }
+                else if (Utils.IntegrityCheck.IsProblem)
+                {
+                    status = Localization.T("⚠ This copy is not the published release. See “Check that Tempo hasn't been tampered with” in Data & Backup.");
+                    ink = t.DangerText;
+                }
+                else
+                {
+                    status = Localization.T("Release build, not yet confirmed against GitHub.");
+                    ink = t.TextMuted;
+                }
+                _buildStatus.AutoSize = false;
+                _buildStatus.Width = L(696);
+                _buildStatus.Text = status;
+                // The last thing on the page: the room under its words is where the scrolling stops, so it
+                // doesn't end flush against the status bar.
+                _buildStatus.Height = MeasureLayout(status, _buildStatus.Font, _buildStatus.Width).Height + 2 + L(16);
+                _buildStatus.ForeColor = Theme.Readable(ink, page, ink == t.TextMuted ? 7.0 : 4.5);
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RefreshPrivacyPanel", ex); }
         }
 
         private void LoadSettingsIntoUi()
@@ -1329,6 +1669,10 @@ namespace AutoClicker.UI
                 {
                     _captionOwnVoiceCheck.Checked = _settings.CaptionFilterOwnVoice;
                 }
+                if (_captionLyricsCheck != null)
+                {
+                    _captionLyricsCheck.Checked = _settings.CaptionLyrics;
+                }
                 _captionFaceCheck.Checked = _settings.CaptionFaceAnalysis;
                 _captionTranscriptCheck.Checked = _settings.CaptionSaveTranscripts;
                 _captionAutoStartCheck.Checked = _settings.CaptionAutoStart;
@@ -1383,6 +1727,8 @@ namespace AutoClicker.UI
                 _confirmExitCheck.Checked = _settings.ConfirmBeforeExitWhileRunning;
                 _safetyEscapeCheck.Checked = _settings.SafetyStopOnEscape;
                 _launchStartupCheck.Checked = _settings.LaunchAtStartup;
+                _openAtSignInCheck.Checked = _settings.OpenWindowAtSignIn;
+                SyncOpenAtSignInEnabled();
                 _hideWhenClickingCheck.Checked = _settings.HideWhenClicking;
                 _checkUpdatesCheck.Checked = _settings.CheckForUpdatesOnLaunch;
                 if (_updateFreqCombo != null)
@@ -1405,6 +1751,7 @@ namespace AutoClicker.UI
                 }
                 _rememberWindowCheck.Checked = _settings.RememberWindowPosition;
                 _rememberTabCheck.Checked = _settings.RememberLastTab;
+                SyncAccountsPlacementCombo();
 
                 if (_integrityCheck != null)
                 {
@@ -1465,6 +1812,11 @@ namespace AutoClicker.UI
             // CheckedChanged handlers re-persist and (for the trail) re-apply live.
             if (_cursorTrailCheck != null) _cursorTrailCheck.Checked = _settings.CursorTrailEnabled;
             if (_recordMovesCheck != null) _recordMovesCheck.Checked = _settings.RecordMacroMovements;
+            if (_recordCameraCheck != null)
+            {
+                _recordCameraCheck.Checked = _settings.RecordMacroCameraMovement;
+                _recordCameraCheck.Enabled = _settings.RecordMacroMovements;
+            }
             if (_recordKeysCheck != null) _recordKeysCheck.Checked = _settings.RecordMacroKeyboard;
             // Same page, same reason — this one was missed when the three above were fixed.
             if (_recordCountdownNum != null)
@@ -1487,6 +1839,34 @@ namespace AutoClicker.UI
             RefreshThemePreview();
             RefreshMissedNotificationsLabel();
             RefreshMutedAppsLabel();
+        }
+
+        /// <summary>1 while a label refresh is already queued, so a burst of entries costs one.</summary>
+        private int _missedLabelRefreshQueued;
+
+        /// <summary>
+        /// NotificationHistory.Changed. Raised on whichever thread added the entry — the
+        /// notification mirror's listener, the notification centre, or the history window's
+        /// Clear — and possibly dozens of times in a burst, so it is marshalled to the UI
+        /// thread and coalesced into a single refresh.
+        /// </summary>
+        private void OnNotificationHistoryChanged()
+        {
+            if (IsDisposed || !IsHandleCreated) { return; }
+            if (System.Threading.Interlocked.Exchange(ref _missedLabelRefreshQueued, 1) == 1) { return; }
+            try
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    System.Threading.Interlocked.Exchange(ref _missedLabelRefreshQueued, 0);
+                    if (!IsDisposed) { RefreshMissedNotificationsLabel(); }
+                }));
+            }
+            catch
+            {
+                // The window is going away; nothing is left to refresh.
+                System.Threading.Interlocked.Exchange(ref _missedLabelRefreshQueued, 0);
+            }
         }
 
         /// <summary>
@@ -1655,29 +2035,85 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
-        /// Fills in the display-colour line: what the panel is, and what Windows is doing
-        /// to Tempo's colours before they reach it.
-        ///
-        /// Deliberately stated, not corrected. An SDR application cannot undo the
-        /// compositor's HDR tone-mapping from inside itself, and guessing a counter-shift
-        /// would make the colours wrong in a second, less predictable way. Saying WHY the
-        /// theme looks off is the honest fix.
+        /// Gates the palette correction on BOTH the user's preference and HDR being on for the
+        /// screen the window is on (the primary screen while it sits in the tray). On an SDR
+        /// screen there is nothing to correct, and correcting anyway would crush shadows Windows
+        /// had not lifted — the bug this feature exists to fix, pointed the other way. It used to
+        /// ask "is HDR on ANYWHERE?", which with one HDR screen and one SDR screen corrected the
+        /// window on both. True when the answer changed, so a caller knows to re-theme.
         /// </summary>
-        /// <summary>
-        /// Gates the palette compensation on BOTH the user's preference and a display that
-        /// is actually tone-mapping. On an SDR machine there is nothing to compensate for,
-        /// and shifting the palette anyway would be the bug this feature exists to fix,
-        /// pointed the other way.
-        /// </summary>
-        private void ApplyHdrCompensationSetting()
+        private bool ApplyHdrCompensationSetting()
         {
             try
             {
-                Theme.CompensateForHdr =
-                    _settings != null && _settings.CompensateForHdr &&
-                    Utils.DisplayColorInfo.SdrIsToneMapped;
+                bool want = _settings != null && _settings.CompensateForHdr &&
+                            Utils.DisplayColorInfo.HdrOnFor(PaletteScreenName());
+                bool changed = want != Theme.CompensateForHdr;
+                Theme.CompensateForHdr = want;
+                return changed;
             }
-            catch (Exception ex) { Utils.Logger.Swallow("ApplyHdrCompensationSetting", ex); }
+            catch (Exception ex)
+            {
+                Utils.Logger.Swallow("ApplyHdrCompensationSetting", ex);
+                return false;
+            }
+        }
+
+        /// <summary>The screen whose HDR state decides the palette.</summary>
+        private string PaletteScreenName()
+        {
+            try
+            {
+                if (IsHandleCreated && Visible && WindowState != FormWindowState.Minimized)
+                {
+                    return Screen.FromHandle(Handle).DeviceName;
+                }
+                return Screen.PrimaryScreen?.DeviceName;
+            }
+            catch { return null; }
+        }
+
+        private string _paletteScreen;
+
+        /// <summary>
+        /// Re-reads the display and re-themes if the correction should now be on or off: after
+        /// Windows reports a display change (HDR switched on or off, a monitor added), and when
+        /// the window lands on another screen. Cheap when nothing changed — one display query.
+        /// </summary>
+        private void RefreshHdrPalette(bool displayChanged)
+        {
+            try
+            {
+                if (_settings == null || _shuttingDown) { return; }
+                string screen = PaletteScreenName();
+                if (!displayChanged && string.Equals(screen, _paletteScreen, StringComparison.OrdinalIgnoreCase)) { return; }
+                _paletteScreen = screen;
+                if (displayChanged) { Utils.DisplayColorInfo.Invalidate(); }
+
+                if (ApplyHdrCompensationSetting())
+                {
+                    Utils.Logger.Info("[Display] HDR colour correction " + (Theme.CompensateForHdr ? "on" : "off")
+                                      + " for " + (screen ?? "the primary screen") + ".");
+                    ApplyThemeToEverything();
+                    RefreshThemePreview();
+                }
+                if (_hdrCompensateCheck != null) { _hdrCompensateCheck.Enabled = Utils.DisplayColorInfo.SdrIsToneMapped; }
+                RefreshDisplayColourNote();
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RefreshHdrPalette", ex); }
+        }
+
+        /// <summary>"Open the window at sign-in" only means something while Tempo launches at sign-in.</summary>
+        private void SyncOpenAtSignInEnabled()
+        {
+            try
+            {
+                if (_openAtSignInCheck != null && _launchStartupCheck != null)
+                {
+                    _openAtSignInCheck.Enabled = _launchStartupCheck.Checked;
+                }
+            }
+            catch { }
         }
 
         private void OnHdrCompensationToggled(object sender, EventArgs e)
@@ -1690,18 +2126,79 @@ namespace AutoClicker.UI
             RefreshDisplayColourNote();
         }
 
+        /// <summary>
+        /// The display line under "Correct colours for HDR": what the screens are doing, and
+        /// what that means for Tempo right now.
+        ///
+        /// It was an English paragraph in a 30-pixel label — cut off after two lines, English in
+        /// every language, and wrong while the correction was on, since it still told people to
+        /// switch HDR off to get the right colours back. It also never mentioned the one thing
+        /// that makes Tempo look dim under HDR and that only the user can change: Windows' "SDR
+        /// content brightness", which this PC had at its lowest, 80 nits.
+        /// </summary>
         private void RefreshDisplayColourNote()
         {
             if (_displayColourNote == null) { return; }
             try
             {
-                string facts = Utils.DisplayColorInfo.Describe();
-                string note = Utils.DisplayColorInfo.ColourAccuracyNote();
+                var a = Utils.DisplayColorInfo.Advanced();
+                int bpp = Utils.DisplayColorInfo.BitsPerPixel;
 
-                _displayColourNote.Text = note.Length > 0
-                    ? Utils.Localization.T("Display:") + " " + facts + "\n⚠ " + note
-                    : Utils.Localization.T("Display:") + " " + facts;
-                _displayColourNote.ForeColor = note.Length > 0 ? _theme.Warning : _theme.TextMuted;
+                var facts = new System.Collections.Generic.List<string>();
+                if (a.Enabled)
+                {
+                    facts.Add(a.Outputs > 1
+                        ? Localization.F("HDR on ({0} of {1} screens)", a.OutputsHdrOn, a.Outputs)
+                        : Localization.T("HDR on"));
+                    if (a.LowestSdrWhiteNits > 0)
+                    {
+                        facts.Add(Localization.F("SDR content brightness {0} nits", Math.Round(a.LowestSdrWhiteNits)));
+                    }
+                }
+                else
+                {
+                    facts.Add(a.Supported ? Localization.T("HDR available, off") : Localization.T("SDR display"));
+                }
+                if (bpp > 0 && bpp < 32) { facts.Add(Localization.F("{0}-bit colour", bpp)); }
+
+                // Each line in the colour of what it says: the facts muted, "✓" in the success
+                // colour, "⚠" in the warning colour.
+                var lines = new System.Collections.Generic.List<string> { Localization.T("Display:") + " " + string.Join(" · ", facts) };
+                var inks = new System.Collections.Generic.List<Color> { _theme.TextMuted };
+                if (a.Enabled)
+                {
+                    if (Theme.CompensateForHdr)
+                    {
+                        lines.Add("✓ " + Localization.T("Colours corrected for HDR: dark shades look as designed."));
+                        inks.Add(_theme.SuccessText);
+                    }
+                    else if (_settings != null && !_settings.CompensateForHdr)
+                    {
+                        lines.Add("⚠ " + Localization.T("Not corrected: with HDR on, Windows lightens Tempo's dark colours. Tick the box to correct them."));
+                        inks.Add(_theme.WarningText);
+                    }
+                    else
+                    {
+                        // Wanted but off: HDR is on for another screen, not the one the window is on.
+                        lines.Add("✓ " + Localization.T("This screen is SDR, so no correction is needed here."));
+                        inks.Add(_theme.TextMuted);
+                    }
+                    if (a.LowestSdrWhiteNits > 0 && a.LowestSdrWhiteNits < 120)
+                    {
+                        lines.Add("⚠ " + Localization.F("SDR content brightness is low ({0} nits), so Tempo looks dim. Raise it in Windows' HDR settings.",
+                                                         Math.Round(a.LowestSdrWhiteNits)));
+                        inks.Add(_theme.WarningText);
+                    }
+                }
+                else if (bpp > 0 && bpp < 32)
+                {
+                    lines.Add("⚠ " + Localization.T("Gradients band at this colour depth. Choose 32-bit colour in Windows' display settings."));
+                    inks.Add(_theme.WarningText);
+                }
+
+                _displayColourNote.Text = string.Join("\n", lines);
+                _displayColourNote.ForeColor = _theme.TextMuted;
+                _displayColourNote.LineColors = inks.ToArray();
             }
             catch (Exception ex) { Utils.Logger.Swallow("RefreshDisplayColourNote", ex); }
         }
@@ -1913,12 +2410,14 @@ namespace AutoClicker.UI
 
             // The accent actually in force — the custom one when it is on, the theme's
             // otherwise. Everything below describes THAT colour, so the details never
-            // disagree with what the app is painting.
+            // disagree with what the app is painting. As designed, not as HDR-corrected:
+            // the hex box can save what it shows, and a corrected value saved as the custom
+            // accent was corrected a second time. The swatch shows it as painted.
             Color liveAccent = _settings.CustomAccentEnabled
                 ? Color.FromArgb(_settings.CustomAccentArgb)
-                : _theme.Accent;
+                : _theme.DesignAccent;
 
-            if (_accentSwatch != null) { _accentSwatch.BackColor = liveAccent; }
+            if (_accentSwatch != null) { _accentSwatch.BackColor = _theme.Accent; }
             if (_accentHoverSwatch != null) { _accentHoverSwatch.BackColor = _theme.AccentHover; }
 
             if (_accentHexBox != null && !_accentHexBox.Focused)
@@ -2415,75 +2914,93 @@ namespace AutoClicker.UI
             warn.ForeColor = Theme.Readable(_theme.Warning, _theme.InputBackground);
             warn.AutoSize = false;
             warn.Width = 664;
-            warn.Height = 32;
+            // As tall as the words need in the language it is in. A fixed two lines stopped
+            // drawing mid-sentence in French, German, Italian and Portuguese, which need three
+            // — cutting off the part about online games forbidding it. Every row below
+            // moves down by whatever the warning grew.
+            // In the window's units (MeasureLayout): built before the window is scaled.
+            warn.Height = Math.Max(32, MeasureLayout(warn.Text, warn.Font, warn.Width, TextFormatFlags.Default).Height + 2);
             g.Controls.Add(warn);
+            int dy = warn.Height - 32;
 
-            g.Controls.Add(UiFactory.Label("Mode:", 16, 96));
+            g.Controls.Add(UiFactory.Label("Mode:", 16, 96 + dy));
             // Combo items don't auto-translate (UiFactory.Combo takes them verbatim), so
             // pass them through T() here. Selection stays index-based, so translating the
             // display text is safe.
-            _movementFrameCombo = UiFactory.Combo(150, 93, 330,
+            _movementFrameCombo = UiFactory.Combo(150, 93 + dy, 330,
                 Localization.T("World-locked – keep heading as the camera turns"),
                 Localization.T("Camera-relative pass-through (no-op in most games)"));
+            LayoutFitter.DeclareShortenedChoices(_movementFrameCombo,
+                "descriptive choices in a full row; the open list and the hover show them whole");
             g.Controls.Add(_movementFrameCombo);
 
             // Sensitivity + the calibrate button that fills it in.
-            g.Controls.Add(UiFactory.Label("Camera sensitivity:", 16, 130));
-            _movementDegPerCountNum = UiFactory.Numeric(150, 126, 90, 0.0005m, 2m, 0.06m);
+            var sensLabel = UiFactory.Label("Camera sensitivity:", 16, 130 + dy);
+            g.Controls.Add(sensLabel);
+            // The row starts after its label, however wide that is, and the hint at its end gives back
+            // the room. Text grows by more than the window does on a 150% screen (glyphs round to whole
+            // pixels): "Sensibilidade da câmara:" came out 207 px and ran 6 into the box at 150.
+            int sdx = Math.Max(0, LayoutRight(sensLabel) + 4 - 150);
+            _movementDegPerCountNum = UiFactory.Numeric(150 + sdx, 126 + dy, 90, 0.0005m, 2m, 0.06m);
             _movementDegPerCountNum.DecimalPlaces = 4;
             _movementDegPerCountNum.Increment = 0.005m;
             g.Controls.Add(_movementDegPerCountNum);
-            g.Controls.Add(UiFactory.Caption("°/count", 246, 130));
+            g.Controls.Add(UiFactory.Caption("°/count", 246 + sdx, 130 + dy));
 
-            var calBtn = UiFactory.Button("Calibrate…", 310, 124, 120, 28);
+            var calBtn = UiFactory.Button("Calibrate…", 310 + sdx, 124 + dy, 120, 28);
             calBtn.Click += OnCalibrateCameraSensitivity;
             g.Controls.Add(calBtn);
 
             var calHint = UiFactory.Caption("Measures it from one 360° turn in your game — far better than guessing.",
-                440, 130);
+                440 + sdx, 130 + dy);
             calHint.ForeColor = _theme.TextMuted;
             calHint.AutoSize = false;
-            calHint.Width = 244;
+            calHint.Width = 244 - sdx;
             calHint.Height = 28;
             g.Controls.Add(calHint);
 
             // Feel / jitter.
-            g.Controls.Add(UiFactory.Label("Smoothing (s):", 16, 166));
-            _movementSmoothingNum = UiFactory.Numeric(150, 162, 70, 0m, 1m, 0m);
+            g.Controls.Add(UiFactory.Label("Smoothing (s):", 16, 166 + dy));
+            _movementSmoothingNum = UiFactory.Numeric(150, 162 + dy, 70, 0m, 1m, 0m);
             _movementSmoothingNum.DecimalPlaces = 2;
             _movementSmoothingNum.Increment = 0.02m;
             g.Controls.Add(_movementSmoothingNum);
-            var smoothHint = UiFactory.Caption("0 = instant", 226, 166);
+            var smoothHint = UiFactory.Caption("0 = instant", 226, 166 + dy);
             smoothHint.ForeColor = _theme.TextMuted;
             g.Controls.Add(smoothHint);
 
-            g.Controls.Add(UiFactory.Label("Anti-jitter (°):", 310, 166));
-            _movementHysteresisNum = UiFactory.Numeric(410, 162, 70, 0m, 22m, 8m);
+            g.Controls.Add(UiFactory.Label("Anti-jitter (°):", 310, 166 + dy));
+            _movementHysteresisNum = UiFactory.Numeric(410, 162 + dy, 70, 0m, 22m, 8m);
             _movementHysteresisNum.DecimalPlaces = 1;
             g.Controls.Add(_movementHysteresisNum);
 
-            g.Controls.Add(UiFactory.Label("Rate (Hz):", 500, 166));
-            _movementHzNum = UiFactory.Numeric(580, 162, 70, 30m, 500m, 120m);
+            g.Controls.Add(UiFactory.Label("Rate (Hz):", 500, 166 + dy));
+            _movementHzNum = UiFactory.Numeric(580, 162 + dy, 70, 30m, 500m, 120m);
             g.Controls.Add(_movementHzNum);
 
-            g.Controls.Add(UiFactory.Label("Stick deadzone:", 16, 202));
-            _movementDeadzoneNum = UiFactory.Numeric(150, 198, 70, 0m, 0.9m, 0.20m);
+            g.Controls.Add(UiFactory.Label("Stick deadzone:", 16, 202 + dy));
+            _movementDeadzoneNum = UiFactory.Numeric(150, 198 + dy, 70, 0m, 0.9m, 0.20m);
             _movementDeadzoneNum.DecimalPlaces = 2;
             _movementDeadzoneNum.Increment = 0.05m;
             g.Controls.Add(_movementDeadzoneNum);
 
-            g.Controls.Add(UiFactory.Label("Pad look (°/s):", 310, 202));
-            _movementPadYawNum = UiFactory.Numeric(410, 198, 70, 20m, 1000m, 220m);
+            g.Controls.Add(UiFactory.Label("Pad look (°/s):", 310, 202 + dy));
+            _movementPadYawNum = UiFactory.Numeric(410, 198 + dy, 70, 20m, 1000m, 220m);
             g.Controls.Add(_movementPadYawNum);
 
+            // A row of its own, the card's full width. It was squeezed into the 184 px left
+            // beside "Pad look", where its first message needed three lines of a two-line box
+            // in English (and four in French) — the end of the sentence was simply not drawn,
+            // and the ARMED/Off messages that replace it are longer still.
             _movementStatus = UiFactory.Caption("Bind a key in Keybinds → “Camera-relative movement” to arm it in-game.",
-                500, 202);
+                16, 236 + dy);
             _movementStatus.ForeColor = _theme.TextMuted;
             _movementStatus.AutoSize = false;
-            _movementStatus.Width = 184;
+            _movementStatus.Width = 664;
             _movementStatus.Height = 30;
             g.Controls.Add(_movementStatus);
 
+            g.Height = _movementStatus.Bottom + 10;
             return g;
         }
 
@@ -2611,6 +3128,7 @@ namespace AutoClicker.UI
             _settings.CaptionOverlayEnabled = _captionOverlayCheck.Checked;
             _settings.CaptionSpeakerTurns = _captionSpeakerCheck.Checked;
             _settings.CaptionFilterOwnVoice = _captionOwnVoiceCheck != null ? _captionOwnVoiceCheck.Checked : _settings.CaptionFilterOwnVoice;
+            _settings.CaptionLyrics = _captionLyricsCheck != null ? _captionLyricsCheck.Checked : _settings.CaptionLyrics;
             _settings.CaptionFaceAnalysis = _captionFaceCheck.Checked;
             _settings.CaptionSaveTranscripts = _captionTranscriptCheck.Checked;
             _settings.CaptionShowSourceTag = _captionSourceTagCheck.Checked;
@@ -2659,6 +3177,7 @@ namespace AutoClicker.UI
             _settings.ClickerStartDelaySeconds = (int)_startDelayNum.Value;
             _settings.StartDelayBeep = _startDelayBeepCheck != null && _startDelayBeepCheck.Checked;
             _settings.LaunchAtStartup = _launchStartupCheck.Checked;
+            if (_openAtSignInCheck != null) { _settings.OpenWindowAtSignIn = _openAtSignInCheck.Checked; }
             if (_startupDelayNum != null) { _settings.StartupDelaySeconds = (int)_startupDelayNum.Value; }
             _settings.HideWhenClicking = _hideWhenClickingCheck.Checked;
             _settings.CheckForUpdatesOnLaunch = _checkUpdatesCheck.Checked;
@@ -2763,7 +3282,7 @@ namespace AutoClicker.UI
         /// Replaces the old modal: same reassurance, no interruption, and it can't stack up
         /// if the user saves repeatedly (the timer just restarts).
         /// </summary>
-        private void ConfirmOnButton(Control button)
+        private void ConfirmOnButton(Control button, string caption = null)
         {
             if (button == null || button.IsDisposed)
             {
@@ -2779,7 +3298,8 @@ namespace AutoClicker.UI
                 }
                 if (_saveConfirmTarget == null) { _saveBtnText = button.Text; }
                 _saveConfirmTarget = button;
-                button.Text = Localization.T("Saved  ✓");
+                // A Copy button confirms with "Copied ✓": it saved nothing (see OnCopyKeybinds).
+                button.Text = caption ?? Localization.T("Saved  ✓");
 
                 if (_saveConfirmTimer == null)
                 {
@@ -3075,7 +3595,7 @@ namespace AutoClicker.UI
             // Says what is KEPT. "Reset all settings?" alone read as if statistics, keybinds and
             // the account manager went too — and until CreateResetFrom, they did.
             var confirm = MessageBox.Show(this,
-                "Reset all settings to their defaults?\n\nYour profiles, macros, keybinds, statistics, Roblox accounts and language are kept.",
+                Localization.T("Reset all settings to their defaults?\n\nYour profiles, macros, keybinds, statistics, Roblox accounts and language are kept."),
                 "Tempo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
@@ -3097,326 +3617,6 @@ namespace AutoClicker.UI
 
             ApplyReplacedSettings(before);
             Utils.Logger.Info("[Settings] reset to defaults (profiles, macros, keybinds, statistics, accounts and language kept).");
-        }
-
-        private void UpdateLastCheckedLabel()
-        {
-            if (_lastCheckedLabel == null)
-            {
-                return;
-            }
-
-            string text;
-            if (_settings == null || _settings.LastUpdateCheckUtc == null)
-            {
-                text = "Updates haven't been checked yet.";
-            }
-            else
-            {
-                text = "Last checked for updates: " +
-                       _settings.LastUpdateCheckUtc.Value.ToLocalTime().ToString("d MMM yyyy, HH:mm");
-            }
-
-            // Inline result of that last check, so the state is visible without
-            // opening the update dialog.
-            if (_settings != null && _settings.LastUpdateCheckUtc != null)
-            {
-                // The saved flag alone is not enough: it survives the update that resolves it, so it kept
-                // this line saying "Update available: v1.0.321" while 1.0.321 was the running build. The
-                // version itself has to be newer, compared as a version (see UpdateChecker.Normalize).
-                if (_settings.LastCheckFoundUpdate
-                    && Utils.UpdateChecker.IsNewerThanCurrent(_settings.LastKnownLatestVersion))
-                {
-                    text += "   ·   Update available: v" + _settings.LastKnownLatestVersion;
-                }
-                else
-                {
-                    text += "   ·   You're up to date.";
-                }
-            }
-
-            if (_settings != null && !string.IsNullOrWhiteSpace(_settings.SkippedUpdateVersion))
-            {
-                text += "   ·   Skipping version " + _settings.SkippedUpdateVersion;
-            }
-
-            _lastCheckedLabel.Text = text;
-        }
-
-        private void OnCheckForUpdatesClicked(object sender, EventArgs e)
-        {
-            var btn = sender as Button;
-            if (btn != null)
-            {
-                btn.Enabled = false;
-                btn.Text = Localization.T("Checking…");
-            }
-
-            // Guard so the result is presented exactly once — whichever happens first,
-            // the network call finishing or the safety timeout firing.
-            bool handled = false;
-            object gate = new object();
-
-            Action<UpdateChecker.UpdateResult, bool> finish = (result, timedOut) =>
-            {
-                lock (gate)
-                {
-                    if (handled) return;
-                    handled = true;
-                }
-                UiInvoke(() =>
-                {
-                    if (btn != null)
-                    {
-                        btn.Enabled = true;
-                        btn.Text = Localization.T("Check for updates");
-                    }
-                    if (timedOut)
-                    {
-                        ShowWarning("The update check took too long and was cancelled. " +
-                                    "Please check your connection and try again.");
-                        return;
-                    }
-                    if (result != null && result.Success)
-                    {
-                        _settings.LastUpdateCheckUtc = DateTime.UtcNow;
-                        _settings.LastKnownLatestVersion = result.LatestVersion?.ToString();
-                        _settings.LastCheckFoundUpdate = result.UpdateAvailable;
-                        SettingsManager.Save(_settings);
-                        UpdateLastCheckedLabel();
-                    }
-                    PresentUpdateResult(result, announceUpToDate: true);
-                });
-            };
-
-            System.Threading.Tasks.Task.Run(() => UpdateChecker.Check())
-                .ContinueWith(t =>
-                {
-                    UpdateChecker.UpdateResult r =
-                        t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion ? t.Result : null;
-                    finish(r, false);
-                });
-
-            // Hard safety net: the button can never stay stuck on "Checking…".
-            // Sized to fit two 9-second attempts plus the short backoff between them.
-            System.Threading.Tasks.Task.Delay(22000)
-                .ContinueWith(_ => finish(null, true));
-        }
-
-        /// <summary>
-        /// Shows the outcome of an update check. When <paramref name="announceUpToDate"/>
-        /// is false (the silent launch check), only a found update is reported.
-        /// </summary>
-        private void PresentUpdateResult(UpdateChecker.UpdateResult result, bool announceUpToDate)
-        {
-            if (result == null)
-            {
-                return;
-            }
-
-            if (!result.Success)
-            {
-                if (announceUpToDate)
-                {
-                    ShowWarning(result.Error ?? Localization.T("The update check failed."));
-                }
-                return;
-            }
-
-            if (!result.UpdateAvailable)
-            {
-                if (announceUpToDate)
-                {
-                    ShowInfo(Localization.F("You're up to date.\n\nTempo {0} is the latest version.", UpdateChecker.CurrentVersion));
-                }
-                return;
-            }
-
-            string notes = string.IsNullOrWhiteSpace(result.Notes) ? "" : result.Notes;
-
-            bool canAutoInstall =
-                !string.IsNullOrWhiteSpace(result.DownloadUrl) &&
-                (result.DownloadUrl.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
-                 result.DownloadUrl.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) &&
-                UpdateInstaller.IsExeDirWritable();
-
-            using (var dlg = new UpdatePromptForm(_theme, UpdateChecker.CurrentVersion?.ToString(),
-                result.LatestVersion?.ToString(), notes, canAutoInstall, result.ReleaseDate))
-            {
-                dlg.ShowDialog(this);
-
-                switch (dlg.Choice)
-                {
-                    case UpdatePromptForm.UpdateChoice.UpdateNow:
-                        RunSelfUpdate(result);
-                        break;
-
-                    case UpdatePromptForm.UpdateChoice.OpenPage:
-                        OpenDownloadPage(string.IsNullOrWhiteSpace(result.DownloadUrl)
-                            ? UpdateChecker.ReleasesPageUrl
-                            : result.DownloadUrl);
-                        break;
-
-                    case UpdatePromptForm.UpdateChoice.Skip:
-                        _settings.SkippedUpdateVersion = result.LatestVersion?.ToString() ?? "";
-                        SettingsManager.Save(_settings);
-                        UpdateLastCheckedLabel();
-                        break;
-
-                    // Later: do nothing.
-                }
-            }
-        }
-
-        /// <summary>
-        /// Downloads the new build (with a progress dialog) and, on success, hands
-        /// off to the swap helper and exits so the running exe can be replaced.
-        /// </summary>
-        private void RunSelfUpdate(UpdateChecker.UpdateResult result)
-        {
-            // The release may ship either a bare Tempo.exe or a setup .zip; support both.
-            bool isZip = !string.IsNullOrWhiteSpace(result.DownloadUrl) &&
-                         result.DownloadUrl.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
-            string dest = UpdateInstaller.GetDownloadTargetPath(result.LatestVersion, isZip);
-
-            DialogResult dr;
-            string downloadedPath;
-            string downloadError;
-            using (var dlg = new UpdateDownloadForm(_theme, result.DownloadUrl, dest, result.LatestVersion, result.Sha256Url,
-                                                    result.DownloadSha256))
-            {
-                dr = dlg.ShowDialog(this);
-                downloadedPath = dlg.DownloadedPath;
-                downloadError = dlg.Error;
-            }
-
-            if (dr == DialogResult.Cancel)
-            {
-                return; // User cancelled the download.
-            }
-
-            if (dr != DialogResult.OK || string.IsNullOrEmpty(downloadedPath))
-            {
-                DialogResult fallback = MessageBox.Show(this,
-                    (downloadError ?? Localization.T("The download failed.")) + "\n\n" + Localization.T("Open the download page instead?"),
-                    "Update", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-                if (fallback == DialogResult.Yes)
-                {
-                    OpenDownloadPage(result.DownloadUrl);
-                }
-                return;
-            }
-
-            // Decide which exe to swap in. A bare .exe is used directly; a setup zip is
-            // unpacked first and its Tempo.exe is header-checked and (if a checksum is
-            // published) verified, so a bad archive can never overwrite the running exe.
-            string swapExe = downloadedPath;
-            if (isZip)
-            {
-                if (!UpdateInstaller.ExtractTempoExe(downloadedPath, out swapExe, out string exErr))
-                {
-                    DialogResult fb = MessageBox.Show(this,
-                        (exErr ?? Localization.T("Couldn't unpack the update.")) + "\n\n" + Localization.T("Open the download page instead?"),
-                        "Update", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-                    if (fb == DialogResult.Yes)
-                    {
-                        OpenDownloadPage(result.DownloadUrl);
-                    }
-                    return;
-                }
-                if (!UpdateInstaller.VerifyExeAgainstSha(swapExe, result.Sha256Url))
-                {
-                    ShowWarning("The update failed its integrity check (checksum mismatch). "
-                        + "Please try again, or use the download page.");
-                    return;
-                }
-            }
-
-            // Stop clicking so nothing is mid-run when we hand off and exit.
-            try
-            {
-                if (_engine != null && _engine.IsRunning)
-                {
-                    _engine.Stop();
-                }
-            }
-            catch { /* best effort */ }
-
-            // A macro being RECORDED only exists in memory until it is stopped and
-            // saved. The swap force-exits the process, so an update accepted mid-record
-            // used to throw the take away with no warning — the engine was stopped here,
-            // the recorder never was. Give the user the choice instead of deciding for
-            // them, and abort the update if they want to keep it.
-            try
-            {
-                if (_recorder != null && _recorder.IsRecording)
-                {
-                    DialogResult keep = MessageBox.Show(this,
-                        "A macro is still being recorded.\n\n" +
-                        "Updating restarts Tempo, which discards the recording in progress.\n\n" +
-                        "Yes — discard it and update now\n" +
-                        "No — cancel the update so you can finish and save it",
-                        "Update Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
-                        MessageBoxDefaultButton.Button2);
-                    if (keep != DialogResult.Yes)
-                    {
-                        Logger.Info("[Update] cancelled — a macro recording was in progress.");
-                        return;
-                    }
-                    try { _recorder.Stop(); } catch { }
-                }
-            }
-            catch { /* best effort */ }
-
-            if (UpdateInstaller.LaunchSwapAndExitHelper(swapExe, out string err))
-            {
-                // Remove the tray icon so it doesn't linger after we force-exit.
-                try { _trayIcon?.Dispose(); } catch { }
-
-                // Environment.Exit runs no FormClosing and no ShutdownStep, so everything
-                // the normal close does has to be done by hand here. Two things actually
-                // matter and neither was happening:
-                //
-                //  • A held mouse button. Hold-to-click and macro playback press a button
-                //    and release it later; exiting in between leaves Windows believing it
-                //    is still down, and the user drags everything they touch afterwards.
-                //    Updating mid-click is not a strange thing to do — the prompt appears
-                //    on its own schedule, not the user's.
-                //  • Unsaved Settings-tab edits. CaptureSettingsFromUi + Save happen on
-                //    close, so a checkbox toggled just before "Update now" was discarded
-                //    by the very act of updating.
-                ReleaseHeldButtons();
-                try { CaptureSettingsFromUi(); } catch { }
-                try { Persistence.SettingsManager.Save(_settings); } catch { }
-
-                Logger.Info("[shutdown] exiting to let the updater replace Tempo.exe.");
-                Environment.Exit(0);
-            }
-            else
-            {
-                ShowWarning(err ?? Localization.F("Couldn't start the updater. The new version was downloaded to:\n{0}", swapExe));
-            }
-        }
-
-        private void OpenDownloadPage(string url)
-        {
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                url = UpdateChecker.ReleasesPageUrl;
-            }
-
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = url,
-                    UseShellExecute = true
-                });
-            }
-            catch (Exception ex)
-            {
-                ShowWarning(Localization.F("Couldn't open the download page: {0}", ex.Message));
-            }
         }
 
         /// <summary>Copies the data folder (profiles, macros, settings, history — everything
@@ -3816,7 +4016,7 @@ namespace AutoClicker.UI
                 }
 
                 var answer = MessageBox.Show(this,
-                    "Repair Tempo?\n\nTempo will close, delete the unpacked copy it runs from in your TEMP folder, and start again — unpacking a clean copy from Tempo.exe. Your settings, profiles, macros and accounts are not touched.",
+                    Localization.T("Repair Tempo?\n\nTempo will close, delete the unpacked copy it runs from in your TEMP folder, and start again — unpacking a clean copy from Tempo.exe. Your settings, profiles, macros and accounts are not touched."),
                     "Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
                 if (answer != DialogResult.Yes)
                 {
@@ -3830,16 +4030,13 @@ namespace AutoClicker.UI
                     return;
                 }
 
-                // The same by-hand shutdown the updater performs before Environment.Exit, which runs no
-                // FormClosing. The warning token is cleared so a later tampering is announced again.
-                try { if (_engine != null && _engine.IsRunning) { _engine.Stop(); } } catch { }
-                try { _trayIcon?.Dispose(); } catch { }
-                ReleaseHeldButtons();
-                try { CaptureSettingsFromUi(); } catch { }
+                // The warning token is cleared so a later tampering is announced again. Then the
+                // ORDINARY close (see CloseForHelper): this used to Environment.Exit, which skips the
+                // whole shutdown — the run in progress, captions, held keys, profiles and macros.
                 _settings.IntegrityLastWarned = "";
                 try { SettingsManager.Save(_settings); } catch { }
-                Logger.Warn("[shutdown] exiting so the altered unpacked copy is replaced with a clean one.");
-                Environment.Exit(0);
+                Logger.Warn("[shutdown] closing so the altered unpacked copy is replaced with a clean one.");
+                CloseForHelper("the altered unpacked copy is replaced with a clean one");
             }
             catch (Exception ex) { Logger.Swallow("OnRepairUnpackedCopy", ex); }
         }
@@ -3866,6 +4063,11 @@ namespace AutoClicker.UI
                 // English, which reads worse than either.
                 string text;
                 Color colour = _theme.TextMuted;
+                // The program file by its real name: an install is TempoClicker.exe since the
+                // Discord rename, so "Tempo.exe is the file that was installed" named a file
+                // that is not there.
+                string exeName = System.IO.Path.GetFileName(Utils.DeploymentInfo.ExecutablePath);
+                if (string.IsNullOrEmpty(exeName)) { exeName = Utils.DeploymentInfo.LegacyExeName; }
                 switch (Utils.IntegrityCheck.Verdict)
                 {
                     case Utils.IntegrityVerdict.Genuine:
@@ -3886,7 +4088,7 @@ namespace AutoClicker.UI
                         break;
                     case Utils.IntegrityVerdict.Ok:
                     case Utils.IntegrityVerdict.Baselined:
-                        text = Localization.T("✓ Tempo.exe is the file that was installed.");
+                        text = Localization.F("✓ {0} is the file that was installed.", exeName);
                         colour = _theme.Success;
                         break;
                     case Utils.IntegrityVerdict.Modified:
@@ -3896,8 +4098,8 @@ namespace AutoClicker.UI
                         colour = _theme.Danger;
                         break;
                     case Utils.IntegrityVerdict.Damaged:
-                        text = Localization.T("✗ Tempo.exe is damaged — part of it is unreadable. "
-                            + "Reinstalling fixes it.");
+                        text = Localization.F("✗ {0} is damaged — part of it is unreadable. "
+                            + "Reinstalling fixes it.", exeName);
                         colour = _theme.Danger;
                         break;
                     case Utils.IntegrityVerdict.Repackaged:
@@ -3906,8 +4108,8 @@ namespace AutoClicker.UI
                         colour = _theme.Danger;
                         break;
                     case Utils.IntegrityVerdict.UnpackedModified:
-                        text = Localization.T("✗ Tempo.exe is intact, but the unpacked copy Tempo runs from was altered — "
-                            + "the code running is not what Tempo.exe carries. Press Repair to unpack a clean copy.");
+                        text = Localization.F("✗ {0} is intact, but the unpacked copy Tempo runs from was altered — "
+                            + "the code running is not what {0} carries. Press Repair to unpack a clean copy.", exeName);
                         colour = _theme.Danger;
                         break;
                     case Utils.IntegrityVerdict.TestBuild:
@@ -4042,7 +4244,7 @@ namespace AutoClicker.UI
 
             if (scheduled != null)
             {
-                FadeOutThenRestart("restoring a restore point");
+                FadeOutThenRestart("the restore point");
             }
         }
 
@@ -4076,9 +4278,15 @@ namespace AutoClicker.UI
 
         private bool _installInProgress;
 
+        // The Settings button, so it can say "Installing…" and refuse a second press while it works.
+        // Null when this copy is not offered the install (it is installed, or must not install).
+        private Button _installTempoBtn;
+        private string _installTempoBtnText;
+
         /// <summary>"Install Tempo on this PC…" in Settings.</summary>
         private void OnInstallTempoClicked(object sender, EventArgs e)
         {
+            if (_installInProgress) { return; }
             if (!Utils.DeploymentInfo.CanOfferInstall) { return; }   // installed meanwhile, or must not install
             DialogResult go = MessageBox.Show(this, InstallOfferText, "Install Tempo",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
@@ -4090,18 +4298,36 @@ namespace AutoClicker.UI
 
         /// <summary>
         /// Installs this copy, then hands over to the installed copy through the same --restart path a
-        /// language change uses. The copy and its two SHA-256 passes run OFF the UI thread: from a USB
-        /// stick or a slow disk they take long enough to freeze the window and trip "Not responding".
+        /// language change uses.
+        ///
+        /// None of it runs on the UI thread, and the window says what it is doing the whole time. The
+        /// copy and its two SHA-256 passes took 4.4 s for the 104 MB exe on a fast NVMe desktop
+        /// (scratchpad/freezeprobe), and many times that on a laptop whose antivirus scans the new file
+        /// — and all the window showed for it was a wait cursor, which to the person looking at it is
+        /// Tempo not responding. It now covers itself with each step as it happens. The shell link is
+        /// made on an STA thread of its own (shell links are apartment-threaded, as the start-up repoint
+        /// already allows for), not on a pool thread.
         /// </summary>
         private async void InstallAndRelaunch()
         {
             if (_installInProgress) { return; }
             _installInProgress = true;
-            UseWaitCursor = true;
+            SetInstallButtonBusy(true);
+
+            long mb = 104;
+            try { mb = Math.Max(1, (new FileInfo(Utils.DeploymentInfo.ExecutablePath).Length + 512 * 1024) / (1024 * 1024)); }
+            catch { }
+            ShowBusyOverlay(Localization.T("Installing Tempo on this PC…"),
+                            InstallStageText(SelfInstaller.InstallStage.Copying, mb));
+
             SelfInstaller.Result r = null;
             try
             {
-                r = await System.Threading.Tasks.Task.Run(() => SelfInstaller.InstallRunningCopy());
+                r = await RunOnStaThread(() => SelfInstaller.InstallRunningCopy(stage =>
+                {
+                    // Reported on the install's own thread; the overlay belongs to this one.
+                    try { BeginInvoke((Action)(() => SetBusyDetail(InstallStageText(stage, mb)))); } catch { }
+                }), "Tempo install");
             }
             catch (Exception ex)
             {
@@ -4109,17 +4335,65 @@ namespace AutoClicker.UI
             }
             finally
             {
-                UseWaitCursor = false;
                 _installInProgress = false;
             }
 
             if (r == null || !r.Ok)
             {
+                HideBusyOverlay();
+                SetInstallButtonBusy(false);
                 ShowWarning(Localization.F("Tempo couldn't be installed. {0}",
                                            Localization.T(r?.Error ?? "")));
                 return;
             }
-            FadeOutThenRestart("installing Tempo", r.InstalledExe);
+            FadeOutThenRestart("the installation", r.InstalledExe);
+        }
+
+        /// <summary>What the busy overlay says while the install is at <paramref name="stage"/>.</summary>
+        private static string InstallStageText(SelfInstaller.InstallStage stage, long mb)
+        {
+            switch (stage)
+            {
+                case SelfInstaller.InstallStage.Copying:
+                    return Localization.F("Copying Tempo ({0} MB)…", mb);
+                case SelfInstaller.InstallStage.Checking:
+                    return Localization.T("Checking the copy…");
+                case SelfInstaller.InstallStage.Shortcut:
+                    return Localization.T("Adding the Start Menu shortcut…");
+                default:
+                    return Localization.T("Adding Tempo to Settings › Apps…");
+            }
+        }
+
+        /// <summary>The Settings install button while an install runs: "Installing…", and not pressable.</summary>
+        private void SetInstallButtonBusy(bool busy)
+        {
+            if (_installTempoBtn == null || _installTempoBtn.IsDisposed) { return; }
+            _installTempoBtn.Enabled = !busy;
+            _installTempoBtn.Text = busy ? Localization.T("Installing…") : _installTempoBtnText;
+        }
+
+        /// <summary>
+        /// Runs <paramref name="work"/> on a background thread of its own in a single-threaded COM
+        /// apartment, and completes on the caller's thread. For work that is slow AND touches the shell
+        /// (shell links), which must not run on the UI thread and should not run on a pool thread either.
+        /// </summary>
+        private static System.Threading.Tasks.Task<T> RunOnStaThread<T>(Func<T> work, string name)
+        {
+            var done = new System.Threading.Tasks.TaskCompletionSource<T>(
+                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+            var thread = new System.Threading.Thread(() =>
+            {
+                try { done.SetResult(work()); }
+                catch (Exception ex) { done.SetException(ex); }
+            })
+            {
+                IsBackground = true,
+                Name = name
+            };
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.Start();
+            return done.Task;
         }
 
         private void OnUninstallClicked(object sender, EventArgs e)
@@ -4160,11 +4434,11 @@ namespace AutoClicker.UI
             {
                 // Only now is anything about to be deleted for good, so only now is a backup worth offering.
                 DialogResult backup = MessageBox.Show(this,
-                    "Back up all your data first?\n\n" +
+                    Localization.T("Back up all your data first?\n\n" +
                     "Yes — choose a folder; Tempo copies all profiles, macros, settings\n" +
                     "         and history there before uninstalling\n" +
-                    "No — uninstall without a backup",
-                    "Uninstall Tempo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question,
+                    "No — uninstall without a backup"),
+                    Localization.T("Uninstall Tempo"), MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button1);
 
                 if (backup == DialogResult.Cancel)
@@ -4262,7 +4536,7 @@ namespace AutoClicker.UI
                 }
 
                 var confirm = MessageBox.Show(this,
-                    "Replace your current settings and keybinds with the imported ones?",
+                    Localization.T("Replace your current settings and keybinds with the imported ones?"),
                     "Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                 if (confirm != DialogResult.Yes)
                 {
@@ -4307,6 +4581,7 @@ namespace AutoClicker.UI
             _settings.CaptionOverlayEnabled = _captionOverlayCheck.Checked;
             _settings.CaptionSpeakerTurns = _captionSpeakerCheck.Checked;
             _settings.CaptionFilterOwnVoice = _captionOwnVoiceCheck != null ? _captionOwnVoiceCheck.Checked : _settings.CaptionFilterOwnVoice;
+            _settings.CaptionLyrics = _captionLyricsCheck != null ? _captionLyricsCheck.Checked : _settings.CaptionLyrics;
             _settings.CaptionFaceAnalysis = _captionFaceCheck.Checked;
             _settings.CaptionSaveTranscripts = _captionTranscriptCheck.Checked;
             _settings.CaptionShowSourceTag = _captionSourceTagCheck.Checked;
@@ -4355,6 +4630,7 @@ namespace AutoClicker.UI
             _settings.ClickerStartDelaySeconds = (int)_startDelayNum.Value;
             _settings.StartDelayBeep = _startDelayBeepCheck != null && _startDelayBeepCheck.Checked;
             _settings.LaunchAtStartup = _launchStartupCheck.Checked;
+            if (_openAtSignInCheck != null) { _settings.OpenWindowAtSignIn = _openAtSignInCheck.Checked; }
             if (_startupDelayNum != null) { _settings.StartupDelaySeconds = (int)_startupDelayNum.Value; }
             _settings.HideWhenClicking = _hideWhenClickingCheck.Checked;
             _settings.CheckForUpdatesOnLaunch = _checkUpdatesCheck.Checked;
@@ -4456,6 +4732,9 @@ namespace AutoClicker.UI
                 {
                     if (digit < _tabs.TabPages.Count)
                     {
+                        // Ctrl+9 on a detached page raises its window — the tab behind it is an
+                        // empty placeholder, so selecting it would show nothing.
+                        if (AccountsNavHandled(_tabs.TabPages[digit])) { return true; }
                         _tabs.SelectedIndex = digit;
                         return true;
                     }
@@ -4466,6 +4745,13 @@ namespace AutoClicker.UI
                     int count = _tabs.TabPages.Count;
                     bool back = (keyData & Keys.Shift) == Keys.Shift;
                     int next = ((_tabs.SelectedIndex + (back ? -1 : 1)) % count + count) % count;
+                    // Cycling SKIPS a detached page rather than stopping on its empty tab. At
+                    // most one step is ever skipped today, but the loop is written to survive a
+                    // second detachable page, and to give up rather than spin if every page were.
+                    for (int guard = 0; guard < count && IsDetachedPage(_tabs.TabPages[next]); guard++)
+                    {
+                        next = ((next + (back ? -1 : 1)) % count + count) % count;
+                    }
                     _tabs.SelectedIndex = next;
                     return true;
                 }

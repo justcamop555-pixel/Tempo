@@ -58,8 +58,7 @@ namespace AutoClicker.UI
         {
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             Text = Localization.T("Welcome to Tempo");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -179,6 +178,7 @@ namespace AutoClicker.UI
             };
             gh.Click += openLink(GitHubUrl);
             site.Click += openLink(WebsiteUrl);
+            UiFactory.ScaleToScreen(this);
         }
 
         /// <summary>Adds a wrapped label sized to its text. Returns the y below it.</summary>
@@ -227,12 +227,8 @@ namespace AutoClicker.UI
 
         private int AddText(string text, Color colour, Font font, int y)
         {
-            int h;
-            using (var g = CreateGraphics())
-            {
-                h = TextRenderer.MeasureText(g, text, font, new Size(TextWidth, 0),
-                                             TextFormatFlags.WordBreak).Height + 2;
-            }
+            // In 100% units: the window is scaled after it is built (UiFactory.Measure96).
+            int h = UiFactory.Measure96(text, font, TextWidth, TextFormatFlags.Default).Height + 2;
             Controls.Add(new Label
             {
                 Text = text,
@@ -276,7 +272,8 @@ namespace AutoClicker.UI
         {
             try
             {
-                Size need = TextRenderer.MeasureText(b.Text, b.Font);
+                // In 100% units: the dialog is scaled after it is built (see UiFactory.FitToText96).
+                Size need = UiFactory.Measure96(b.Text, b.Font, 0, TextFormatFlags.Default);
                 b.Width = Math.Max(designWidth, need.Width + 28);
             }
             catch { }

@@ -64,11 +64,16 @@ namespace AutoClicker
             try
             {
                 int me = System.Diagnostics.Process.GetCurrentProcess().Id;
-                foreach (var p in System.Diagnostics.Process.GetProcessesByName("Tempo"))
+                // Under either name: the installed copy is TempoClicker.exe now, downloads are Tempo.exe
+                // (see DeploymentInfo.InstalledExeName).
+                foreach (string name in new[] { "TempoClicker", "Tempo" })
                 {
-                    using (p)
+                    foreach (var p in System.Diagnostics.Process.GetProcessesByName(name))
                     {
-                        if (p.Id != me && AllowSetForegroundWindow(p.Id)) { granted = true; }
+                        using (p)
+                        {
+                            if (p.Id != me && AllowSetForegroundWindow(p.Id)) { granted = true; }
+                        }
                     }
                 }
             }
@@ -169,10 +174,18 @@ namespace AutoClicker
             // native load.
             RegisterNativeLibrarySearchPath();
 
+            // Launched by a restart or an install: say so at once, before waiting for the old copy to
+            // let go. That copy is still on screen saying "Restarting…", and it now stays there until
+            // this signal arrives instead of vanishing the moment it asked Windows to start us.
+            if (StartedForRestart() || StartedForHandover())
+            {
+                AnnounceRestartStarted();
+            }
+
             // Ensure only one copy of the application runs at a time.
             bool createdNew;
             _singleInstanceMutex = new Mutex(true, MutexName, out createdNew);
-            if (!createdNew && StartedForRestart() && WaitForRestartHandover())
+            if (!createdNew && (StartedForRestart() || StartedForHandover()) && WaitForRestartHandover())
             {
                 // A deliberate restart (language or GPU change) relaunches Tempo with
                 // --restart WHILE the old instance is still shutting down, so the mutex
@@ -238,7 +251,10 @@ namespace AutoClicker
                     if (s != null)
                     {
                         Utils.Localization.Current = s.Language;
-                        theme = UI.Theme.ForKind((Models.ThemeKind)s.Theme);
+                        // HDR-corrected like the running window, on the screen the notice opens on.
+                        bool hdr = s.CompensateForHdr &&
+                                   Utils.DisplayColorInfo.HdrOnFor(Screen.FromPoint(Control.MousePosition).DeviceName);
+                        theme = UI.Theme.ForKind((Models.ThemeKind)s.Theme, hdr);
                     }
                 }
                 catch { /* fall back to the default dark theme and English */ }
@@ -326,6 +342,33 @@ namespace AutoClicker
                 e.SetObserved();
             };
 
+            // One-time costs the UI thread would otherwise pay in the middle of start-up, paid here in
+            // parallel instead (all profiled on the UI thread before this existed):
+            //  • System.Text.Json describing each stored type and making its accessors, by reflection —
+            //    66 of the 87 ms settings load, 26 of the 32 ms recycle-bin load;
+            //  • the translation tables' static constructor (12 ms) and the globalization library
+            //    behind the first culture-aware compare.
+            // Two threads, so the settings the window needs first are not queued behind the rest.
+            // Nothing is duplicated if the UI thread gets there first: a static constructor runs
+            // once, and System.Text.Json configures a type once, the latecomer waiting. This
+            // instance owns the mutex now, so a second launch that is about to exit starts neither.
+            // Measured as installed, six interleaved starts each: median to the built window 591 ms
+            // with no warm-up, 515 describing the types only, 503 with these two threads.
+            new Thread(() =>
+            {
+                Persistence.SettingsManager.WarmUp();
+                Persistence.ProfileManager.WarmUp();
+                Persistence.MacroStore.WarmUp();
+                Persistence.SessionHistoryStore.WarmUp();
+            })
+            { IsBackground = true, Name = "Tempo warm-up: data" }.Start();
+            new Thread(() =>
+            {
+                try { Utils.Localization.T("OK"); } catch { }
+                try { System.Globalization.CultureInfo.CurrentCulture.CompareInfo.Compare("a", "B"); } catch { }
+            })
+            { IsBackground = true, Name = "Tempo warm-up: text" }.Start();
+
             // Read the version rather than spelling it out: this line said "1.0.319" as a
             // literal, so every log from a later release would have kept claiming 1.0.319
             // until somebody noticed. The build ID rides along because the version alone
@@ -333,6 +376,46 @@ namespace AutoClicker
             // is the first line of every log attached to a bug report.
             Logger.Info("[startup] Tempo starting (version " + Utils.AppVersion.Text
                         + ", " + Utils.BuildInfo.Short + ").");
+
+            // Discord showed Tempo users as playing the Steam game "Tempo": its detection list names
+            // that game's program tempo.exe. An install still called Tempo.exe is renamed once, here, to
+            // TempoClicker.exe (DeploymentInfo.RenameInstalledExe) — and this process hands over to the
+            // renamed file, because to Discord it is still Tempo.exe: GetProcessImageFileName keeps
+            // returning the name a process started under until it exits (measured). Never for an
+            // uninstall launch: that must stay an uninstall.
+            //
+            // --handover, not --restart. Both wait for this process to let go of the single-instance
+            // mutex, but --restart also forces the window on screen, and passing it here made the
+            // FIRST sign-in after the update pop the window up for everyone who starts in the tray.
+            // What this launch was asked to do travels with it instead: --startup for a sign-in
+            // launch, --restart when it is itself a restart (the updater relaunches with it, and
+            // "Update now" must bring the window back, not seem to quit).
+            if (!StartedForUninstall() && Utils.DeploymentInfo.RenameInstalledExe(out string renamedExe))
+            {
+                try
+                {
+                    var psi = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = renamedExe,
+                        Arguments = "--handover"
+                                    + (StartedForRestart() ? " --restart" : "")
+                                    + (Utils.StartupManager.LaunchedAtStartup() ? " --startup" : ""),
+                        UseShellExecute = true,
+                        WorkingDirectory = Path.GetDirectoryName(renamedExe) ?? Environment.CurrentDirectory,
+                    };
+                    System.Diagnostics.Process.Start(psi);
+                    Logger.Info("[startup] handed over to " + renamedExe + ".");
+                    ReleaseMutex();
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    // The file is renamed either way; this copy simply carries on, and the next start
+                    // is under the new name.
+                    Logger.Warn("[startup] could not start the renamed copy (" + ex.Message + ") — carrying on.");
+                }
+            }
+
             Utils.SelfCheck.Run();   // does the single-file bundle actually work here?
 
             // Every build Tempo has ever run left ~263 MB of unpacked natives in TEMP and
@@ -361,6 +444,10 @@ namespace AutoClicker
             // startup, and it only ever touches a script that is already there.
             System.Threading.ThreadPool.QueueUserWorkItem(
                 _ => Utils.UninstallScriptRefresh.Run());
+
+            // Shortcuts, pins and the sign-in entry still aimed at the installed copy's old name (see the
+            // rename above; install.cmd renames by installing the new name) move to this file.
+            Utils.DeploymentInfo.RepointLeftoversOfOldNameInBackground();
 
             // Prime WinForms and put the splash on screen FIRST, before any other
             // startup work, so there's instant visible feedback. Everything below this
@@ -437,7 +524,23 @@ namespace AutoClicker
                     ReleaseMutex();
                 }
             }
+
+            // A helper is waiting for this PROCESS to end before it touches Tempo.exe (the updater's
+            // swap, the unpacked-copy repair). The normal shutdown above has already saved and
+            // released everything; this makes sure no straggling foreground thread can keep the
+            // process — and the lock on the exe — alive after it.
+            if (ExitProcessAfterShutdown)
+            {
+                Environment.Exit(0);
+            }
         }
+
+        /// <summary>
+        /// Set when Tempo is closing so an external helper can replace or repair it. The close
+        /// itself is the ordinary one — everything is saved and put back — and this only guarantees
+        /// the process then actually ends. See <see cref="Main"/>.
+        /// </summary>
+        internal static volatile bool ExitProcessAfterShutdown;
 
         private static void OnThreadException(object sender, ThreadExceptionEventArgs e)
         {
@@ -515,14 +618,28 @@ namespace AutoClicker
         }
 
         /// <summary>True when this process was launched by Tempo's own restart flow.</summary>
-        internal static bool StartedForRestart()
+        internal static bool StartedForRestart() => HasArg("restart");
+
+        /// <summary>
+        /// True when an older copy started this one to take over from it (the Discord rename) — it
+        /// waits for the mutex like a restart, but comes up exactly as its own launch asked.
+        /// </summary>
+        internal static bool StartedForHandover() => HasArg("handover");
+
+        /// <summary>
+        /// True when a restart asked to come back in the tray: the tray menu's Restart, pressed while
+        /// the window was hidden, should not bring the window up.
+        /// </summary>
+        internal static bool StartedToTray() => HasArg("tray");
+
+        private static bool HasArg(string name)
         {
             try
             {
                 foreach (string a in Environment.GetCommandLineArgs())
                 {
-                    if (string.Equals(a, "--restart", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(a, "/restart", StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(a, "--" + name, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(a, "/" + name, StringComparison.OrdinalIgnoreCase))
                     {
                         return true;
                     }
@@ -555,16 +672,36 @@ namespace AutoClicker
         }
 
         /// <summary>
-        /// Restarts Tempo cleanly, avoiding the single-instance race that
-        /// <see cref="Application.Restart"/> caused: it launched the new process before
-        /// this one released the mutex, so the new instance saw "already running" and
-        /// exited — leaving NO window. This launches the replacement with a --restart
-        /// flag (so it waits for the hand-over, see <see cref="WaitForRestartHandover"/>)
-        /// and only then exits the current instance to release the mutex.
-        /// Throws if the relaunch can't start, so the caller can keep the app open and
-        /// tell the user; in that case the current instance is NOT exited.
+        /// Sets the event the outgoing instance waits on (<see cref="MainForm.RestartStartedEventName"/>).
+        /// By the time Main runs, the slow part of a first start is over: a single-file build unpacks
+        /// itself before any of Tempo's code runs, which for a freshly installed copy — a new file name,
+        /// so a new unpack folder — is many seconds on a laptop with antivirus.
         /// </summary>
-        internal static void RestartApp(string relaunchExe = null)
+        private static void AnnounceRestartStarted()
+        {
+            try
+            {
+                if (EventWaitHandle.TryOpenExisting(MainForm.RestartStartedEventName, out EventWaitHandle started))
+                {
+                    using (started) { started.Set(); }
+                }
+            }
+            catch { /* nobody is waiting: a hand-over from an older build */ }
+        }
+
+        /// <summary>
+        /// Starts the copy of Tempo that replaces this one, with a --restart flag so it waits for the
+        /// hand-over (<see cref="WaitForRestartHandover"/>) — the fix for the single-instance race
+        /// <see cref="Application.Restart"/> had: it launched the new process before this one released
+        /// the mutex, so the new instance saw "already running" and exited, leaving NO window.
+        ///
+        /// Only STARTS it. The caller exits once the new copy has announced itself (see
+        /// <see cref="AnnounceRestartStarted"/>), and call it OFF the UI thread: ShellExecute has Windows
+        /// look at the program first — the antivirus scan of a file that was only just written,
+        /// SmartScreen for a downloaded one — and on the UI thread that wait froze the window. Throws if
+        /// the relaunch can't start, so the caller can keep the app open and tell the user.
+        /// </summary>
+        internal static System.Diagnostics.Process StartReplacement(string relaunchExe = null, bool toTray = false)
         {
             // Normally the same file relaunches itself. Installing a portable copy relaunches the
             // INSTALLED copy instead, through the very same --restart hand-over, so the new
@@ -576,14 +713,11 @@ namespace AutoClicker
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = exe,
-                Arguments = "--restart",
+                Arguments = "--restart" + (toTray ? " --tray" : ""),
                 UseShellExecute = true,
                 WorkingDirectory = Path.GetDirectoryName(exe) ?? Environment.CurrentDirectory
             };
-            System.Diagnostics.Process.Start(psi);   // throws → caller keeps app open
-
-            // Relaunch is on its way and will wait for the mutex; now let this one go.
-            Application.Exit();
+            return System.Diagnostics.Process.Start(psi);   // throws → caller keeps app open
         }
 
         private static void ReleaseMutex()

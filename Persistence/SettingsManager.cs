@@ -31,6 +31,29 @@ namespace AutoClicker.Persistence
             NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
         };
 
+        /// <summary>
+        /// Builds System.Text.Json's description of everything settings.json holds, through the SAME
+        /// options Load uses, so Load finds it ready. The first read of a type pays for that once, by
+        /// reflection — profiled at start-up, 66 of the 87 ms Load took, on the UI thread before any
+        /// of the window could be built. Program.Main runs this on a thread of its own as Tempo
+        /// starts, alongside the ~80 ms of other work that comes before the first Load. Safe to race
+        /// Load: the options' type cache is thread-safe, and a type is only ever configured once.
+        /// </summary>
+        internal static void WarmUp()
+        {
+            try
+            {
+                // A ROUND TRIP of a default settings object, not just the type's description: the first
+                // real read also makes a getter and setter for each of the ~170 properties as it first
+                // touches them — 30 ms more on the UI thread, profiled after a describe-only warm-up.
+                string json = JsonSerializer.Serialize(AppSettings.CreateDefault(), Options);
+                JsonSerializer.Deserialize<AppSettings>(json, Options);
+                Options.GetTypeInfo(typeof(HotkeyDefinition));
+                Options.GetTypeInfo(typeof(System.Collections.Generic.List<HotkeyBinding>));
+            }
+            catch (Exception ex) { Logger.Swallow("SettingsManager.WarmUp", ex); }
+        }
+
         private static string _resolvedDir;
 
         public static string GetSettingsDirectory()

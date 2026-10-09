@@ -36,8 +36,8 @@ namespace AutoClicker.Utils
             public int ShortcutsRepointed { get; internal set; }
         }
 
-        /// <summary>Where a shortcut that launches the portable copy is likely to live.</summary>
-        private static IEnumerable<string> ShortcutFolders()
+        /// <summary>Where a shortcut that launches Tempo is likely to live: the Desktop, taskbar pins, the Start Menu.</summary>
+        internal static IEnumerable<string> ShortcutFolders()
         {
             string desktop = "", pins = "", startMenu = "";
             try { desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory); } catch { }
@@ -129,11 +129,29 @@ namespace AutoClicker.Utils
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                          "Microsoft", "Windows", "Start Menu", "Programs", "Tempo.lnk");
 
-        /// <summary>Installs the copy of Tempo that is running now.</summary>
-        public static Result InstallRunningCopy()
+        /// <summary>
+        /// The steps an install goes through, reported as each one starts, so the window can say what
+        /// it is doing. The copy and its check are the slow part: 4.4 s for the 104 MB exe on a fast
+        /// NVMe desktop, and many times that on a laptop whose antivirus scans the new file — a wait
+        /// that used to show nothing but a wait cursor, and read as Tempo not responding.
+        /// </summary>
+        public enum InstallStage
+        {
+            Copying,
+            Checking,
+            Shortcut,
+            Registering
+        }
+
+        /// <summary>
+        /// Installs the copy of Tempo that is running now. Blocking, and it creates a shell link: call
+        /// it on a background STA thread, never the UI thread. <paramref name="stage"/> is called on
+        /// that thread as each step starts.
+        /// </summary>
+        public static Result InstallRunningCopy(Action<InstallStage> stage = null)
         {
             Result r = Install(DeploymentInfo.ExecutablePath, DeploymentInfo.InstalledDirectory,
-                               StartMenuShortcutPath, integrateWithWindows: true);
+                               StartMenuShortcutPath, integrateWithWindows: true, stage);
             if (r.Ok)
             {
                 Logger.Info("[Install] installed this copy to " + r.InstalledExe
@@ -156,6 +174,17 @@ namespace AutoClicker.Utils
         internal static Result Install(string sourceExe, string targetDir, string shortcutPath,
                                        bool integrateWithWindows)
         {
+            return Install(sourceExe, targetDir, shortcutPath, integrateWithWindows, null);
+        }
+
+        internal static Result Install(string sourceExe, string targetDir, string shortcutPath,
+                                       bool integrateWithWindows, Action<InstallStage> stage)
+        {
+            void Report(InstallStage s)
+            {
+                try { stage?.Invoke(s); } catch { /* progress is cosmetic; never fail the install over it */ }
+            }
+
             var r = new Result();
             string staging = null;
             bool createdDir = false;
@@ -172,21 +201,29 @@ namespace AutoClicker.Utils
                     return r;
                 }
 
-                string target = Path.Combine(targetDir, "Tempo.exe");
-                if (string.Equals(Path.GetFullPath(sourceExe), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase))
+                // Installed under its own name, not the download's (see DeploymentInfo.InstalledExeName:
+                // "Tempo.exe" makes Discord show the user as playing the Steam game "Tempo").
+                string target = Path.Combine(targetDir, DeploymentInfo.InstalledExeName);
+                string oldNamed = Path.Combine(targetDir, DeploymentInfo.LegacyExeName);
+                if (string.Equals(Path.GetFullPath(sourceExe), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(Path.GetFullPath(sourceExe), Path.GetFullPath(oldNamed), StringComparison.OrdinalIgnoreCase))
                 {
                     r.Error = "This copy of Tempo is already the installed one.";
                     return r;
                 }
 
-                // Never put an older download over a newer install. The offer is not shown when an
-                // installed copy exists at all; this is the same rule enforced where the copy happens.
-                if (File.Exists(target) && IsOlder(sourceExe, target, out string installedVersion))
+                // Never put an older download over a newer install — under either name. The offer is not
+                // shown when an installed copy exists at all; this is the same rule enforced where the
+                // copy happens.
+                foreach (string existing in new[] { target, oldNamed })
                 {
-                    // A fixed sentence so it can be translated; the version goes to the log instead.
-                    Logger.Info("[Install] refused: the installed copy (" + installedVersion + ") is newer than this one.");
-                    r.Error = "A newer Tempo is already installed on this PC. Open that one instead.";
-                    return r;
+                    if (File.Exists(existing) && IsOlder(sourceExe, existing, out string installedVersion))
+                    {
+                        // A fixed sentence so it can be translated; the version goes to the log instead.
+                        Logger.Info("[Install] refused: the installed copy (" + installedVersion + ") is newer than this one.");
+                        r.Error = "A newer Tempo is already installed on this PC. Open that one instead.";
+                        return r;
+                    }
                 }
 
                 if (!Directory.Exists(targetDir))
@@ -199,7 +236,9 @@ namespace AutoClicker.Utils
                 // failed half-way — a full disk, an antivirus snatching the file — can never leave a
                 // truncated Tempo.exe where the Start Menu and Settings › Apps will point.
                 staging = target + ".installing";
+                Report(InstallStage.Copying);
                 File.Copy(sourceExe, staging, overwrite: true);
+                Report(InstallStage.Checking);
                 if (!SameBytes(sourceExe, staging))
                 {
                     r.Error = "The copied file did not match the original, so nothing was installed.";
@@ -207,6 +246,14 @@ namespace AutoClicker.Utils
                 }
                 File.Move(staging, target, overwrite: true);
                 staging = null;
+
+                // An install from before the rename, now replaced: it would only be a second copy to
+                // launch by mistake. Best-effort — if it is running it cannot go yet, and the renamed
+                // copy's own start moves its shortcuts and sign-in entry along regardless.
+                if (File.Exists(oldNamed))
+                {
+                    try { File.Delete(oldNamed); } catch { }
+                }
 
                 string sha = sourceExe + ".sha256";
                 if (File.Exists(sha))
@@ -222,15 +269,18 @@ namespace AutoClicker.Utils
                 // itself the first time it runs (Uninstaller.RefreshRegisteredVersion).
                 if (!string.IsNullOrEmpty(shortcutPath))
                 {
+                    Report(InstallStage.Shortcut);
                     r.ShortcutCreated = CreateShortcut(shortcutPath, target, targetDir, "Tempo");
                 }
                 if (integrateWithWindows)
                 {
+                    Report(InstallStage.Registering);
                     string version = null;
                     try { version = FileVersionInfo.GetVersionInfo(target).FileVersion; } catch { }
                     r.Registered = Uninstaller.RegisterInstalledCopy(target, version);
                     r.StartupMoved = StartupManager.RepointTo(target);
-                    r.ShortcutsRepointed = RepointShortcuts(sourceExe, target, ShortcutFolders());
+                    r.ShortcutsRepointed = RepointShortcuts(sourceExe, target, ShortcutFolders())
+                                         + RepointShortcuts(oldNamed, target, ShortcutFolders());
                 }
 
                 r.Ok = true;

@@ -27,17 +27,10 @@ namespace AutoClicker.UI
         {
             if (_keybindsTraySleepLabel == null || _keybindsTraySleepLabel.IsDisposed) { return; }
             bool sleeping = _settings != null && _settings.TraySleepEnabled;
-            _keybindsTraySleepLabel.Visible = sleeping;
-            if (sleeping)
-            {
-                // Kept to two lines on purpose: the band is 38 px, and the half that
-                // tells you what to DO must not be the half that gets clipped.
-                _keybindsTraySleepLabel.Text = Utils.Localization.T(
-                    "⏾  “Sleep in tray” is on: while Tempo sits hidden with nothing running, hotkeys that "
-                    + "START clicking, playback or recording are paused so a forgotten Tempo can't run by "
-                    + "itself. Emergency stop and Show / hide window keep working. Turn it off in "
-                    + "Settings → Startup & Window.");
-            }
+            SetKeybindNotice(_keybindsTraySleepLabel, !sleeping ? null : Utils.Localization.T(
+                "⏾  “Sleep in tray” is on: after 30 minutes hidden with nothing running, Tempo sleeps and "
+                + "its start hotkeys pause — the first press then only wakes it, so press again. Emergency "
+                + "stop and Show / hide window always work. Turn it off in Settings → Startup & Window."));
         }
         private Label _keybindsRouteLabel;
 
@@ -169,7 +162,7 @@ namespace AutoClicker.UI
 
             if (fallbacks.Count == 0 && dead.Count == 0)
             {
-                _keybindsRouteLabel.Visible = false;
+                SetKeybindNotice(_keybindsRouteLabel, null);
                 return;
             }
 
@@ -209,8 +202,7 @@ namespace AutoClicker.UI
                         names));
             }
 
-            _keybindsRouteLabel.Text = string.Join("\r\n", parts.ToArray());
-            _keybindsRouteLabel.Visible = true;
+            SetKeybindNotice(_keybindsRouteLabel, string.Join("\r\n", parts.ToArray()));
         }
 
         /// <summary>
@@ -280,14 +272,24 @@ namespace AutoClicker.UI
                     }
 
                     string assigned = MacroSlotName(pair.Key);
-                    int idx = string.IsNullOrEmpty(assigned) ? 0 : combo.Items.IndexOf(assigned);
+                    // Matched the way playback matches it (MacroStore.GetByName ignores case): a slot
+                    // saved as "farm" for the macro "Farm" — a case-only rename left exactly that —
+                    // played it, but the picker said "farm  (missing)".
+                    int idx = string.IsNullOrEmpty(assigned) ? 0 : -1;
+                    for (int i = 1; idx < 0 && i < combo.Items.Count; i++)
+                    {
+                        if (combo.Items[i] is string item && string.Equals(item, assigned, StringComparison.OrdinalIgnoreCase))
+                        {
+                            idx = i;
+                        }
+                    }
 
                     // Assigned to something that is gone. Keep the name visible rather
                     // than silently snapping back to "first in the list" — the hotkey
                     // does nothing right now and the user needs to see why.
                     if (idx < 0)
                     {
-                        combo.Items.Add(Utils.Localization.F("{0}  (missing)", assigned));
+                        combo.Items.Add(new MissingMacroSlot(assigned));
                         idx = combo.Items.Count - 1;
                     }
 
@@ -307,14 +309,32 @@ namespace AutoClicker.UI
             var combo = sender as ComboBox;
             if (combo == null || !(combo.Tag is int slot)) { return; }
 
+            // The "Name  (missing)" entry stands for the assignment as it was: picking it (back)
+            // restores that name. It used to save the whole LABEL as the macro's name —
+            // "Name  (missing)" — a macro that could never exist, and the next refresh showed
+            // "Name  (missing)  (missing)".
             // Index 0 is "(first in the list)" — i.e. clear the assignment and fall
             // back to the old positional behaviour.
-            string name = combo.SelectedIndex <= 0 ? "" : combo.SelectedItem as string;
+            string name = combo.SelectedItem is MissingMacroSlot missing ? missing.Name
+                        : combo.SelectedIndex <= 0 ? "" : combo.SelectedItem as string;
             SetMacroSlotName(slot, name);
             try { Persistence.SettingsManager.Save(_settings); } catch { }
 
             Utils.Logger.Info("[Macros] quick-play slot " + slot + " -> " +
                               (string.IsNullOrEmpty(name) ? "(first in the list)" : "'" + name + "'"));
+        }
+
+        /// <summary>A quick-play choice naming a macro that is no longer in the library.</summary>
+        private sealed class MissingMacroSlot
+        {
+            private readonly string _text;
+            public string Name { get; }
+            public MissingMacroSlot(string name)
+            {
+                Name = name;
+                _text = Utils.Localization.F("{0}  (missing)", name);
+            }
+            public override string ToString() => _text;
         }
 
         private void BuildKeybindsTab()
@@ -331,17 +351,21 @@ namespace AutoClicker.UI
                 "Hotkeys work even when the window is in the tray. Save to apply.";
 
             var help = UiFactory.Label(helpText, 12, 12);
+            // "Bare left & right click": without this the label hid the "&" as an accelerator marker.
+            help.UseMnemonic = false;
             help.MaximumSize = new Size(760, 0);
             help.AutoSize = true;
             help.ForeColor = _theme.TextMuted;
 
             // Measure the wrapped height so the controls below never collide with it,
             // regardless of translation length.
-            int helpHeight = TextRenderer.MeasureText(
-                helpText, help.Font, new Size(760, 0), TextFormatFlags.WordBreak).Height;
+            // In the window's units (MeasureLayout): built before the window is scaled.
+            int helpHeight = MeasureLayout(help.Text, help.Font, 760, TextFormatFlags.NoPrefix).Height;
             int rowY = 12 + helpHeight + 12;
 
             var saveBtn = UiFactory.PrimaryButton("Save Keybinds", 12, rowY, 150, 32, _theme);
+            // "Saved ✓" for a moment after a save (ConfirmOnButton): measured both ways.
+            LayoutFitter.DeclareCaptions(saveBtn, Utils.Localization.T("Save Keybinds"), Utils.Localization.T("Saved  ✓"));
             saveBtn.Click += OnSaveKeybinds;
             _keybindsSaveBtn = saveBtn;      // Esc parks focus here (see EscapePressed)
 
@@ -368,31 +392,47 @@ namespace AutoClicker.UI
             };
             page.Controls.Add(_keybindsDirtyLabel);
 
+            // Hotkeys also fire with Shift/Ctrl held on top (AppSettings.HotkeysIgnoreExtraShiftCtrl).
+            // Applies at once, like the quick-play pickers: it changes how keys are caught, not what
+            // is bound. Under the button row; the notices stack below it.
+            _extraShiftCtrlCheck = UiFactory.Check("Hotkeys also work while you hold Shift or Ctrl", 12, rowY + 44,
+                                                   _settings == null || _settings.HotkeysIgnoreExtraShiftCtrl);
+            _extraShiftCtrlCheck.CheckedChanged += OnExtraShiftCtrlChanged;
+            page.Controls.Add(_extraShiftCtrlCheck);
+
+            // The notices below share one stack under the Save/Reset row (see
+            // RelayoutKeybindNotices): each takes the height its text needs, only while it is
+            // showing. Every one of them used to own a band reserved whether it showed or not —
+            // seven bands, 280 px — so on a normal setup the list began more than half-way down
+            // the window below a wall of empty space, and only six of the 26 rows fitted.
+            //
             // A bare key is grabbed SYSTEM-WIDE, so it stops working in every other app
             // while Tempo runs. That is fine for F6/F8 and disastrous for "A" or Tab —
             // and the user has no way to guess which is which. Say it, in place.
-            // Sits BELOW the Save/Reset row and the interval-step spinner (which end at
-            // about rowY+42), not across them.
+            // Past five lines (many keys listed), it ends in "…" and the whole warning is on hover.
             _keybindsWarnLabel = new Label
             {
                 AutoSize = false,
                 Location = new Point(12, rowY + 46),
-                Size = new Size(760, 32),
+                Size = new Size(760, 46),
                 Font = new Font("Segoe UI", 8.5f),
                 ForeColor = _theme.WarningText,
+                AutoEllipsis = true,
                 Visible = false
             };
             page.Controls.Add(_keybindsWarnLabel);
+            TipStyle.FollowText(_keybindsWarnLabel);
 
             // Which keyboard is Tempo actually talking to? Hotkeys bind by VIRTUAL-KEY
             // code, and what a virtual key MEANS depends on the layout — so when a bind
             // "doesn't work on my keyboard", the device and the layout are the first two
             // facts anyone needs. Until now Tempo couldn't tell you either.
-            _keyboardInfoLabel = UiFactory.Caption("Detecting keyboard…", 12, rowY + 80);
+            _keyboardInfoLabel = UiFactory.Caption("Detecting keyboard…", 12, rowY + 94);
             _keyboardInfoLabel.AutoSize = false;
             _keyboardInfoLabel.Width = 760;
             _keyboardInfoLabel.Height = 16;
             _keyboardInfoLabel.ForeColor = _theme.TextMuted;
+            _keyboardInfoLabel.AutoEllipsis = true;
             page.Controls.Add(_keyboardInfoLabel);
             RefreshKeyboardInfo();
 
@@ -400,18 +440,10 @@ namespace AutoClicker.UI
             // Tempo then quietly falls back to a keyboard hook: the action still fires,
             // but the key is no longer reserved, so it ALSO keeps doing its normal job
             // in whatever app you're using. That is the classic "my hotkey half works"
-            // report, and until now nothing anywhere said it had happened.
-            // 48, not 32: it can now carry a second sentence for bindings that got no
-            // route at all, which is a different problem from "another app owns it".
-            _keybindsRouteLabel = new Label
-            {
-                AutoSize = false,
-                Location = new Point(12, rowY + 98),
-                Size = new Size(760, 48),
-                Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.WarningText,
-                Visible = false
-            };
+            // report, and until now nothing anywhere said it had happened. It also
+            // carries a second sentence for bindings that got no route at all, which is
+            // a different problem from "another app owns it".
+            _keybindsRouteLabel = NewKeybindNotice(rowY + 112, _theme.WarningText);
             page.Controls.Add(_keybindsRouteLabel);
 
             // A SETTING that switches these hotkeys off, said where they are configured.
@@ -423,64 +455,37 @@ namespace AutoClicker.UI
             // "Start minimised to tray" it never shows a window at all. So you bind F6,
             // send Tempo to the tray, press F6 — and nothing happens, with no clue why.
             // The only hint was buried in the tray icon's tooltip.
-            // Its own reserved band, rowY+148 .. rowY+186, ABOVE the column headers.
-            // Space is reserved whether or not it is showing, for the same reason the two
-            // notices above it reserve theirs: a label that pops in and shoves every
-            // keybind row down the page is worse than the warning it carries.
-            _keybindsTraySleepLabel = new Label
-            {
-                AutoSize = false,
-                Location = new Point(12, rowY + 148),
-                Size = new Size(760, 38),
-                Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.TextMuted,
-                Visible = false
-            };
+            _keybindsTraySleepLabel = NewKeybindNotice(rowY + 162, _theme.TextMuted);
+            // "Settings → Startup & Window": a label takes "&" as an accelerator marker and hides it,
+            // so this read "Startup  Window".
+            _keybindsTraySleepLabel.UseMnemonic = false;
             page.Controls.Add(_keybindsTraySleepLabel);
-            RefreshTraySleepNotice();
 
             // "That key was taken from another action." Assigning a combination already
             // in use clears the previous owner — the right resolution, but it used to
             // happen in complete silence, and the evidence was one row out of 26 going
-            // blank somewhere off-screen. Its own reserved band, rowY+190 .. rowY+220,
-            // for the same reason as the notices above: a label that appears and shoves
-            // every keybind row down the page is worse than the news it carries.
-            _keybindsTakenLabel = new Label
-            {
-                AutoSize = false,
-                Location = new Point(12, rowY + 190),
-                Size = new Size(760, 30),
-                Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.AccentText,
-                Visible = false
-            };
+            // blank somewhere off-screen.
+            _keybindsTakenLabel = NewKeybindNotice(rowY + 212, _theme.AccentText);
             page.Controls.Add(_keybindsTakenLabel);
 
-            // Its own reserved band, rowY+222 .. rowY+252.
-            _keybindsHoldLabel = new Label
-            {
-                AutoSize = false,
-                Location = new Point(12, rowY + 222),
-                Size = new Size(760, 30),
-                Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.WarningText,
-                Visible = false
-            };
+            // The hold trigger is the button the clicker itself clicks.
+            _keybindsHoldLabel = NewKeybindNotice(rowY + 244, _theme.WarningText);
             page.Controls.Add(_keybindsHoldLabel);
 
-            // Its own reserved band, rowY+254 .. rowY+302 — three lines, because it names
-            // the key, where Tempo presses it from, and which action it fires, and the
-            // translations of that run longer than the English.
-            _keybindsSelfKeyLabel = new Label
-            {
-                AutoSize = false,
-                Location = new Point(12, rowY + 254),
-                Size = new Size(760, 48),
-                Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.WarningText,
-                Visible = false
-            };
+            // A key Tempo presses itself is bound here: names the key, where Tempo presses
+            // it from, and which action it fires.
+            _keybindsSelfKeyLabel = NewKeybindNotice(rowY + 276, _theme.WarningText);
             page.Controls.Add(_keybindsSelfKeyLabel);
+
+            // Top to bottom: what the last edit did or risks first, the standing problems next,
+            // the background facts last.
+            _keybindNotices.Clear();
+            _keybindNotices.AddRange(new[] { _keybindsWarnLabel, _keybindsTakenLabel, _keybindsRouteLabel,
+                                             _keybindsSelfKeyLabel, _keybindsHoldLabel, _keybindsTraySleepLabel,
+                                             _keyboardInfoLabel });
+            _keybindNoticeShown.Clear();
+            _keybindNoticeShown.Add(_keyboardInfoLabel);   // always there
+            RefreshTraySleepNotice();
 
             var stepCaption = UiFactory.Caption("Interval step (ms):", 344, rowY + 1);
             stepCaption.AutoSize = false;
@@ -489,15 +494,15 @@ namespace AutoClicker.UI
             // Italian and Portuguese the words themselves run past x=448, where the
             // "Unsaved changes" label starts, and the two overprint. Measuring is also
             // what the help label above already does, for the same reason.
-            stepCaption.Width = TextRenderer.MeasureText(stepCaption.Text, stepCaption.Font).Width + 4;
+            stepCaption.Width = MeasureLayout(stepCaption.Text, stepCaption.Font, 0, TextFormatFlags.Default).Width + 4;
             stepCaption.Height = 16;
             page.Controls.Add(stepCaption);
 
             // Park the dirty label after the caption rather than at a hard-coded 448.
-            // This row is the only place it can live — the bands below it are reserved,
-            // as the comment further down sets out — so it has to share the row without
-            // colliding, in every language. The page is ~815 wide and the longest of these
-            // (Portuguese) needs about 748, so this fits without a second line.
+            // This row is the only place it can live — everything below it moves with the
+            // notices — so it has to share the row without colliding, in every language.
+            // The page is ~815 wide and the longest of these (Portuguese) needs about 748,
+            // so this fits without a second line.
             _keybindsDirtyLabel.Left = Math.Max(448, stepCaption.Right + 16);
             _intervalStepNum = UiFactory.Numeric(344, rowY + 18, 90, 1, 600000, 10);
             _intervalStepNum.ValueChanged += OnKeybindEdited;
@@ -507,19 +512,15 @@ namespace AutoClicker.UI
             page.Controls.Add(resetBtn);
             page.Controls.Add(_intervalStepNum);
 
-            // Column headers, below the whole header block:
-            //   rowY      .. rowY+42    Save / Reset / interval-step
-            //   rowY+46   .. rowY+78    bare-key warning (space RESERVED even when hidden —
-            //                           a label that pops in and shoves every row down the
-            //                           page would be worse than the warning it carries)
-            //   rowY+80   .. rowY+96    detected keyboard
-            //   rowY+98   .. rowY+146   "Windows refused / could not bind this hotkey" (reserved)
-            //   rowY+148  .. rowY+186   "Sleep in tray pauses these" notice (also reserved)
-            //   rowY+190  .. rowY+220   "that key was taken from another action"
-            //   rowY+222  .. rowY+252   hold trigger vs the clicked button
-            //   rowY+254  .. rowY+302   a key Tempo presses itself is bound here
-            int headerY = rowY + 306;
-            page.Controls.Add(UiFactory.Label(Utils.Localization.T("Action"), 16, headerY, FontStyle.Bold));
+            // Column headers, below the Save / Reset / interval-step row (rowY .. rowY+42), the
+            // Shift/Ctrl tick box and the notice stack under them. Placed here as if only the
+            // keyboard line showed; RelayoutKeybindNotices moves the headers and every row below
+            // them to wherever the stack really ends.
+            int headerY = rowY + 100;
+            _keybindTable.Clear();
+            int firstTableControl = page.Controls.Count;
+            _keybindsHeaderLabel = UiFactory.Label(Utils.Localization.T("Action"), 16, headerY, FontStyle.Bold);
+            page.Controls.Add(_keybindsHeaderLabel);
             page.Controls.Add(UiFactory.Label(Utils.Localization.T("Hotkey"), 300, headerY, FontStyle.Bold));
 
             int y = headerY + 26;
@@ -601,10 +602,257 @@ namespace AutoClicker.UI
             // — which the layout suite caught and I had not, because at rest the notice
             // is invisible. Down here the space is the page's own, after the last row.
             _copyKeybindsBtn = UiFactory.Button(Utils.Localization.T("Copy keybinds"), 12, y + 12, 190, 32);
+            // "Copied", not "Saved": it said "Saved ✓" after copying, about a page whose edits
+            // were still unsaved — the opposite of the truth one line above it.
+            LayoutFitter.DeclareCaptions(_copyKeybindsBtn, Utils.Localization.T("Copy keybinds"), Utils.Localization.T("Copied  ✓"));
             _copyKeybindsBtn.Click += OnCopyKeybinds;
             page.Controls.Add(_copyKeybindsBtn);
 
+            // Everything from the column headers down moves as one block with the notice stack.
+            for (int i = firstTableControl; i < page.Controls.Count; i++)
+            {
+                _keybindTable.Add(page.Controls[i]);
+            }
+            _keybindsPage = page;
+            RelayoutKeybindNotices();
+            // Coming into view (the window may have been scaled, or a notice changed while the
+            // page was hidden) and on resize: cheap when nothing moved.
+            page.VisibleChanged += (s, e) => { if (page.Visible) { RelayoutKeybindNotices(); } };
+            page.Resize += (s, e) => ScheduleKeybindRelayout();
+            // The stack hangs from the bottom of the button row, and that row is still adjusted after
+            // the page's first layout (the start-up layout fitter moves the interval box down 4 px).
+            // Queued, never done on the spot: a scroll moves every control one message at a time, and
+            // part-way through the button row has moved and the table has not — re-stacking then
+            // shifted the table by the scroll a second time.
+            foreach (Control row in new Control[] { _intervalStepNum, saveBtn, _extraShiftCtrlCheck })
+            {
+                row.SizeChanged += (s, e) => ScheduleKeybindRelayout();
+                row.LocationChanged += (s, e) => ScheduleKeybindRelayout();
+            }
+            // And the notices themselves: the start-up layout pass may grow or move one.
+            foreach (Label notice in _keybindNotices)
+            {
+                notice.SizeChanged += (s, e) => ScheduleKeybindRelayout();
+                notice.LocationChanged += (s, e) => ScheduleKeybindRelayout();
+            }
+
             _tabs.TabPages.Add(page);
+        }
+
+        // ── The notice stack ────────────────────────────────────────────────────────────────
+
+        /// <summary>Every notice, in stack order (see BuildKeybindsTab).</summary>
+        private readonly List<Label> _keybindNotices = new List<Label>();
+
+        /// <summary>
+        /// Which notices are meant to show. Not <c>Label.Visible</c>: that reads false for every
+        /// control on a page that is not the selected tab, so the stack would collapse to nothing
+        /// whenever it was worked out with the page out of view.
+        /// </summary>
+        private readonly HashSet<Label> _keybindNoticeShown = new HashSet<Label>();
+
+        /// <summary>The column headers, the rows and the Copy button: moved together.</summary>
+        private readonly List<Control> _keybindTable = new List<Control>();
+
+        private Label _keybindsHeaderLabel;
+        private TabPage _keybindsPage;
+        private bool _keybindRelayoutBusy;
+        private bool _keybindRelayoutQueued;
+
+        /// <summary>"Hotkeys also work while you hold Shift or Ctrl".</summary>
+        private CheckBox _extraShiftCtrlCheck;
+
+        private void OnExtraShiftCtrlChanged(object sender, EventArgs e)
+        {
+            if (_suppressKeybindEvents || _settings == null || _extraShiftCtrlCheck == null) { return; }
+            bool on = _extraShiftCtrlCheck.Checked;
+            if (_settings.HotkeysIgnoreExtraShiftCtrl == on) { return; }
+            _settings.HotkeysIgnoreExtraShiftCtrl = on;
+            try { SettingsManager.Save(_settings); } catch (Exception ex) { Utils.Logger.Swallow("OnExtraShiftCtrlChanged", ex); }
+            ApplyHotkeysFromSettings();
+            HighlightConflicts();   // which keys Tempo itself presses would fire a hotkey changes with it
+            Utils.Logger.Info("[Hotkeys] Shift/Ctrl held on top of a hotkey " + (on ? "still fires it" : "no longer fires it") + ".");
+        }
+
+        /// <summary>Re-stacks once the current message is done (see where the button row is watched).</summary>
+        private void ScheduleKeybindRelayout()
+        {
+            if (_keybindRelayoutQueued || IsDisposed) { return; }
+            if (!IsHandleCreated) { RelayoutKeybindNotices(); return; }
+            _keybindRelayoutQueued = true;
+            try
+            {
+                BeginInvoke((Action)(() => { _keybindRelayoutQueued = false; RelayoutKeybindNotices(); }));
+            }
+            catch (InvalidOperationException) { _keybindRelayoutQueued = false; }
+        }
+
+        /// <summary>A notice label: hidden, as wide as the page's text column, cut with "…" past its cap.</summary>
+        private Label NewKeybindNotice(int y, Color ink)
+        {
+            var label = new Label
+            {
+                AutoSize = false,
+                Location = new Point(12, y),
+                Size = new Size(760, 30),
+                Font = new Font("Segoe UI", 8.5f),
+                ForeColor = ink,
+                AutoEllipsis = true,
+                Visible = false
+            };
+            TipStyle.FollowText(label);
+            return label;
+        }
+
+        /// <summary>
+        /// Shows a notice with this text, or hides it (null/empty), then re-stacks the notices —
+        /// unless <paramref name="restack"/> is false because the caller changes several and
+        /// re-stacks once at the end.
+        /// </summary>
+        private void SetKeybindNotice(Label notice, string text, bool restack = true)
+        {
+            if (notice == null || notice.IsDisposed) { return; }
+            bool show = !string.IsNullOrEmpty(text);
+            if (show && !string.Equals(notice.Text, text, StringComparison.Ordinal)) { notice.Text = text; }
+            if (show) { _keybindNoticeShown.Add(notice); } else { _keybindNoticeShown.Remove(notice); }
+            notice.Visible = show;
+            if (restack) { RelayoutKeybindNotices(); }
+        }
+
+        /// <summary>
+        /// Stacks the showing notices under the Save/Reset row, each as tall as its text, and moves
+        /// the table to just below them.
+        ///
+        /// A notice can appear while you are editing a field (a bare key, a key taken from another
+        /// action), and a row that jumps away from under the pointer is worse than the news. So the
+        /// field being edited is held still: when the table moves by N, the page scrolls by N with
+        /// it, and what moves is the help text above — as far as the Save row, which stays in view.
+        /// The old answer was to reserve every notice's space whether it showed or not, which
+        /// pushed the list half-way down the window.
+        /// </summary>
+        private void RelayoutKeybindNotices()
+        {
+            TabPage page = _keybindsPage;
+            if (page == null || page.IsDisposed || _keybindsHeaderLabel == null || _keybindRelayoutBusy) { return; }
+            if (_keybindsSaveBtn == null || _intervalStepNum == null) { return; }
+            // Page centring is moving everything at once (and back to the places noted below):
+            // half-way through, the button row and the table disagree about where they are.
+            if (_centeringBusy) { return; }
+            _keybindRelayoutBusy = true;
+            try
+            {
+                int gap = L(4);
+                // Under the button row and the Shift/Ctrl tick box as they stand — positions already in
+                // the window's current units and scrolled with the page, so no scale or scroll
+                // arithmetic is needed.
+                int y = Math.Max(_keybindsSaveBtn.Bottom, _intervalStepNum.Bottom);
+                if (_extraShiftCtrlCheck != null) { y = Math.Max(y, _extraShiftCtrlCheck.Bottom); }
+                y += L(5);
+                var moves = new List<KeyValuePair<Label, Rectangle>>();
+                foreach (Label notice in _keybindNotices)
+                {
+                    if (notice == null || notice.IsDisposed) { continue; }
+                    if (!_keybindNoticeShown.Contains(notice))
+                    {
+                        // A hidden notice takes no room — and HAS none: the layout checks judge
+                        // controls by size, not visibility (a page that is not the selected tab
+                        // reports every control hidden), so one left full-size at its old place
+                        // was an empty box lying across the rows.
+                        var parked = new Rectangle(notice.Left, y, notice.Width, 0);
+                        if (notice.Bounds != parked) { moves.Add(new KeyValuePair<Label, Rectangle>(notice, parked)); }
+                        continue;
+                    }
+                    int h = KeybindNoticeHeight(notice);
+                    var want = new Rectangle(notice.Left, y, notice.Width, h);
+                    if (notice.Bounds != want) { moves.Add(new KeyValuePair<Label, Rectangle>(notice, want)); }
+                    y += h + gap;
+                }
+                int delta = (y - gap + L(10)) - _keybindsHeaderLabel.Top;
+                if (moves.Count == 0 && delta == 0) { return; }
+
+                // The control being edited, if it is in the table: it stays where it is on screen.
+                Control focused = ActiveControl;
+                bool onScreen = page.Visible && page.IsHandleCreated;
+                bool anchor = delta != 0 && onScreen && focused != null && page.ContainsFocus &&
+                              _keybindTable.Contains(focused);
+
+                // Page centring (CenterPageContent) puts every control back at the place it noted
+                // when the window was built — on each tab switch, resize and scrollbar change — and
+                // that undid the stack: the rows went back up under the notices. So the new places
+                // become the noted ones, BEFORE anything moves, because a move can itself toggle the
+                // scrollbar and set the centring off in the middle of this.
+                // Noted relative to the Save button's own noted place, so neither the scroll nor
+                // full-screen centring's offset has to be read: both move the button with the rest.
+                if (_autoFitBaseTop.TryGetValue(_keybindsSaveBtn, out int saveBase))
+                {
+                    int rel = saveBase - _keybindsSaveBtn.Top;
+                    foreach (var move in moves)
+                    {
+                        if (_autoFitBaseTop.ContainsKey(move.Key)) { _autoFitBaseTop[move.Key] = move.Value.Y + rel; }
+                    }
+                    if (delta != 0)
+                    {
+                        foreach (Control c in _keybindTable)
+                        {
+                            if (_autoFitBaseTop.ContainsKey(c)) { _autoFitBaseTop[c] = c.Top + delta + rel; }
+                        }
+                    }
+                }
+
+                // Frozen only while on screen. WM_SETREDRAW(TRUE) makes its window VISIBLE, so a
+                // freeze-and-thaw of a page that is not the selected tab would put it up over the
+                // one that is.
+                if (onScreen) { SetRedraw(page, false); }
+                page.SuspendLayout();
+                try
+                {
+                    foreach (var move in moves) { move.Key.Bounds = move.Value; }
+                    if (delta != 0)
+                    {
+                        foreach (Control c in _keybindTable) { c.Top += delta; }
+                    }
+                }
+                finally
+                {
+                    page.ResumeLayout(true);
+                }
+                if (anchor)
+                {
+                    Point at = page.AutoScrollPosition;   // negative offsets; set as positive ones
+                    int scroll = -at.Y + delta;
+                    // ...but not by scrolling the Save row out of view while it is in view: "Unsaved
+                    // changes — click Save Keybinds" lives there. The help text above it gives way
+                    // first; past that the rows move down instead.
+                    if (delta > 0 && _keybindsSaveBtn.Top >= 0)
+                    {
+                        int saveRow = _keybindsSaveBtn.Top - at.Y;   // its place on the unscrolled page
+                        scroll = Math.Min(scroll, Math.Max(-at.Y, saveRow - L(6)));
+                    }
+                    page.AutoScrollPosition = new Point(-at.X, Math.Max(0, scroll));
+                }
+                if (onScreen)
+                {
+                    SetRedraw(page, true);
+                    page.Invalidate(true);
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RelayoutKeybindNotices", ex); }
+            finally { _keybindRelayoutBusy = false; }
+        }
+
+        /// <summary>
+        /// A notice's height: its text wrapped at its width, at most eight lines (the warning can
+        /// carry four kinds of trouble, and French needs six lines for three). Past that it ends in
+        /// "…" and the whole text is on hover.
+        /// </summary>
+        private int KeybindNoticeHeight(Label notice)
+        {
+            if (ReferenceEquals(notice, _keyboardInfoLabel)) { return notice.Height; }   // one line, fixed
+            TextFormatFlags flags = notice.UseMnemonic ? TextFormatFlags.Default : TextFormatFlags.NoPrefix;
+            int width = Math.Max(1, notice.Width - notice.Padding.Horizontal);
+            int line = MeasureLayout("Ag", notice.Font, 0, flags).Height;
+            int text = MeasureLayout(notice.Text, notice.Font, width, flags).Height;
+            return Math.Max(line, Math.Min(text, line * 8)) + notice.Padding.Vertical;
         }
 
         private void LoadKeybindsIntoUi()
@@ -626,6 +874,14 @@ namespace AutoClicker.UI
                 _intervalStepNum.Value = step;
             }
 
+            if (_extraShiftCtrlCheck != null)
+            {
+                _extraShiftCtrlCheck.Checked = _settings.HotkeysIgnoreExtraShiftCtrl;   // events suppressed above
+            }
+
+            // "X was already used by Y" described an edit these fields no longer hold (a reset, a
+            // reload). It stayed up after Reset to defaults, naming bindings that were gone.
+            SetKeybindNotice(_keybindsTakenLabel, null, restack: false);
             HighlightConflicts();
             _suppressKeybindEvents = false;
             if (_keybindsDirtyLabel != null)
@@ -681,7 +937,7 @@ namespace AutoClicker.UI
                 // the clear there is no clash left for the colouring to show. A stray
                 // keypress into the wrong field could therefore unbind Emergency stop
                 // with nothing on screen to say it had happened, and nothing to undo it.
-                if (taken.Count > 0 && _keybindsTakenLabel != null)
+                if (taken.Count > 0)
                 {
                     var names = new List<string>();
                     foreach (HotkeyAction a in taken)
@@ -690,18 +946,17 @@ namespace AutoClicker.UI
                     }
                     names.Sort(StringComparer.CurrentCultureIgnoreCase);
 
-                    _keybindsTakenLabel.Text = Utils.Localization.F(
+                    SetKeybindNotice(_keybindsTakenLabel, Utils.Localization.F(
                         "{0} was already used by {1} — that action is now unbound.",
-                        combo.ToDisplayString(), string.Join(", ", names.ToArray()));
-                    _keybindsTakenLabel.Visible = true;
+                        combo.ToDisplayString(), string.Join(", ", names.ToArray())), restack: false);
                 }
-                else if (_keybindsTakenLabel != null)
+                else
                 {
-                    _keybindsTakenLabel.Visible = false;
+                    SetKeybindNotice(_keybindsTakenLabel, null, restack: false);
                 }
             }
 
-            HighlightConflicts();
+            HighlightConflicts();   // re-stacks the notices
             if (_keybindsDirtyLabel != null)
             {
                 _keybindsDirtyLabel.Visible = true;
@@ -742,6 +997,9 @@ namespace AutoClicker.UI
 
             Color normal = _theme.InputBackground;
             var risky = new List<string>();
+            var common = new List<string>();     // Ctrl+C, Ctrl+V, Alt+Enter…: taken from every program
+            var typed = new List<string>();      // Ctrl+Alt+Q = AltGr+Q = "@" on this layout
+            var ownKeys = new List<string>();    // F11, Ctrl+1…9, Ctrl+Tab: Tempo's own window shortcuts
 
             foreach (var pair in _bindingControls)
             {
@@ -756,15 +1014,25 @@ namespace AutoClicker.UI
                 // case that got no amber field and no warning at all.
                 bool isRisky = valid && (hk.IsRiskyBareKey || hk.IsRiskyBareMouseButton);
 
-                if (isRisky && !isClash)
+                // A MODIFIED combination counted as safe, full stop — and the warning for bare
+                // keys even says "add Ctrl/Alt/Shift". Three kinds are not safe at all.
+                string altGr = valid && !isRisky ? KeyNames.AltGrCharacter(hk) : null;
+                bool isCommon = valid && !isRisky && altGr == null && KeyNames.IsCommonShortcut(hk);
+                bool isOwn = valid && !isRisky && altGr == null && !isCommon && KeyNames.IsTempoWindowShortcut(hk);
+
+                if (!isClash)
                 {
-                    risky.Add(hk.ToDisplayString());
+                    if (isRisky) { risky.Add(hk.ToDisplayString()); }
+                    if (isCommon) { common.Add(hk.ToDisplayString()); }
+                    if (isOwn) { ownKeys.Add(hk.ToDisplayString()); }
+                    if (altGr != null) { typed.Add(hk.ToDisplayString() + " → " + altGr); }
                 }
 
                 // A clash is the more serious problem, so it wins the colour.
+                bool amber = isRisky || isCommon || isOwn || altGr != null;
                 pair.Value.BackColor =
                     isClash ? BlendColors(normal, _theme.Danger, 0.35)
-                  : isRisky ? BlendColors(normal, _theme.Warning, 0.30)
+                  : amber ? BlendColors(normal, _theme.Warning, 0.30)
                   : normal;
             }
 
@@ -774,48 +1042,77 @@ namespace AutoClicker.UI
             HotkeyDefinition holdTrigger =
                 _bindingControls.TryGetValue(HotkeyAction.ToggleStartStop, out HotkeyCaptureControl tc)
                     ? tc.Hotkey : null;
-            if (_keybindsHoldLabel != null)
-            {
-                bool fights = holdTrigger != null && holdTrigger.IsValid &&
-                              HoldTriggerFightsClickButton(holdTrigger);
-                if (fights)
-                {
-                    _keybindsHoldLabel.Text = Utils.Localization.F(
-                        "⚠ {0} is also the button the clicker clicks. In Hold-to-click mode Tempo's own "
-                        + "clicks would keep that button reading as held, so the hold could never be "
-                        + "released — it will not engage. Pick a different button, or a side button.",
-                        holdTrigger.ToDisplayString());
-                }
-                _keybindsHoldLabel.Visible = fights;
-            }
+            bool fights = holdTrigger != null && holdTrigger.IsValid &&
+                          HoldTriggerFightsClickButton(holdTrigger);
+            SetKeybindNotice(_keybindsHoldLabel, !fights ? null : Utils.Localization.F(
+                "⚠ {0} is also the button the clicker clicks. In Hold-to-click mode Tempo's own "
+                + "clicks would keep that button reading as held, so the hold could never be "
+                + "released — it will not engage. Pick a different button, or a side button.",
+                holdTrigger.ToDisplayString()), restack: false);
 
             // The keyboard half of the same idea: a key Tempo sends that is bound here.
-            RefreshSelfPressedKeyNotice();
+            UpdateSelfPressedKeyNotice();
 
-            if (_keybindsWarnLabel != null)
+            // One warning, a sentence per kind of trouble, worst first.
+            var sentences = new List<string>();
+            if (risky.Count > 0)
             {
-                if (risky.Count == 0)
-                {
-                    _keybindsWarnLabel.Visible = false;
-                }
-                else
-                {
-                    risky.Sort(StringComparer.OrdinalIgnoreCase);
-                    string bare = string.Join(", ", risky.ToArray());
-                    _keybindsWarnLabel.Text = risky.Count == 1
-                        ? Utils.Localization.F(
-                            "⚠ {0} is bound bare. A global hotkey is taken system-wide, so that key "
-                            + "will stop working in every other program while Tempo is running. "
-                            + "Add Ctrl/Alt/Shift, or use an F-key, unless that is exactly what you want.",
-                            bare)
-                        : Utils.Localization.F(
-                            "⚠ {0} are bound bare. A global hotkey is taken system-wide, so those keys "
-                            + "will stop working in every other program while Tempo is running. "
-                            + "Add Ctrl/Alt/Shift, or use an F-key, unless that is exactly what you want.",
-                            bare);
-                    _keybindsWarnLabel.Visible = true;
-                }
+                risky.Sort(StringComparer.OrdinalIgnoreCase);
+                string bare = string.Join(", ", risky.ToArray());
+                sentences.Add(risky.Count == 1
+                    ? Utils.Localization.F(
+                        "⚠ {0} is bound bare. A global hotkey is taken system-wide, so that key "
+                        + "will stop working in every other program while Tempo is running. "
+                        + "Add Ctrl/Alt/Shift, or use an F-key, unless that is exactly what you want.",
+                        bare)
+                    : Utils.Localization.F(
+                        "⚠ {0} are bound bare. A global hotkey is taken system-wide, so those keys "
+                        + "will stop working in every other program while Tempo is running. "
+                        + "Add Ctrl/Alt/Shift, or use an F-key, unless that is exactly what you want.",
+                        bare));
             }
+            if (common.Count > 0)
+            {
+                common.Sort(StringComparer.OrdinalIgnoreCase);
+                string list = string.Join(", ", common.ToArray());
+                sentences.Add(common.Count == 1
+                    ? Utils.Localization.F(
+                        "⚠ {0} is a shortcut almost every program uses. Bound here, it stops working in all "
+                        + "of them while Tempo is running.", list)
+                    : Utils.Localization.F(
+                        "⚠ {0} are shortcuts almost every program uses. Bound here, they stop working in all "
+                        + "of them while Tempo is running.", list));
+            }
+            if (typed.Count > 0)
+            {
+                typed.Sort(StringComparer.OrdinalIgnoreCase);
+                string list = string.Join(", ", typed.ToArray());
+                sentences.Add(typed.Count == 1
+                    ? Utils.Localization.F(
+                        "⚠ {0}: on your keyboard layout Ctrl + Alt is the AltGr key, so this combination types "
+                        + "a character. Bound here, that character can't be typed in any other program while "
+                        + "Tempo is running.", list)
+                    : Utils.Localization.F(
+                        "⚠ {0}: on your keyboard layout Ctrl + Alt is the AltGr key, so these combinations type "
+                        + "characters. Bound here, those characters can't be typed in any other program while "
+                        + "Tempo is running.", list));
+            }
+            if (ownKeys.Count > 0)
+            {
+                ownKeys.Sort(StringComparer.OrdinalIgnoreCase);
+                string list = string.Join(", ", ownKeys.ToArray());
+                sentences.Add(ownKeys.Count == 1
+                    ? Utils.Localization.F(
+                        "⚠ {0} is also one of Tempo's own window shortcuts (full screen, switching tabs). "
+                        + "Bound here, pressing it inside Tempo runs this hotkey instead.", list)
+                    : Utils.Localization.F(
+                        "⚠ {0} are also Tempo's own window shortcuts (full screen, switching tabs). "
+                        + "Bound here, pressing them inside Tempo runs these hotkeys instead.", list));
+            }
+            SetKeybindNotice(_keybindsWarnLabel,
+                sentences.Count == 0 ? null : string.Join("\r\n", sentences.ToArray()), restack: false);
+
+            RelayoutKeybindNotices();
         }
 
         /// <summary>
@@ -824,6 +1121,9 @@ namespace AutoClicker.UI
         /// </summary>
         private HotkeyAction? ActionFiredBy(int vk, bool ctrl, bool alt, bool shift, bool win)
         {
+            HotkeyAction? loose = null;
+            int looseRank = -1;
+            bool extra = _settings != null && _settings.HotkeysIgnoreExtraShiftCtrl;
             foreach (var pair in _bindingControls)
             {
                 HotkeyDefinition hk = pair.Value.Hotkey;
@@ -835,8 +1135,17 @@ namespace AutoClicker.UI
                 {
                     return pair.Key;
                 }
+                // ...except the extra Shift/Ctrl the hotkeys themselves now accept: a macro holding
+                // Shift while it presses F6 fires an F6 hotkey. Same rule, same priority (exact
+                // first, then the most specific) as GlobalHotkeyManager.
+                if (extra && hk.ToleratesExtraShiftCtrl() && (ctrl || !hk.Control) && (shift || !hk.Shift) &&
+                    hk.Alt == alt && hk.Win == win && hk.ModifierCount() > looseRank)
+                {
+                    loose = pair.Key;
+                    looseRank = hk.ModifierCount();
+                }
             }
-            return null;
+            return loose;
         }
 
         /// <summary>
@@ -878,6 +1187,13 @@ namespace AutoClicker.UI
         /// InputSimulator, so it collides identically.
         /// </summary>
         private void RefreshSelfPressedKeyNotice()
+        {
+            UpdateSelfPressedKeyNotice();
+            RelayoutKeybindNotices();
+        }
+
+        /// <summary>The notice's text and visibility only; the caller re-stacks.</summary>
+        private void UpdateSelfPressedKeyNotice()
         {
             if (_keybindsSelfKeyLabel == null || _keybindsSelfKeyLabel.IsDisposed) { return; }
 
@@ -933,27 +1249,26 @@ namespace AutoClicker.UI
 
             if (hits.Count == 0)
             {
-                _keybindsSelfKeyLabel.Visible = false;
+                SetKeybindNotice(_keybindsSelfKeyLabel, null, restack: false);
                 return;
             }
 
             hits.Sort(StringComparer.CurrentCultureIgnoreCase);
-            // Two lines of band, so cap the list rather than letting a macro-heavy setup
-            // clip the half that says what to do about it.
+            // Capped, rather than letting a macro-heavy setup push the half that says what
+            // to do about it past the notice's five lines.
             string list = hits.Count <= 3
                 ? string.Join("; ", hits.ToArray())
                 : string.Join("; ", hits.GetRange(0, 3).ToArray()) + "; "
                   + Utils.Localization.F("and {0} more", hits.Count - 3);
 
-            _keybindsSelfKeyLabel.Text = hits.Count == 1
+            SetKeybindNotice(_keybindsSelfKeyLabel, hits.Count == 1
                 ? Utils.Localization.F(
                     "⚠ {0} — Tempo presses this key itself, and Windows can't tell its keystroke from "
                     + "yours, so every press runs that action too. Change the key or the binding.", list)
                 : Utils.Localization.F(
                     "⚠ {0} — Tempo presses these keys itself, and Windows can't tell its keystrokes "
                     + "from yours, so every press runs that action too. Change the keys or the bindings.",
-                    list);
-            _keybindsSelfKeyLabel.Visible = true;
+                    list), restack: false);
         }
 
         private static Color BlendColors(Color a, Color b, double t)
@@ -992,18 +1307,14 @@ namespace AutoClicker.UI
 
             if (!string.IsNullOrEmpty(conflicts))
             {
-                // NOT "only one action will respond" — that was wrong, and wrong in the
-                // direction that matters. Windows will not reserve one combination twice,
-                // so the second action falls back to the low-level keyboard hook, which
-                // still sees the keystroke WM_HOTKEY consumed: one press then runs BOTH
-                // actions. Telling someone only one would fire meant the surprising case
-                // (start clicking AND emergency-stop on one key) read as a Tempo bug with
-                // no explanation. Mouse bindings really do stop at the first match, but
-                // the keyboard case is the common one.
+                // "Only one responds", which is true again. This said a single press would run
+                // BOTH actions — true once, when the second action fell back to the keyboard hook.
+                // GlobalHotkeyManager now leaves the second one unbound on every route (reserved,
+                // hook, mouse) and reports it, so the warning described the opposite of what happens.
                 ShowWarning(
-                    Utils.Localization.F("Keybinds saved, but some combinations are used more than once. "
-                    + "Windows cannot reserve one combination twice, so a single press will run BOTH "
-                    + "actions:\n\n{0}", conflicts));
+                    Utils.Localization.F("Keybinds saved, but some combinations are set for more than one "
+                    + "action. Only one of them will respond to the key — give the others a different one:"
+                    + "\n\n{0}", conflicts));
             }
             else
             {
@@ -1071,7 +1382,7 @@ namespace AutoClicker.UI
                 }
 
                 Clipboard.SetText(sb.ToString());
-                ConfirmOnButton(_copyKeybindsBtn);
+                ConfirmOnButton(_copyKeybindsBtn, Utils.Localization.T("Copied  ✓"));
             }
             catch (Exception ex)
             {
@@ -1082,8 +1393,10 @@ namespace AutoClicker.UI
 
         private void OnResetKeybinds(object sender, EventArgs e)
         {
+            // Translated: the text was in all five tables and never looked up, so this asked in
+            // English in every language.
             var confirm = MessageBox.Show(this,
-                "Reset all keybinds to their defaults?",
+                Utils.Localization.T("Reset all keybinds to their defaults?"),
                 "Tempo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
@@ -1095,6 +1408,7 @@ namespace AutoClicker.UI
 
             _settings.Bindings = HotkeyActions.DefaultBindings();
             _settings.IntervalStepMilliseconds = 10;
+            _settings.HotkeysIgnoreExtraShiftCtrl = true;
             SettingsManager.Save(_settings);
             LoadKeybindsIntoUi();
             ApplyHotkeysFromSettings();

@@ -131,15 +131,21 @@ namespace AutoClicker.Utils
         /// <summary>Name of a device, honest when the model can't be read.</summary>
         public static string NameOf(MMDevice dev, DataFlow flow)
         {
-            try
+            string n = null;
+            try { n = dev?.FriendlyName; } catch { }
+            return NameOrUnknown(n, flow);
+        }
+
+        /// <summary>
+        /// A name already read — AudioDeviceWatcher keeps them, because reading one is expensive —
+        /// or the same honest fallback <see cref="NameOf"/> gives.
+        /// </summary>
+        public static string NameOrUnknown(string friendlyName, DataFlow flow)
+        {
+            if (!string.IsNullOrWhiteSpace(friendlyName))
             {
-                string n = dev?.FriendlyName;
-                if (!string.IsNullOrWhiteSpace(n))
-                {
-                    return n;
-                }
+                return friendlyName;
             }
-            catch { }
             return flow == DataFlow.Render
                 ? "Unknown speaker (model not reported)"
                 : "Unknown microphone (model not reported)";

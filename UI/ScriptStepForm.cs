@@ -1,5 +1,7 @@
 using System;
 using System.Drawing;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using AutoClicker.Models;
 
@@ -12,6 +14,11 @@ namespace AutoClicker.UI
     /// It also states, up front, which interpreter Tempo found — because "my script does
     /// nothing" is nearly always "Tempo is using a different Python from the one I
     /// installed my packages into", and that is invisible unless the window says so.
+    ///
+    /// And it can RUN the script, here, before it is ever part of a macro. Every failure a
+    /// Script step can have — the wrong Python, a missing package, a crash on the first
+    /// line — used to be discovered mid-macro, with the game in front and the reason in a
+    /// log. A test run shows the output and the reason right here.
     /// </summary>
     public sealed class ScriptStepForm : Form
     {
@@ -19,24 +26,43 @@ namespace AutoClicker.UI
         private readonly NumericUpDown _timeout;
         private readonly ComboBox _onFailure;
         private readonly Label _interpreter;
+        private readonly Button _testBtn;
+        private readonly Label _testStatus;
+        private readonly TextBox _output;
         private readonly Theme _theme;
+
+        /// <summary>
+        /// The whole failure reason on hover over the status line. One for the dialog: a new
+        /// ToolTip per failed run leaked a native window each time, and the last failure's
+        /// text went on showing over a later "✓ Finished".
+        /// </summary>
+        private readonly ToolTip _testTip = new ToolTip { AutoPopDelay = 20000, InitialDelay = 350, ReshowDelay = 120 };
+
+        /// <summary>Re-resolves the interpreter once typing in the path box settles.</summary>
+        private readonly System.Windows.Forms.Timer _resolveDebounce;
+        private int _resolveSeq;
+
+        // The test run in flight, if any.
+        private ManualResetEventSlim _testStop;
+        private bool _testRunning;
 
         /// <summary>The configured step, once the dialog returns OK.</summary>
         public MacroAction Result { get; private set; }
 
         public ScriptStepForm(Theme theme, MacroAction existing)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             _theme = theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = Utils.Localization.T("Run a Python script");
             FormBorderStyle = FormBorderStyle.FixedSingle;
             StartPosition = FormStartPosition.CenterParent;
+            ScreenFit.Attach(this);   // on the screen, whole, however small it is (see ScreenFit)
             MaximizeBox = false;
             MinimizeBox = false;
-            // 352, not 320: one more row for the interpreter picker below the Rescan line.
-            Size = new Size(560, 352);
+            // 470, not 352: a test-run row and an output box below the interpreter rows.
+            // The client area (was a 560×470 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(544, 431);
             BackColor = theme.Background;
             ForeColor = theme.Text;
             Font = UiFactory.BodyFont;
@@ -139,11 +165,45 @@ namespace AutoClicker.UI
             };
             Controls.Add(auto);
 
-            var ok = UiFactory.PrimaryButton("OK", 348, 268, 88, 30, theme);
+            // ── Test run ─────────────────────────────────────────────────────────
+            _testBtn = UiFactory.Button("Test run", 18, 244, 120, 28);
+            // "Stop test" while a test runs: measured both ways.
+            LayoutFitter.DeclareCaptions(_testBtn, Utils.Localization.T("Test run"), Utils.Localization.T("Stop test"));
+            _testBtn.BackColor = theme.Surface2;
+            _testBtn.ForeColor = theme.Text;
+            _testBtn.Click += (s, e) => ToggleTestRun();
+            Controls.Add(_testBtn);
+
+            _testStatus = UiFactory.Label("", 148, 250);
+            _testStatus.AutoSize = false;
+            _testStatus.AutoEllipsis = true;
+            _testStatus.Size = new Size(380, 20);
+            _testStatus.ForeColor = theme.TextMuted;
+            Controls.Add(_testStatus);
+
+            _output = new TextBox
+            {
+                Left = 18,
+                Top = 280,
+                Width = 510,
+                Height = 104,
+                Multiline = true,
+                ReadOnly = true,
+                WordWrap = false,
+                ScrollBars = ScrollBars.Both,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = theme.InputBackground,
+                ForeColor = theme.Text,
+                Font = new Font("Consolas", 9f),
+                TabStop = false
+            };
+            Controls.Add(_output);
+
+            var ok = UiFactory.PrimaryButton("OK", 348, 394, 88, 30, theme);
             ok.Click += (s, e) => Accept();
             Controls.Add(ok);
 
-            var cancel = UiFactory.Button("Cancel", 444, 268, 84, 30);
+            var cancel = UiFactory.Button("Cancel", 444, 394, 84, 30);
             cancel.BackColor = theme.Surface2;
             cancel.ForeColor = theme.Text;
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
@@ -152,17 +212,41 @@ namespace AutoClicker.UI
             AcceptButton = ok;
             CancelButton = cancel;
 
-            // Probing runs candidate executables, so it is done on Shown rather than in
-            // the constructor — otherwise the dialog takes a visible beat to appear the
-            // first time, on a machine with no Python (the slowest case, and the one where
-            // the delay would be most confusing).
+            // Which Python runs a script depends on WHERE the script is (a .venv beside it
+            // wins), so the answer has to follow the path box. It used to be worked out once,
+            // when the dialog opened — browse to a script with its own venv and the dialog
+            // went on naming the system Python, which is exactly the confusion this line
+            // exists to prevent.
+            _resolveDebounce = new System.Windows.Forms.Timer { Interval = 400 };
+            _resolveDebounce.Tick += (s, e) => { _resolveDebounce.Stop(); ShowInterpreter(); };
+            _path.TextChanged += (s, e) => { _resolveDebounce.Stop(); _resolveDebounce.Start(); };
+
             Shown += (s, e) => ShowInterpreter();
+            FormClosing += (s, e) =>
+            {
+                // A test still running is stopped with the dialog, not left behind.
+                try { _testStop?.Set(); } catch { }
+                try { _resolveDebounce.Stop(); } catch { }
+            };
+            UiFactory.ScaleToScreen(this);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                try { _resolveDebounce?.Dispose(); } catch { }
+                try { _testTip.Dispose(); } catch { }
+            }
+            base.Dispose(disposing);
         }
 
         private static decimal Clamp(int v, int lo, int hi)
         {
             return v < lo ? lo : v > hi ? hi : v;
         }
+
+        private string CurrentPath => (_path.Text ?? "").Trim().Trim('"');
 
         /// <summary>
         /// Names the interpreter that will run THIS script, and why it was picked.
@@ -171,22 +255,160 @@ namespace AutoClicker.UI
         /// virtual environment beside the script shows up here — which is the whole point:
         /// the difference between "Python 3.12" and "the Python that has your packages"
         /// is invisible until something says which one it is.
+        ///
+        /// OFF the UI thread. Resolving can mean probing several candidate executables — up
+        /// to four seconds each — and doing that on the UI thread froze the dialog, and
+        /// Tempo with it, for as long as it took.
         /// </summary>
         private void ShowInterpreter()
         {
-            try
+            string path = CurrentPath;
+            int seq = Interlocked.Increment(ref _resolveSeq);
+            _interpreter.Text = Utils.Localization.T("Checking which Python will run it…");
+            _interpreter.ForeColor = _theme.TextMuted;
+
+            Task.Run(() =>
             {
-                (string exe, _, string why) = Utils.PythonRunner.ResolveFor(_path?.Text ?? "");
-                bool have = !string.IsNullOrEmpty(exe);
-                _interpreter.Text = have
-                    // One line, no embedded newline: a key with a line break in it is
-                    // awkward to keep identical across five dictionaries, and the label
-                    // wraps on its own anyway.
-                    ? Utils.Localization.F("Using: {0} — {1}", exe, why)
-                    : Utils.Localization.T("No Python interpreter found on this PC.");
-                _interpreter.ForeColor = have ? _theme.SuccessText : _theme.WarningText;
+                string exe = null, why = null;
+                try { (exe, _, why) = Utils.PythonRunner.ResolveFor(path); }
+                catch (Exception ex) { Utils.Logger.Swallow("ScriptStepForm.ShowInterpreter", ex); }
+
+                try
+                {
+                    if (IsDisposed || !IsHandleCreated) { return; }
+                    BeginInvoke((Action)(() =>
+                    {
+                        // A newer ask (the path changed again) wins; this answer is stale.
+                        if (IsDisposed || seq != _resolveSeq) { return; }
+                        bool have = !string.IsNullOrEmpty(exe);
+                        _interpreter.Text = have
+                            // One line, no embedded newline: a key with a line break in it is
+                            // awkward to keep identical across five dictionaries, and the label
+                            // wraps on its own anyway.
+                            ? Utils.Localization.F("Using: {0} — {1}", exe, Utils.Localization.T(why ?? ""))
+                            : Utils.Localization.T("No Python interpreter found on this PC.");
+                        _interpreter.ForeColor = have ? _theme.SuccessText : _theme.WarningText;
+                    }));
+                }
+                catch { /* the dialog closed while resolving */ }
+            });
+        }
+
+        /// <summary>Starts a test run of the script in the box, or stops the one running.</summary>
+        private void ToggleTestRun()
+        {
+            if (_testRunning)
+            {
+                try { _testStop?.Set(); } catch { }
+                return;
             }
-            catch (Exception ex) { Utils.Logger.Swallow("ScriptStepForm.ShowInterpreter", ex); }
+
+            string path = CurrentPath;
+            if (path.Length == 0 || !System.IO.File.Exists(path))
+            {
+                _testStatus.Text = path.Length == 0
+                    ? Utils.Localization.T("Choose a .py file for this step.")
+                    : Utils.Localization.F("That file doesn't exist:\n\n{0}", path).Replace("\n\n", " ");
+                _testStatus.ForeColor = _theme.WarningText;
+                return;
+            }
+
+            int timeout = (int)_timeout.Value;
+            _testRunning = true;
+            _testStop = new ManualResetEventSlim(false);
+            ManualResetEventSlim stop = _testStop;
+            _testBtn.Text = Utils.Localization.T("Stop test");
+            _testStatus.Text = Utils.Localization.T("Running…");
+            _testStatus.ForeColor = _theme.TextMuted;
+            TipStyle.Set(_testTip, _testStatus, "");
+            _output.Clear();
+
+            var options = new Utils.PythonRunner.RunOptions
+            {
+                // Output appears in the box as the script prints it, not all at the end.
+                OnLine = line =>
+                {
+                    try
+                    {
+                        if (IsDisposed || !IsHandleCreated) { return; }
+                        BeginInvoke((Action)(() =>
+                        {
+                            if (IsDisposed) { return; }
+                            if (_output.TextLength < 60000) { _output.AppendText(line + Environment.NewLine); }
+                        }));
+                    }
+                    catch { }
+                },
+                Environment = new System.Collections.Generic.Dictionary<string, string>
+                {
+                    // So a script can tell a dry run from the real thing if it cares to.
+                    ["TEMPO_MACRO"] = "",
+                    ["TEMPO_TEST_RUN"] = "1",
+                }
+            };
+
+            Task.Run(() =>
+            {
+                Utils.PythonRunner.Result r = null;
+                try { r = Utils.PythonRunner.Run(path, timeout, stop, options); }
+                catch (Exception ex) { Utils.Logger.Swallow("ScriptStepForm.TestRun", ex); }
+
+                try
+                {
+                    if (IsDisposed || !IsHandleCreated) { return; }
+                    BeginInvoke((Action)(() => FinishTestRun(r)));
+                }
+                catch { }
+                finally
+                {
+                    try { stop.Dispose(); } catch { }
+                }
+            });
+        }
+
+        private void FinishTestRun(Utils.PythonRunner.Result r)
+        {
+            if (IsDisposed) { return; }
+            _testRunning = false;
+            _testStop = null;
+            _testBtn.Text = Utils.Localization.T("Test run");
+
+            if (r == null)
+            {
+                _testStatus.Text = Utils.Localization.T("Python could not be started.");
+                _testStatus.ForeColor = _theme.DangerText;
+                return;
+            }
+
+            // The captured text is the complete record; the live lines above may have been
+            // cut short by a script that printed faster than the box could keep up.
+            if (!string.IsNullOrEmpty(r.Output)) { _output.Text = r.Output; }
+            if (_output.TextLength == 0) { _output.Text = Utils.Localization.T("(no output)"); }
+
+            switch (r.Outcome)
+            {
+                case Utils.PythonRunner.Outcome.Ok:
+                    _testStatus.Text = "✓ " + Utils.Localization.F("Finished in {0} ms.", r.ElapsedMs);
+                    _testStatus.ForeColor = _theme.SuccessText;
+                    break;
+                case Utils.PythonRunner.Outcome.Stopped:
+                    _testStatus.Text = Utils.Localization.T("Stopped.");
+                    _testStatus.ForeColor = _theme.TextMuted;
+                    break;
+                default:
+                    // The reason is often two lines (the error, then how to fix it); the
+                    // status shows the first, and the whole thing is on hover and in the box.
+                    string detail = r.Detail ?? "";
+                    string first = detail.Split('\n')[0].Trim();
+                    _testStatus.Text = "✗ " + first;
+                    _testStatus.ForeColor = _theme.DangerText;
+                    TipStyle.Set(_testTip, _testStatus, detail);
+                    if (detail.IndexOf('\n') >= 0)
+                    {
+                        _output.AppendText(Environment.NewLine + detail.Substring(detail.IndexOf('\n') + 1).Trim());
+                    }
+                    break;
+            }
         }
 
         /// <summary>Lets the user point Tempo at a specific python.exe (usually a venv).</summary>
@@ -234,6 +456,7 @@ namespace AutoClicker.UI
                     }
                     catch { }
 
+                    // The TextChanged handler re-resolves the interpreter for the new path.
                     if (dlg.ShowDialog(this) == DialogResult.OK) { _path.Text = dlg.FileName; }
                 }
             }
@@ -247,7 +470,7 @@ namespace AutoClicker.UI
         /// </summary>
         private void Accept()
         {
-            string path = (_path.Text ?? "").Trim().Trim('"');
+            string path = CurrentPath;
             if (path.Length == 0)
             {
                 MessageBox.Show(this, Utils.Localization.T("Choose a .py file for this step."),

@@ -8,51 +8,6 @@ namespace AutoClicker.UI
         private ToolTip _tips;
 
         /// <summary>
-        /// Owner-draws a ToolTip in the current theme's colours so it isn't the bright
-        /// system popup over the dark UI. Safe to call before the theme exists (falls
-        /// back to sensible dark defaults).
-        /// </summary>
-        private void ThemeTooltip(ToolTip tip)
-        {
-            if (tip == null)
-            {
-                return;
-            }
-            Color back = _theme != null ? _theme.Surface2 : Color.FromArgb(45, 45, 48);
-            Color fore = _theme != null ? _theme.Text : Color.WhiteSmoke;
-            Color line = _theme != null ? _theme.Border : Color.FromArgb(70, 70, 74);
-
-            tip.OwnerDraw = true;
-            tip.BackColor = back;
-            tip.ForeColor = fore;
-            tip.Draw -= OnToolTipDraw;
-            tip.Draw += OnToolTipDraw;
-            _tipBack = back;
-            _tipFore = fore;
-            _tipBorder = line;
-        }
-
-        private Color _tipBack = Color.FromArgb(45, 45, 48);
-        private Color _tipFore = Color.WhiteSmoke;
-        private Color _tipBorder = Color.FromArgb(70, 70, 74);
-
-        private void OnToolTipDraw(object sender, DrawToolTipEventArgs e)
-        {
-            using (var b = new SolidBrush(_tipBack))
-            {
-                e.Graphics.FillRectangle(b, e.Bounds);
-            }
-            using (var p = new Pen(_tipBorder))
-            {
-                e.Graphics.DrawRectangle(p, new Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width - 1, e.Bounds.Height - 1));
-            }
-            TextRenderer.DrawText(
-                e.Graphics, e.ToolTipText, e.Font, e.Bounds, _tipFore,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-                TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
-        }
-
-        /// <summary>
         /// Attaches concise help text to the main controls on every tab. This is
         /// purely informational — it changes no behaviour, it just makes the existing
         /// features easier to understand on hover.
@@ -70,7 +25,8 @@ namespace AutoClicker.UI
             // Theme the tooltip dark. A default ToolTip is the system light/yellow popup,
             // which flashed bright over the dark UI on every hover — users lumped that in
             // with the "light flash" report. Owner-draw it in the theme surface colour.
-            ThemeTooltip(_tips);
+            TipStyle.SetTheme(_theme);
+            TipStyle.Apply(_tips);
 
             // Translates, and that matters twice over.
             //
@@ -88,7 +44,9 @@ namespace AutoClicker.UI
                 if (c != null)
                 {
                     string localized = Utils.Localization.T(text);
-                    _tips.SetToolTip(c, localized);
+                    // Wrapped to a readable width, and merged with any other tip on the
+                    // control (the layout fitter's full caption, the Set-key clash warning).
+                    TipStyle.Set(_tips, c, localized);
                     // Screen readers read AccessibleDescription, so the same help is
                     // available without a mouse.
                     c.AccessibleDescription = localized;
@@ -98,22 +56,27 @@ namespace AutoClicker.UI
             // ── Sidebar navigation ──────────────────────────────────────────────
             // Name the keyboard shortcut for each tab. Ctrl+1…9 and Ctrl+Tab have
             // always worked; until now nothing in the app mentioned them.
+            //
+            // Put together from TRANSLATED pieces. It used to be assembled in English and then
+            // looked up whole — "Open the Clicker tab  ·  Ctrl+1. Ctrl+Tab cycles…" can never be
+            // a key in any table — so every tab's tip, and what a screen reader says for it, was
+            // English in every language (and said "Ctrl" to German users, whose key reads Strg).
             for (int i = 0; i < _navButtons.Count; i++)
             {
                 string tab = i < _tabs.TabPages.Count ? _tabs.TabPages[i].Text : "";
-                string tip = "Open the " + tab + " tab";
+                string tip = Utils.Localization.F("Open the {0} tab", tab);
                 if (i < 9)
                 {
-                    tip += "  ·  Ctrl+" + (i + 1);
+                    tip += "  ·  " + Utils.Localization.F("Ctrl+{0}", (i + 1).ToString());
                 }
-                tip += ". Ctrl+Tab cycles through the tabs.";
+                tip += ". " + Utils.Localization.T("Ctrl+Tab cycles through the tabs. Hold Ctrl to see each tab's number.");
                 T(_navButtons[i], tip);
             }
 
             // ── Clicker: profile ────────────────────────────────────────────────
             T(_notifyFinishCheck, "Play a chime (and show a tray notice) when a fixed-count or fixed-duration run \u2014 or a finite macro playback \u2014 finishes by itself. Manual stops stay silent.");
             T(_sessionHistoryList, "Double-click a row for details \u00b7 right-click for more options \u00b7 click a column header to sort.");
-            T(_traySleepCheck, "While Tempo is hidden in the tray and nothing is running, global hotkeys and the cursor trail are paused so a forgotten Tempo can't start clicking invisibly. Everything wakes when you open the window or start something from the tray menu.");
+            T(_traySleepCheck, "After 30 minutes hidden in the tray with nothing running, global hotkeys and the cursor trail pause, so a forgotten Tempo can't start clicking invisibly. The first press of a paused hotkey only wakes Tempo — a notification says so — and the next press works. Opening the window or starting something from the tray menu wakes it too.");
             T(_captionOverlayCheck, "Show Tempo's own caption bar (a transparent strip across the bottom of the screen) when you toggle Live Captions with your hotkey. Only the text is visible - it floats over any game and never blocks clicks.");
             T(_captionSourceCombo, "Choose which engine makes the caption text: Windows 11 Live Captions (uses the built-in Windows engine), or Tempo's own offline captions (Tempo listens to your PC audio and transcribes it itself, no internet). Both show in Tempo's caption bar.");
             T(_captionSpeakerCheck, "Start each spoken turn with \"Speaker 1:\", \"Speaker 2:\" ... Tempo listens to the voice itself (pitch and tone, on your PC - nothing uploaded) so a returning speaker gets their old number back; where the voice can't be told apart it falls back to the rhythm of the conversation, like the >> marks in TV captions. After 30 seconds of silence the numbering starts over at Speaker 1.");
@@ -129,10 +92,12 @@ namespace AutoClicker.UI
             T(_captionBackgroundCheck, "Show the rounded panel behind captions. Turn this off for a clean text-only look with no background \u2014 the text keeps a soft glow so it stays readable.");
             T(_profileCombo, "Switch between your saved click profiles.");
             T(_profileNameText, "The name used when you save this profile.");
-            T(_newProfileBtn, "Create a new profile from the current settings.");
+            // New starts from the defaults and Duplicate copies the profile as saved, as the code has
+            // always done; New's tip promised "from the current settings", which neither does.
+            T(_newProfileBtn, "Create a new profile with the default settings.");
             T(_saveProfileBtn, "Save the current settings (including multi-point list) to this profile.");
-            T(_duplicateProfileBtn, "Make a copy of the selected profile.");
-            T(_deleteProfileBtn, "Delete the selected profile.");
+            T(_duplicateProfileBtn, "Make a copy of the selected profile as it was last saved. Save first to include your changes.");
+            T(_deleteProfileBtn, "Delete the selected profile. You can restore it from the recycle bin on the Profiles tab.");
 
             // ── Clicker: interval ───────────────────────────────────────────────
             T(_hoursNum, "Hours between clicks.");
@@ -219,6 +184,7 @@ namespace AutoClicker.UI
             T(_stopRecordBtn, "Stop recording.");
             T(_recordCountdownNum, "Seconds to wait (3, 2, 1…) before recording starts, so you can switch to the app you want to record. 0 starts immediately.");
             T(_recordMovesCheck, "Also record mouse movement between actions.");
+            T(_recordCameraCheck, "For games that turn the camera with the mouse — first person, shift lock, holding right-click. Records how far the mouse moved instead of where the pointer was, and plays it back as mouse movement, which is what turns a game's camera. Clicks then happen wherever the pointer is. Leave it off for clicking on screens and menus.");
             T(_playMacroBtn, "Play the selected macro (Enter).");
             T(_playOnceBtn, "Play the selected macro a single time.");
             T(_stopPlayBtn, "Stop the macro that's playing.");
@@ -226,6 +192,7 @@ namespace AutoClicker.UI
             T(_macroLoopNum, "How many times to repeat. 0 = loop forever.");
             T(_macroSpeedNum, "Playback speed. 10 = normal (1.0x), 20 = twice as fast.");
             T(_macroPreserveHoldsCheck, "Keep held keys/buttons at their real recorded length when speeding up — so 2× / 4× only shorten the gaps between actions, not a held movement key (WASD). Off = everything scales with speed.");
+            T(_macroSmoothCheck, "Glide the pointer to each position instead of jumping. The glide happens in the wait before each move or click, so the macro keeps its recorded timing, and a recording made without mouse movement glides between its clicks too.");
             T(_pinMacroBtn, "Pin the selected macro to the top of the list.");
             T(_resetMacroStatsBtn, "Clear the selected macro's play count and last-played time.");
             T(_macroSearchBox, "Filter the macro list by name, notes, or what the macro does — type a key like F5, a button like right, or part of a script filename.");
@@ -235,15 +202,18 @@ namespace AutoClicker.UI
             T(_importAllBtn, "Load macros from a file, adding them to your list.");
 
             // Each hotkey capture row: explain how to set and clear a binding.
+            // Through T(), like every other tooltip on this page. These two were set straight
+            // onto the controls, so the hotkey boxes explained themselves in English — and what
+            // a screen reader announced for the interval box was English — in every language.
             foreach (var pair in _bindingControls)
             {
-                _tips.SetToolTip(pair.Value,
+                T(pair.Value,
                     "Click, then press a key combination to set this hotkey. " +
                     "Press Backspace or Delete to clear it.");
             }
             if (_intervalStepNum != null)
             {
-                _intervalStepNum.AccessibleName = "Interval step in milliseconds";
+                _intervalStepNum.AccessibleName = Utils.Localization.T("Interval step in milliseconds");
                 T(_intervalStepNum, "How much the increase/decrease-speed hotkeys change the click interval, in milliseconds.");
             }
 
@@ -253,6 +223,8 @@ namespace AutoClicker.UI
             T(_sessionGoalNum, "Set a target number of clicks for the current session.");
             T(_resetStatsBtn, "Reset the current-session counters (not your lifetime totals).");
             T(_resetLifetimeBtn, "Reset your all-time totals. This cannot be undone.");
+
+            T(_extraShiftCtrlCheck, "F6 still fires while you hold Shift to sprint or Ctrl to crouch. This applies to the function keys, the middle and side mouse buttons, the media keys, Pause and Scroll Lock. A combination bound to something else (say Shift + F6) still does that. Keys that type or edit (letters, digits, arrows, Enter…) always need their exact combination, so typing and text shortcuts are not affected. Like the key itself, its Shift and Ctrl versions are taken from other programs while Tempo runs.");
 
             // ── Keybinds: the quick-play macro pickers ──────────────────────────
             // These combos took the place of the description labels on their rows, so
@@ -272,6 +244,7 @@ namespace AutoClicker.UI
             T(_audioDeviceStatus, "Live view of the audio devices Tempo can hear through, updated every few seconds. Captions capture 'what the PC is playing' via the speaker shown here; with no speaker, switch \"Listen to\" to Microphone. When a speaker appears or comes back (headphones plugged in, Bluetooth reconnects), running captions recover automatically.");
             T(_captionSourceTagCheck, "Show which app the audio comes from at the start of the caption bar — '♪ YouTube ·', '♪ Roblox ·', and the app name on the '♪ Music or sounds' note. Untick to hide the tag and keep only the words and speaker labels. Takes effect from the next caption line.");
             T(_captionGpuCheck, "Run the speech engine on your graphics card (Vulkan — works on AMD, Intel and NVIDIA) instead of the processor. Experimental: on some PCs it's much faster, on others slower than CPU. Takes effect the next time Tempo starts. If the GPU engine can't keep up with live audio, Tempo switches this off again by itself and returns to the proven CPU engine. AMD processors always use the normal CPU engine — nothing special needed.");
+            T(_captionLyricsCheck, "Off (the default): Tempo's voice detection skips stretches of sound with no voice in them — music, a fan, gunfire, a game's menus — before the speech engine hears them, because that is where it invents words. Singing can count as 'no voice', so song lyrics may be skipped too. On: everything with sound is transcribed, lyrics included, and instrumental music can bring stray invented words back. Applies at once.");
             T(_speakerDeviceCombo, "Which SPEAKER captions listen through. Tempo hears 'what the PC plays' via this device — with several outputs (headset + monitor speakers), pick the one your videos/games actually play on. 'Default' follows whatever Windows has as its output. Devices are listed by model; a device whose model can't be read shows as 'Unknown speaker'. Applies immediately, and if the chosen device is unplugged, captions fall back to the default and say so below.");
             T(_micDeviceCombo, "Which MICROPHONE is used when 'Listen to' is set to Microphone (or Auto falls back to it). With several mics (webcam mic + USB mic), pick the good one. 'Default' follows Windows. Applies immediately; an unplugged choice falls back to the default with a note below.");
             // ── Camera-relative movement ─────────────────────────────────────────
@@ -291,7 +264,9 @@ namespace AutoClicker.UI
             T(_opacitySlider, "Make the Tempo window see-through. 100% is solid; lower values let what's behind show through.");
             T(_customAccentCheck, "Use your own accent colour instead of the theme's.");
             T(_chooseAccentBtn, "Pick a custom accent colour.");
-            T(_launchStartupCheck, "Start Tempo automatically every time you sign in to Windows - it opens quietly in the system tray, ready for your hotkeys. Tempo keeps this working even if it's moved to another folder, and it respects Windows' own Startup list: if you switch Tempo off in Task Manager > Startup apps, this box turns itself off to match.");
+            T(_hdrCompensateCheck, "With HDR on, Windows shows Tempo and other non-HDR apps with lighter shadows than an ordinary screen: near-blacks turn charcoal and dark themes look milky. This darkens Tempo's colours by exactly that difference so they look as designed. It follows the window between screens and updates by itself when HDR is switched on or off. Untick it if a colour profile already corrects SDR apps under HDR — correcting twice makes shadows too dark.");
+            T(_launchStartupCheck, "Start Tempo automatically every time you sign in to Windows - it opens quietly in the system tray, ready for your hotkeys, or with its window if you tick the option below. Tempo keeps this working even if it's moved to another folder, and it respects Windows' own Startup list: if you switch Tempo off in Task Manager > Startup apps, this box turns itself off to match.");
+            T(_openAtSignInCheck, "When Windows starts Tempo at sign-in, open its window instead of starting quietly in the tray. Only the sign-in launch: opening Tempo yourself follows \"Start minimised to tray\".");
             T(_minimizeToTrayCheck, "Closing the window hides it to the tray instead of quitting.");
             T(_startMinimizedCheck, "Start with the window hidden in the tray.");
             T(_trayNotifyCheck, "Show small notifications from the tray icon.");
@@ -299,9 +274,9 @@ namespace AutoClicker.UI
             T(_safetyEscapeCheck, "Let the Escape key act as an emergency stop.");
             T(_startDelayNum, "Wait this many seconds after pressing Start before the first click. A countdown appears — press Esc or your stop hotkey to cancel it.");
             T(_startDelayBeepCheck, "Play a soft beep on each second of the start-delay countdown, and a higher note on GO.");
-            T(_updateFreqCombo, "How often the automatic check may actually run: every launch, at most once a day, or at most once a week. Only applies while 'Check for updates on start' is ticked.");
+            T(_updateFreqCombo, "How often the automatic check may run: every launch, at most once a day, or at most once a week. While Tempo stays open it checks again at the same pace (twice a day for 'Every launch'). Only applies while the box beside it is ticked.");
             T(_startupDelayNum, "When Windows launches Tempo at sign-in, wait this many extra seconds before its background update check — so it doesn't fight other startup apps for the network. Has no effect when you open Tempo yourself.");
-            T(_checkUpdatesCheck, "Quietly check GitHub for a newer version when Tempo starts.");
+            T(_checkUpdatesCheck, "Quietly check GitHub for a newer version when Tempo starts, and again while it stays open. A check that fails is tried again a few minutes later.");
             T(_writeLogCheck, "Write a diagnostic log file. Turn off for extra privacy.");
             T(_showIndicatorCheck, "Show a small click-through badge on screen while clicking, so you can tell Tempo is running even when its window is hidden.");
             T(_minimizeRecordingCheck, "When you start recording or playing a macro, minimise Tempo so it isn't in the way. Stop with the Record/Stop or Emergency-stop hotkey; the window returns automatically.");
@@ -345,6 +320,9 @@ namespace AutoClicker.UI
             Name(_startDelayNum, "Start delay seconds");
             Name(_profileCombo, "Profile");
             Name(_profileNameText, "Profile name");
+
+            // The profile cards were built before this ran (the first grid is part of start-up).
+            RefreshProfileCardTips();
         }
     }
 }

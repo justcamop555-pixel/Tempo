@@ -10,7 +10,7 @@ namespace AutoClicker.Utils
     /// Checks for a newer Tempo version using the GitHub Releases API for the
     /// project repository. No authentication is needed for a public repo. The
     /// "latest" release's <c>tag_name</c> (e.g. <c>v1.0.26</c>) is treated as the
-    /// available version, its <c>html_url</c> as the download page, and its
+    /// available version, its <c>html_url</c> as the release page, and its
     /// <c>body</c> as the release notes.
     /// </summary>
     public static class UpdateChecker
@@ -25,6 +25,9 @@ namespace AutoClicker.Utils
         /// <summary>Human-facing releases page (fallback download link).</summary>
         public const string ReleasesPageUrl =
             "https://github.com/" + Repository + "/releases/latest";
+
+        /// <summary>The file a release ships for the in-app updater to swap in.</summary>
+        public const string ExeAssetName = "Tempo.exe";
 
         // GitHub's "latest release" JSON (only the fields we use).
         public sealed class GitHubRelease
@@ -43,6 +46,9 @@ namespace AutoClicker.Utils
         {
             public string name { get; set; }
             public string browser_download_url { get; set; }
+
+            /// <summary>The file's size in bytes, as GitHub stores it.</summary>
+            public long size { get; set; }
 
             /// <summary>
             /// GitHub's own checksum for the uploaded file, as "sha256:&lt;hex&gt;".
@@ -70,6 +76,20 @@ namespace AutoClicker.Utils
             /// file the releases stopped carrying, which left in-app updates unverified.
             /// </summary>
             public string DownloadSha256 { get; set; }
+
+            /// <summary>Size in bytes of the asset at <see cref="DownloadUrl"/>, or 0 when unknown.</summary>
+            public long DownloadSize { get; set; }
+
+            /// <summary>
+            /// The release's own page on GitHub — what "Download page" opens.
+            ///
+            /// It used to open <see cref="DownloadUrl"/>, which is the Tempo.exe ASSET: a button
+            /// labelled as a page started a 106 MB download in the browser instead, and left one
+            /// more loose copy of Tempo in the Downloads folder — the portable copies that fall
+            /// behind every update after it.
+            /// </summary>
+            public string ReleasePageUrl { get; set; }
+
             public string Notes { get; set; }
             public DateTime? ReleaseDate { get; set; }
         }
@@ -93,7 +113,7 @@ namespace AutoClicker.Utils
         /// <summary>
         /// Fetches ONE release by its tag, for verifying a build rather than updating.
         ///
-        /// Deliberately separate from <see cref="CheckForUpdate"/>: that asks "what is
+        /// Deliberately separate from <see cref="Check"/>: that asks "what is
         /// the newest version?", this asks "what does GitHub say the build I am running
         /// should look like?". The difference matters — the answer for a version that
         /// was never published is itself the finding, so "no such release" is a real
@@ -182,15 +202,24 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
+        /// The longest a <see cref="Check"/> can take: two attempts of up to 9 s for the answer
+        /// plus 9 s reading it, and the pause between them. A caller waiting on a check uses
+        /// this, so its safety net cannot fire while a slow but healthy check is still running —
+        /// the old 22 s net was shorter than the check it guarded.
+        /// </summary>
+        public static readonly TimeSpan WorstCaseCheckTime = TimeSpan.FromSeconds(2 * (9 + 9) + 2);
+
+        /// <summary>
         /// Blocking fetch + compare. Call from a background thread. Never throws —
-        /// failures are returned in <see cref="UpdateResult.Error"/>.
+        /// failures are returned in <see cref="UpdateResult.Error"/>, already translated,
+        /// because that text is shown to the user as it is.
         /// </summary>
         public static UpdateResult Check()
         {
             var result = new UpdateResult();
             // One retry. With a generous 9s per-attempt timeout, a second attempt keeps
-            // the worst case (~19s) inside the caller's safety window while still riding
-            // out a slow cold connection or a brief server hiccup.
+            // the worst case inside WorstCaseCheckTime while still riding out a slow cold
+            // connection or a brief server hiccup.
             const int maxAttempts = 2;
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
@@ -228,47 +257,7 @@ namespace AutoClicker.Utils
                     json = reader.ReadToEnd();
                 }
 
-                if (string.IsNullOrWhiteSpace(json))
-                {
-                    result.Error = "The update server returned an empty response.";
-                    return result;
-                }
-
-                GitHubRelease release = JsonSerializer.Deserialize<GitHubRelease>(json, JsonOptions);
-                if (release == null || string.IsNullOrWhiteSpace(release.tag_name))
-                {
-                    result.Error = "No published release was found yet.";
-                    return result;
-                }
-
-                if (!TryParseTag(release.tag_name, out Version latest))
-                {
-                    result.Error = "The latest release tag (" + release.tag_name +
-                                   ") is not a valid version number.";
-                    return result;
-                }
-
-                result.Success = true;
-                result.LatestVersion = latest;
-                result.Notes = string.IsNullOrWhiteSpace(release.body) ? release.name : release.body;
-                result.DownloadUrl = PickDownloadUrl(release);
-                result.Sha256Url = PickChecksumUrl(release);
-                result.DownloadSha256 = DigestFor(release, result.DownloadUrl);
-                // Both sides normalised: comparing a 3-part tag with a 4-part assembly version directly
-                // is the part-count trap described on Normalize.
-                result.UpdateAvailable = Normalize(latest) > Normalize(CurrentVersion);
-
-                if (!string.IsNullOrWhiteSpace(release.published_at) &&
-                    DateTime.TryParse(release.published_at,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        System.Globalization.DateTimeStyles.AdjustToUniversal, out DateTime pub))
-                {
-                    result.ReleaseDate = pub;
-                }
-
-                Logger.Info($"[Update] check: current {CurrentVersion}, latest {latest} " +
-                            $"(tag {release.tag_name}), update available: {result.UpdateAvailable}.");
-                return result;
+                return FromReleaseJson(json, CurrentVersion);
             }
             catch (WebException wex)
             {
@@ -276,12 +265,11 @@ namespace AutoClicker.Utils
                 int code = http != null ? (int)http.StatusCode : 0;
 
                 // Transient server-side or connection hiccups - a 500/502/503/504 gateway
-                // Transient server-side or connection hiccups - a 500/502/503/504 gateway
-                // error, a 429, a dropped connection, or a timeout (often just a slow
-                // cold connection) - usually clear on an immediate retry, so try again
-                // before bothering the user.
+                // error, a dropped connection, or a timeout (often just a slow cold
+                // connection) - usually clear on an immediate retry, so try again before
+                // bothering the user. A 429 is NOT retried: it means "stop asking".
                 bool transient =
-                    code == 500 || code == 502 || code == 503 || code == 504 || code == 429 ||
+                    code == 500 || code == 502 || code == 503 || code == 504 ||
                     wex.Status == WebExceptionStatus.Timeout ||
                     wex.Status == WebExceptionStatus.ConnectFailure ||
                     wex.Status == WebExceptionStatus.ReceiveFailure ||
@@ -296,45 +284,13 @@ namespace AutoClicker.Utils
                     continue;
                 }
 
-                if (http != null && http.StatusCode == HttpStatusCode.NotFound)
-                {
-                    // A 404 here usually just means no release has been published yet.
-                    result.Error = "No published release was found for " + Repository + " yet.";
-                }
-                else if (code == 403)
-                {
-                    // GitHub rate-limits unauthenticated API requests (60/hour).
-                    result.Error = "GitHub is rate-limiting update checks right now. " +
-                                   "Please wait a little while and try again.";
-                }
-                else if (wex.Status == WebExceptionStatus.Timeout)
-                {
-                    result.Error = "The update check timed out, even after retrying. GitHub may be slow " +
-                                   "right now, or a firewall/VPN/antivirus may be blocking Tempo's connection " +
-                                   "to github.com. Your internet is otherwise fine \u2014 please try again in a moment.";
-                }
-                else if (code >= 500)
-                {
-                    // A gateway/server error on GitHub's end, not a problem with Tempo or
-                    // your PC, and almost always temporary - even after the retries above.
-                    result.Error = "GitHub's update server is having a temporary problem (error " + code +
-                                   "). This isn't a problem with Tempo \u2014 please try again in a few minutes.";
-                }
-                else if (http != null)
-                {
-                    result.Error = "The update server returned an error (" + code +
-                                   "). Please try again later.";
-                }
-                else
-                {
-                    result.Error = "Couldn't reach GitHub. Check your internet connection.";
-                }
+                result.Error = DescribeFailure(wex, http, code);
                 Logger.Warn("Update check network error: " + wex.Message);
                 return result;
             }
             catch (Exception ex)
             {
-                result.Error = "The update check failed: " + ex.Message;
+                result.Error = Localization.F("The update check failed: {0}", ex.Message);
                 Logger.Warn("Update check failed: " + ex.Message);
                 return result;
             }
@@ -344,10 +300,143 @@ namespace AutoClicker.Utils
             // more specific message above (defensive - the loop normally returns first).
             if (string.IsNullOrEmpty(result.Error))
             {
-                result.Error = "GitHub's update server is having a temporary problem. " +
-                               "This isn't a problem with Tempo \u2014 please try again in a few minutes.";
+                result.Error = Localization.T("GitHub's update server is having a temporary problem. " +
+                               "This isn't a problem with Tempo — please try again in a few minutes.");
             }
             return result;
+        }
+
+        /// <summary>
+        /// Turns GitHub's answer into a result, with no network involved — so the parsing, the asset
+        /// choice and the comparison can be tested against real release JSON. <paramref name="current"/>
+        /// is explicit for the same reason <see cref="IsNewerThan"/> takes it.
+        /// </summary>
+        internal static UpdateResult FromReleaseJson(string json, Version current)
+        {
+            var result = new UpdateResult();
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                result.Error = Localization.T("The update server returned an empty response.");
+                return result;
+            }
+
+            GitHubRelease release;
+            try
+            {
+                release = JsonSerializer.Deserialize<GitHubRelease>(json, JsonOptions);
+            }
+            catch (JsonException jex)
+            {
+                // Something other than GitHub answered — a Wi-Fi sign-in page or a proxy's error page.
+                // The parser's own message ("'<' is an invalid start of a value…") said nothing useful.
+                Logger.Warn("[Update] the answer was not release data: " + jex.Message);
+                result.Error = Localization.T("GitHub's answer could not be read. A network sign-in page or a proxy can cause this — please try again later.");
+                return result;
+            }
+            if (release == null || string.IsNullOrWhiteSpace(release.tag_name))
+            {
+                result.Error = Localization.T("No published release was found yet.");
+                return result;
+            }
+
+            if (!TryParseTag(release.tag_name, out Version latest))
+            {
+                result.Error = Localization.F("The latest release tag ({0}) is not a valid version number.",
+                                              release.tag_name);
+                return result;
+            }
+
+            result.Success = true;
+            result.LatestVersion = latest;
+            result.Notes = string.IsNullOrWhiteSpace(release.body) ? release.name : release.body;
+            result.DownloadUrl = PickDownloadUrl(release);
+            result.Sha256Url = PickChecksumUrl(release);
+            result.DownloadSha256 = DigestFor(release, result.DownloadUrl);
+            result.DownloadSize = SizeFor(release, result.DownloadUrl);
+            result.ReleasePageUrl = string.IsNullOrWhiteSpace(release.html_url) ? ReleasesPageUrl : release.html_url;
+            // Both sides normalised: comparing a 3-part tag with a 4-part assembly version directly
+            // is the part-count trap described on Normalize.
+            result.UpdateAvailable = Normalize(latest) > Normalize(current);
+
+            if (!string.IsNullOrWhiteSpace(release.published_at) &&
+                DateTime.TryParse(release.published_at,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal, out DateTime pub))
+            {
+                result.ReleaseDate = DateTime.SpecifyKind(pub, DateTimeKind.Utc);
+            }
+
+            Logger.Info($"[Update] check: current {current}, latest {latest} " +
+                        $"(tag {release.tag_name}), update available: {result.UpdateAvailable}.");
+            return result;
+        }
+
+        /// <summary>
+        /// What to tell the user about a check that could not complete. Translated here because
+        /// the result goes straight onto the screen, and several carry a value (a status code, a
+        /// time), which a finished English sentence could never be looked up by.
+        /// </summary>
+        private static string DescribeFailure(WebException wex, HttpWebResponse http, int code)
+        {
+            if (http != null && http.StatusCode == HttpStatusCode.NotFound)
+            {
+                // A 404 here usually just means no release has been published yet.
+                return Localization.F("No published release was found for {0} yet.", Repository);
+            }
+
+            if (code == 403 || code == 429)
+            {
+                // GitHub allows 60 unauthenticated API requests an hour per address. When it says
+                // when the allowance comes back, pass that on: "try again later" with no idea how
+                // much later is how the button gets pressed ten more times.
+                string resetAt = RateLimitResetText(http);
+                if (resetAt != null)
+                {
+                    return Localization.F("GitHub is limiting how often Tempo can ask about updates. Please try again after {0}.",
+                                          resetAt);
+                }
+                return Localization.T("GitHub is rate-limiting update checks right now. " +
+                                      "Please wait a little while and try again.");
+            }
+
+            if (wex.Status == WebExceptionStatus.Timeout)
+            {
+                // Not "your internet is fine": a timeout proves nothing about the connection, and
+                // this sentence used to claim that it did.
+                return Localization.T("The update check timed out, even after retrying. GitHub may be slow right now, " +
+                                      "or a firewall, VPN or antivirus may be blocking Tempo's connection to github.com. " +
+                                      "Please try again in a moment.");
+            }
+
+            if (code >= 500)
+            {
+                // A gateway/server error on GitHub's end, not a problem with Tempo or
+                // your PC, and almost always temporary - even after the retry above.
+                return Localization.F("GitHub's update server is having a temporary problem (error {0}). " +
+                                      "This isn't a problem with Tempo — please try again in a few minutes.", code);
+            }
+
+            if (http != null)
+            {
+                return Localization.F("The update server returned an error ({0}). Please try again later.", code);
+            }
+
+            return Localization.T("Couldn't reach GitHub. Check your internet connection.");
+        }
+
+        /// <summary>The local time GitHub's API allowance resets, or null when it did not say.</summary>
+        private static string RateLimitResetText(HttpWebResponse http)
+        {
+            try
+            {
+                string remaining = http?.Headers["X-RateLimit-Remaining"];
+                string reset = http?.Headers["X-RateLimit-Reset"];
+                if (remaining == null || remaining.Trim() != "0" || string.IsNullOrWhiteSpace(reset)) { return null; }
+                if (!long.TryParse(reset.Trim(), out long epoch)) { return null; }
+                DateTime local = DateTimeOffset.FromUnixTimeSeconds(epoch).LocalDateTime;
+                return local.ToString("t", Localization.DateCulture);
+            }
+            catch { return null; }
         }
 
         /// <summary>
@@ -362,6 +451,35 @@ namespace AutoClicker.Utils
             if (v == null) { return new Version(0, 0, 0, 0); }
             return new Version(Math.Max(0, v.Major), Math.Max(0, v.Minor),
                                Math.Max(0, v.Build), Math.Max(0, v.Revision));
+        }
+
+        /// <summary>
+        /// A version as people read it: "1.0.323", with a fourth part only when it is not zero. The
+        /// update dialog used to show "Installed 1.0.322.0 → Latest 1.0.323" — the same kind of
+        /// number spelled two different ways side by side.
+        /// </summary>
+        public static string Display(Version v)
+        {
+            if (v == null) { return ""; }
+            Version n = Normalize(v);
+            return n.Revision > 0 ? n.ToString(4) : n.ToString(3);
+        }
+
+        /// <summary><see cref="Display(Version)"/> for a stored or tagged version string; the input unchanged when it is not one.</summary>
+        public static string Display(string version)
+        {
+            return TryParseTag(version, out Version v) ? Display(v) : (version ?? "");
+        }
+
+        /// <summary>
+        /// True when two spellings name the same version ("v1.0.323", "1.0.323", "1.0.323.0"). A skipped
+        /// version is compared this way, never as a string — the string test is what kept "update
+        /// available" on screen for the version already installed.
+        /// </summary>
+        public static bool IsSameVersion(string a, string b)
+        {
+            return TryParseTag(a, out Version va) && TryParseTag(b, out Version vb)
+                   && Normalize(va) == Normalize(vb);
         }
 
         /// <summary>
@@ -393,8 +511,7 @@ namespace AutoClicker.Utils
             }
 
             string cleaned = tag.Trim();
-            if (cleaned.StartsWith("v", StringComparison.OrdinalIgnoreCase) ||
-                cleaned.StartsWith("V", StringComparison.OrdinalIgnoreCase))
+            if (cleaned.StartsWith("v", StringComparison.OrdinalIgnoreCase))
             {
                 cleaned = cleaned.Substring(1);
             }
@@ -411,18 +528,19 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
-        /// Prefers a downloadable .exe asset attached to the release; otherwise
-        /// falls back to the release's web page.
+        /// The asset the in-app updater should fetch: Tempo.exe by name first, so it can be
+        /// swapped in place; then any other .exe; then a setup zip (unpacked afterwards); then
+        /// any zip; otherwise the release's web page.
+        ///
+        /// By name first, because "the first .exe" is only right while a release carries exactly
+        /// one — an installer or a tool attached beside Tempo.exe would otherwise be swapped in
+        /// over Tempo itself.
         /// </summary>
         private static string PickDownloadUrl(GitHubRelease release)
         {
             if (release.assets != null)
             {
-                // Prefer a standalone .exe so the in-app one-click updater can swap
-                // it in place. If a release only ships the installer zip, return that
-                // (the app opens it in the browser to run install.cmd). Fall back to
-                // any zip, then the releases page.
-                string setup = null, exe = null, anyZip = null;
+                string named = null, setup = null, exe = null, anyZip = null;
                 foreach (GitHubAsset asset in release.assets)
                 {
                     if (asset == null || string.IsNullOrWhiteSpace(asset.browser_download_url) ||
@@ -431,7 +549,11 @@ namespace AutoClicker.Utils
                         continue;
                     }
                     string n = asset.name;
-                    if (exe == null && n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                    if (named == null && string.Equals(n, ExeAssetName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        named = asset.browser_download_url;
+                    }
+                    else if (exe == null && n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                     {
                         exe = asset.browser_download_url;
                     }
@@ -445,6 +567,7 @@ namespace AutoClicker.Utils
                         anyZip = asset.browser_download_url;
                     }
                 }
+                if (named != null) return named;
                 if (exe != null) return exe;
                 if (setup != null) return setup;
                 if (anyZip != null) return anyZip;
@@ -453,25 +576,42 @@ namespace AutoClicker.Utils
             return string.IsNullOrWhiteSpace(release.html_url) ? ReleasesPageUrl : release.html_url;
         }
 
-        /// <summary>The hex SHA-256 GitHub holds for the asset served at <paramref name="url"/>, or null.</summary>
-        internal static string DigestFor(GitHubRelease release, string url)
+        /// <summary>The asset served at <paramref name="url"/>, or null.</summary>
+        private static GitHubAsset AssetAt(GitHubRelease release, string url)
         {
             if (release?.assets == null || string.IsNullOrWhiteSpace(url)) { return null; }
             foreach (GitHubAsset asset in release.assets)
             {
-                if (asset == null || !string.Equals(asset.browser_download_url, url, StringComparison.Ordinal)) { continue; }
-                string d = (asset.digest ?? "").Trim();
-                const string prefix = "sha256:";
-                if (!d.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { return null; }
-                string hex = d.Substring(prefix.Length);
-                if (hex.Length != 64) { return null; }
-                foreach (char c in hex)
+                if (asset != null && string.Equals(asset.browser_download_url, url, StringComparison.Ordinal))
                 {
-                    if (!Uri.IsHexDigit(c)) { return null; }
+                    return asset;
                 }
-                return hex;
             }
             return null;
+        }
+
+        /// <summary>The hex SHA-256 GitHub holds for the asset served at <paramref name="url"/>, or null.</summary>
+        internal static string DigestFor(GitHubRelease release, string url)
+        {
+            GitHubAsset asset = AssetAt(release, url);
+            if (asset == null) { return null; }
+            string d = (asset.digest ?? "").Trim();
+            const string prefix = "sha256:";
+            if (!d.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { return null; }
+            string hex = d.Substring(prefix.Length);
+            if (hex.Length != 64) { return null; }
+            foreach (char c in hex)
+            {
+                if (!Uri.IsHexDigit(c)) { return null; }
+            }
+            return hex;
+        }
+
+        /// <summary>The size GitHub reports for the asset served at <paramref name="url"/>, or 0.</summary>
+        internal static long SizeFor(GitHubRelease release, string url)
+        {
+            GitHubAsset asset = AssetAt(release, url);
+            return asset != null && asset.size > 0 ? asset.size : 0;
         }
 
         /// <summary>

@@ -44,6 +44,27 @@ namespace AutoClicker.Utils
         /// <summary>When each line's latest words were spoken (local time), index for index.</summary>
         public List<DateTime> EndTimes { get; } = new List<DateTime>();
 
+        /// <summary>
+        /// The name the user gave a speaker, to write in place of "Speaker N", or null for the number.
+        /// Every surface reads <see cref="Lines"/> — the Captions tab, the history window, the saved
+        /// file and the subtitles — so a name put here reaches all of them.
+        /// </summary>
+        public Func<int, string> SpeakerName { get; set; }
+
+        /// <summary>
+        /// Which person a speaker number means right now (SpeakerLinker.Incarnation). A number can be
+        /// handed to someone new — when all nine are taken, or after the audio changes — and naming
+        /// the newcomer must not rename the lines the previous holder of that number spoke.
+        /// </summary>
+        public Func<int, int> SpeakerIdentity { get; set; }
+
+        // Per line, index for index with Lines: whose line it is (number and which holder of it) and
+        // its words without the label, so a speaker named part-way through can be renamed in the lines
+        // already written.
+        private readonly List<int> _lineSpeaker = new List<int>();
+        private readonly List<int> _lineIdentity = new List<int>();
+        private readonly List<string> _lineText = new List<string>();
+
         private bool _open;
         private int _speaker;
         private DateTime _turn = DateTime.MinValue;
@@ -55,6 +76,9 @@ namespace AutoClicker.Utils
             Lines.Clear();
             Times.Clear();
             EndTimes.Clear();
+            _lineSpeaker.Clear();
+            _lineIdentity.Clear();
+            _lineText.Clear();
             _open = false;
             _speaker = 0;
             _turn = DateTime.MinValue;
@@ -140,12 +164,18 @@ namespace AutoClicker.Utils
             Lines.Add(Prefix(speaker) + text);
             Times.Add(start);
             EndTimes.Add(end);
+            _lineSpeaker.Add(speaker);
+            _lineIdentity.Add(IdentityOf(speaker));
+            _lineText.Add(text);
             if (Lines.Count > MaxLines)
             {
                 int drop = Lines.Count - MaxLines;
                 Lines.RemoveRange(0, drop);
                 Times.RemoveRange(0, Math.Min(drop, Times.Count));
                 EndTimes.RemoveRange(0, Math.Min(drop, EndTimes.Count));
+                _lineSpeaker.RemoveRange(0, Math.Min(drop, _lineSpeaker.Count));
+                _lineIdentity.RemoveRange(0, Math.Min(drop, _lineIdentity.Count));
+                _lineText.RemoveRange(0, Math.Min(drop, _lineText.Count));
             }
         }
 
@@ -155,11 +185,63 @@ namespace AutoClicker.Utils
             _text = text;
             Lines[Lines.Count - 1] = Prefix(_speaker) + text;
             if (EndTimes.Count > 0) { EndTimes[EndTimes.Count - 1] = end; }
+            if (_lineSpeaker.Count > 0) { _lineSpeaker[_lineSpeaker.Count - 1] = _speaker; }
+            if (_lineIdentity.Count > 0) { _lineIdentity[_lineIdentity.Count - 1] = IdentityOf(_speaker); }
+            if (_lineText.Count > 0) { _lineText[_lineText.Count - 1] = text; }
         }
 
-        private static string Prefix(int speaker)
+        /// <summary>
+        /// Rewrites the label of every line <paramref name="speaker"/> spoke — after they were given a
+        /// name, or had it taken away. Only the lines of the person holding that number NOW: an earlier
+        /// holder's lines keep their label. The words and times stay as they are. Returns how many
+        /// changed.
+        /// </summary>
+        public int Relabel(int speaker)
         {
-            return speaker > 0 ? SpeakerTurnLabeler.Prefix(speaker) : string.Empty;
+            if (speaker <= 0) { return 0; }
+            int identity = IdentityOf(speaker);
+            int changed = 0;
+            int n = Math.Min(Lines.Count, Math.Min(_lineSpeaker.Count, Math.Min(_lineIdentity.Count, _lineText.Count)));
+            for (int i = 0; i < n; i++)
+            {
+                if (_lineSpeaker[i] != speaker || _lineIdentity[i] != identity) { continue; }
+                string line = Prefix(speaker) + _lineText[i];
+                if (line != Lines[i]) { Lines[i] = line; changed++; }
+            }
+            return changed;
+        }
+
+        /// <summary>Whose line <paramref name="index"/> is: the speaker's number, or 0 when it has no label.</summary>
+        public int SpeakerOf(int index)
+        {
+            return index >= 0 && index < _lineSpeaker.Count ? _lineSpeaker[index] : 0;
+        }
+
+        /// <summary>
+        /// How many characters at the start of line <paramref name="index"/> are its label ("Speaker 2: ",
+        /// "Ana: "), or 0 when it has none — so the history window can colour the label the way the
+        /// caption bar does without guessing where a name that contains ": " ends.
+        /// </summary>
+        public int LabelLengthOf(int index)
+        {
+            if (index < 0 || index >= Lines.Count || index >= _lineText.Count || SpeakerOf(index) <= 0) { return 0; }
+            string line = Lines[index], text = _lineText[index];
+            return line.Length > text.Length && line.EndsWith(text, StringComparison.Ordinal) ? line.Length - text.Length : 0;
+        }
+
+        private int IdentityOf(int speaker)
+        {
+            if (speaker <= 0 || SpeakerIdentity == null) { return 0; }
+            try { return SpeakerIdentity(speaker); } catch { return 0; }
+        }
+
+        /// <summary>The label a line starts with: the speaker's name when they have one, else "Speaker N: ".</summary>
+        private string Prefix(int speaker)
+        {
+            if (speaker <= 0) { return string.Empty; }
+            string name = null;
+            try { name = SpeakerName?.Invoke(speaker); } catch { name = null; }
+            return string.IsNullOrWhiteSpace(name) ? SpeakerTurnLabeler.Prefix(speaker) : name.Trim() + ": ";
         }
 
         private static bool EndsSentence(string text)

@@ -88,7 +88,8 @@ REM  portably), there's nothing here to uninstall. Say so plainly instead of
 REM  pretending to remove an installed copy that doesn't exist. Saved settings
 REM  in %DATA_DIR% may still exist and can be cleared with /purge.
 REM ---------------------------------------------------------------------------
-if not exist "%INSTALL_DIR%\Tempo.exe" if not exist "%SM_LNK%" (
+REM  The program is TempoClicker.exe since the Discord rename; an install from before is Tempo.exe.
+if not exist "%INSTALL_DIR%\TempoClicker.exe" if not exist "%INSTALL_DIR%\Tempo.exe" if not exist "%SM_LNK%" (
   echo   Tempo doesn't appear to be installed for your account.
   echo   ^(Looked in: %INSTALL_DIR%^)
   echo(
@@ -120,12 +121,14 @@ if not exist "%INSTALL_DIR%\Tempo.exe" if not exist "%SM_LNK%" (
 
 REM --- close Tempo if it's running (best-effort) ---
 REM find by its full path: with Git's Unix tools on the PATH a bare find is GNU find, which would miss a running Tempo
-tasklist /fi "imagename eq Tempo.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "Tempo.exe" >nul
-if not errorlevel 1 (
-  echo   Closing the running Tempo ...
-  taskkill /im Tempo.exe /f >nul 2>&1
-  >> "%LOG%" echo Killed : running Tempo.exe
-  "%SystemRoot%\System32\timeout.exe" /t 1 >nul
+for %%N in (TempoClicker.exe Tempo.exe) do (
+  tasklist /fi "imagename eq %%N" 2>nul | "%SystemRoot%\System32\find.exe" /i "%%N" >nul
+  if not errorlevel 1 (
+    echo   Closing the running Tempo ...
+    taskkill /im %%N /f >nul 2>&1
+    >> "%LOG%" echo Killed : running %%N
+    "%SystemRoot%\System32\timeout.exe" /t 1 >nul
+  )
 )
 
 REM --- remove shortcuts ---
@@ -141,8 +144,12 @@ REM --- remove start-with-Windows, but only the entry that starts THIS install -
 REM  Tempo turns it off itself when it uninstalls; this script never did, so every uninstall through
 REM  it left Windows trying to start a Tempo.exe that was gone. An entry naming another copy of
 REM  Tempo (a portable one) belongs to that copy and stays.
-reg query "%RUNKEY%" /v Tempo 2>nul | "%SystemRoot%\System32\find.exe" /i "%INSTALL_DIR%\Tempo.exe" >nul
-if not errorlevel 1 (
+set "RUNHIT="
+for %%N in (TempoClicker.exe Tempo.exe) do (
+  reg query "%RUNKEY%" /v Tempo 2>nul | "%SystemRoot%\System32\find.exe" /i "%INSTALL_DIR%\%%N" >nul
+  if not errorlevel 1 set "RUNHIT=1"
+)
+if defined RUNHIT (
   reg delete "%RUNKEY%" /v Tempo /f >nul 2>&1
   >> "%LOG%" echo Removed: start-with-Windows entry
 )

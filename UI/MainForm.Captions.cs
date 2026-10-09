@@ -29,12 +29,16 @@ namespace AutoClicker.UI
         private Label _capSourceLine;
         private Label _capDelayLine;
         private Button _capFasterModelBtn;
-        private TextBox _capTranscript;
+        private ThemedRichTextBox _capTranscript;
+        private Button _capCopyBtn;            // relabels "Copy all" → "Copy shown" while filtering
+        private Button _capSaveBtn;
+        private ToolTip _capTip;               // the filter syntax, and what Save will write
         private TextBox _capSearchBox;
         private System.Windows.Forms.Timer _capSearchDebounce;
         private Label _capCountLabel;
         private Button _capOverlayBtn;
         private Button _capHistoryBtn;
+        private Button _capMoveBtn;
         private CaptionLevelMeter _capLevel;
         private Label _capQualityLine;
         // The Captions tab's copy of the language picker. Its twin on the Settings page
@@ -42,6 +46,9 @@ namespace AutoClicker.UI
         // disagree with each other or with what is on disk.
         private ComboBox _capLangCombo;
         private Label _capLangLabel;
+        // Who is talking: each speaker with their face (see SpeakerStrip / Utils.SpeakerLinker).
+        private SpeakerStrip _capSpeakerStrip;
+        private Button _capSpeakerActionBtn;     // "Turn on speaker labels" / "Use faces too", when either is off
 
         // What the transcript box is currently showing, so the (potentially 500-line)
         // rebuild is skipped when nothing changed. Starts as null rather than "" so the
@@ -60,6 +67,9 @@ namespace AutoClicker.UI
             var status = UiFactory.Group(Localization.T("Live Captions"), 12, 12, 696, 186, CardIcon.Caption);
 
             _capStatePill = UiFactory.Label("Off", 16, 30, FontStyle.Bold, 15f);
+            // Every state it can say (RefreshCaptionsTab), in 15 pt bold beside the Start button.
+            LayoutFitter.DeclareCaptions(_capStatePill, Localization.T("Off"), Localization.T("⚠  Not hearing anything"),
+                Localization.T("◌  Loading the speech model…"), Localization.T("●  Listening…"));
             status.Controls.Add(_capStatePill);
 
             _capEngineLine = UiFactory.Caption("", 16, 60);
@@ -76,6 +86,8 @@ namespace AutoClicker.UI
             status.Controls.Add(_capDelayLine);
 
             _capStartStopBtn = UiFactory.PrimaryButton("Start captions", 520, 26, 156, 34, _theme);
+            // Every caption these buttons switch between, so the layout checks measure each one.
+            LayoutFitter.DeclareCaptions(_capStartStopBtn, Localization.T("Start captions"), Localization.T("Stop captions"));
             _capStartStopBtn.Click += (s, e) =>
             {
                 // ToggleLiveCaptions, not a private copy of its body. It carries a
@@ -119,8 +131,13 @@ namespace AutoClicker.UI
             // "is it even receiving sound?" was unanswerable from the UI: the engine
             // recomputes LevelDb ~25 times a second and it only ever reached Live debug.
             // Silence and a broken capture looked identical — both produce no captions.
-            status.Controls.Add(UiFactory.Caption("Input:", 16, 126));
-            _capLevel = new CaptionLevelMeter { Left = 60, Top = 126, Width = 300, Height = 14 };
+            var inputLabel = UiFactory.Caption("Input:", 16, 126);
+            status.Controls.Add(inputLabel);
+            // After the label, not at a fixed x=60: "Entrada:", "Eingang:" and "Ingresso:" ran
+            // 6–10 px under the meter, which painted over the colon and the last letter. The
+            // meter keeps its right edge.
+            int meterLeft = Math.Max(60, LayoutRight(inputLabel) + 6);   // the label sizes itself in screen pixels
+            _capLevel = new CaptionLevelMeter { Left = meterLeft, Top = 126, Width = 360 - meterLeft, Height = 14 };
             status.Controls.Add(_capLevel);
 
             // Confidence / clipping / language lock — all computed by the engine already.
@@ -128,14 +145,44 @@ namespace AutoClicker.UI
             _capQualityLine.MaximumSize = new Size(660, 0);
             status.Controls.Add(_capQualityLine);
 
+            // ── Speakers ──────────────────────────────────────────────────────
+            // Who is talking, with their faces. The speaker labels, the voice matching and the face
+            // & mouth analysis only ever showed up as text in Live debug; nothing here said who
+            // "Speaker 2" was. The transcript card gave up the height (the tab still fits its
+            // 689 px without scrolling, so the language picker stays in view). Click a speaker to give
+            // them a name; hover one to see their face large.
+            var speakers = UiFactory.Group(Localization.T("Speakers"), 12, 210, 696, 88, CardIcon.People);
+            _capSpeakerStrip = new SpeakerStrip
+            {
+                Left = 16,
+                Top = 28,
+                Width = 660,
+                Height = 52,
+                Font = new Font("Segoe UI", 9f),
+            };
+            _capSpeakerStrip.SetTheme(_theme);
+            _capSpeakerStrip.ChipClicked += RenameSpeaker;
+            speakers.Controls.Add(_capSpeakerStrip);
+            // Names reach every surface through these: the transcript's lines (and so the history
+            // window, the saved file and the subtitles) and the caption bar's labels.
+            _transcript.SpeakerName = SpeakerDisplayName;
+            _transcript.SpeakerIdentity = _speakerLinker.Incarnation;
+            CaptionOverlayForm.SpeakerNameFor = SpeakerDisplayName;
+            _capSpeakerActionBtn = UiFactory.Button("Turn on speaker labels", 476, 40, 200, 28);
+            _capSpeakerActionBtn.Visible = false;
+            _capSpeakerActionBtn.Click += (s, e) => OnCaptionSpeakerAction();
+            speakers.Controls.Add(_capSpeakerActionBtn);
+            LayoutFitter.DeclareOverlay(_capSpeakerActionBtn,
+                "sits over the right end of the speaker strip, which leaves that end empty while it is showing");
+
             // ── The running transcript ────────────────────────────────────────
-            var live = UiFactory.Group(Localization.T("Transcript"), 12, 210, 696, 348, CardIcon.Caption);
+            var live = UiFactory.Group(Localization.T("Transcript"), 12, 310, 696, 248, CardIcon.Caption);
 
             live.Controls.Add(UiFactory.Label("Find:", 16, 32));
             // x=96, not 60: "Find:" fits in 44px but "Rechercher :" needs 66, and the
             // label was overprinting this box in four of the five languages.
-            // Width 200, not 240: "Copy all" sits at x=312, so the box has to give back
-            // what it took from the label rather than grow into the button.
+            // Its width is settled below, once the buttons to its right have measured
+            // their own captions: the box takes what they leave (200 px in English).
             _capSearchBox = new TextBox
             {
                 Left = 96,
@@ -156,8 +203,13 @@ namespace AutoClicker.UI
                     _capSearchDebounce.Stop();
                     // Trimmed: a trailing space is invisible in the box but matched
                     // literally, so typing "hello " quietly found nothing in a transcript
-                    // full of "hello".
+                    // full of "hello". (The parser splits on whitespace anyway now, but the
+                    // trimmed text is still what the "Nothing matches …" message quotes.)
                     _capFilter = (_capSearchBox.Text ?? "").Trim();
+                    // Text-only: tag: and level: are log fields and mean nothing here, so
+                    // they stay ordinary words rather than becoming a term that never matches.
+                    _capParsedFilter = Utils.LogFilter.ParseTextOnly(_capFilter);
+                    RefreshTranscriptButtonLabels();
                     _capRenderedText = null;   // force a re-render through the filter
                     RefreshCaptionTranscript();
                 }
@@ -179,13 +231,24 @@ namespace AutoClicker.UI
             };
             live.Controls.Add(_capSearchBox);
 
-            var copyBtn = UiFactory.Button("Copy all", 312, 26, 104, 28);
-            copyBtn.Click += (s, e) => CopyTranscript();
-            live.Controls.Add(copyBtn);
+            // What the box understands, where someone will actually see it. It is a small
+            // query language now, shared with Live debug's filter.
+            _capTip = new ToolTip { AutoPopDelay = 20000, InitialDelay = 350, ReshowDelay = 120 };
+            TipStyle.Set(_capTip, _capSearchBox, Localization.T(
+                "two words = both  ·  \"a phrase\"  ·  -hide a word"));
+            // No tooltip on the speaker strip: it shows its own preview of whoever is under the
+            // mouse (face, name, how to rename, that the picture is never saved), and a second
+            // tooltip there would pop up on top of it.
 
-            var saveBtn = UiFactory.Button("Save…", 424, 26, 96, 28);
-            saveBtn.Click += (s, e) => SaveTranscript();
-            live.Controls.Add(saveBtn);
+            _capCopyBtn = UiFactory.Button("Copy all", 312, 26, 104, 28);
+            LayoutFitter.DeclareCaptions(_capCopyBtn, Localization.T("Copy all"), Localization.T("Copy shown"));
+            _capCopyBtn.Click += (s, e) => CopyTranscript();
+            live.Controls.Add(_capCopyBtn);
+
+            _capSaveBtn = UiFactory.Button("Save…", 424, 26, 96, 28);
+            _capSaveBtn.Click += (s, e) => SaveTranscript();
+            live.Controls.Add(_capSaveBtn);
+            RefreshTranscriptButtonLabels();
 
             var srtBtn = UiFactory.Button("Subtitles…", 524, 26, 100, 28);
             srtBtn.Click += (s, e) => ExportTranscriptSubtitles();
@@ -195,37 +258,72 @@ namespace AutoClicker.UI
             clearBtn.Click += (s, e) =>
             {
                 _transcript.Clear();
-                try { _captionHistoryForm?.SetHistory(_captionHistory); } catch { }
+                try { _captionHistoryForm?.SetHistory(_transcript); } catch { }
                 _capRenderedText = null;
                 RefreshCaptionTranscript();
             };
             live.Controls.Add(clearBtn);
 
-            _capTranscript = new TextBox
+            // The row, packed from the right edge: each button as wide as its own caption
+            // needs (never narrower than its English design width, so English is unchanged),
+            // and the search box takes whatever is left.
+            //
+            // Copy is sized for the WIDER of its two captions. It turns into "Copy shown" the
+            // moment a filter is typed, and "Angezeigtes kopieren" (120 px of text), "Copiar lo
+            // mostrado" (109) and "Copiar o mostrado" (106) did not fit its 104 px — cut off
+            // at runtime, long after the start-up layout check had passed the row as clean.
+            // In 100% units (FitToText96): this row is built before the window scales, and measured in
+            // screen pixels it was scaled twice — every button 1.5× too wide on a 150% laptop, the row
+            // packed leftwards from the card's edge into the transcript's filter box. "Copy all" is
+            // sized for both its captions (declared where it is built).
+            const int capPad = 12;
+            UiFactory.FitToText96(_capCopyBtn, 104, capPad);
+            UiFactory.FitToText96(_capSaveBtn, 96, capPad);
+            UiFactory.FitToText96(srtBtn, 100, capPad);
+            UiFactory.FitToText96(clearBtn, 46, capPad);
+            clearBtn.Left = 676 - clearBtn.Width;
+            srtBtn.Left = clearBtn.Left - 6 - srtBtn.Width;
+            _capSaveBtn.Left = srtBtn.Left - 4 - _capSaveBtn.Width;
+            _capCopyBtn.Left = _capSaveBtn.Left - 8 - _capCopyBtn.Width;
+            _capSearchBox.Width = Math.Max(120, _capCopyBtn.Left - 16 - _capSearchBox.Left);
+
+            // A RichTextBox, not a TextBox: the timestamps read as timestamps (muted) and a
+            // filter MARKS what it matched, the way Live debug's does — in a plain box the
+            // words you searched for looked exactly like every other word on the line.
+            // The font is set explicitly to what it inherited before (the tab control's), so
+            // the transcript looks as it always has. Themed, because Windows drew its border as a
+            // grey-and-white sunken edge on every theme.
+            _capTranscript = new ThemedRichTextBox
             {
                 Left = 16,
                 Top = 62,
                 Width = 660,
-                Height = 258,
+                Height = 158,
                 Multiline = true,
                 ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
+                ScrollBars = RichTextBoxScrollBars.Vertical,
                 WordWrap = true,
                 BorderStyle = BorderStyle.FixedSingle,
-                TabStop = false
+                TabStop = false,
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                DetectUrls = false,
+                BackColor = _theme.InputBackground,
+                ForeColor = _theme.Text,
             };
+            _capTranscript.ApplyTheme(_theme);
             live.Controls.Add(_capTranscript);
 
-            // y=326, not 352. The card is 348 tall, so a child at 352 sits BELOW its own
-            // client area and is clipped away entirely — which is why none of the three
-            // messages this label carries has ever been seen: the empty-state hint
-            // ("Nothing transcribed yet — start captions and play something with
-            // speech."), the line counter, and the "Nothing matches … press Esc to clear
-            // the filter." that explains an empty box during a search. The transcript
-            // ends at 62+258=320, so this sits just under it with room to spare.
-            _capCountLabel = UiFactory.Caption("", 16, 326);
+            // Just under the transcript box (62+158=220), inside the card (248 tall). It once sat
+            // at y=352 in a 348-tall card — below its own client area, clipped away — which is why
+            // none of the three messages this label carries had ever been seen: the empty-state
+            // hint ("Nothing transcribed yet — start captions and play something with speech."),
+            // the line counter, and the "Nothing matches … press Esc to clear the filter." that
+            // explains an empty box during a search.
+            _capCountLabel = UiFactory.Caption("", 16, 226);
             _capCountLabel.AutoSize = false;
             _capCountLabel.Size = new Size(660, 16);
+            // Doubles as the way back down while it is showing "N new below".
+            _capCountLabel.Click += (s, e) => { if (_capNewBelow > 0) { JumpTranscriptToNewest(); } };
             live.Controls.Add(_capCountLabel);
 
             // ── Actions ───────────────────────────────────────────────────────
@@ -235,10 +333,12 @@ namespace AutoClicker.UI
             var actions = UiFactory.Group(Localization.T("Windows & model"), 12, 570, 696, 104, CardIcon.Gear);
 
             _capOverlayBtn = UiFactory.Button("Show caption bar", 16, 30, 172, 30);
+            LayoutFitter.DeclareCaptions(_capOverlayBtn, Localization.T("Show caption bar"), Localization.T("Hide caption bar"));
             _capOverlayBtn.Click += (s, e) => ToggleCaptionOverlayBar();
             actions.Controls.Add(_capOverlayBtn);
 
             _capHistoryBtn = UiFactory.Button("Show history window", 198, 30, 190, 30);
+            LayoutFitter.DeclareCaptions(_capHistoryBtn, Localization.T("Show history window"), Localization.T("Hide history window"));
             _capHistoryBtn.Click += (s, e) =>
             {
                 try { ToggleCaptionHistoryWindow(); } catch (Exception ex) { Logger.Warn("[Captions tab] history: " + ex.Message); }
@@ -246,17 +346,40 @@ namespace AutoClicker.UI
             };
             actions.Controls.Add(_capHistoryBtn);
 
-            var dlBtn = UiFactory.Button("Download model…", 398, 30, 160, 30);
-            dlBtn.Click += OnDownloadCaptionModel;      // the same handler Settings uses
-            actions.Controls.Add(dlBtn);
+            // Move mode, beside the two windows it moves. It lived only in the tray, where the only
+            // way to know it was on was that the windows had stopped letting clicks through.
+            // "Download model…" moved into the Models… menu to make room: it is a one-time job,
+            // and Settings keeps its own button for it.
+            _capMoveBtn = UiFactory.Button("Move captions", 398, 30, 160, 30);
+            LayoutFitter.DeclareCaptions(_capMoveBtn, Localization.T("Move captions"), Localization.T("Done moving"));
+            _capMoveBtn.Click += (s, e) =>
+            {
+                try { ToggleCaptionMoveMode(); } catch (Exception ex) { Logger.Warn("[Captions tab] move: " + ex.Message); }
+                RefreshCaptionsTab();
+            };
+            actions.Controls.Add(_capMoveBtn);
 
             // A menu rather than a plain button, because BOTH rows of this card are full and
             // the card is pinned at 104 tall on purpose (a taller one pushes the language
             // picker below the 689 px fold — see the note above). The menu adds the
             // "use a model from anywhere" option without costing a single pixel.
             var modelsBtn = UiFactory.Button("Models…", 568, 30, 110, 30);
-            modelsBtn.Click += (s, e) => ShowModelSourceMenu(modelsBtn);
+            modelsBtn.Click += (s, e) => ShowModelSourceMenu(modelsBtn, withDownload: true);
             actions.Controls.Add(modelsBtn);
+
+            // Each toggle as wide as the WIDER of its two captions — they change at run time, long
+            // after the start-up layout check has passed the row — packed into the card's width.
+            const int actPad = 16;
+            PackButtonRow(16, 680,
+                new Control[] { _capOverlayBtn, _capHistoryBtn, _capMoveBtn, modelsBtn },
+                new[] { 172, 190, 160, 110 },
+                new[]
+                {
+                    WidestCaption(_capOverlayBtn, actPad, "Show caption bar", "Hide caption bar"),
+                    WidestCaption(_capHistoryBtn, actPad, "Show history window", "Hide history window"),
+                    WidestCaption(_capMoveBtn, actPad, "Move captions", "Done moving"),
+                    WidestCaption(modelsBtn, actPad, "Models…")
+                });
 
             actions.Controls.Add(UiFactory.Caption(
                 "Captions run entirely on this PC — audio never leaves it.", 16, 70));
@@ -283,9 +406,124 @@ namespace AutoClicker.UI
             // already reports what the language is doing, and Settings carries the hint.
 
             page.Controls.Add(status);
+            page.Controls.Add(speakers);
             page.Controls.Add(live);
             page.Controls.Add(actions);
             _tabs.TabPages.Add(page);
+        }
+
+        /// <summary>
+        /// The Speakers card: who has spoken this session, their faces, who is talking now — or why
+        /// there is nothing to show, with the one switch that would change that.
+        /// </summary>
+        private void RefreshCaptionSpeakers()
+        {
+            if (_capSpeakerStrip == null || _capSpeakerStrip.IsDisposed) { return; }
+            try
+            {
+                _capSpeakerStrip.SetTheme(_theme);
+                bool labels = _settings != null && _settings.CaptionSpeakerTurns;
+                bool faces = _settings != null && _settings.CaptionFaceAnalysis;
+                var fa = _faceAnalyzer;
+
+                // One button, whichever switch is off — labels first, since faces need them.
+                string action = !labels ? "Turn on speaker labels" : !faces ? "Use faces too" : null;
+                // At the window's scale: this runs again whenever the card refreshes, long after the
+                // window has scaled, and its 100% numbers then put the button a third of the way short
+                // of the card's edge and cut the face strip to two-thirds of its width on a 150% laptop.
+                float k = AppliedWindowScale;
+                if (action != null)
+                {
+                    _capSpeakerActionBtn.Text = Localization.T(action);
+                    FitButtonToText(_capSpeakerActionBtn, 120, 12);
+                    int right = _capSpeakerActionBtn.Parent != null
+                        ? _capSpeakerActionBtn.Parent.ClientSize.Width - (int)Math.Round(20 * k)
+                        : 676;
+                    _capSpeakerActionBtn.Left = right - _capSpeakerActionBtn.Width;
+                }
+                _capSpeakerActionBtn.Visible = action != null;
+                // The strip keeps clear of the button while it shows.
+                _capSpeakerStrip.Width = action != null
+                    ? Math.Max((int)Math.Round(200 * k), _capSpeakerActionBtn.Left - (int)Math.Round(12 * k) - _capSpeakerStrip.Left)
+                    : (int)Math.Round(660 * k);
+
+                if (!labels)
+                {
+                    _capSpeakerStrip.SetMessage(Localization.T("Speaker labels are off."), "");
+                    return;
+                }
+                if (!_captionsActive)
+                {
+                    _capSpeakerStrip.SetMessage(Localization.T("Start captions to see who is talking."), "");
+                    return;
+                }
+
+                string status;
+                if (!faces)
+                {
+                    status = "";
+                }
+                else if (fa == null || !fa.Running)
+                {
+                    status = Localization.T("faces: not watching");
+                }
+                else
+                {
+                    status = Localization.F("faces on screen: {0}", fa.FaceCount);
+                }
+
+                var list = _speakerLinker.Snapshot();
+                if (list.Count == 0)
+                {
+                    _capSpeakerStrip.SetMessage(Localization.T("No one has spoken yet."), status);
+                    return;
+                }
+                var chips = new System.Collections.Generic.List<SpeakerStrip.Chip>();
+                DateTime now = DateTime.UtcNow;
+                foreach (Utils.SpeakerLinker.SpeakerInfo s in list)
+                {
+                    chips.Add(new SpeakerStrip.Chip
+                    {
+                        Label = s.Label,
+                        Name = SpeakerDisplayName(s.Label),
+                        Color = CaptionOverlayForm.SpeakerColor(s.Label),
+                        // The best of their faces: one person is often a close-up AND a small face in
+                        // the wide shots, and the latest is not always the one worth showing.
+                        Face = faces && fa != null && s.Faces.Count > 0 ? fa.GetBestFaceThumbnail(s.Faces) : null,
+                        Talking = s.Talking && (now - s.LastHeardUtc).TotalSeconds < 1.0,
+                        Detail = s.HasVoice && s.HasFace ? Localization.T("voice + face")
+                               : s.HasFace ? Localization.T("face")
+                               : Localization.T("voice"),
+                    });
+                }
+                _capSpeakerStrip.SetChips(chips, status);
+            }
+            catch (Exception ex) { Logger.Swallow("RefreshCaptionSpeakers", ex); }
+        }
+
+        /// <summary>The Speakers card's button: turns on speaker labels, or face &amp; mouth analysis.</summary>
+        private void OnCaptionSpeakerAction()
+        {
+            if (_settings == null) { return; }
+            try
+            {
+                if (!_settings.CaptionSpeakerTurns)
+                {
+                    _settings.CaptionSpeakerTurns = true;
+                    // Settings shows the same switch; keep it truthful.
+                    if (_captionSpeakerCheck != null) { _captionSpeakerCheck.Checked = true; }
+                }
+                else if (!_settings.CaptionFaceAnalysis)
+                {
+                    _settings.CaptionFaceAnalysis = true;
+                    if (_captionFaceCheck != null) { _captionFaceCheck.Checked = true; }
+                }
+                Persistence.SettingsManager.Save(_settings);
+                // A running session picks it up now (and shows the one-time note about labels).
+                ApplySpeakerTurnsLive();
+            }
+            catch (Exception ex) { Logger.Warn("[Captions tab] speaker switch failed: " + ex.Message); }
+            RefreshCaptionsTab();
         }
 
         /// <summary>
@@ -333,7 +571,10 @@ namespace AutoClicker.UI
                     pill = "●  Listening…";
                     pillColor = _theme.SuccessText;
                 }
-                _capStatePill.Text = pill;
+                // Translated here: the label is CREATED translated, and this line used to put the
+                // English back on the first refresh — "Off" in every language, found by the layout
+                // suite once its check ran after that refresh.
+                _capStatePill.Text = Localization.T(pill);
                 _capStatePill.ForeColor = pillColor;
 
                 if (_capStartStopBtn != null)
@@ -351,48 +592,53 @@ namespace AutoClicker.UI
                     // wasn't, which is the opposite of a diagnosis.
                     bool tempoEngine = _settings.CaptionSource != Models.CaptionSource.Windows
                                        && !_captionFellBackToWindows;
+                    // Translated piece by piece. It was assembled in English and shown as it was, so
+                    // this line said "Model: base · Engine: CPU · Language: auto-detect" in every
+                    // language, under a translated heading and above translated lines.
                     if (!tempoEngine)
                     {
-                        sb.Append("Using Windows Live Captions");
+                        sb.Append(Localization.T("Using Windows Live Captions"));
                         if (_captionFellBackToWindows)
                         {
-                            sb.Append("   ·   Tempo's engine fell back to it this session");
+                            sb.Append("   ·   ").Append(Localization.T("Tempo's engine fell back to it this session"));
                         }
                     }
                     else
                     {
-                        sb.Append("Model: ").Append(string.IsNullOrEmpty(_captionModelActiveKey)
+                        sb.Append(Localization.F("Model: {0}", string.IsNullOrEmpty(_captionModelActiveKey)
                             ? (string.IsNullOrEmpty(_settings.CaptionModelKey) ? "base" : _settings.CaptionModelKey)
-                            : _captionModelActiveKey);
-                        sb.Append("   ·   Engine: ").Append(_settings.CaptionTryGpu ? "GPU (if available)" : "CPU");
+                            : _captionModelActiveKey));
+                        sb.Append("   ·   ").Append(Localization.F("Engine: {0}",
+                            _settings.CaptionTryGpu ? Localization.T("GPU (if available)") : "CPU"));
                         // What language the text is being decoded as. Pinned shows the
                         // language; auto shows what detection has settled on, or that it
                         // is still deciding — which is the state game audio tends to sit
                         // in, and which used to be invisible from here.
-                        sb.Append("   ·   Language: ");
+                        string language;
                         string pinned = _settings.CaptionLanguage;
                         if (!string.IsNullOrEmpty(pinned) &&
                             !pinned.Equals("auto", StringComparison.OrdinalIgnoreCase))
                         {
-                            sb.Append(CaptionLanguageLabel(pinned));
+                            language = CaptionLanguageLabel(pinned);
                             if (_captionsActive && _captionTranscriber != null &&
                                 !string.IsNullOrEmpty(_captionTranscriber.LanguageState) &&
                                 _captionTranscriber.LanguageState.IndexOf(pinned,
                                     StringComparison.OrdinalIgnoreCase) < 0)
                             {
-                                sb.Append(" (restart captions to apply)");
+                                language += " " + Localization.T("(restart captions to apply)");
                             }
                         }
                         else
                         {
-                            sb.Append(_captionsActive && _captionTranscriber != null &&
-                                      !string.IsNullOrEmpty(_captionTranscriber.LanguageState)
+                            language = _captionsActive && _captionTranscriber != null &&
+                                       !string.IsNullOrEmpty(_captionTranscriber.LanguageState)
                                 ? _captionTranscriber.LanguageState
-                                : "auto-detect");
+                                : Localization.T("auto-detect");
                         }
+                        sb.Append("   ·   ").Append(Localization.F("Language: {0}", language));
                         if (TempoTranscriber.GpuWouldHelp && !_settings.CaptionTryGpu)
                         {
-                            sb.Append("  — running behind; the GPU engine would help");
+                            sb.Append("  — ").Append(Localization.T("running behind; the GPU engine would help"));
                         }
                     }
                     _capEngineLine.Text = sb.ToString();
@@ -438,6 +684,7 @@ namespace AutoClicker.UI
 
                 RefreshCaptionDelayLine();
                 RefreshCaptionQuality(tr);
+                RefreshCaptionSpeakers();
 
                 if (_capOverlayBtn != null)
                 {
@@ -451,6 +698,10 @@ namespace AutoClicker.UI
                 {
                     bool histUp = _captionHistoryForm != null && !_captionHistoryForm.IsDisposed && _captionHistoryForm.Visible;
                     _capHistoryBtn.Text = Localization.T(histUp ? "Hide history window" : "Show history window");
+                }
+                if (_capMoveBtn != null)
+                {
+                    _capMoveBtn.Text = Localization.T(_captionMoveMode ? "Done moving" : "Move captions");
                 }
 
                 RefreshCaptionTranscript();
@@ -474,25 +725,8 @@ namespace AutoClicker.UI
             {
                 if (!IsCaptionsTabVisible()) { return; }
 
-                var sb = new StringBuilder();
-                int shown = 0;
-                bool filtering = !string.IsNullOrWhiteSpace(_capFilter);
-                for (int i = 0; i < _captionHistory.Count; i++)
-                {
-                    string line = _captionHistory[i];
-                    if (string.IsNullOrEmpty(line)) { continue; }
-                    if (filtering && line.IndexOf(_capFilter, StringComparison.OrdinalIgnoreCase) < 0)
-                    {
-                        continue;
-                    }
-                    string stamp = i < _captionHistoryTimes.Count
-                        ? _captionHistoryTimes[i].ToString("HH:mm:ss") + "  "
-                        : "";
-                    sb.Append(stamp).AppendLine(line);
-                    shown++;
-                }
-
-                string text = sb.ToString();
+                bool filtering = !_capParsedFilter.IsEmpty;
+                string text = BuildTranscriptText(true, out int shown);
 
                 // The count label is updated BEFORE the early-out below, not after it.
                 //
@@ -532,11 +766,11 @@ namespace AutoClicker.UI
 
                     // Assigned only when it differs. This now runs on every tick rather
                     // than only when the transcript text changed, and setting .Text on a
-                    // Label repaints it whether or not the string is new.
-                    if (!string.Equals(_capCountLabel.Text, caption, StringComparison.Ordinal))
-                    {
-                        _capCountLabel.Text = caption;
-                    }
+                    // Label repaints it whether or not the string is new. The "N new below"
+                    // suffix is added by UpdateTranscriptNewBelow, so the base text is kept
+                    // apart from it — otherwise the two would compound on every tick.
+                    _capCountBaseText = caption;
+                    UpdateTranscriptNewBelow();
                 }
 
                 // NOW the early-out, and only for the expensive half. Rewriting the
@@ -544,17 +778,27 @@ namespace AutoClicker.UI
                 // still skipped whenever the text is unchanged — which is most ticks
                 // during a long run.
                 if (text == _capRenderedText) { return; }
+                int wasShowing = CountRenderedLines(_capRenderedText);
                 _capRenderedText = text;
 
                 // Only follow the tail when the user is already at the bottom, so reading
                 // back through the transcript isn't yanked away every time a line lands.
                 bool atBottom = IsTranscriptScrolledToBottom();
-                _capTranscript.Text = text;
+                _capTranscript.Rtf = BuildTranscriptRtf();
                 if (atBottom)
                 {
                     _capTranscript.SelectionStart = _capTranscript.TextLength;
                     _capTranscript.ScrollToCaret();
+                    _capNewBelow = 0;
                 }
+                else
+                {
+                    // Reading back through the transcript: say how much has landed since,
+                    // rather than leaving new speech to be discovered by scrolling down.
+                    int now = CountRenderedLines(text);
+                    if (now > wasShowing) { _capNewBelow += now - wasShowing; }
+                }
+                UpdateTranscriptNewBelow();
             }
             catch (Exception ex) { Logger.Swallow("RefreshCaptionTranscript", ex); }
         }
@@ -586,6 +830,58 @@ namespace AutoClicker.UI
         /// ever take it down again, because that branch is skipped entirely while the
         /// setting is off. Toggling the setting keeps both surfaces telling the same story.
         /// </summary>
+        /// <summary>
+        /// The width <paramref name="b"/> needs for the widest of its translated captions, plus
+        /// <paramref name="pad"/>: for a button whose caption flips at run time.
+        /// </summary>
+        private int WidestCaption(Control b, int pad, params string[] keys)
+        {
+            // In the window's units (MeasureLayout): the row is packed while the window is built.
+            int w = 0;
+            foreach (string k in keys)
+            {
+                w = Math.Max(w, MeasureLayout(Localization.T(k), b.Font, 0, TextFormatFlags.Default).Width);
+            }
+            return w + pad;
+        }
+
+        /// <summary>
+        /// Lays <paramref name="row"/> out left to right between <paramref name="left"/> and
+        /// <paramref name="right"/>: each button at its design width, or wider when its text needs it.
+        /// When that overflows, the gaps close from 10 to 6 px and buttons wider than their text
+        /// give back the difference, most spare first — so English keeps its design exactly and a
+        /// long language fits without any button's font being shrunk. Only a row that cannot fit
+        /// even then is left to the layout checker.
+        /// </summary>
+        private static void PackButtonRow(int left, int right, Control[] row, int[] design, int[] needed)
+        {
+            int n = row.Length;
+            var w = new int[n];
+            for (int i = 0; i < n; i++) { w[i] = Math.Max(design[i], needed[i]); }
+            int gap = 10;
+            int avail = right - left;
+            int Total() { int s = 0; foreach (int x in w) { s += x; } return s + gap * (n - 1); }
+            if (Total() > avail) { gap = 6; }
+            while (Total() > avail)
+            {
+                int best = -1, spare = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    int s = w[i] - needed[i];
+                    if (s > spare) { spare = s; best = i; }
+                }
+                if (best < 0) { break; }
+                w[best] -= Math.Min(spare, Total() - avail);
+            }
+            int x0 = left;
+            for (int i = 0; i < n; i++)
+            {
+                row[i].Left = x0;
+                row[i].Width = w[i];
+                x0 += w[i] + gap;
+            }
+        }
+
         private void ToggleCaptionOverlayBar()
         {
             try
@@ -613,7 +909,7 @@ namespace AutoClicker.UI
         /// somewhere. Requiring a second copy purely because it must live in Tempo's folder
         /// is a cost with nothing behind it, so Tempo can read one where it already is.
         /// </summary>
-        private void ShowModelSourceMenu(Control anchor)
+        private void ShowModelSourceMenu(Control anchor, bool withDownload = false)
         {
             if (anchor == null || anchor.IsDisposed) { return; }
 
@@ -626,6 +922,15 @@ namespace AutoClicker.UI
                 menu.ForeColor = _theme.Text;
             }
             catch { }
+
+            // The tab's own "Download model…" button gave its place to "Move captions"; the job it
+            // did (the model chosen in Settings, with the same confirmation) is first in here.
+            // Settings has its button still, so its copy of this menu leaves it out.
+            if (withDownload)
+            {
+                menu.Items.Add(Utils.Localization.T("Download model…"), null, (s, e) => OnDownloadCaptionModel(s, e));
+                menu.Items.Add(new ToolStripSeparator());
+            }
 
             menu.Items.Add(Utils.Localization.T("Open the models folder"), null, (s, e) =>
             {
@@ -657,7 +962,7 @@ namespace AutoClicker.UI
                     var pf = WhisperModelManager.ReadFacts(p);
                     var it = new ToolStripMenuItem(pf.Headline.Replace("&", "&&"))
                     {
-                        ToolTipText = pf.FileName + "\n" + p,
+                        ToolTipText = TipStyle.Wrap(pf.FileName + "\n" + p),
                         Checked = string.Equals(_settings?.CaptionCustomModelPath, p, StringComparison.OrdinalIgnoreCase),
                         CheckOnClick = false
                     };
@@ -680,7 +985,7 @@ namespace AutoClicker.UI
                     var lf = WhisperModelManager.ReadFacts(p);
                     var it = new ToolStripMenuItem(lf.Headline.Replace("&", "&&"))
                     {
-                        ToolTipText = lf.FileName + "\n" + p,
+                        ToolTipText = TipStyle.Wrap(lf.FileName + "\n" + p),
                         Checked = string.Equals(_settings?.CaptionCustomModelPath, p, StringComparison.OrdinalIgnoreCase),
                         CheckOnClick = false
                     };
@@ -694,8 +999,11 @@ namespace AutoClicker.UI
             {
                 menu.Items.Add(new ToolStripSeparator());
                 var cf = WhisperModelManager.ReadFacts(current);
+                // Through F(): glued together from English pieces, this line read "Using: …" in every
+                // language although "Using: {0}" has been translated all along.
                 menu.Items.Add(new ToolStripMenuItem(
-                    (cf.Valid ? "Using: " + cf.Headline : "Using a file that is missing: " + cf.FileName)
+                    (cf.Valid ? Utils.Localization.F("Using: {0}", cf.Headline)
+                              : Utils.Localization.F("Using a file that is missing: {0}", cf.FileName))
                         .Replace("&", "&&"))
                 { Enabled = false });
                 menu.Items.Add(Utils.Localization.T("Show details of this model…"), null, (s, e) =>
@@ -730,7 +1038,7 @@ namespace AutoClicker.UI
         {
             string url = WhisperModelManager.OfficialModelsPageUrl;
             var answer = MessageBox.Show(this,
-                "Tempo's speech models come from the whisper.cpp project on Hugging Face — the same " +
+                Localization.T("Tempo's speech models come from the whisper.cpp project on Hugging Face — the same " +
                 "place the \"Download model\" button uses. You only need this page for something " +
                 "Tempo doesn't list, such as a language-specific or fine-tuned model.\n\n" +
                 "On that page:\n" +
@@ -741,8 +1049,8 @@ namespace AutoClicker.UI
                 "   •  Bigger is more accurate but slower — large is roughly 3 GB\n\n" +
                 "Then save it into Tempo's models folder and it will be picked up automatically. " +
                 "You can also keep it anywhere you like and use \"Use a model file from anywhere\".\n\n" +
-                "Open the page in your browser now?",
-                "Where to get speech models",
+                "Open the page in your browser now?"),
+                Localization.T("Where to get speech models"),
                 MessageBoxButtons.YesNo, MessageBoxIcon.Information);
 
             if (answer != DialogResult.Yes) { return; }
@@ -1309,13 +1617,17 @@ namespace AutoClicker.UI
                 // gated on _captionsActive, which made the button lie: it read "Show
                 // caption bar", and clicking it with captions stopped did nothing
                 // visible. An empty bar is also how you drag it where you want it before
-                // starting, so there is a real reason to put one up.
+                // starting, so there is a real reason to put one up. (With captions off it now
+                // says so, instead of "Captions on · listening…".)
                 ShowCaptionOverlay();
+                // Asked for on purpose: ending move mode must not take it away again.
+                _moveModeShowedBar = false;
             }
             else if (_captionOverlay != null && !_captionOverlay.IsDisposed)
             {
                 try { _captionOverlay.Hide(); } catch { }
             }
+            SyncCaptionMoveUi();
         }
 
         /// <summary>
@@ -1351,7 +1663,9 @@ namespace AutoClicker.UI
             {
                 if (_captionHistory.Count == 0)
                 {
-                    TempoNotify(2500, "Tempo", Localization.T("Nothing to export yet."), ToolTipIcon.Info);
+                    // always: the answer to a button press. With "Show notifications" off it was
+                    // dropped, and the button looked broken.
+                    TempoNotify(2500, "Tempo", Localization.T("Nothing to export yet."), ToolTipIcon.Info, always: true);
                     return;
                 }
                 using (var dlg = new SaveFileDialog
@@ -1398,7 +1712,7 @@ namespace AutoClicker.UI
 
                         sb.Append(cue).AppendLine();
                         sb.Append(CueTime(start, vtt)).Append(" --> ").Append(CueTime(end, vtt)).AppendLine();
-                        sb.AppendLine(line.Trim());
+                        sb.AppendLine(CueText(line, vtt));
                         sb.AppendLine();
                     }
 
@@ -1409,7 +1723,30 @@ namespace AutoClicker.UI
                         + Environment.NewLine + dlg.FileName, ToolTipIcon.Info);
                 }
             }
-            catch (Exception ex) { Logger.Warn("[Captions tab] subtitle export failed: " + ex.Message); }
+            catch (Exception ex)
+            {
+                // A file that couldn't be written (read-only folder, open in another program, a
+                // disconnected drive) was only logged: the export seemed to work and left no file.
+                Logger.Warn("[Captions tab] subtitle export failed: " + ex.Message);
+                ShowWarning(Localization.F("Couldn't save: {0}", ex.Message));
+            }
+        }
+
+        /// <summary>
+        /// One cue's text. A blank line ends a cue in both formats, so a line break inside a
+        /// caption becomes a space. WebVTT reads its text as markup: "&lt;" opened a tag that
+        /// swallowed the rest of the line ("x &lt; 5 so…" showed as "x"), "&amp;" started an
+        /// entity, and "-->" is not allowed in a cue at all — they are escaped there. SubRip
+        /// has no escapes, so its text is left as spoken.
+        /// </summary>
+        private static string CueText(string line, bool vtt)
+        {
+            string text = (line ?? "").Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ').Trim();
+            if (vtt)
+            {
+                text = text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+            }
+            return text;
         }
 
         /// <summary>SubRip uses a comma before the milliseconds; WebVTT uses a dot.</summary>
@@ -1515,6 +1852,157 @@ namespace AutoClicker.UI
                 ? null : "small";
         }
 
+        /// <summary>The transcript filter, parsed once per settled query rather than per line.</summary>
+        private Utils.LogFilter _capParsedFilter = Utils.LogFilter.ParseTextOnly("");
+
+        /// <summary>
+        /// The transcript as text, timestamped, optionally through the filter.
+        ///
+        /// One builder for the box, Copy and Save. They used to be three: the box filtered,
+        /// Copy took whatever the box happened to have rendered, and Save walked the raw
+        /// history and ignored the filter completely — so with a filter active, the button
+        /// labelled "Copy all" gave you the filtered lines and "Save…" gave you everything.
+        /// Whichever of those a user wanted, one of the two buttons lied to them.
+        /// </summary>
+        private string BuildTranscriptText(bool honourFilter, out int shown)
+        {
+            var sb = new StringBuilder();
+            shown = 0;
+            bool filtering = honourFilter && !_capParsedFilter.IsEmpty;
+            for (int i = 0; i < _captionHistory.Count; i++)
+            {
+                string line = _captionHistory[i];
+                if (string.IsNullOrEmpty(line)) { continue; }
+                if (filtering && !_capParsedFilter.IsMatch(line)) { continue; }
+                string stamp = i < _captionHistoryTimes.Count
+                    ? _captionHistoryTimes[i].ToString("HH:mm:ss") + "  "
+                    : "";
+                sb.Append(stamp).AppendLine(line);
+                shown++;
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// The same transcript, as RTF: each timestamp muted, each line in the text colour,
+        /// and every filter match marked. Built and handed over in one assignment — see
+        /// UI/RtfBuilder.cs for what filling a RichTextBox a piece at a time costs.
+        /// </summary>
+        private string BuildTranscriptRtf()
+        {
+            Color text = _theme != null ? _theme.Text : Color.White;
+            Color muted = _theme != null ? _theme.TextMuted : Color.Gray;
+            bool light = _theme != null && _theme.InputBackground.GetBrightness() > 0.5f;
+            Color hiBack = light ? Color.FromArgb(255, 226, 120) : Color.FromArgb(120, 96, 0);
+            Color hiFore = light ? Color.FromArgb(28, 26, 12) : Color.FromArgb(255, 244, 205);
+
+            var rtf = new RtfBuilder(_capTranscript.Font, Math.Max(1024, _captionHistory.Count * 64));
+            bool filtering = !_capParsedFilter.IsEmpty;
+            for (int i = 0; i < _captionHistory.Count; i++)
+            {
+                string line = _captionHistory[i];
+                if (string.IsNullOrEmpty(line)) { continue; }
+                if (filtering && !_capParsedFilter.IsMatch(line)) { continue; }
+
+                if (i < _captionHistoryTimes.Count)
+                {
+                    rtf.Run(_captionHistoryTimes[i].ToString("HH:mm:ss") + "  ", muted);
+                }
+                if (filtering && _capParsedFilter.HasHighlightableText)
+                {
+                    int at = 0;
+                    foreach (var span in _capParsedFilter.Highlights(line))
+                    {
+                        int s = Math.Max(at, Math.Min(span.Key, line.Length));
+                        int e = Math.Min(line.Length, span.Key + span.Value);
+                        if (e <= s) { continue; }
+                        rtf.Run(line.Substring(at, s - at), text);
+                        rtf.Run(line.Substring(s, e - s), hiFore, hiBack);
+                        at = e;
+                    }
+                    rtf.Run(line.Substring(at), text);
+                }
+                else
+                {
+                    rtf.Run(line, text);
+                }
+                rtf.EndLine();
+            }
+            return rtf.ToRtf();
+        }
+
+        /// <summary>How many lines a rendered transcript string holds.</summary>
+        private static int CountRenderedLines(string rendered)
+        {
+            if (string.IsNullOrEmpty(rendered)) { return 0; }
+            int n = 0;
+            foreach (char c in rendered) { if (c == '\n') { n++; } }
+            return n;
+        }
+
+        /// <summary>Lines that have landed while the reader is scrolled away from the newest.</summary>
+        private int _capNewBelow;
+
+        /// <summary>
+        /// Adds "· N new below" to the transcript's count line while the view is scrolled up,
+        /// and makes the line a way back down. Without it, speech that arrives while you are
+        /// reading back is silent — the box does not move, by design, and nothing says why.
+        /// </summary>
+        private void UpdateTranscriptNewBelow()
+        {
+            if (_capCountLabel == null) { return; }
+            bool show = _capNewBelow > 0;
+            string suffix = show ? "   ·   " + Localization.F("{0} new below ↓", _capNewBelow) : "";
+            string baseText = _capCountBaseText ?? _capCountLabel.Text ?? "";
+            string wanted = baseText + suffix;
+            if (!string.Equals(_capCountLabel.Text, wanted, StringComparison.Ordinal))
+            {
+                _capCountLabel.Text = wanted;
+            }
+            _capCountLabel.Cursor = show ? Cursors.Hand : Cursors.Default;
+            if (_theme != null)
+            {
+                _capCountLabel.ForeColor = show ? _theme.Accent : _theme.TextMuted;
+            }
+        }
+
+        /// <summary>The count line without the "N new below" suffix, so the two never compound.</summary>
+        private string _capCountBaseText;
+
+        /// <summary>Jumps the transcript to the newest line and clears the "new below" note.</summary>
+        private void JumpTranscriptToNewest()
+        {
+            if (_capTranscript == null || _capTranscript.IsDisposed) { return; }
+            try
+            {
+                _capTranscript.SelectionStart = _capTranscript.TextLength;
+                _capTranscript.SelectionLength = 0;
+                _capTranscript.ScrollToCaret();
+            }
+            catch { }
+            _capNewBelow = 0;
+            UpdateTranscriptNewBelow();
+        }
+
+        /// <summary>
+        /// Keeps the Copy/Save captions honest about what they will actually produce, so the
+        /// buttons cannot promise "all" while a filter is hiding most of it.
+        /// </summary>
+        private void RefreshTranscriptButtonLabels()
+        {
+            bool filtering = _capParsedFilter != null && !_capParsedFilter.IsEmpty;
+            if (_capCopyBtn != null)
+            {
+                _capCopyBtn.Text = filtering ? Localization.T("Copy shown") : Localization.T("Copy all");
+            }
+            if (_capSaveBtn != null && _capTip != null)
+            {
+                TipStyle.Set(_capTip, _capSaveBtn, filtering
+                    ? Localization.T("Saves only the lines matching the filter.")
+                    : Localization.T("Saves the whole transcript."));
+            }
+        }
+
         private bool IsCaptionsTabVisible()
         {
             try
@@ -1532,13 +2020,28 @@ namespace AutoClicker.UI
             catch { return false; }
         }
 
+        /// <summary>
+        /// True when the newest lines are already on screen, so a new caption may follow the
+        /// tail without dragging the user away from what they were reading.
+        ///
+        /// It compared two different kinds of "line". GetLineFromCharIndex counts PHYSICAL
+        /// lines — it asks the control, and the control counts every wrapped row — while
+        /// <c>Lines.Length</c> counts LOGICAL ones, splitting only on newlines. The transcript
+        /// has WordWrap on and caption lines are long, so one logical line is routinely three
+        /// physical ones: the logical total was far smaller than the physical position, the
+        /// test read as "at the bottom" from about a third of the way down, and reading back
+        /// through a transcript kept snapping to the end whenever anyone spoke.
+        ///
+        /// Asking the control for the last physical line keeps both sides in the same unit.
+        /// </summary>
         private bool IsTranscriptScrolledToBottom()
         {
             try
             {
                 int visibleLines = Math.Max(1, _capTranscript.ClientSize.Height / Math.Max(1, _capTranscript.Font.Height));
                 int firstVisible = _capTranscript.GetLineFromCharIndex(_capTranscript.GetCharIndexFromPosition(new Point(1, 1)));
-                return firstVisible + visibleLines >= _capTranscript.Lines.Length - 1;
+                int lastLine = _capTranscript.GetLineFromCharIndex(Math.Max(0, _capTranscript.TextLength - 1));
+                return firstVisible + visibleLines >= lastLine;
             }
             catch { return true; }
         }
@@ -1547,19 +2050,50 @@ namespace AutoClicker.UI
         {
             try
             {
-                string text = _capRenderedText ?? "";
-                if (text.Length == 0) { return; }
+                // Built from the history, not from _capRenderedText. That field is a RENDER
+                // CACHE: it is only written while the tab is on screen and the text changed,
+                // so copying through it meant copying whatever happened to have been drawn.
+                string text = BuildTranscriptText(true, out int shown);
+                if (text.Length == 0)
+                {
+                    // Silence here read as "the button is broken". Say which of the two it is —
+                    // always, or "Show notifications" off brought the silence back.
+                    TempoNotify(2200, "Tempo", _captionHistory.Count == 0
+                        ? Localization.T("There is nothing transcribed to copy yet.")
+                        : Localization.T("No lines match the filter, so nothing was copied."),
+                        ToolTipIcon.Info, always: true);
+                    return;
+                }
                 Clipboard.SetText(text);
-                TempoNotify(1800, "Tempo", Localization.T("Transcript copied to the clipboard."), ToolTipIcon.Info);
+                TempoNotify(1800, "Tempo", _capParsedFilter.IsEmpty
+                    ? Localization.T("Transcript copied to the clipboard.")
+                    : Localization.F("{0} matching line(s) copied to the clipboard.", shown),
+                    ToolTipIcon.Info);
             }
-            catch (Exception ex) { Logger.Warn("[Captions tab] copy failed: " + ex.Message); }
+            catch (Exception ex)
+            {
+                // Another program holding the clipboard (SetText already retries for a second) was
+                // only logged, so Copy seemed to work and pasting gave the old clipboard.
+                Logger.Warn("[Captions tab] copy failed: " + ex.Message);
+                TempoNotify(3000, "Tempo", Localization.T("Couldn't reach the clipboard — try again."),
+                    ToolTipIcon.Warning, always: true);
+            }
         }
 
         private void SaveTranscript()
         {
             try
             {
-                if (_captionHistory.Count == 0) { return; }
+                // Like Copy: say why nothing happens. Save returned silently with nothing heard yet,
+                // and with a filter that matched nothing it wrote an empty file.
+                if (_captionHistory.Count == 0 || BuildTranscriptText(true, out _).Length == 0)
+                {
+                    TempoNotify(2200, "Tempo", _captionHistory.Count == 0
+                        ? Localization.T("There is nothing transcribed to save yet.")
+                        : Localization.T("No lines match the filter, so nothing was saved."),
+                        ToolTipIcon.Info, always: true);
+                    return;
+                }
                 using (var dlg = new SaveFileDialog
                 {
                     Title = Localization.T("Save transcript"),
@@ -1568,20 +2102,23 @@ namespace AutoClicker.UI
                 })
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK) { return; }
-                    var sb = new StringBuilder();
-                    for (int i = 0; i < _captionHistory.Count; i++)
-                    {
-                        string stamp = i < _captionHistoryTimes.Count
-                            ? _captionHistoryTimes[i].ToString("HH:mm:ss") + "  "
-                            : "";
-                        sb.Append(stamp).AppendLine(_captionHistory[i]);
-                    }
-                    System.IO.File.WriteAllText(dlg.FileName, sb.ToString(), Encoding.UTF8);
+                    // Through the same builder as Copy and the box, so all three agree about
+                    // what "the transcript" is while a filter is on.
+                    string text = BuildTranscriptText(true, out int shown);
+                    System.IO.File.WriteAllText(dlg.FileName, text, Encoding.UTF8);
                     TempoNotify(2500, "Tempo",
-                        Localization.T("Transcript saved.") + Environment.NewLine + dlg.FileName, ToolTipIcon.Info);
+                        (_capParsedFilter.IsEmpty
+                            ? Localization.T("Transcript saved.")
+                            : Localization.F("Saved {0} of {1} lines (the filter is on).", shown, _captionHistory.Count))
+                        + Environment.NewLine + dlg.FileName, ToolTipIcon.Info);
                 }
             }
-            catch (Exception ex) { Logger.Warn("[Captions tab] save failed: " + ex.Message); }
+            catch (Exception ex)
+            {
+                // Only logged before: the save seemed to work and there was no file.
+                Logger.Warn("[Captions tab] save failed: " + ex.Message);
+                ShowWarning(Localization.F("Couldn't save: {0}", ex.Message));
+            }
         }
     }
 }

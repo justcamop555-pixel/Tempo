@@ -24,27 +24,30 @@ namespace AutoClicker.UI
 
         public CrashReportForm(Exception ex, string context, string report, string reportPath, bool fatal)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             _ex = ex;
             _report = report ?? string.Empty;
             _reportPath = reportPath;
             _fatal = fatal;
 
             BuildUi();
+            UiFactory.ScaleToScreen(this);
         }
 
         private void BuildUi()
         {
-            Color bg = Color.FromArgb(24, 26, 32);
-            Color panel = Color.FromArgb(34, 37, 46);
-            Color text = Color.FromArgb(232, 234, 240);
-            Color muted = Color.FromArgb(150, 156, 170);
-            Color accent = Color.FromArgb(124, 92, 255);
+            // Its own fixed palette, so it works when the theme is what broke — HDR-corrected
+            // like the theme when the window has the correction on.
+            Color bg = Theme.Corrected(Color.FromArgb(24, 26, 32));
+            Color panel = Theme.Corrected(Color.FromArgb(34, 37, 46));
+            Color text = Theme.Corrected(Color.FromArgb(232, 234, 240));
+            Color muted = Theme.Corrected(Color.FromArgb(150, 156, 170));
+            Color accent = Theme.Corrected(Color.FromArgb(124, 92, 255));
 
             Text = Utils.Localization.T("Tempo — something went wrong");
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedSingle;
+            ScreenFit.Attach(this);   // on the screen, whole, however small it is (see ScreenFit)
             MinimizeBox = false;
             MaximizeBox = false;
             ClientSize = new Size(540, 420);
@@ -95,6 +98,14 @@ namespace AutoClicker.UI
             };
             Controls.Add(privacy);
 
+            // Each paragraph as tall as its words, each placed under the one above, and the rest of
+            // the window moved down by what they grew: the apology is two lines in French, German and
+            // Italian and the privacy note four in French and German, and their boxes cut the last.
+            sub.Height = Math.Max(sub.Height, TextHeight(sub, 500));
+            privacy.Top = sub.Bottom;
+            privacy.Height = Math.Max(privacy.Height, TextHeight(privacy, 500));
+            int shift = Math.Max(0, privacy.Bottom + 4 - 118);
+
             var box = new TextBox
             {
                 Multiline = true,
@@ -104,13 +115,13 @@ namespace AutoClicker.UI
                 ForeColor = text,
                 BorderStyle = BorderStyle.FixedSingle,
                 Font = new Font("Consolas", 8.5f, FontStyle.Regular),
-                Location = new Point(20, 118),
+                Location = new Point(20, 118 + shift),
                 Size = new Size(500, 204),
                 Text = _report.Replace("\n", "\r\n")
             };
             Controls.Add(box);
 
-            int by = 334;
+            int by = 334 + shift;
 
             // Row 1 — reporting options.
             var reportBtn = MakeButton("Report on GitHub", 20, by, 160, accent, Color.White, true);
@@ -157,6 +168,15 @@ namespace AutoClicker.UI
             }
 
             AcceptButton = reportBtn;
+        }
+
+        /// <summary>
+        /// How tall <paramref name="l"/>'s words are wrapped at <paramref name="width"/>, in its own font —
+        /// in 100% units, because the window is scaled after it is built (UiFactory.Measure96).
+        /// </summary>
+        private static int TextHeight(Label l, int width)
+        {
+            return UiFactory.Measure96(l.Text, l.Font, width, TextFormatFlags.Default).Height + 2;
         }
 
         private Button MakeButton(string label, int x, int y, int w, Color back, Color fore, bool bold)

@@ -54,19 +54,45 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>When this build was stamped, or null if it never was.</summary>
-        public static DateTime? BuiltUtc
+        public static DateTime? BuiltUtc => s_builtUtc;
+
+        // Parsed ONCE. It was parsed on every read — three times per Short, which the first log line
+        // of every start reads — and ANY DateTime parse, even an exact invariant one, first loads the
+        // globalization library: 16 ms of the UI thread's start-up, profiled. StampUtc is a constant
+        // in stamp-build.ps1's own format, "2026-09-26T05:00:18Z", so it is read digit by digit; the
+        // general parse stays as the fallback for a stamp written some other way.
+        private static readonly DateTime? s_builtUtc = ParseStamp();
+
+        private static DateTime? ParseStamp()
         {
-            get
+            string s = StampUtc;
+            if (string.IsNullOrEmpty(s)) { return null; }
+            if (s.Length == 20 && s[4] == '-' && s[7] == '-' && s[10] == 'T' && s[13] == ':' && s[16] == ':' && s[19] == 'Z'
+                && Digits(s, 0, 4, out int year) && Digits(s, 5, 2, out int month) && Digits(s, 8, 2, out int day)
+                && Digits(s, 11, 2, out int hour) && Digits(s, 14, 2, out int minute) && Digits(s, 17, 2, out int second))
             {
-                DateTime t;
-                if (!string.IsNullOrEmpty(StampUtc)
-                    && DateTime.TryParse(StampUtc, CultureInfo.InvariantCulture,
-                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out t))
-                {
-                    return t;
-                }
-                return null;
+                try { return new DateTime(year, month, day, hour, minute, second, DateTimeKind.Utc); }
+                catch (ArgumentOutOfRangeException) { /* not a real date: the general parse decides */ }
             }
+            DateTime t;
+            if (DateTime.TryParse(s, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out t))
+            {
+                return t;
+            }
+            return null;
+        }
+
+        private static bool Digits(string s, int at, int count, out int value)
+        {
+            value = 0;
+            for (int i = at; i < at + count; i++)
+            {
+                char c = s[i];
+                if (c < '0' || c > '9') { return false; }
+                value = value * 10 + (c - '0');
+            }
+            return true;
         }
 
         /// <summary>

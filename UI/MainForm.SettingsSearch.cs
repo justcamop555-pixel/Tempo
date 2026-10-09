@@ -149,20 +149,23 @@ namespace AutoClicker.UI
                 // whenever the page is scrolled.
                 int dy = page.AutoScrollPosition.Y;
 
-                int y = _settingsCardTop;
+                // The first card's top, the gaps and the tail's offsets are 100% numbers (L puts them
+                // in the window's units): today this only runs while the window is built, where they
+                // are the same, but run after a 150% window had scaled it would pull every card up.
+                int y = L(_settingsCardTop);
                 foreach (GroupBox g in _settingsCards)
                 {
                     g.Top = y + dy;
                     // Height, not Bottom: Bottom already carries dy, and adding it to a
                     // design-space running total would compound the offset per card.
-                    y += g.Height + SettingsCardGap;
+                    y += g.Height + L(SettingsCardGap);
                 }
 
-                int bottom = y - SettingsCardGap;
+                int bottom = y - L(SettingsCardGap);
                 foreach (KeyValuePair<Control, int> kv in _settingsTail)
                 {
                     if (kv.Key == null || kv.Key.IsDisposed) { continue; }
-                    kv.Key.Top = bottom + kv.Value + dy;
+                    kv.Key.Top = bottom + L(kv.Value) + dy;
                 }
 
                 // Same [layout] channel the fitter reports on.

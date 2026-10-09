@@ -29,6 +29,7 @@ namespace AutoClicker.Native
     /// movement to drive the camera), this reports which physical mouse produced each
     /// event via the device handle in <c>RAWINPUTHEADER.hDevice</c> — so a SECOND real
     /// mouse can be told apart from the main one and used to drive the second cursor.
+    /// The events come from <see cref="RawMouseHub"/>, the one registration Tempo shares.
     ///
     /// Also enumerates the connected mice (<see cref="EnumerateRealMice"/>) so Tempo can
     /// tell the user "2 mice detected" and refuse the second-mouse mode when there's
@@ -39,15 +40,8 @@ namespace AutoClicker.Native
     /// </summary>
     public sealed class SecondMouseListener : IDisposable
     {
-        private const int WM_INPUT = 0x00FF;
-        private const int WM_INPUT_DEVICE_CHANGE = 0x00FE;
-        private const uint RID_INPUT = 0x10000003;
         private const uint RIDI_DEVICENAME = 0x20000007;
-        private const uint RIDEV_INPUTSINK = 0x00000100;
-        private const uint RIDEV_DEVNOTIFY = 0x00002000;   // also send WM_INPUT_DEVICE_CHANGE
-        private const uint RIDEV_REMOVE = 0x00000001;
         private const uint RIM_TYPEMOUSE = 0;
-        private const ushort MOUSE_MOVE_ABSOLUTE = 0x01;
 
         // For reading a device's real product name (e.g. "Razer DeathAdder") via HID.
         private const uint FILE_SHARE_READ = 0x00000001;
@@ -62,15 +56,7 @@ namespace AutoClicker.Native
         public const ushort RI_MOUSE_MIDDLE_BUTTON_DOWN = 0x0010;
         public const ushort RI_MOUSE_MIDDLE_BUTTON_UP = 0x0020;
         public const ushort RI_MOUSE_WHEEL = 0x0400;
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct RAWINPUTDEVICE
-        {
-            public ushort usUsagePage;
-            public ushort usUsage;
-            public uint dwFlags;
-            public IntPtr hwndTarget;
-        }
+        public const ushort RI_MOUSE_HWHEEL = 0x0800;   // tilt wheel
 
         [StructLayout(LayoutKind.Sequential)]
         private struct RAWINPUTDEVICELIST
@@ -78,45 +64,6 @@ namespace AutoClicker.Native
             public IntPtr hDevice;
             public uint dwType;
         }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct RAWINPUTHEADER
-        {
-            public uint dwType;
-            public uint dwSize;
-            public IntPtr hDevice;
-            public IntPtr wParam;
-        }
-
-        // See RawMouseInput for why the explicit padding reproduces the RAWMOUSE union
-        // alignment so lLastX/lLastY land at the right offsets.
-        [StructLayout(LayoutKind.Sequential)]
-        private struct RAWMOUSE
-        {
-            public ushort usFlags;
-            public ushort _padding;
-            public ushort usButtonFlags;
-            public ushort usButtonData;
-            public uint ulRawButtons;
-            public int lLastX;
-            public int lLastY;
-            public uint ulExtraInformation;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct RAWINPUT
-        {
-            public RAWINPUTHEADER header;
-            public RAWMOUSE mouse;
-        }
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool RegisterRawInputDevices(
-            [In] RAWINPUTDEVICE[] devices, uint numDevices, uint size);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint GetRawInputData(
-            IntPtr hRawInput, uint command, out RAWINPUT data, ref uint size, uint headerSize);
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetRawInputDeviceList(
@@ -140,7 +87,8 @@ namespace AutoClicker.Native
         /// <summary>
         /// Fired (on the UI thread) for every raw mouse event: which device, the relative
         /// movement, any button transitions, the wheel delta (WHEEL_DELTA units) this
-        /// report carried, and whether the report was ABSOLUTE.
+        /// report carried — horizontal when the flags include RI_MOUSE_HWHEEL — and whether
+        /// the report was ABSOLUTE.
         ///
         /// The absolute flag matters because such a report carries a screen coordinate
         /// rather than a delta, so it is deliberately not turned into movement. Without
@@ -155,8 +103,20 @@ namespace AutoClicker.Native
         /// <summary>Fired (UI thread) when a mouse is plugged in or unplugged.</summary>
         public event Action DevicesChanged;
 
-        private MessageWindow _window;
+        // One delegate instance each, so the hub can find this listener again to remove it.
+        private readonly Action<RawMouseEvent> _onInput;
+        private readonly Action _onDevicesChanged;
         private bool _disposed;
+
+        public SecondMouseListener()
+        {
+            _onInput = OnRawInput;
+            _onDevicesChanged = () =>
+            {
+                InvalidateMiceCache();   // handlers must see the post-change device list
+                try { DevicesChanged?.Invoke(); } catch { }
+            };
+        }
 
         // Product-name lookups open a HID handle, so cache them by device path.
         private static readonly Dictionary<string, string> _productCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -321,127 +281,48 @@ namespace AutoClicker.Native
             return "Mouse";
         }
 
-        /// <summary>Registers for raw mouse input. Call from the UI (message-pump) thread.</summary>
+        /// <summary>
+        /// Starts listening for raw mouse input, and for mice being plugged in or unplugged.
+        /// Call from the UI (message-pump) thread. The registration itself is shared with
+        /// camera-relative movement and macro recording (see <see cref="RawMouseHub"/>).
+        /// </summary>
         public bool Start()
         {
             if (_disposed) { throw new ObjectDisposedException(nameof(SecondMouseListener)); }
             if (IsRunning) { return true; }
-            try
+
+            if (!RawMouseHub.Subscribe(_onInput, _onDevicesChanged))
             {
-                _window = new MessageWindow(OnRawInput, () =>
-                {
-                    InvalidateMiceCache();   // handlers must see the post-change device list
-                    try { DevicesChanged?.Invoke(); } catch { }
-                });
-
-                var dev = new RAWINPUTDEVICE[1];
-                dev[0].usUsagePage = 0x01;             // Generic Desktop Controls
-                dev[0].usUsage = 0x02;                 // Mouse
-                // INPUTSINK: keep receiving without focus. DEVNOTIFY: also get told the
-                // moment a mouse is plugged in / unplugged (WM_INPUT_DEVICE_CHANGE).
-                dev[0].dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY;
-                dev[0].hwndTarget = _window.Handle;
-
-                if (!RegisterRawInputDevices(dev, 1, (uint)Marshal.SizeOf<RAWINPUTDEVICE>()))
-                {
-                    int err = Marshal.GetLastWin32Error();
-                    Logger.Error("[2nd mouse] raw input registration failed. Win32 error " + err + ".");
-                    _window.Dispose();
-                    _window = null;
-                    return false;
-                }
-
-                IsRunning = true;
-                Logger.Info("[2nd mouse] per-device raw input active.");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Logger.Error("[2nd mouse] could not start per-device raw input.", ex);
+                Logger.Error("[2nd mouse] per-device raw input could not start.");
                 return false;
             }
+
+            IsRunning = true;
+            Logger.Info("[2nd mouse] per-device raw input active.");
+            return true;
         }
 
         public void Stop()
         {
             if (!IsRunning) { return; }
             IsRunning = false;
-            try
-            {
-                var dev = new RAWINPUTDEVICE[1];
-                dev[0].usUsagePage = 0x01;
-                dev[0].usUsage = 0x02;
-                dev[0].dwFlags = RIDEV_REMOVE;
-                dev[0].hwndTarget = IntPtr.Zero;   // must be NULL for RIDEV_REMOVE
-                RegisterRawInputDevices(dev, 1, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
-            }
-            catch { }
-            try { _window?.Dispose(); } catch { }
-            _window = null;
+            // Only this listener leaves; anything else sharing the registration keeps it.
+            RawMouseHub.Unsubscribe(_onInput);
             Logger.Info("[2nd mouse] per-device raw input stopped.");
         }
 
-        private void OnRawInput(IntPtr lParam)
+        private void OnRawInput(RawMouseEvent e)
         {
-            uint size = (uint)Marshal.SizeOf<RAWINPUT>();
-            if (GetRawInputData(lParam, RID_INPUT, out RAWINPUT raw, ref size,
-                    (uint)Marshal.SizeOf<RAWINPUTHEADER>()) == unchecked((uint)-1))
-            {
-                return;
-            }
-            if (raw.header.dwType != RIM_TYPEMOUSE)
-            {
-                return;
-            }
             // Absolute pointers (tablets, RDP, some VMs) report a screen coordinate, not
-            // a delta; treating that as movement would fling the second cursor away.
-            int dx = 0, dy = 0;
-            bool absolute = (raw.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == MOUSE_MOVE_ABSOLUTE;
-            if (!absolute)
-            {
-                dx = raw.mouse.lLastX;
-                dy = raw.mouse.lLastY;
-            }
+            // a delta; the hub reports no movement for them, which the flag explains.
             int wheel = 0;
-            if ((raw.mouse.usButtonFlags & RI_MOUSE_WHEEL) != 0)
+            if ((e.ButtonFlags & (RI_MOUSE_WHEEL | RI_MOUSE_HWHEEL)) != 0)
             {
-                // usButtonData is a signed wheel delta (multiples of WHEEL_DELTA = 120).
-                wheel = (short)raw.mouse.usButtonData;
+                // usButtonData is a signed wheel delta (multiples of WHEEL_DELTA = 120), for
+                // whichever wheel the flags name — a report carries one or the other.
+                wheel = e.ButtonData;
             }
-            Input?.Invoke(raw.header.hDevice, dx, dy, raw.mouse.usButtonFlags, wheel, absolute);
-        }
-
-        /// <summary>Message-only window (HWND_MESSAGE) that exists purely to receive WM_INPUT.</summary>
-        private sealed class MessageWindow : NativeWindow, IDisposable
-        {
-            private const int HWND_MESSAGE = -3;
-            private readonly Action<IntPtr> _onInput;
-            private readonly Action _onDeviceChange;
-
-            public MessageWindow(Action<IntPtr> onInput, Action onDeviceChange)
-            {
-                _onInput = onInput;
-                _onDeviceChange = onDeviceChange;
-                CreateHandle(new CreateParams { Parent = new IntPtr(HWND_MESSAGE) });
-            }
-
-            protected override void WndProc(ref Message m)
-            {
-                if (m.Msg == WM_INPUT)
-                {
-                    try { _onInput(m.LParam); } catch { }
-                }
-                else if (m.Msg == WM_INPUT_DEVICE_CHANGE)
-                {
-                    try { _onDeviceChange(); } catch { }
-                }
-                base.WndProc(ref m);
-            }
-
-            public void Dispose()
-            {
-                try { DestroyHandle(); } catch { }
-            }
+            Input?.Invoke(e.Device, e.Dx, e.Dy, e.ButtonFlags, wheel, e.Absolute);
         }
 
         public void Dispose()

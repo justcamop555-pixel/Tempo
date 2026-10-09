@@ -53,8 +53,7 @@ namespace AutoClicker.UI
         {
             theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
 
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             Text = Localization.T("Send a bug report");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -100,6 +99,12 @@ namespace AutoClicker.UI
                 Location = new Point(24, 56),
                 Size = new Size(512, 56)
             };
+            // As tall as its words — four lines in French, German and Italian, where the box held
+            // three and a half and cut the last — with everything under it moved down to match.
+            // (In 100% units: the window is scaled after it is built — UiFactory.Measure96.)
+            int privacyHeight = UiFactory.Measure96(privacy.Text, Font, 512, TextFormatFlags.Default).Height + 2;
+            int shift = Math.Max(0, privacyHeight - privacy.Height);
+            privacy.Height += shift;
             Controls.Add(privacy);
 
             _body = new TextBox
@@ -184,6 +189,16 @@ namespace AutoClicker.UI
             Controls.Add(cancel);
             CancelButton = cancel;
 
+            if (shift > 0)
+            {
+                int below = _body.Top;
+                foreach (Control c in Controls)
+                {
+                    if (c.Top >= below) { c.Top += shift; }
+                }
+                ClientSize = new Size(ClientSize.Width, ClientSize.Height + shift);
+            }
+
             // Highlight and focus whichever channel was used last time, so a repeat
             // report is just Enter.
             Button lastBtn = lastUsed == EmailReportChannel.GitHub ? github
@@ -200,11 +215,26 @@ namespace AutoClicker.UI
                 // navigateur)   ·  last used" — and because the string was appended
                 // rather than assigned, no translation audit could see it either.
                 lastBtn.Text = Localization.F("{0}   ·  last used", lastBtn.Text);
+                // The suffix makes it the longest caption here, in a column that cannot widen: Italian
+                // needed 259 px of the 248. A size smaller rather than a cut word, as the main window's
+                // button pass does.
+                if (lastBtn is RoundedButton rb)
+                {
+                    foreach (float size in new[] { 8.25f, 7.5f })
+                    {
+                        // The text in 100% units, as the column is: the window is scaled after this
+                        // (screen pixels against it made a 150% screen shrink a caption that fitted).
+                        if (Math.Ceiling(rb.CaptionWidthNeeded(0) / UiFactory.BuildScale) + 8 <= rb.Width) { break; }
+                        rb.Font = new Font(rb.Font.FontFamily, size, rb.Font.Style);
+                    }
+                }
                 lastBtn.BackColor = theme.Surface;
                 lastBtn.FlatAppearance.BorderColor = theme.Accent;
                 AcceptButton = lastBtn;
                 Shown += (s, e) => lastBtn.Focus();
             }
+
+            UiFactory.ScaleToScreen(this);
         }
 
         /// <summary>

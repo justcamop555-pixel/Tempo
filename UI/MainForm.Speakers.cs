@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Text;
 
 namespace AutoClicker.UI
@@ -17,6 +18,135 @@ namespace AutoClicker.UI
         // teach people to ignore it.
         private const double SpeakerDeviceMismatchGraceSeconds = 5.0;
         private DateTime _speakerDeviceMismatchSinceUtc = DateTime.MinValue;
+
+        // One speaker identity out of what the face analyzer SEES and the voice profiler HEARS, and the
+        // timeline captions are labelled from (see Utils.SpeakerLinker).
+        private readonly Utils.SpeakerLinker _speakerLinker = new Utils.SpeakerLinker();
+        private System.Threading.Timer _speakerSampleTimer;
+        private int _speakerSampleBusy;
+        private int _speakerSplitCaptions;     // captions cut in two at a hand-over, this session
+
+        /// <summary>Starts feeding the linker ~10 samples a second. Idempotent.</summary>
+        private void StartSpeakerSampling()
+        {
+            if (_speakerSampleTimer != null) { return; }
+            try { _speakerSampleTimer = new System.Threading.Timer(_ => SampleSpeakerEvidence(), null, 100, 100); }
+            catch (Exception ex) { Utils.Logger.Swallow("StartSpeakerSampling", ex); }
+        }
+
+        private void StopSpeakerSampling()
+        {
+            try { _speakerSampleTimer?.Dispose(); } catch { }
+            _speakerSampleTimer = null;
+        }
+
+        /// <summary>
+        /// One evidence sample into the linker. Runs on a timer thread, and on its own schedule rather
+        /// than the UI tick's: that tick stops while Tempo sleeps in the tray, and captions keep running
+        /// then. Reads only values the two analyzers publish for other threads.
+        /// </summary>
+        private void SampleSpeakerEvidence()
+        {
+            if (System.Threading.Interlocked.Exchange(ref _speakerSampleBusy, 1) != 0) { return; }
+            try
+            {
+                var vp = _voiceProfiler;
+                var fa = _faceAnalyzer;
+                var tr = _captionTranscriber;
+                // Microphone captions: the profiler listens to the speakers and the analyzer watches
+                // the window playing sound — neither describes the room the microphone hears.
+                bool mic = tr != null && tr.IsRunning && !_captionFellBackToWindows
+                           && tr.ActiveMode == Utils.CaptureMode.Microphone;
+                bool voice = !mic && vp != null && vp.Running;
+                bool face = !mic && fa != null && fa.Running && _settings != null && _settings.CaptionFaceAnalysis;
+                _speakerLinker.Sample(DateTime.UtcNow, new Utils.SpeakerLinker.Evidence
+                {
+                    VoiceRunning = voice,
+                    ActiveVoice = voice ? vp.ActiveSegmentSpeaker : 0,
+                    HeldVoice = voice ? vp.CurrentSpeaker : 0,
+                    FaceRunning = face,
+                    TalkingFace = face ? fa.CurrentSpeakerOccupant : 0,
+                    FacesOnScreen = face ? fa.FaceCount : 0,
+                    CrossTalk = face && fa.CrossTalk,
+                    VisibleFaces = face ? fa.VisibleOccupants : null,
+                });
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("SampleSpeakerEvidence", ex); }
+            finally { System.Threading.Interlocked.Exchange(ref _speakerSampleBusy, 0); }
+        }
+
+        /// <summary>A new caption session or new audio: forget who everyone was.</summary>
+        private void ResetSpeakerIdentities()
+        {
+            _speakerLinker.Reset();
+            _speakerSplitCaptions = 0;
+            // Their names too: the next "Speaker 1" is whoever talks first in the new audio.
+            _speakerNames.Clear();
+            // And the faces the analyzer would recognise on their return: different audio, different people.
+            try { _faceAnalyzer?.ForgetFaces(); } catch { }
+        }
+
+        // The names given to speakers this session, by label — with the incarnation of that label
+        // they were given to (SpeakerLinker.Incarnation), so a number handed to someone new does not
+        // arrive wearing the previous person's name. UI thread only. Never saved: the people behind
+        // the numbers are only known for as long as the audio runs.
+        private readonly Dictionary<int, KeyValuePair<int, string>> _speakerNames =
+            new Dictionary<int, KeyValuePair<int, string>>();
+
+        /// <summary>
+        /// The name <paramref name="label"/> was given, or null for "Speaker N". The caption bar, the
+        /// transcript and the Speakers card all ask here.
+        /// </summary>
+        private string SpeakerDisplayName(int label)
+        {
+            if (label <= 0 || !_speakerNames.TryGetValue(label, out KeyValuePair<int, string> named)) { return null; }
+            return named.Key == _speakerLinker.Incarnation(label) ? named.Value : null;
+        }
+
+        /// <summary>A speaker on the Speakers card was clicked: ask what to call them.</summary>
+        private void RenameSpeaker(int label)
+        {
+            if (label <= 0) { return; }
+            try
+            {
+                var fa = _faceAnalyzer;
+                Utils.SpeakerLinker.SpeakerInfo info = _speakerLinker.Snapshot().Find(s => s.Label == label);
+                Bitmap face = null;
+                try
+                {
+                    face = info != null && info.Faces.Count > 0 && fa != null && _settings != null && _settings.CaptionFaceAnalysis
+                        ? fa.GetBestFaceThumbnail(info.Faces) : null;
+                    string name = SpeakerNameForm.Ask(this, _theme, label, SpeakerDisplayName(label), face,
+                                                      CaptionOverlayForm.SpeakerColor(label));
+                    if (name != null) { SetSpeakerName(label, name); }
+                }
+                finally { face?.Dispose(); }
+            }
+            catch (Exception ex) { Utils.Logger.Warn("[Captions tab] naming a speaker failed: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// Names <paramref name="label"/> (or, with an empty name, takes the name away) and shows it
+        /// everywhere at once: the lines they already spoke, the caption bar, the history window and the card.
+        /// </summary>
+        internal void SetSpeakerName(int label, string name)
+        {
+            if (label <= 0) { return; }
+            name = SpeakerNameForm.Clean(name);
+            if (name.Length == 0) { _speakerNames.Remove(label); }
+            else { _speakerNames[label] = new KeyValuePair<int, string>(_speakerLinker.Incarnation(label), name); }
+            // What went into the log is the fact, not the name: names are the user's business.
+            Utils.Logger.Info("[captions] speaker " + label + (name.Length == 0 ? " back to its number" : " given a name"));
+
+            int changed = _transcript.Relabel(label);
+            if (changed > 0)
+            {
+                _capRenderedText = null;          // the tab's copy is text-compared; force it
+                OnTranscriptChanged();
+            }
+            try { _captionOverlay?.RefreshSpeakerNames(); } catch { }
+            RefreshCaptionSpeakers();
+        }
 
         /// <summary>
         /// The speaker block of Live debug.
@@ -46,16 +176,25 @@ namespace AutoClicker.UI
                 int onBar = _speakerTurns.CurrentSpeaker;
                 sb.Append("Speakers: bar shows ")
                   .Append(onBar > 0 ? "Speaker " + onBar : "no label yet")
-                  .Append(" · ")
-                  .Append(string.IsNullOrEmpty(_speakerHintWhy) ? "waiting for the first caption" : _speakerHintWhy);
-                if (_speakerHintSpaceSwitches > 0)
+                  // Whether they were named, not the name: Live debug gets pasted into bug reports.
+                  .Append(onBar > 0 && SpeakerDisplayName(onBar) != null ? " (named)" : "")
+                  .Append(" · now: ")
+                  .Append(string.IsNullOrEmpty(_speakerLinker.Why) ? "waiting for the first sample" : _speakerLinker.Why);
+                if (_speakerSplitCaptions > 0)
                 {
-                    // Face slots and voice profiles are different number spaces, so each
-                    // hand-over is a moment the same number can start meaning someone else.
-                    sb.Append(" · numbering moved between faces and voices ")
-                      .Append(_speakerHintSpaceSwitches).Append('×');
+                    sb.Append(" · ").Append(_speakerSplitCaptions)
+                      .Append(_speakerSplitCaptions == 1 ? " caption" : " captions").Append(" split at a hand-over");
+                }
+                int named = 0;
+                foreach (int label in _speakerNames.Keys) { if (SpeakerDisplayName(label) != null) { named++; } }
+                if (named > 0)
+                {
+                    sb.Append(" · ").Append(named).Append(named == 1 ? " speaker named" : " speakers named");
                 }
                 sb.AppendLine();
+                // Who is who: each speaker's voices and face, and each face's link evidence.
+                string links = _speakerLinker.DebugDetail();
+                if (!string.IsNullOrEmpty(links)) { sb.Append(links); }
 
                 var vp = _voiceProfiler;
                 if (vp != null && vp.Running)
@@ -67,7 +206,12 @@ namespace AutoClicker.UI
                     }
                     sb.Append(" · ").Append(vp.ProfileCount).Append(" of ").Append(vp.ProfileCapacity)
                       .Append(" voices learned · now ")
-                      .Append(vp.CurrentSpeaker > 0 ? "voice " + vp.CurrentSpeaker : "no voice");
+                      .Append(vp.ActiveSegmentSpeaker > 0 ? "voice " + vp.ActiveSegmentSpeaker + " speaking"
+                              : vp.CurrentSpeaker > 0 ? "voice " + vp.CurrentSpeaker + " (last heard)" : "no voice");
+                    if (vp.MidSpeechChanges > 0)
+                    {
+                        sb.Append(" · ").Append(vp.MidSpeechChanges).Append(" hand-over(s) caught without a pause");
+                    }
                     if (vp.CaptureOpens > 1)
                     {
                         sb.Append(" · capture reopened ").Append(vp.CaptureOpens - 1).Append('×');
@@ -111,14 +255,19 @@ namespace AutoClicker.UI
                           .Append(fa.CurrentVisualSpeaker > 0 ? "face " + fa.CurrentVisualSpeaker : "none");
                         if (fa.SlotRecycles > 0)
                         {
-                            // A face's slot number IS its speaker number, and an expired slot
-                            // goes to the next new face — so this counts the moments a new
-                            // person may have inherited someone else's label.
+                            // Speakers are linked to the person in a slot, not the slot, so a newcomer
+                            // taking a departed face's slot starts unlinked rather than inheriting.
                             sb.Append(" · ").Append(fa.SlotRecycles)
                               .Append(fa.SlotRecycles == 1 ? " slot" : " slots")
-                              .Append(" reused — a face arriving after another left takes its number");
+                              .Append(" reused (each newcomer is linked afresh)");
                         }
                         sb.AppendLine();
+                        // Recognising returning faces (Utils/FaceAppearance.cs): who came back and was
+                        // known again, and who turned up where someone else had been.
+                        sb.Append("  face recognition: ").Append(fa.Reidentified)
+                          .Append(fa.Reidentified == 1 ? " face" : " faces").Append(" known again on return · ")
+                          .Append(fa.ChangedAtCut).Append(" new person caught where another had been · ")
+                          .Append(fa.KnownFaceCount).Append(" off screen, remembered").AppendLine();
                     }
                     else
                     {

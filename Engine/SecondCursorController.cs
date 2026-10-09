@@ -54,6 +54,11 @@ namespace AutoClicker.Engine
         private MouseButtonType _spamButton = MouseButtonType.Left;
         private ClickStyle _spamStyle = ClickStyle.Single;
         private volatile int _spamIntervalMs = 100;
+        // Real clicks instead of posted ones: the pointer goes to the second cursor for each
+        // click. Posted clicks never reach a game that reads the mouse itself.
+        private volatile bool _spamRealClicks;
+        // Set by StopSpam, so a stop in the middle of a real click cuts its waits short.
+        private readonly ManualResetEventSlim _spamStop = new ManualResetEventSlim(false);
 
         // ── second PHYSICAL mouse (optional) ─────────────────────────────────
         // When the user plugs in a second real mouse, it can drive this cursor
@@ -88,11 +93,31 @@ namespace AutoClicker.Engine
         public event EventHandler MiceChanged;
         /// <summary>Raised (UI thread) when a mouse becomes bound — the UI persists which one.</summary>
         public event EventHandler SecondMouseBoundChanged;
-        // During "wiggle to assign", movement is summed PER DEVICE; the first device to
-        // cross this threshold wins — so a deliberate wiggle beats an accidental nudge of
-        // the other mouse (much more reliable than "first device to twitch").
-        private readonly Dictionary<IntPtr, int> _assignAccum = new Dictionary<IntPtr, int>();
-        private const int AssignThresholdCounts = 40;
+        // During "wiggle to assign", the first device to actually WIGGLE wins: a few strokes
+        // back and forth in quick succession. It used to be the first device to move 40
+        // counts in total, which is a hair's breadth — a fraction of a millimetre on a gaming
+        // mouse — so the MAIN mouse, the one in the user's hand that had just clicked the
+        // checkbox, nearly always won as soon as it moved on. The main mouse then drove the
+        // second cursor and the real pointer froze where it stood. Ordinary pointing is
+        // strokes with pauses and the odd correction; three full turn-backs along the SAME
+        // axis inside 0.8 s is something people only do on purpose. (Counted per axis: a
+        // stroke that drifts up, a correction and a stroke that drifts down already turn
+        // back three times between the two axes.)
+        private sealed class WiggleTrack
+        {
+            public int RunX, RunY;                      // the stroke under way on each axis (signed counts)
+            public bool TurnX, TurnY;                   // it reversed a full stroke; counts once it is one too
+            public readonly List<int> TurnsX = new List<int>(), TurnsY = new List<int>();   // ticks of recent turn-backs
+        }
+        private readonly Dictionary<IntPtr, WiggleTrack> _assignTrack = new Dictionary<IntPtr, WiggleTrack>();
+        private const int WiggleStrokeCounts = 30;   // a turn-back counts after a stroke this long
+        private const int WiggleTurns = 3;           // this many of them on one axis...
+        private const int WiggleWindowMs = 800;      // ...inside this long is a wiggle
+        // The set of mice the user was last asked about. Without it the backstop poll asked
+        // again the moment an unanswered request timed out, so "wiggle the mouse you want"
+        // stood open for ever (two log lines every 13 s) and any wiggle-like movement of the
+        // main mouse, at any time, could still bind it.
+        private string _askedForMice = "";
 
         // Per-device live activity, for the "both mice are being read" Live-debug readout.
         // AbsMoves counts reports that carried a screen COORDINATE rather than a delta.
@@ -101,18 +126,55 @@ namespace AutoClicker.Engine
         // shows up in the picker, but it can never drive the second cursor.
         private sealed class DevStat { public int LastTick; public long Moves; public long Clicks; public long AbsMoves; }
         private readonly Dictionary<IntPtr, DevStat> _devStats = new Dictionary<IntPtr, DevStat>();
-        // Per-button (L=0, R=1, M=2, wheel=3) tick of the last time the SECOND mouse
-        // pressed/released that button (or rolled its wheel) — lets the low-level hook
-        // swallow the matching stray system event even when the raw event and the hook
-        // fire in an unpredictable order.
-        private readonly int[] _secondBtnTick = new int[4];
-        // Which second-mouse buttons are currently held down (bit 0 = left, 1 = right), so
-        // hold-to-drag works: the real button stays down and movement drags until release.
+        // Per-button (L=0, R=1, M=2, wheel=3, X1=4, X2=5, tilt=6) tick of the last time the
+        // SECOND mouse pressed/released that button (or rolled or tilted its wheel) — lets
+        // the low-level hook swallow the matching stray system event even when the raw
+        // event and the hook fire in an unpredictable order.
+        private readonly int[] _secondBtnTick = new int[7];
+        // Which second-mouse buttons are currently held down (bit 0 = left, 1 = right,
+        // 2 = X1, 3 = X2), so hold-to-drag works: the real button stays down and movement
+        // drags until release.
         private volatile int _secondHeldButtons;
-        private const int HeldLeft = 1, HeldRight = 2;
+        private const int HeldLeft = 1, HeldRight = 2, HeldX1 = 4, HeldX2 = 8;
+
+        // The side buttons in RAWMOUSE.usButtonFlags (BUTTON_4 = X1 "Back", BUTTON_5 = X2).
+        private const ushort RawX1Down = 0x0040, RawX1Up = 0x0080, RawX2Down = 0x0100, RawX2Up = 0x0200;
+
+        // What the second mouse moved that didn't add up to a whole pixel yet. Below 100 %
+        // speed a slow, careful hand sends 1-count reports, each worth a fraction of a pixel:
+        // rounded one by one (half to even, 0.5 → 0) they were ALL zero, and at 50 % the
+        // cursor would not creep at all — exactly when aiming needs it to. Above 100 % the
+        // same rounding made slow movement faster than fast movement (1 count → 2 px at
+        // 150 %, 3 counts → 4). Carried over instead, so every count lands eventually.
+        private double _fracX, _fracY;
+
+        // The marker is moved at most this often. A gaming mouse reports up to 1000+ times a
+        // second, and every report used to move the layered overlay window — on the UI thread
+        // that also runs the low-level mouse hook, so every mouse event on the PC waited
+        // behind it. No screen shows more than a few hundred frames a second.
+        private const double OverlayMinIntervalMs = 4.0;
+        private long _overlayMovedStamp;
+        private bool _overlayPending;
+        private readonly System.Windows.Forms.Timer _overlayFlush;
 
         /// <summary>Raised (UI thread) when the user right-clicks the second cursor.</summary>
         public event EventHandler<SecondCursorMenuEventArgs> MenuRequested;
+
+        /// <summary>
+        /// Raised (UI thread) when the parked spot moves: dropped, parked by the hotkey, moved
+        /// by the second mouse (once it comes to rest), carried along with the window it is
+        /// aimed at, or brought back onto a monitor. The UI remembers it for the next launch.
+        /// </summary>
+        public event EventHandler PositionChanged;
+
+        /// <summary>Raised (UI thread) when spam-clicking starts or stops.</summary>
+        public event EventHandler SpamChanged;
+
+        // The second mouse moved the cursor and hasn't been reported yet — reported once it
+        // rests, not for each of up to a thousand reports a second.
+        private bool _positionDirty;
+        private int _positionMovedTick;
+        private bool _disposing;
 
         public bool Enabled => _enabled;
         public bool Placing => _placing;
@@ -146,10 +208,12 @@ namespace AutoClicker.Engine
             get
             {
                 int h = _secondHeldButtons;
-                if (h == (HeldLeft | HeldRight)) { return "L+R"; }
-                if ((h & HeldLeft) != 0) { return "L"; }
-                if ((h & HeldRight) != 0) { return "R"; }
-                return "";
+                var parts = new List<string>(4);
+                if ((h & HeldLeft) != 0) { parts.Add("L"); }
+                if ((h & HeldRight) != 0) { parts.Add("R"); }
+                if ((h & HeldX1) != 0) { parts.Add("X1"); }
+                if ((h & HeldX2) != 0) { parts.Add("X2"); }
+                return string.Join("+", parts);
             }
         }
         /// <summary>The mouse the user chose (raw path), even before it's connected/bound — for Live debug.</summary>
@@ -226,15 +290,83 @@ namespace AutoClicker.Engine
         {
             _followTimer = new System.Windows.Forms.Timer { Interval = 15 };
             _followTimer.Tick += FollowTick;
+            // The trailing move for a burst the throttle held back (see MoveOverlay).
+            _overlayFlush = new System.Windows.Forms.Timer { Interval = 10 };
+            _overlayFlush.Tick += (s, e) =>
+            {
+                _overlayFlush.Stop();
+                if (_overlayPending)
+                {
+                    _overlayPending = false;
+                    _overlay.SetHotspot(_x, _y);
+                    _overlayMovedStamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                }
+            };
             // Keep the marker visible: other apps (games, launchers) assert topmost
             // AFTER the overlay and bury it — reported as "the second cursor vanished".
             // A gentle 2 s re-assert keeps it above them without the z-order churn that
             // would bother a fullscreen game's presentation.
             _topKeeper = new System.Windows.Forms.Timer { Interval = 2000 };
             _topKeeper.Tick += (s, e) => { if (_enabled) { _overlay.KeepOnTop(); } };
+            // A monitor unplugged or rearranged can leave the parked spot on no screen at all:
+            // the marker invisible, and any spam clicking into nothing.
+            Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         }
 
         private readonly System.Windows.Forms.Timer _topKeeper;
+
+        /// <summary>
+        /// Puts the second cursor at a remembered spot — moved onto the nearest monitor if the
+        /// spot is no longer on one. Doesn't raise <see cref="PositionChanged"/>: the caller
+        /// is the one remembering it.
+        /// </summary>
+        public void SetPosition(int x, int y)
+        {
+            KeepOnAMonitor(ref x, ref y, x, y);
+            _x = x;
+            _y = y;
+            _overlay.SetHotspot(x, y);
+        }
+
+        private void RaisePositionChanged()
+        {
+            _positionDirty = false;
+            if (_disposing) { return; }
+            try { PositionChanged?.Invoke(this, EventArgs.Empty); } catch { }
+        }
+
+        /// <summary>Reports a second-mouse move once the mouse has rested for half a second.</summary>
+        private void ReportRestingPosition()
+        {
+            if (_positionDirty && unchecked(Environment.TickCount - _positionMovedTick) > 500)
+            {
+                RaisePositionChanged();
+            }
+        }
+
+        private void OnDisplaySettingsChanged(object sender, EventArgs e)
+        {
+            MarshalToUi(() =>
+            {
+                if (!_enabled || _placing) { return; }
+                int x = _x, y = _y;
+                KeepOnAMonitor(ref x, ref y, x, y);
+                _overlay.SetHotspot(x, y);   // also re-reads the DPI of the screen it is on
+                if (x != _x || y != _y)
+                {
+                    _x = x;
+                    _y = y;
+                    Logger.Info("[2nd cursor] the displays changed — moved back onto a screen at (" + x + ", " + y + ").");
+                    RaisePositionChanged();
+                }
+            });
+        }
+
+        /// <summary>The halo means "being moved": grabbed, or waiting for a wiggle.</summary>
+        private void RefreshActiveLook()
+        {
+            if (_enabled) { _overlay.SetActiveLook(_placing || _assigning); }
+        }
 
         // ── enable / appearance ───────────────────────────────────────────────
 
@@ -243,6 +375,11 @@ namespace AutoClicker.Engine
             _enabled = on;
             if (on)
             {
+                // Displays can change while it is hidden, and nothing watches for that then.
+                int x = _x, y = _y;
+                KeepOnAMonitor(ref x, ref y, x, y);
+                _x = x;
+                _y = y;
                 _overlay.SetHotspot(_x, _y);
                 if (!_overlay.Visible) { _overlay.Show(); }
                 _overlay.KeepOnTop();
@@ -275,19 +412,22 @@ namespace AutoClicker.Engine
             _overlay.SetHotspot(_x, _y);
         }
 
-        public void SetSpamSettings(MouseButtonType button, ClickStyle style, int intervalMs)
+        /// <summary>
+        /// How close a right-click must be to count as "on" the cursor, in screen pixels: the
+        /// marker is drawn larger on a high-DPI monitor, so its target grows with it.
+        /// </summary>
+        private int MarkerRadiusNow => (int)Math.Round(_markerRadius * Math.Max(1f, _overlay.DpiScale));
+
+        public void SetSpamSettings(MouseButtonType button, ClickStyle style, int intervalMs, bool realClicks = false)
         {
             _spamButton = button;
             _spamStyle = style;
             _spamIntervalMs = Math.Max(1, intervalMs);
+            _spamRealClicks = realClicks;
         }
 
-        public void SetPosition(int x, int y)
-        {
-            _x = x;
-            _y = y;
-            if (_enabled) { _overlay.SetHotspot(x, y); }
-        }
+        /// <summary>True when spam makes REAL clicks (see <see cref="RealClickAt"/>) rather than posted ones.</summary>
+        public bool SpamRealClicks => _spamRealClicks;
 
         // ── second PHYSICAL mouse: bind a real 2nd mouse to this cursor ────────
 
@@ -346,7 +486,7 @@ namespace AutoClicker.Engine
                 _secondMouseName = "";
                 _secondMouseDeviceName = "";
                 StopListener();
-                if (_enabled) { _overlay.SetActiveLook(_placing || _spamming); }
+                RefreshActiveLook();
                 RaiseMiceChanged();
             }
         }
@@ -430,6 +570,7 @@ namespace AutoClicker.Engine
         private void StopListener()
         {
             try { _deviceWatch?.Stop(); } catch { }
+            if (_positionDirty) { RaisePositionChanged(); }   // the watch reported it; it has stopped
             if (_mouseListener == null)
             {
                 return;
@@ -453,13 +594,65 @@ namespace AutoClicker.Engine
             _secondMouseHandle = IntPtr.Zero;
             _secondMouseName = "";
             _secondMouseDeviceName = "";
-            _assignAccum.Clear();
+            _assignTrack.Clear();
+            _askedForMice = MiceKey(SecondMouseListener.EnumerateRealMice());
             _assigning = true;
             _assignDeadlineTick = Environment.TickCount + 12000;
             if (NativeMethods.GetCursorPos(out NativeMethods.POINT p)) { _lastMainX = p.X; _lastMainY = p.Y; }
-            if (_enabled) { _overlay.SetActiveLook(true); }
+            RefreshActiveLook();
             RaiseMiceChanged();
-            Logger.Info("[2nd mouse] move the mouse you want to use as the SECOND mouse now…");
+            Logger.Info("[2nd mouse] wiggle the mouse you want to use as the SECOND mouse now (a few quick strokes back and forth)…");
+        }
+
+        /// <summary>The connected mice as one comparable string, to notice the set changing.</summary>
+        private static string MiceKey(List<MouseDeviceInfo> mice)
+        {
+            var handles = new List<long>(mice.Count);
+            foreach (var m in mice) { handles.Add(m.Handle.ToInt64()); }
+            handles.Sort();
+            return string.Join("|", handles);
+        }
+
+        /// <summary>
+        /// Adds one report to this device's strokes and says whether it is being wiggled:
+        /// <see cref="WiggleTurns"/> turn-backs along one axis, each a full stroke
+        /// (<see cref="WiggleStrokeCounts"/>) answered by another, within <see cref="WiggleWindowMs"/>.
+        /// </summary>
+        private bool IsWiggling(IntPtr hDevice, int dx, int dy, int now)
+        {
+            if (!_assignTrack.TryGetValue(hDevice, out WiggleTrack w))
+            {
+                w = new WiggleTrack();
+                _assignTrack[hDevice] = w;
+            }
+            if (TurnsBack(ref w.RunX, ref w.TurnX, dx)) { w.TurnsX.Add(now); }
+            if (TurnsBack(ref w.RunY, ref w.TurnY, dy)) { w.TurnsY.Add(now); }
+            w.TurnsX.RemoveAll(t => unchecked(now - t) > WiggleWindowMs);
+            w.TurnsY.RemoveAll(t => unchecked(now - t) > WiggleWindowMs);
+            return w.TurnsX.Count >= WiggleTurns || w.TurnsY.Count >= WiggleTurns;
+        }
+
+        /// <summary>
+        /// Follows the stroke on one axis; true once a full stroke has been answered by a full
+        /// stroke the other way. Counting at the reversal itself would count the count or two
+        /// a mouse slips back as it comes to rest — three quick strokes the SAME way would
+        /// have read as a wiggle.
+        /// </summary>
+        private static bool TurnsBack(ref int run, ref bool turning, int d)
+        {
+            if (d == 0) { return false; }
+            if (run != 0 && (run > 0) != (d > 0))
+            {
+                turning = Math.Abs(run) >= WiggleStrokeCounts;
+                run = 0;
+            }
+            run += d;
+            if (turning && Math.Abs(run) >= WiggleStrokeCounts)
+            {
+                turning = false;
+                return true;
+            }
+            return false;
         }
 
         /// <summary>Bind the mouse with this raw device path if it's currently connected.</summary>
@@ -523,12 +716,14 @@ namespace AutoClicker.Engine
             }
             _secondMouseHandle = info.Handle;
             _assigning = false;
-            _assignAccum.Clear();
+            _assignTrack.Clear();
+            _fracX = 0;   // a new mouse starts from whole pixels
+            _fracY = 0;
             _secondMouseName = info.FriendlyName ?? "";
             _secondMouseDeviceName = info.DeviceName ?? "";
             _desiredDeviceName = _secondMouseDeviceName;   // remember this choice
             if (NativeMethods.GetCursorPos(out NativeMethods.POINT mp)) { _lastMainX = mp.X; _lastMainY = mp.Y; }
-            if (_enabled) { _overlay.SetActiveLook(_spamming); }
+            RefreshActiveLook();
             Logger.Info("[2nd mouse] bound " + (_secondMouseName.Length > 0 ? _secondMouseName : "a mouse")
                 + " — it now drives the second cursor.");
             try { SecondMouseBoundChanged?.Invoke(this, EventArgs.Empty); } catch { }
@@ -583,13 +778,14 @@ namespace AutoClicker.Engine
             if (_assigning && unchecked(Environment.TickCount - _assignDeadlineTick) > 0)
             {
                 _assigning = false;
-                _assignAccum.Clear();
-                if (_enabled) { _overlay.SetActiveLook(_placing || _spamming); }
+                _assignTrack.Clear();
+                RefreshActiveLook();
                 Logger.Info("[2nd mouse] second-mouse assignment timed out (no movement).");
                 RaiseMiceChanged();
             }
             PruneDeviceStats();
             ReconcileSecondMouse();
+            ReportRestingPosition();
         }
 
         /// <summary>Drops per-device activity entries for mice that are no longer connected,
@@ -651,8 +847,10 @@ namespace AutoClicker.Engine
                     return;
                 }
 
-                // 3) No choice yet but two mice are present → ask the user to wiggle one.
-                if (_desiredDeviceName.Length == 0 && mice.Count >= 2)
+                // 3) No choice yet but two mice are present → ask the user to wiggle one —
+                //    once per set of mice. An unanswered ask is not repeated until a mouse
+                //    is plugged in or removed (or the user asks for it again from the menu).
+                if (_desiredDeviceName.Length == 0 && mice.Count >= 2 && MiceKey(mice) != _askedForMice)
                 {
                     BeginAssign();
                 }
@@ -701,17 +899,10 @@ namespace AutoClicker.Engine
 
             if (_assigning)
             {
-                // Sum movement per device; the first to cross the threshold wins, so a
-                // deliberate wiggle beats a stray nudge of the other mouse.
-                if (dx != 0 || dy != 0)
+                // The first device to wiggle wins (see WiggleTrack).
+                if ((dx != 0 || dy != 0) && IsWiggling(hDevice, dx, dy, now))
                 {
-                    _assignAccum.TryGetValue(hDevice, out int acc);
-                    acc += Math.Abs(dx) + Math.Abs(dy);
-                    _assignAccum[hDevice] = acc;
-                    if (acc >= AssignThresholdCounts)
-                    {
-                        BindSecondMouse(hDevice);
-                    }
+                    BindSecondMouse(hDevice);
                 }
                 // unchecked subtraction, not a direct >: Environment.TickCount is a signed
                 // int that wraps, and every other deadline in this file (including the
@@ -719,8 +910,8 @@ namespace AutoClicker.Engine
                 if (_assigning && unchecked(now - _assignDeadlineTick) > 0)
                 {
                     _assigning = false;
-                    _assignAccum.Clear();
-                    _overlay.SetActiveLook(_spamming);
+                    _assignTrack.Clear();
+                    RefreshActiveLook();
                     Logger.Info("[2nd mouse] no clear movement seen — second-mouse assignment timed out.");
                 }
                 return;
@@ -768,41 +959,61 @@ namespace AutoClicker.Engine
             if ((buttons & (SecondMouseListener.RI_MOUSE_LEFT_BUTTON_DOWN | SecondMouseListener.RI_MOUSE_LEFT_BUTTON_UP)) != 0) { _secondBtnTick[0] = now; }
             if ((buttons & (SecondMouseListener.RI_MOUSE_RIGHT_BUTTON_DOWN | SecondMouseListener.RI_MOUSE_RIGHT_BUTTON_UP)) != 0) { _secondBtnTick[1] = now; }
             if ((buttons & (SecondMouseListener.RI_MOUSE_MIDDLE_BUTTON_DOWN | SecondMouseListener.RI_MOUSE_MIDDLE_BUTTON_UP)) != 0) { _secondBtnTick[2] = now; }
-            if (wheel != 0) { _secondBtnTick[3] = now; }
+            bool tilt = (buttons & SecondMouseListener.RI_MOUSE_HWHEEL) != 0;
+            if (wheel != 0) { _secondBtnTick[tilt ? 6 : 3] = now; }
+            if ((buttons & (RawX1Down | RawX1Up)) != 0) { _secondBtnTick[4] = now; }
+            if ((buttons & (RawX2Down | RawX2Up)) != 0) { _secondBtnTick[5] = now; }
 
             // Press-and-HOLD, so click, hold and drag all work. Left/Right press the real
             // button at the second cursor and keep it down until you release it (below).
             // Middle = spam toggle. Do the press BEFORE handling this report's movement so
             // a press-then-drag in one report drags with the button already down.
-            if ((buttons & SecondMouseListener.RI_MOUSE_LEFT_BUTTON_DOWN) != 0) { PressSecondButton(MouseButtonType.Left, HeldLeft); activity = true; }
-            if ((buttons & SecondMouseListener.RI_MOUSE_RIGHT_BUTTON_DOWN) != 0) { PressSecondButton(MouseButtonType.Right, HeldRight); activity = true; }
+            //
+            // The side buttons work the same way. They used to be ignored AND left alone by
+            // the hook, so pressing Back on the SECOND mouse went Back in whatever window the
+            // MAIN pointer was over.
+            if ((buttons & SecondMouseListener.RI_MOUSE_LEFT_BUTTON_DOWN) != 0) { PressSecond(HeldLeft, () => InputSimulator.ButtonDown(MouseButtonType.Left)); activity = true; }
+            if ((buttons & SecondMouseListener.RI_MOUSE_RIGHT_BUTTON_DOWN) != 0) { PressSecond(HeldRight, () => InputSimulator.ButtonDown(MouseButtonType.Right)); activity = true; }
+            if ((buttons & RawX1Down) != 0) { PressSecond(HeldX1, () => InputSimulator.XButtonDown(1)); activity = true; }
+            if ((buttons & RawX2Down) != 0) { PressSecond(HeldX2, () => InputSimulator.XButtonDown(2)); activity = true; }
             if ((buttons & SecondMouseListener.RI_MOUSE_MIDDLE_BUTTON_DOWN) != 0) { ToggleSpam(); activity = true; }
 
             if (dx != 0 || dy != 0)
             {
+                // Scaled with the fraction carried over (see _fracX).
                 double sens = _secondMouseSensPercent / 100.0;
-                int nx = _x + (int)Math.Round(dx * sens);
-                int ny = _y + (int)Math.Round(dy * sens);
-                var vs = System.Windows.Forms.SystemInformation.VirtualScreen;
-                nx = Math.Max(vs.Left, Math.Min(vs.Right - 1, nx));
-                ny = Math.Max(vs.Top, Math.Min(vs.Bottom - 1, ny));
-                _x = nx;
-                _y = ny;
-                _overlay.SetHotspot(nx, ny);
+                _fracX += dx * sens;
+                _fracY += dy * sens;
+                int stepX = (int)Math.Truncate(_fracX);
+                int stepY = (int)Math.Truncate(_fracY);
+                _fracX -= stepX;
+                _fracY -= stepY;
 
-                if (_secondHeldButtons != 0)
+                if (stepX != 0 || stepY != 0)
                 {
-                    // A button is HELD (clicking / holding / dragging). The real pointer
-                    // has to be AT the second cursor for that press, drag and release to
-                    // land there — a Windows click happens wherever the pointer is — so it
-                    // FOLLOWS the second cursor while held, then is handed back to the
-                    // parked spot on release. Without this, a click that moved even a pixel
-                    // put its down at the second cursor and its up back at the parked spot
-                    // (a broken click / accidental drag).
-                    NativeMethods.SetCursorPos(_x, _y);
-                    _suppressMainUntilTick = now + 200;
+                    int nx = _x + stepX;
+                    int ny = _y + stepY;
+                    KeepOnAMonitor(ref nx, ref ny, _x, _y);
+                    _x = nx;
+                    _y = ny;
+                    MoveOverlay(nx, ny);
+                    _positionDirty = true;
+                    _positionMovedTick = now;
+
+                    if (_secondHeldButtons != 0)
+                    {
+                        // A button is HELD (clicking / holding / dragging). The real pointer
+                        // has to be AT the second cursor for that press, drag and release to
+                        // land there — a Windows click happens wherever the pointer is — so it
+                        // FOLLOWS the second cursor while held, then is handed back to the
+                        // parked spot on release. Without this, a click that moved even a pixel
+                        // put its down at the second cursor and its up back at the parked spot
+                        // (a broken click / accidental drag).
+                        NativeMethods.SetCursorPos(_x, _y);
+                        _suppressMainUntilTick = now + 200;
+                    }
                 }
-                else
+                if (_secondHeldButtons == 0)
                 {
                     // AIMING (no button held): the real pointer stays PARKED. Windows only
                     // has one cursor, so this is the whole trick — you move the second
@@ -815,28 +1026,35 @@ namespace AutoClicker.Engine
             }
 
             // Release AFTER movement, so a drag's final motion is applied before the up.
-            if ((buttons & SecondMouseListener.RI_MOUSE_LEFT_BUTTON_UP) != 0) { ReleaseSecondButton(MouseButtonType.Left, HeldLeft); activity = true; }
-            if ((buttons & SecondMouseListener.RI_MOUSE_RIGHT_BUTTON_UP) != 0) { ReleaseSecondButton(MouseButtonType.Right, HeldRight); activity = true; }
+            if ((buttons & SecondMouseListener.RI_MOUSE_LEFT_BUTTON_UP) != 0) { ReleaseSecond(HeldLeft, () => InputSimulator.ButtonUp(MouseButtonType.Left)); activity = true; }
+            if ((buttons & SecondMouseListener.RI_MOUSE_RIGHT_BUTTON_UP) != 0) { ReleaseSecond(HeldRight, () => InputSimulator.ButtonUp(MouseButtonType.Right)); activity = true; }
+            if ((buttons & RawX1Up) != 0) { ReleaseSecond(HeldX1, () => InputSimulator.XButtonUp(1)); activity = true; }
+            if ((buttons & RawX2Up) != 0) { ReleaseSecond(HeldX2, () => InputSimulator.XButtonUp(2)); activity = true; }
 
             if (wheel != 0)
             {
-                // A REAL wheel at the second cursor (borrow the pointer, scroll, hand it
-                // back) — Windows scrolls the window under the pointer, so this scrolls
-                // the second cursor's target. The physical wheel event at the PARKED
-                // spot is swallowed by the hook (it used to scroll the wrong window).
-                int wx = _x, wy = _y, wd = wheel, rx = _lastMainX, ry = _lastMainY;
+                // A REAL wheel at the second cursor — Windows scrolls the window under the
+                // pointer, so the pointer goes there, scrolls, and comes back — as ONE ordered
+                // batch of input, right here. It was three separate calls on a thread-pool
+                // thread: notches scrolled quickly ran on several threads at once and
+                // interleaved, and the hand-back could overtake the scroll still waiting in
+                // Windows' input queue, so part of a fast scroll went to the window under the
+                // PARKED pointer. While a button is held the pointer is already borrowed and
+                // stays at the second cursor. The physical wheel at the parked spot is
+                // swallowed by the hook. The tilt wheel goes the same way — it was never
+                // read at all, so tilting the second mouse scrolled sideways wherever the
+                // MAIN pointer was.
+                int backX = _secondHeldButtons != 0 ? _x : _lastMainX;
+                int backY = _secondHeldButtons != 0 ? _y : _lastMainY;
                 _suppressMainUntilTick = now + 120;
-                ThreadPool.QueueUserWorkItem(_ =>
+                try
                 {
-                    try
+                    using (InputSimulator.RelayingUserInput())
                     {
-                        using (InputSimulator.RelayingUserInput())
-                        {
-                            InputSimulator.RealWheelAtAndRestore(wx, wy, wd, rx, ry);
-                        }
+                        InputSimulator.RealWheelAtAndRestore(_x, _y, wheel, backX, backY, tilt);
                     }
-                    catch { }
-                });
+                }
+                catch { }
                 activity = true;
             }
 
@@ -847,8 +1065,9 @@ namespace AutoClicker.Engine
         /// Press a real mouse button AT the second cursor and keep it held. On the first
         /// button we borrow the real pointer (warp it onto the second cursor); it's handed
         /// back on release. This is what lets you click, hold, and drag with the 2nd mouse.
+        /// <paramref name="pressIt"/> sends the press itself (left, right, X1 or X2).
         /// </summary>
-        private void PressSecondButton(MouseButtonType button, int bit)
+        private void PressSecond(int bit, Action pressIt)
         {
             bool wasIdle = _secondHeldButtons == 0;
             _secondHeldButtons |= bit;
@@ -863,14 +1082,14 @@ namespace AutoClicker.Engine
                 using (InputSimulator.RelayingUserInput())
                 {
                     if (wasIdle) { InputSimulator.MoveTo(_x, _y); }   // borrow the pointer
-                    InputSimulator.ButtonDown(button);
+                    pressIt();
                 }
             }
             catch { }
         }
 
         /// <summary>Releases any second-cursor buttons still held — so a button never sticks
-        /// down if the mode is turned off (or panic-stopped) mid-hold.</summary>
+        /// down if the mode is turned off (or panic-stopped, or Tempo closes) mid-hold.</summary>
         private void ReleaseAllHeldButtons()
         {
             int held = _secondHeldButtons;
@@ -882,13 +1101,15 @@ namespace AutoClicker.Engine
                 {
                     if ((held & HeldLeft) != 0) { InputSimulator.ButtonUp(MouseButtonType.Left); }
                     if ((held & HeldRight) != 0) { InputSimulator.ButtonUp(MouseButtonType.Right); }
+                    if ((held & HeldX1) != 0) { InputSimulator.XButtonUp(1); }
+                    if ((held & HeldX2) != 0) { InputSimulator.XButtonUp(2); }
                 }
             }
             catch { }
         }
 
         /// <summary>Release a held second-cursor button; hand the real pointer back when none remain.</summary>
-        private void ReleaseSecondButton(MouseButtonType button, int bit)
+        private void ReleaseSecond(int bit, Action releaseIt)
         {
             if ((_secondHeldButtons & bit) == 0)
             {
@@ -899,7 +1120,7 @@ namespace AutoClicker.Engine
             {
                 using (InputSimulator.RelayingUserInput())
                 {
-                    InputSimulator.ButtonUp(button);
+                    releaseIt();
                     if (_secondHeldButtons == 0)
                     {
                         InputSimulator.MoveTo(_lastMainX, _lastMainY);   // give the pointer back
@@ -908,6 +1129,82 @@ namespace AutoClicker.Engine
                 }
             }
             catch { }
+        }
+
+        /// <summary>
+        /// Moves the marker, at most every <see cref="OverlayMinIntervalMs"/>; a move held
+        /// back is made by <see cref="_overlayFlush"/> shortly after, so the marker always
+        /// ends where the cursor is.
+        /// </summary>
+        private void MoveOverlay(int x, int y)
+        {
+            long nowStamp = System.Diagnostics.Stopwatch.GetTimestamp();
+            double sinceMs = (nowStamp - _overlayMovedStamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (sinceMs >= OverlayMinIntervalMs)
+            {
+                _overlayPending = false;
+                _overlay.SetHotspot(x, y);
+                _overlayMovedStamp = nowStamp;
+                return;
+            }
+            _overlayPending = true;
+            if (!_overlayFlush.Enabled)
+            {
+                _overlayFlush.Start();
+            }
+        }
+
+        // ── keeping the cursor on a monitor ───────────────────────────────────
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct MonitorRect { public int Left, Top, Right, Bottom; }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct MonitorInfo
+        {
+            public int cbSize;
+            public MonitorRect rcMonitor;
+            public MonitorRect rcWork;
+            public uint dwFlags;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromPoint(NativeMethods.POINT pt, uint flags);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MonitorInfo info);
+
+        private const uint MONITOR_DEFAULTTONULL = 0;
+        private const uint MONITOR_DEFAULTTONEAREST = 2;
+
+        /// <summary>
+        /// Keeps the second cursor on a monitor, the way Windows keeps the real one: a move
+        /// that would leave every monitor slides along the edge of the one it came from.
+        ///
+        /// It used to be clamped to the rectangle around ALL monitors. With two screens of
+        /// different sizes, or set at different heights, that rectangle has corners no screen
+        /// covers — and the cursor could wander into one and vanish off every display.
+        /// </summary>
+        private static void KeepOnAMonitor(ref int x, ref int y, int fromX, int fromY)
+        {
+            try
+            {
+                if (MonitorFromPoint(new NativeMethods.POINT(x, y), MONITOR_DEFAULTTONULL) != IntPtr.Zero)
+                {
+                    return;   // on a monitor
+                }
+                IntPtr from = MonitorFromPoint(new NativeMethods.POINT(fromX, fromY), MONITOR_DEFAULTTONEAREST);
+                var info = new MonitorInfo { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MonitorInfo>() };
+                if (from != IntPtr.Zero && GetMonitorInfo(from, ref info))
+                {
+                    x = Math.Max(info.rcMonitor.Left, Math.Min(info.rcMonitor.Right - 1, x));
+                    y = Math.Max(info.rcMonitor.Top, Math.Min(info.rcMonitor.Bottom - 1, y));
+                    return;
+                }
+            }
+            catch { }
+            var vs = System.Windows.Forms.SystemInformation.VirtualScreen;
+            x = Math.Max(vs.Left, Math.Min(vs.Right - 1, x));
+            y = Math.Max(vs.Top, Math.Min(vs.Bottom - 1, y));
         }
 
         // ── grab & place (one simple click) ───────────────────────────────────
@@ -926,6 +1223,26 @@ namespace AutoClicker.Engine
             Logger.Info("[2nd cursor] grab & place — move the mouse and click where you want the second cursor.");
         }
 
+        /// <summary>
+        /// The grab hotkey: grabs the cursor, or — pressed again while it follows the mouse —
+        /// parks it right there. Its description always promised "press again to park it",
+        /// but the hotkey only ever started placement, so a second press did nothing and
+        /// only a click could drop it.
+        /// </summary>
+        public void TogglePlacement()
+        {
+            if (!_placing)
+            {
+                StartPlacement();
+                return;
+            }
+            if (NativeMethods.GetCursorPos(out NativeMethods.POINT p)) { _x = p.X; _y = p.Y; }
+            CancelPlacement();
+            _overlay.SetHotspot(_x, _y);
+            Logger.Info("[2nd cursor] parked at (" + _x + ", " + _y + ") by the hotkey.");
+            RaisePositionChanged();
+        }
+
         private void CancelPlacement()
         {
             if (!_placing)
@@ -934,7 +1251,7 @@ namespace AutoClicker.Engine
             }
             _placing = false;
             _followTimer.Stop();
-            _overlay.SetActiveLook(false);
+            RefreshActiveLook();
         }
 
         private void FollowTick(object sender, EventArgs e)
@@ -969,12 +1286,61 @@ namespace AutoClicker.Engine
             // loop, not here, where the menu that started this is still covering the point.
             ArmSpamLatch(_x, _y);
             _spamPaused = "";
+            Interlocked.Exchange(ref _spamClicks, 0);
+            _spamPausedSince = 0;
+            _spamLookShown = (int)SecondCursorSpamLook.Clicking;
+            _overlay.SetSpamLook(SecondCursorSpamLook.Clicking);
+            _spamStop.Reset();
 
             _spamming = true;
             _spamThread = new Thread(SpamLoop) { IsBackground = true, Name = "SecondCursorSpam" };
             _spamThread.Start();
             Logger.Info("[2nd cursor] spam-clicking at (" + _x + ", " + _y + ") every " + _spamIntervalMs
-                + " ms → target: " + DescribeTarget());
+                + " ms with " + (_spamRealClicks ? "REAL clicks" : "background clicks") + " → target: " + DescribeTarget());
+            RaiseSpamChanged();
+        }
+
+        private void RaiseSpamChanged()
+        {
+            if (_disposing) { return; }
+            try { SpamChanged?.Invoke(this, EventArgs.Empty); } catch { }
+        }
+
+        // Clicks posted since spam started.
+        private long _spamClicks;
+        // The badge showing (a SecondCursorSpamLook), and since when clicks have been held back.
+        private volatile int _spamLookShown;
+        private int _spamPausedSince;
+
+        /// <summary>Clicks posted since spam-clicking started (the menu, Live debug).</summary>
+        public long SpamClickCount => Interlocked.Read(ref _spamClicks);
+
+        /// <summary>The title of the window spam is aimed at — its program's name if it has none — or "".</summary>
+        public string SpamTargetName => _spamming ? (_spamTargetTitle ?? "") : "";
+
+        /// <summary>
+        /// Puts spam's state on the marker when it changes. A pause shows only once it has
+        /// lasted 300 ms: the menu that starts spam still covers the point for the first tick,
+        /// and a flash of "paused" every time would be noise.
+        /// </summary>
+        private void ShowSpamState(bool clicking)
+        {
+            int want;
+            if (clicking)
+            {
+                _spamPausedSince = 0;
+                want = (int)SecondCursorSpamLook.Clicking;
+            }
+            else
+            {
+                int now = Environment.TickCount;
+                if (_spamPausedSince == 0) { _spamPausedSince = now; }
+                if (unchecked(now - _spamPausedSince) < 300) { return; }
+                want = (int)SecondCursorSpamLook.Paused;
+            }
+            if (want == _spamLookShown) { return; }
+            _spamLookShown = want;
+            MarshalToUi(() => _overlay.SetSpamLook(_spamming ? (SecondCursorSpamLook)_spamLookShown : SecondCursorSpamLook.Off));
         }
 
         /// <summary>
@@ -1022,6 +1388,15 @@ namespace AutoClicker.Engine
         private IntPtr _spamTargetRoot = IntPtr.Zero;
         private uint _spamTargetPid;
         private string _spamTargetLabel = "";
+        private string _spamTargetTitle = "";
+        // The aimed-at program's name ("RobloxPlayerBeta"), to recognise it when it comes back
+        // as a new process. Looked up once per process, not once per latch.
+        private string _spamTargetProgram = "";
+        private uint _programNamePid;
+        private string _programName = "";
+        // Where the aimed-at window was, to carry the spot along when the window moves.
+        private int _spamTargetLeft, _spamTargetTop, _spamTargetWidth, _spamTargetHeight;
+        private bool _spamTargetHasRect;
         private int _spamTargetWarnTick;
         private volatile int _spamLatchX;
         private volatile int _spamLatchY;
@@ -1075,8 +1450,58 @@ namespace AutoClicker.Engine
             _spamTargetRoot = IntPtr.Zero;
             _spamTargetPid = 0;
             _spamTargetLabel = "";
+            _spamTargetTitle = "";
+            _spamTargetProgram = "";
+            _spamTargetHasRect = false;
             _spamTargetWarnTick = 0;
             _spamNeedsLatch = true;
+        }
+
+        /// <summary>The program behind a process id ("" if it can't be read), remembered per process.</summary>
+        private string ProgramNameOf(uint pid)
+        {
+            if (pid == 0) { return ""; }
+            if (pid == _programNamePid) { return _programName; }
+            string name = "";
+            try
+            {
+                using (var proc = System.Diagnostics.Process.GetProcessById((int)pid))
+                {
+                    name = proc.ProcessName;
+                }
+            }
+            catch { }
+            _programNamePid = pid;
+            _programName = name;
+            return name;
+        }
+
+        /// <summary>
+        /// True — and the spam re-aimed — when the window it was aimed at has CLOSED and a window
+        /// of the same program now sits under the cursor. A game that crashes or is relaunched
+        /// comes back as a new process, and spam compared processes, so it stayed paused for
+        /// good behind its own game ("another window is covering the target") until re-aimed
+        /// by hand — through a whole AFK session. Only a CLOSED target is replaced: while the
+        /// original is still open, another window of the same program on top (a second account's
+        /// client) is covering it, not replacing it.
+        /// </summary>
+        private bool AdoptReturningProgram(int x, int y)
+        {
+            if (_spamTargetProgram.Length == 0 || _spamTargetRoot == IntPtr.Zero || NativeMethods.IsWindow(_spamTargetRoot))
+            {
+                return false;
+            }
+            IntPtr now = TopLevelAt(x, y);
+            if (now == IntPtr.Zero) { return false; }
+            uint pid = 0;
+            try { NativeMethods.GetWindowThreadProcessId(now, out pid); } catch { }
+            if (pid == 0 || pid == OwnProcessId || pid == _spamTargetPid) { return false; }
+            if (!string.Equals(ProgramNameOf(pid), _spamTargetProgram, StringComparison.OrdinalIgnoreCase)) { return false; }
+            string was = _spamTargetLabel;
+            LatchSpamTarget(x, y);
+            Logger.Info("[2nd cursor] " + _spamTargetProgram + " is back (" + was + " had closed) — spam carries on in "
+                + _spamTargetLabel + ".");
+            return true;
         }
 
         /// <summary>Records what is under the cursor now as the thing spam is aimed at.</summary>
@@ -1087,12 +1512,84 @@ namespace AutoClicker.Engine
             _spamNeedsLatch = false;
             _spamTargetRoot = TopLevelAt(x, y);
             _spamTargetPid = 0;
+            _spamTargetHasRect = false;
+            string title = "";
             if (_spamTargetRoot != IntPtr.Zero)
             {
                 try { NativeMethods.GetWindowThreadProcessId(_spamTargetRoot, out _spamTargetPid); } catch { }
+                _spamTargetProgram = ProgramNameOf(_spamTargetPid);
+                try
+                {
+                    if (GetWindowRect(_spamTargetRoot, out MonitorRect r))
+                    {
+                        _spamTargetLeft = r.Left;
+                        _spamTargetTop = r.Top;
+                        _spamTargetWidth = r.Right - r.Left;
+                        _spamTargetHeight = r.Bottom - r.Top;
+                        _spamTargetHasRect = true;
+                    }
+                    var sb = new System.Text.StringBuilder(128);
+                    NativeMethods.GetWindowText(_spamTargetRoot, sb, sb.Capacity);
+                    title = sb.ToString().Trim();
+                }
+                catch { }
+                if (title.Length == 0) { title = _spamTargetProgram; }
             }
+            _spamTargetTitle = title;
             _spamTargetLabel = DescribeTarget();
             _spamTargetWarnTick = 0;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out MonitorRect rect);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+
+        /// <summary>
+        /// Carries the spot along when the window it is aimed at MOVES, so spam keeps clicking
+        /// the same place in it. The spot is a screen point: drag the game's window aside and
+        /// the clicks went on landing where the window used to be — on a different part of
+        /// the same program, which the aimed-at check (it compares programs) let through. A
+        /// resize is not followed: whether the spot scaled, stayed or moved with a corner is
+        /// the program's business, so the point stays and the new size becomes the reference.
+        /// </summary>
+        private bool FollowSpamTarget(ref int x, ref int y)
+        {
+            IntPtr root = _spamTargetRoot;
+            if (!_spamTargetHasRect || root == IntPtr.Zero || _spamNeedsLatch) { return false; }
+            try
+            {
+                if (!NativeMethods.IsWindow(root) || IsIconic(root) || !GetWindowRect(root, out MonitorRect r))
+                {
+                    return false;
+                }
+                int w = r.Right - r.Left, h = r.Bottom - r.Top;
+                if (r.Left == _spamTargetLeft && r.Top == _spamTargetTop && w == _spamTargetWidth && h == _spamTargetHeight)
+                {
+                    return false;
+                }
+                bool moved = w == _spamTargetWidth && h == _spamTargetHeight;
+                int dx = r.Left - _spamTargetLeft, dy = r.Top - _spamTargetTop;
+                _spamTargetLeft = r.Left;
+                _spamTargetTop = r.Top;
+                _spamTargetWidth = w;
+                _spamTargetHeight = h;
+                if (!moved) { return false; }
+                x += dx;
+                y += dy;
+                _x = x;
+                _y = y;
+                _spamLatchX = x;
+                _spamLatchY = y;
+                MarshalToUi(() =>
+                {
+                    _overlay.SetHotspot(_x, _y);
+                    RaisePositionChanged();
+                });
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -1122,11 +1619,12 @@ namespace AutoClicker.Engine
 
             bool closed = _spamTargetRoot != IntPtr.Zero && !NativeMethods.IsWindow(_spamTargetRoot);
             string why = closed
-                ? "the window it was aimed at " + _spamTargetLabel + " has closed."
+                ? "the window it was aimed at " + _spamTargetLabel + " has closed. It carries on by itself if "
+                  + (_spamTargetProgram.Length > 0 ? _spamTargetProgram : "that program") + " opens under the cursor again,"
                 : "something else is under the second cursor now (aimed at " + _spamTargetLabel
                   + ", currently " + DescribeTarget() + ").";
             Logger.Info("[2nd cursor] spam paused — " + why
-                + " Bring that window back, or move the cursor to re-aim.");
+                + (closed ? " or move the cursor to re-aim." : " Bring that window back, or move the cursor to re-aim."));
         }
 
         /// <summary>
@@ -1141,10 +1639,15 @@ namespace AutoClicker.Engine
                 IntPtr hwnd = NativeMethods.WindowFromPoint(new NativeMethods.POINT(x, y));
                 if (hwnd == IntPtr.Zero) { return false; }
                 NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
-                return pid == (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+                return pid == OwnProcessId;
             }
             catch { return false; }
         }
+
+        // Read once. This runs on every spam tick — up to 100 a second — and
+        // Process.GetCurrentProcess() builds a new Process object, holding an OS handle until
+        // the finalizer gets round to it, each time it is asked.
+        private static readonly uint OwnProcessId = (uint)Environment.ProcessId;
 
         /// <summary>Says why spam went quiet, at most once every 3 s.</summary>
         private void WarnSpamOverSelfOnce()
@@ -1163,9 +1666,13 @@ namespace AutoClicker.Engine
                 return;
             }
             _spamming = false;
+            _spamStop.Set();   // a real click in progress lets go and hands the pointer back now
             try { _spamThread?.Join(400); } catch { }
             _spamThread = null;
-            Logger.Info("[2nd cursor] spam-clicking stopped.");
+            _spamLookShown = (int)SecondCursorSpamLook.Off;
+            _overlay.SetSpamLook(SecondCursorSpamLook.Off);
+            Logger.Info("[2nd cursor] spam-clicking stopped after " + SpamClickCount + " click(s).");
+            RaiseSpamChanged();
         }
 
         private void SpamLoop()
@@ -1189,7 +1696,13 @@ namespace AutoClicker.Engine
                 {
                     ArmSpamLatch(x, y);
                 }
+                else
+                {
+                    FollowSpamTarget(ref x, ref y);   // the window it is aimed at may have moved
+                }
 
+                long tickStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                bool clicked = false;
                 if (TargetIsOwnWindow(x, y))
                 {
                     // Note this runs BEFORE the latch below, which is what keeps Tempo's
@@ -1200,33 +1713,142 @@ namespace AutoClicker.Engine
                 else if (_spamNeedsLatch)
                 {
                     LatchSpamTarget(x, y);
-                    _spamPaused = "";
-                    try { InputSimulator.BackgroundClick(x, y, _spamButton, _spamStyle); }
-                    catch { }
+                    clicked = ClickOnce(x, y);
                 }
-                else if (!SpamTargetStillThere(x, y))
+                else if (SpamTargetStillThere(x, y) || AdoptReturningProgram(x, y))
+                {
+                    // (Or the same game, relaunched after the aimed-at window closed.)
+                    clicked = ClickOnce(x, y);
+                }
+                else
                 {
                     // Pause rather than stop, exactly like the over-Tempo guard above: the
-                    // window may well come back (an alt-tab, a dialog dismissed), and
-                    // silently ending the run would be its own surprise.
+                    // window may well come back (an alt-tab, a dialog dismissed, the game
+                    // relaunched), and silently ending the run would be its own surprise.
                     _spamPaused = (_spamTargetRoot != IntPtr.Zero && !NativeMethods.IsWindow(_spamTargetRoot))
                         ? "the window it was aimed at has closed"
                         : "another window is covering the target";
                     WarnSpamTargetChangedOnce();
                 }
-                else
-                {
-                    _spamPaused = "";
-                    try { InputSimulator.BackgroundClick(x, y, _spamButton, _spamStyle); }
-                    catch { }
-                }
-                int wait = _spamIntervalMs;
+                if (clicked) { Interlocked.Increment(ref _spamClicks); }
+                ShowSpamState(clicked);
+                // A real click's hold and linger come out of the interval, so the speed
+                // chosen is the speed you get.
+                int spent = (int)((System.Diagnostics.Stopwatch.GetTimestamp() - tickStart) * 1000
+                                  / System.Diagnostics.Stopwatch.Frequency);
+                int wait = _spamIntervalMs - spent;
                 while (wait > 0 && _spamming)
                 {
                     int slice = Math.Min(20, wait);
                     Thread.Sleep(slice);
                     wait -= slice;
                 }
+            }
+        }
+
+        /// <summary>One spam click at (x, y) the chosen way. Sets why nothing went out, if it didn't.</summary>
+        private bool ClickOnce(int x, int y)
+        {
+            if (!_spamRealClicks)
+            {
+                _spamPaused = "";
+                try { return InputSimulator.BackgroundClick(x, y, _spamButton, _spamStyle); }
+                catch { return false; }
+            }
+            string held = RealClickBlocker();
+            if (held != null)
+            {
+                _spamPaused = held;
+                WarnRealClicksHeldOnce(held);
+                return false;
+            }
+            _spamPaused = "";
+            try { return RealClickAt(x, y); }
+            catch { return false; }
+        }
+
+        // VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2.
+        private static readonly int[] MouseButtonKeys = { 0x01, 0x02, 0x04, 0x05, 0x06 };
+
+        /// <summary>
+        /// Why a real click must wait, or null. A real click borrows the user's own pointer, so it
+        /// holds back while any mouse button is down (it would end a drag, or the held right button
+        /// that turns a game's camera), and while the program it is aimed at isn't the one in front:
+        /// clicking a window activates it, and a click there while the user works in another
+        /// program would pull their typing into the game.
+        /// </summary>
+        private string RealClickBlocker()
+        {
+            if (_secondHeldButtons != 0) { return "your mouse button is held down"; }
+            foreach (int vk in MouseButtonKeys)
+            {
+                if ((NativeMethods.GetAsyncKeyState(vk) & 0x8000) != 0) { return "your mouse button is held down"; }
+            }
+            if (_spamTargetPid != 0)
+            {
+                uint front = 0;
+                try
+                {
+                    IntPtr fg = NativeMethods.GetForegroundWindow();
+                    if (fg != IntPtr.Zero) { NativeMethods.GetWindowThreadProcessId(fg, out front); }
+                }
+                catch { return null; }
+                if (front != _spamTargetPid) { return "the window it is aimed at isn't in front"; }
+            }
+            return null;
+        }
+
+        private string _realClicksHeldWhy = "";
+        private int _realClicksHeldTick;
+
+        /// <summary>Says why real clicks are waiting — once per reason, again after 10 s.</summary>
+        private void WarnRealClicksHeldOnce(string why)
+        {
+            int now = Environment.TickCount;
+            if (why == _realClicksHeldWhy && unchecked(now - _realClicksHeldTick) < 10000) { return; }
+            _realClicksHeldWhy = why;
+            _realClicksHeldTick = now;
+            Logger.Info("[2nd cursor] real clicks waiting — " + why + ".");
+        }
+
+        /// <summary>
+        /// A REAL click at the second cursor, for programs that ignore posted clicks — games that
+        /// read the mouse themselves. The pointer goes there and presses, holds, releases on the same
+        /// spot, lingers, and comes back, keeping whatever movement the hand made meanwhile.
+        ///
+        /// The hold and the linger are what let a game see it. One that reads the mouse once a frame
+        /// needs the button down across a frame, and the pointer still on the spot when it reads the
+        /// release; a click and hand-back in one instant would come and go between two frames. Both
+        /// scale with the speed (at most 25 + 15 ms), so the pointer is home well over half the time.
+        /// </summary>
+        private bool RealClickAt(int x, int y)
+        {
+            if (!NativeMethods.GetCursorPos(out NativeMethods.POINT home)) { return false; }
+            int interval = _spamIntervalMs;
+            double hold = Math.Max(2.0, Math.Min(25.0, interval * 0.3));
+            double linger = Math.Max(1.0, Math.Min(15.0, interval * 0.15));
+            MouseButtonType button = _spamButton;
+            // The main mouse's reports must not take the borrowed position for the parked one.
+            _suppressMainUntilTick = Environment.TickCount + (int)(hold + linger) + 80;
+            int dx = 0, dy = 0;
+            bool down = false;
+            try
+            {
+                InputSimulator.MoveAndButton(x, y, button, true);
+                down = true;
+                PreciseWait.Wait(hold, _spamStop);
+                if (NativeMethods.GetCursorPos(out NativeMethods.POINT p1)) { dx += p1.X - x; dy += p1.Y - y; }
+                InputSimulator.MoveAndButton(x, y, button, false);   // released exactly where pressed
+                down = false;
+                PreciseWait.Wait(linger, _spamStop);
+                if (NativeMethods.GetCursorPos(out NativeMethods.POINT p2)) { dx += p2.X - x; dy += p2.Y - y; }
+                return true;
+            }
+            finally
+            {
+                // Never leave the button down or the pointer away — not on a stop, not on a throw.
+                if (down) { try { InputSimulator.ButtonUp(button); } catch { } }
+                try { InputSimulator.MoveTo(home.X + dx, home.Y + dy); } catch { }
             }
         }
 
@@ -1255,6 +1877,18 @@ namespace AutoClicker.Engine
 
         private void OnHookMouse(object sender, MouseHookEventArgs e)
         {
+            // Which mouse did THIS come from? The hook can't tell; raw input can, but this
+            // callback is SENT to the UI thread and so runs ahead of raw reports POSTED
+            // before it — the decisions below were being made on the previous report. Moving
+            // the main mouse just after the second one had its first movements held still,
+            // and a main-mouse click soon after second-mouse activity could be eaten as that
+            // mouse's stray. Hand the queued reports over first, so they are made on the
+            // current state.
+            if (_usePhysicalMouse && _secondMouseHandle != IntPtr.Zero && !e.Injected)
+            {
+                RawMouseHub.DrainPending(e.TimeStamp);
+            }
+
             // ── keep the REAL cursor perfectly still while the 2nd mouse is moving ──
             // The clean way to stop the real pointer moving is not to snap it back after
             // the fact (that jitters) but to BLOCK the movement here before the cursor
@@ -1292,9 +1926,10 @@ namespace AutoClicker.Engine
                     {
                         _placing = false;
                         _followTimer.Stop();
-                        _overlay.SetActiveLook(false);
+                        RefreshActiveLook();
                         _overlay.SetHotspot(_x, _y);
                         Logger.Info("[2nd cursor] placed at (" + _x + ", " + _y + ").");
+                        RaisePositionChanged();
                     });
                 }
                 else if (e.Type == MouseHookEventType.RightDown)
@@ -1303,7 +1938,7 @@ namespace AutoClicker.Engine
                     {
                         _placing = false;
                         _followTimer.Stop();
-                        _overlay.SetActiveLook(_spamming);
+                        RefreshActiveLook();
                         Logger.Info("[2nd cursor] grab cancelled.");
                     });
                 }
@@ -1318,7 +1953,7 @@ namespace AutoClicker.Engine
             // button (matched per-button, order-independent) OR it was the most recent
             // device. The main mouse's own clicks match neither and pass through.
             if (_usePhysicalMouse && _secondMouseHandle != IntPtr.Zero && !e.Injected
-                && (IsButtonEvent(e.Type) || e.Type == MouseHookEventType.Wheel))
+                && (IsButtonEvent(e.Type) || e.Type == MouseHookEventType.Wheel || e.Type == MouseHookEventType.HWheel))
             {
                 int nowTick = Environment.TickCount;
                 int bi = ButtonIndex(e.Type);
@@ -1362,7 +1997,8 @@ namespace AutoClicker.Engine
         private bool IsOnCursor(int x, int y)
         {
             long dx = x - _x, dy = y - _y;
-            return dx * dx + dy * dy <= (long)_markerRadius * _markerRadius;
+            long r = MarkerRadiusNow;
+            return dx * dx + dy * dy <= r * r;
         }
 
         /// <summary>
@@ -1381,10 +2017,12 @@ namespace AutoClicker.Engine
         {
             return t == MouseHookEventType.LeftDown || t == MouseHookEventType.LeftUp
                 || t == MouseHookEventType.RightDown || t == MouseHookEventType.RightUp
-                || t == MouseHookEventType.MiddleDown || t == MouseHookEventType.MiddleUp;
+                || t == MouseHookEventType.MiddleDown || t == MouseHookEventType.MiddleUp
+                || t == MouseHookEventType.XButton1Down || t == MouseHookEventType.XButton1Up
+                || t == MouseHookEventType.XButton2Down || t == MouseHookEventType.XButton2Up;
         }
 
-        /// <summary>Maps a hook event to the L=0 / R=1 / M=2 / wheel=3 index (-1 otherwise).</summary>
+        /// <summary>Maps a hook event to the L=0 / R=1 / M=2 / wheel=3 / X1=4 / X2=5 / tilt=6 index (-1 otherwise).</summary>
         private static int ButtonIndex(MouseHookEventType t)
         {
             switch (t)
@@ -1396,6 +2034,11 @@ namespace AutoClicker.Engine
                 case MouseHookEventType.MiddleDown:
                 case MouseHookEventType.MiddleUp: return 2;
                 case MouseHookEventType.Wheel: return 3;
+                case MouseHookEventType.XButton1Down:
+                case MouseHookEventType.XButton1Up: return 4;
+                case MouseHookEventType.XButton2Down:
+                case MouseHookEventType.XButton2Up: return 5;
+                case MouseHookEventType.HWheel: return 6;
                 default: return -1;
             }
         }
@@ -1418,13 +2061,22 @@ namespace AutoClicker.Engine
 
         public void Dispose()
         {
+            // A move not yet reported goes out while the UI can still save it.
+            if (_positionDirty) { RaisePositionChanged(); }
+            _disposing = true;
+            try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
+            // Tempo closing mid-drag with the second mouse: the button's release can never
+            // arrive now, and Windows would go on believing it is held.
+            ReleaseAllHeldButtons();
             StopSpam();
             StopHook();
             StopListener();
             try { _topKeeper?.Dispose(); } catch { }
             try { _deviceWatch?.Dispose(); } catch { }
             try { _followTimer?.Dispose(); } catch { }
+            try { _overlayFlush?.Dispose(); } catch { }
             try { _overlay?.Dispose(); } catch { }
+            try { _spamStop.Dispose(); } catch { }
         }
     }
 }

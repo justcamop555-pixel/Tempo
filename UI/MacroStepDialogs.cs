@@ -14,6 +14,8 @@ namespace AutoClicker.UI
         private readonly RadioButton _left;
         private readonly RadioButton _right;
         private readonly RadioButton _middle;
+        private readonly RadioButton _x1;
+        private readonly RadioButton _x2;
         private readonly CheckBox _pick;
 
         public MouseButtonType SelectedButton =>
@@ -21,12 +23,17 @@ namespace AutoClicker.UI
             _middle.Checked ? MouseButtonType.Middle :
             MouseButtonType.Left;
 
+        /// <summary>
+        /// 1 or 2 when a side button (X1 / X2) is chosen, else 0 and <see cref="SelectedButton"/>
+        /// applies. Apart from it because <see cref="MouseButtonType"/> is the clicker's own list.
+        /// </summary>
+        public int SelectedSideButton => _x1.Checked ? 1 : _x2.Checked ? 2 : 0;
+
         public bool PickPosition => _pick.Checked;
 
         public InsertClickForm(Theme theme)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = Utils.Localization.T("Insert Click");
@@ -34,7 +41,9 @@ namespace AutoClicker.UI
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false;
             MinimizeBox = false;
-            Size = new Size(320, 210);
+            // 236 tall, not 210: a second row of buttons for the side buttons, X1 and X2.
+            // The client area (was a 320×236 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(304, 197);
             BackColor = theme.Background;
             ForeColor = theme.Text;
             Font = UiFactory.BodyFont;
@@ -44,26 +53,32 @@ namespace AutoClicker.UI
             _left = new RadioButton { Text = Utils.Localization.T("Left"), Left = 28, Top = 44, Width = 80, Checked = true, ForeColor = theme.Text };
             _right = new RadioButton { Text = Utils.Localization.T("Right"), Left = 118, Top = 44, Width = 80, ForeColor = theme.Text };
             _middle = new RadioButton { Text = Utils.Localization.T("Middle"), Left = 208, Top = 44, Width = 80, ForeColor = theme.Text };
+            // The side buttons, named as the macro's steps name them. One group with the three
+            // above: all five sit directly on the form, so choosing one clears the others.
+            _x1 = new RadioButton { Text = Utils.Localization.T("X1 (Back)"), Left = 28, Top = 70, Width = 130, ForeColor = theme.Text };
+            _x2 = new RadioButton { Text = Utils.Localization.T("X2 (Forward)"), Left = 168, Top = 70, Width = 130, ForeColor = theme.Text };
 
             _pick = new CheckBox
             {
                 Text = Utils.Localization.T("Pick position on screen (otherwise use current cursor)"),
                 Left = 20,
-                Top = 84,
+                Top = 110,
                 Width = 280,
                 Height = 40,
                 ForeColor = theme.Text
             };
 
-            var ok = UiFactory.PrimaryButton("Insert", 120, 134, 80, 30, theme);
+            var ok = UiFactory.PrimaryButton("Insert", 120, 160, 80, 30, theme);
             ok.Click += (s, e) => { DialogResult = DialogResult.OK; Close(); };
 
-            var cancel = UiFactory.Button("Cancel", 210, 134, 80, 30);
+            var cancel = UiFactory.Button("Cancel", 210, 160, 80, 30);
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
 
             Controls.Add(_left);
             Controls.Add(_right);
             Controls.Add(_middle);
+            Controls.Add(_x1);
+            Controls.Add(_x2);
             Controls.Add(_pick);
             Controls.Add(ok);
             Controls.Add(cancel);
@@ -72,6 +87,7 @@ namespace AutoClicker.UI
             CancelButton = cancel;
 
             ThemeManager.Apply(this, theme);
+            UiFactory.ScaleToScreen(this);
         }
     }
 
@@ -90,8 +106,7 @@ namespace AutoClicker.UI
 
         public KeyCaptureForm(Theme theme)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = Utils.Localization.T("Insert Key Press");
@@ -99,7 +114,8 @@ namespace AutoClicker.UI
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false;
             MinimizeBox = false;
-            Size = new Size(340, 160);
+            // The client area (was a 340×160 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(324, 121);
             BackColor = theme.Background;
             ForeColor = theme.Text;
             Font = UiFactory.BodyFont;
@@ -124,6 +140,7 @@ namespace AutoClicker.UI
             CancelButton = cancel;
 
             ThemeManager.Apply(this, theme);
+            UiFactory.ScaleToScreen(this);
         }
     }
 
@@ -140,8 +157,7 @@ namespace AutoClicker.UI
 
         public PointInputForm(Theme theme, int x, int y)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             Text = Utils.Localization.T("Edit Position");
@@ -149,7 +165,8 @@ namespace AutoClicker.UI
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false;
             MinimizeBox = false;
-            Size = new Size(280, 170);
+            // The client area (was a 280×170 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(264, 131);
             BackColor = theme.Background;
             ForeColor = theme.Text;
             Font = UiFactory.BodyFont;
@@ -177,6 +194,7 @@ namespace AutoClicker.UI
             CancelButton = cancel;
 
             ThemeManager.Apply(this, theme);
+            UiFactory.ScaleToScreen(this);
         }
     }
 }

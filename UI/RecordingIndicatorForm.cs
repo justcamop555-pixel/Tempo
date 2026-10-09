@@ -33,23 +33,25 @@ namespace AutoClicker.UI
             ShowInTaskbar = false;
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
-            Size = new Size(236, 60);
+            // Its numbers are 100% ones in the screen's pixels (D): the window is not scaled by WinForms,
+            // and its fonts grow with the screen — at 150% the two lines no longer fit the 60 px badge.
+            Size = new Size(D(236), D(60));
             BackColor = _theme.Surface;
             DoubleBuffered = true;
 
             // Anchor to the top-right corner of the working area.
             var wa = Screen.PrimaryScreen.WorkingArea;
-            Location = new Point(wa.Right - Width - 16, wa.Top + 16);
+            Location = new Point(wa.Right - Width - D(16), wa.Top + D(16));
 
             // Rounded corners to match the modern on-screen overlay.
-            Region = RoundedRegion(Width, Height, 14);
+            Region = RoundedRegion(Width, Height, D(14));
 
             _label = new Label
             {
                 Left = 1,
-                Top = 8,
+                Top = D(8),
                 Width = Width - 2,
-                Height = 24,
+                Height = D(24),
                 Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
                 ForeColor = _theme.Text,
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -63,9 +65,9 @@ namespace AutoClicker.UI
             _hint = new Label
             {
                 Left = 1,
-                Top = 32,
+                Top = D(32),
                 Width = Width - 2,
-                Height = 20,
+                Height = D(20),
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 ForeColor = _theme.TextMuted,
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -82,13 +84,16 @@ namespace AutoClicker.UI
             Paint += (s, e) =>
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                using (var path = RoundedPath(Width, Height, 14))
-                using (var pen = new Pen(_theme.Danger, 2))
+                using (var path = RoundedPath(Width, Height, D(14)))
+                using (var pen = new Pen(_theme.Danger, 2f * DeviceDpi / 96f))
                 {
                     e.Graphics.DrawPath(pen, path);
                 }
             };
         }
+
+        /// <summary>One of this badge's 100% numbers in the screen's pixels.</summary>
+        private int D(int px) => (int)Math.Round(px * DeviceDpi / 96f);
 
         private static GraphicsPath RoundedPath(int w, int h, int r)
         {

@@ -19,16 +19,25 @@ namespace AutoClicker.Utils
 
         private static string Dir => SettingsManager.GetSettingsDirectory();
 
-        /// <summary>Path to the saved custom logo, or null if none is set.</summary>
+        /// <summary>
+        /// Path to the saved custom logo, or null if none is set. The NEWEST file by that name: a
+        /// replacement is saved under its own extension (customlogo.gif → customlogo.png) after the
+        /// old one is deleted, and if that delete failed the first file in the folder — often the
+        /// OLD logo, since "gif" sorts before "png" — was the one used.
+        /// </summary>
         public static string GetPath()
         {
             try
             {
                 if (!Directory.Exists(Dir)) return null;
+                string newest = null;
+                DateTime newestTime = DateTime.MinValue;
                 foreach (string f in Directory.GetFiles(Dir, BaseName + ".*"))
                 {
-                    return f;
+                    DateTime t = File.GetLastWriteTimeUtc(f);
+                    if (newest == null || t > newestTime) { newest = f; newestTime = t; }
                 }
+                return newest;
             }
             catch
             {
@@ -66,10 +75,15 @@ namespace AutoClicker.Utils
         /// </summary>
         private static void ClearQuietly()
         {
+            // Every file by that name, not just the first: one left behind stays "the logo".
             try
             {
-                string p = GetPath();
-                if (p != null) File.Delete(p);
+                if (!Directory.Exists(Dir)) return;
+                foreach (string f in Directory.GetFiles(Dir, BaseName + ".*"))
+                {
+                    try { File.Delete(f); }
+                    catch (Exception ex) { Logger.Swallow("CustomLogo.Delete", ex); }
+                }
             }
             catch
             {

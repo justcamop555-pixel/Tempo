@@ -205,6 +205,12 @@ namespace AutoClicker.Models
         /// <summary>Register the app to launch when the user signs in to Windows.</summary>
         public bool LaunchAtStartup { get; set; } = false;
 
+        /// <summary>
+        /// When Windows starts Tempo at sign-in, open its window instead of starting quietly in
+        /// the tray. Only the sign-in launch: a launch the user makes follows StartMinimizedToTray.
+        /// </summary>
+        public bool OpenWindowAtSignIn { get; set; } = false;
+
         /// <summary>Automatically hide the window to the tray when clicking starts.</summary>
         public bool HideWhenClicking { get; set; } = false;
 
@@ -376,10 +382,12 @@ namespace AutoClicker.Models
         public double MovementGamepadYawDps { get; set; } = 220.0;
 
         /// <summary>
-        /// One-time balloon shown when Tempo runs from a folder named "Tempo" —
-        /// Discord flags any "tempo\tempo.exe" path as the Steam game "Tempo".
+        /// One-time notice shown when a portable copy runs as Tempo.exe — Discord takes a program
+        /// by that name for the Steam game "Tempo". A new name on purpose: the old notice
+        /// (DiscordPathHintShown, still in older settings files) advised renaming the FOLDER,
+        /// which does not stop the match, and its flag must not hide the corrected advice.
         /// </summary>
-        public bool DiscordPathHintShown { get; set; } = false;
+        public bool DiscordNameHintShown { get; set; } = false;
 
         /// <summary>
         /// One-time notice before speaker labels are first used, explaining the
@@ -426,6 +434,15 @@ namespace AutoClicker.Models
         public bool CaptionFilterOwnVoice { get; set; } = false;
 
         /// <summary>
+        /// Caption song lyrics: let music through to the speech engine. Off by default, when
+        /// Tempo's voice detection (Silero VAD) skips sound with no voice in it — music, a fan,
+        /// gunfire — because that is where Whisper invents words; singing can count as "no
+        /// voice" too. On, everything with sound is transcribed, lyrics included, and
+        /// instrumental music can bring stray invented words back. Applies at once.
+        /// </summary>
+        public bool CaptionLyrics { get; set; } = false;
+
+        /// <summary>
         /// Endpoint id of the SPEAKER captions listen through (loopback). Empty =
         /// follow Windows' default output, the long-standing behaviour. Only
         /// meaningful on PCs with more than one playback device.
@@ -470,6 +487,13 @@ namespace AutoClicker.Models
         public int CaptionHistoryX { get; set; } = -1;
         public int CaptionHistoryY { get; set; } = -1;
 
+        /// <summary>
+        /// The history overlay's size once the user has resized it in move mode, in 96-DPI pixels;
+        /// -1 means "follow the caption font" (42% of the screen wide, seven lines tall).
+        /// </summary>
+        public int CaptionHistoryWidth { get; set; } = -1;
+        public int CaptionHistoryHeight { get; set; } = -1;
+
         /// <summary>Fun: draw a colourful trail following the mouse cursor.</summary>
         public bool CursorTrailEnabled { get; set; } = false;
 
@@ -490,6 +514,13 @@ namespace AutoClicker.Models
 
         /// <summary>Capture mouse movement when recording a macro (Macros tab checkbox).</summary>
         public bool RecordMacroMovements { get; set; } = true;
+
+        /// <summary>
+        /// Record that movement as camera turns — how far the mouse moved, from raw input —
+        /// instead of where the pointer was ("…as camera turns (games)" on the Macros tab).
+        /// Off by default: positions are what clicking on screens and menus needs.
+        /// </summary>
+        public bool RecordMacroCameraMovement { get; set; } = false;
 
         /// <summary>Capture keyboard input when recording a macro (Macros tab checkbox).</summary>
         public bool RecordMacroKeyboard { get; set; } = true;
@@ -545,6 +576,16 @@ namespace AutoClicker.Models
         public int IntervalStepMilliseconds { get; set; } = 10;
 
         /// <summary>
+        /// Hotkeys on a function key, a side or middle mouse button, a media key, Pause or Scroll
+        /// Lock also fire while Shift and/or Ctrl are held on top of their own combination: F6 still
+        /// works while you hold Shift to sprint or Ctrl to crouch. A combination bound exactly to
+        /// something else still does that. Keys that type or edit (letters, digits, arrows, Enter…)
+        /// always need their exact combination, so typing and text shortcuts are untouched.
+        /// On the Keybinds tab; kept by "Reset settings" like the bindings themselves.
+        /// </summary>
+        public bool HotkeysIgnoreExtraShiftCtrl { get; set; } = true;
+
+        /// <summary>
         /// Seconds of countdown shown before clicking begins from the Start button
         /// or the Start/Toggle hotkey (not Hold mode). Zero starts immediately.
         /// </summary>
@@ -595,6 +636,29 @@ namespace AutoClicker.Models
         /// This only changes the default; an existing settings file keeps whatever it holds.
         /// </summary>
         public bool AccountsEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Tab or its own window. Defaults to Tab — the shape everyone already has — and the
+        /// page itself is built the same either way; only which container it is parented to
+        /// changes, so switching costs no restart.
+        ///
+        /// Remembered separately from the window's own size and position below, because a
+        /// user who docks it back to a tab and later detaches it again expects the window to
+        /// return where they left it.
+        /// </summary>
+        public AccountsPlacement AccountsPlacement { get; set; } = AccountsPlacement.Tab;
+
+        /// <summary>Last bounds of the detached Accounts window. -1 = never placed; centre it.</summary>
+        public int AccountsWindowLeft { get; set; } = -1;
+        public int AccountsWindowTop { get; set; } = -1;
+        public int AccountsWindowWidth { get; set; } = -1;
+        public int AccountsWindowHeight { get; set; } = -1;
+
+        /// <summary>
+        /// Keep the detached Accounts window above other windows. Off by default: it is a
+        /// convenience for watching session dots while a game is up, not something to impose.
+        /// </summary>
+        public bool AccountsWindowTopMost { get; set; } = false;
 
         /// <summary>
         /// Hold Roblox's single-instance lock so several accounts can run at once. OFF, and
@@ -651,8 +715,12 @@ namespace AutoClicker.Models
         public int SecondCursorScale { get; set; } = 100;           // 50..250 %
         public int SecondCursorSpamButton { get; set; } = 0;        // MouseButtonType (Left)
         public int SecondCursorSpamCps { get; set; } = 10;          // clicks per second
+        // Spam with REAL clicks: the pointer jumps to the second cursor for each one, and only
+        // while the program it is aimed at is in front. Off = posted clicks, which leave the
+        // pointer alone but never reach a game that reads the mouse itself.
+        public bool SecondCursorSpamRealClicks { get; set; } = false;
         // When a SECOND physical mouse is plugged in, let it drive the second cursor
-        // directly (move it, left-click = click at it, right-click = start/stop spam),
+        // directly (move it; its buttons click at it; middle-click = start/stop spam),
         // while your main mouse keeps controlling the normal Windows cursor. Off by
         // default; needs two mice. See SecondMouseListener.
         public bool SecondCursorUsePhysicalMouse { get; set; } = false;
@@ -660,6 +728,11 @@ namespace AutoClicker.Models
         // Raw device path of the mouse the user chose to drive the second cursor. Empty =
         // ask by wiggling. Persisted so the same mouse re-binds automatically next time.
         public string SecondCursorMouseDeviceName { get; set; } = "";
+        // Where the second cursor was last parked, in screen pixels; int.MinValue = never
+        // placed. It used to start at (400, 400) on every launch, so each update, restart or
+        // sign-in threw away the spot it had been aimed at.
+        public int SecondCursorX { get; set; } = int.MinValue;
+        public int SecondCursorY { get; set; } = int.MinValue;
 
         // ── Start-delay countdown ───────────────────────────────────────────────
         /// <summary>Play a soft beep on each second of the start-delay count-in.</summary>
@@ -868,6 +941,25 @@ namespace AutoClicker.Models
             WindowTop = local.WindowTop;
             WindowWidth = local.WindowWidth;
             WindowHeight = local.WindowHeight;
+            // The detached Accounts window's place is this PC's too — a file exported from a
+            // three-monitor desk would otherwise open it off-screen here.
+            AccountsWindowLeft = local.AccountsWindowLeft;
+            AccountsWindowTop = local.AccountsWindowTop;
+            AccountsWindowWidth = local.AccountsWindowWidth;
+            AccountsWindowHeight = local.AccountsWindowHeight;
+            // So is the second cursor's parked spot — a point on THESE monitors.
+            SecondCursorX = local.SecondCursorX;
+            SecondCursorY = local.SecondCursorY;
+            // And where the caption bar and the caption history were put. A file from another
+            // desk carried that desk's spots (a bar parked on a monitor this PC hasn't got), and
+            // Reset to defaults threw them away with the preferences — "Default place" in either
+            // window's move-mode menu is the way to reset those.
+            CaptionBarX = local.CaptionBarX;
+            CaptionBarY = local.CaptionBarY;
+            CaptionHistoryX = local.CaptionHistoryX;
+            CaptionHistoryY = local.CaptionHistoryY;
+            CaptionHistoryWidth = local.CaptionHistoryWidth;
+            CaptionHistoryHeight = local.CaptionHistoryHeight;
             CaptionResumeAfterRestart = local.CaptionResumeAfterRestart;
             InstallOfferDeclined = local.InstallOfferDeclined;
         }
@@ -919,7 +1011,7 @@ namespace AutoClicker.Models
         private void KeepAnswersFrom(AppSettings s)
         {
             HasShownTrayIntro = s.HasShownTrayIntro;
-            DiscordPathHintShown = s.DiscordPathHintShown;
+            DiscordNameHintShown = s.DiscordNameHintShown;
             SpeakerLabelsNoticeShown = s.SpeakerLabelsNoticeShown;
             SkippedUpdateVersion = s.SkippedUpdateVersion;
             LastBugReportChannel = s.LastBugReportChannel;
@@ -952,8 +1044,11 @@ namespace AutoClicker.Models
             MacroSlot2 = s.MacroSlot2;
             MacroSlot3 = s.MacroSlot3;
             IntervalStepMilliseconds = s.IntervalStepMilliseconds;
+            HotkeysIgnoreExtraShiftCtrl = s.HotkeysIgnoreExtraShiftCtrl;
 
             AccountsEnabled = s.AccountsEnabled;
+            AccountsPlacement = s.AccountsPlacement;
+            AccountsWindowTopMost = s.AccountsWindowTopMost;
             RobloxMultiInstance = s.RobloxMultiInstance;
             AccountApiEnabled = s.AccountApiEnabled;
             AccountApiPort = s.AccountApiPort;

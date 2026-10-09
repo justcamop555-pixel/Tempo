@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace AutoClicker.Utils
@@ -8,7 +9,7 @@ namespace AutoClicker.Utils
     ///
     /// Tempo ships as a compressed single-file bundle, so on the FIRST run of any given
     /// build the runtime unpacks its native libraries into
-    /// %TEMP%\.net\Tempo\&lt;content-hash&gt;\ and runs them from there. The hash changes
+    /// %TEMP%\.net\&lt;exe name&gt;\&lt;content-hash&gt;\ and runs them from there. The hash changes
     /// with every build, so every version gets its own folder — and nothing ever deletes
     /// the old ones. They are not small: measured on this machine, 263 MB per build.
     ///
@@ -19,7 +20,8 @@ namespace AutoClicker.Utils
     ///
     /// So Tempo tidies up after itself. The rules are deliberately timid, because this
     /// is code that deletes things:
-    ///   • only ever inside %TEMP%\.net\Tempo — never TEMP itself, never anywhere else;
+    ///   • only ever inside Tempo's own %TEMP%\.net\&lt;name&gt; folders (see Roots) — never
+    ///     TEMP itself, never anywhere else;
     ///   • never the folder this process is running from;
     ///   • only folders untouched for a few days, so a build still in use is left alone;
     ///   • every failure is ignored — a locked file means some Tempo is using it, which
@@ -50,25 +52,24 @@ namespace AutoClicker.Utils
         /// <summary>
         /// Sweeps in the background and logs what it reclaimed. Safe to call at startup:
         /// it never touches the UI thread and never throws.
+        ///
+        /// In background mode (<see cref="BackgroundWork"/>), and after a start-with-Windows
+        /// launch only once sign-in has settled: the first start after an update deletes the
+        /// previous build, 270 MB, and that used to happen at full priority in the first
+        /// second of the launch.
         /// </summary>
         public static void SweepInBackground()
         {
-            try
-            {
-                System.Threading.Tasks.Task.Run(() =>
+            BackgroundWork.Start("bundle clean-up",
+                StartupManager.LaunchedAtStartup() ? BackgroundWork.SignInDelayMs : 0, () =>
                 {
                     try { Sweep(); }
                     catch (Exception ex) { Logger.Warn("[cleanup] sweep failed: " + ex.Message); }
                 });
-            }
-            catch { }
         }
 
         private static void Sweep()
         {
-            string root = Path.Combine(Path.GetTempPath(), ".net", "Tempo");
-            if (!Directory.Exists(root)) { return; }
-
             // The folder we are running from is off limits, whatever its age.
             string live = "";
             try
@@ -83,6 +84,54 @@ namespace AutoClicker.Utils
             DateTime cutoff = DateTime.UtcNow - MinimumAge;
             long freed = 0;
             int removed = 0, kept = 0;
+
+            foreach (string root in Roots(live))
+            {
+                SweepRoot(root, live, cutoff, ref freed, ref removed, ref kept);
+            }
+
+            if (removed > 0)
+            {
+                Logger.Info("[cleanup] removed " + removed + " stale bundle folder(s) from TEMP, freeing " +
+                            (freed / (1024 * 1024)) + " MB (" + kept + " kept).");
+            }
+        }
+
+        /// <summary>
+        /// Every %TEMP%\.net\&lt;name&gt; folder Tempo unpacks into. The runtime names it after the exe's
+        /// FILE name, so one root was not enough once the installed copy became TempoClicker.exe: its
+        /// builds went to .net\TempoClicker, which nothing swept, while .net\Tempo kept only the
+        /// downloads (still Tempo.exe) and installs from before the rename. Measured on this project's
+        /// PC: the same build unpacked to both .net\Tempo\t2ejvhPonQr1 and .net\TempoClicker\t2ejvhPonQr1.
+        /// A copy the user renamed adds its own folder; that one is Tempo's by definition, since Tempo
+        /// is running from it. Never anything but a direct child of %TEMP%\.net.
+        /// </summary>
+        private static List<string> Roots(string live)
+        {
+            string net = Path.GetFullPath(Path.Combine(Path.GetTempPath(), ".net")).TrimEnd('\\');
+            var roots = new List<string>
+            {
+                Path.Combine(net, Path.GetFileNameWithoutExtension(DeploymentInfo.LegacyExeName)),
+                Path.Combine(net, Path.GetFileNameWithoutExtension(DeploymentInfo.InstalledExeName)),
+            };
+            try
+            {
+                string own = live.Length > 0 ? Path.GetDirectoryName(live) : null;
+                if (!string.IsNullOrEmpty(own) &&
+                    string.Equals(Path.GetDirectoryName(own), net, StringComparison.OrdinalIgnoreCase) &&
+                    !roots.Exists(r => r.Equals(own, StringComparison.OrdinalIgnoreCase)))
+                {
+                    roots.Add(own);
+                }
+            }
+            catch { }
+            return roots;
+        }
+
+        private static void SweepRoot(string root, string live, DateTime cutoff,
+                                      ref long freed, ref int removed, ref int kept)
+        {
+            if (!Directory.Exists(root)) { return; }
 
             string[] folders;
             try { folders = Directory.GetDirectories(root); }
@@ -139,12 +188,6 @@ namespace AutoClicker.Utils
                     // In use, permission-denied, or vanished under us. Leave it.
                     kept++;
                 }
-            }
-
-            if (removed > 0)
-            {
-                Logger.Info("[cleanup] removed " + removed + " stale bundle folder(s) from TEMP, freeing " +
-                            (freed / (1024 * 1024)) + " MB (" + kept + " kept).");
             }
         }
 

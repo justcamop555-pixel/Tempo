@@ -68,13 +68,16 @@ if defined BADARG (
 )
 
 set "SRC=%~dp0"
-REM  The folder is deliberately NOT named "Tempo": Discord's game detection flags
-REM  any process at a path ending in "tempo\tempo.exe" as the Steam game "Tempo"
-REM  (publisher Aestronauts) and shows it as playing-a-game. "TempoClicker\Tempo.exe"
-REM  keeps the exe name (updates & docs unchanged) while breaking that path match.
+REM  Neither the folder nor the program is named "Tempo": Discord's game detection
+REM  lists the Steam game "Tempo" (publisher Aestronauts) as tempo\tempo.exe and
+REM  shows anyone running a matching program as playing it. Renaming only the
+REM  folder (TempoClicker\Tempo.exe) did NOT stop that, so the installed program is
+REM  TempoClicker.exe too. Downloads keep the name Tempo.exe; this installs it under
+REM  the new name, and an older install's Tempo.exe is removed once this is in place.
 set "INSTALL_DIR=%LOCALAPPDATA%\Programs\TempoClicker"
 set "LEGACY_DIR=%LOCALAPPDATA%\Programs\Tempo"
-set "EXE=%INSTALL_DIR%\Tempo.exe"
+set "EXE=%INSTALL_DIR%\TempoClicker.exe"
+set "OLDEXE=%INSTALL_DIR%\Tempo.exe"
 set "UNINST=%INSTALL_DIR%\uninstall.cmd"
 set "SM_LNK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Tempo.lnk"
 REM  The Desktop Windows actually shows, which is not always the Desktop folder in the user profile:
@@ -187,9 +190,12 @@ REM  Upgrade detection: is an older (or newer) Tempo already installed?
 REM ---------------------------------------------------------------------------
 set "NEWVER=1.0"
 where powershell >nul 2>&1 && for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Item '%SRC%Tempo.exe').VersionInfo.FileVersion" 2^>nul`) do set "NEWVER=%%v"
-if exist "%EXE%" (
+set "PREV="
+if exist "%OLDEXE%" set "PREV=%OLDEXE%"
+if exist "%EXE%" set "PREV=%EXE%"
+if defined PREV (
   set "OLDVER=?"
-  where powershell >nul 2>&1 && for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Item '%EXE%').VersionInfo.FileVersion" 2^>nul`) do set "OLDVER=%%v"
+  where powershell >nul 2>&1 && for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Item '%PREV%').VersionInfo.FileVersion" 2^>nul`) do set "OLDVER=%%v"
   echo   An existing install was found ^(version !OLDVER!^).
   echo   This will update it to version !NEWVER!.
   >> "%LOG%" echo Upgrade: !OLDVER! -^> !NEWVER!
@@ -201,12 +207,15 @@ REM ---------------------------------------------------------------------------
 REM  Close a running Tempo so files aren't locked during copy.
 REM ---------------------------------------------------------------------------
 REM find by its full path: with Git's Unix tools on the PATH a bare find is GNU find, which would miss a running Tempo
-tasklist /fi "imagename eq Tempo.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "Tempo.exe" >nul
-if not errorlevel 1 (
-  echo   Tempo is currently running - closing it first ...
-  taskkill /im Tempo.exe /f >nul 2>&1
-  >> "%LOG%" echo Killed : running Tempo.exe before copy
-  "%SystemRoot%\System32\timeout.exe" /t 1 >nul
+REM Under both names: an install from before the rename runs as Tempo.exe.
+for %%N in (TempoClicker.exe Tempo.exe) do (
+  tasklist /fi "imagename eq %%N" 2>nul | "%SystemRoot%\System32\find.exe" /i "%%N" >nul
+  if not errorlevel 1 (
+    echo   Tempo is currently running - closing it first ...
+    taskkill /im %%N /f >nul 2>&1
+    >> "%LOG%" echo Killed : running %%N before copy
+    "%SystemRoot%\System32\timeout.exe" /t 1 >nul
+  )
 )
 
 echo   Installing to:
@@ -222,6 +231,7 @@ REM  there afterwards - on an update there always is - so a failed copy still sa
 REM  the new version number into Settings > Apps over the old program.
 set "HADEXE="
 if exist "%EXE%" set "HADEXE=1"
+if exist "%OLDEXE%" set "HADEXE=1"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>&1
 set "COPIED="
 for /l %%i in (1,1,10) do if not defined COPIED (
@@ -253,6 +263,19 @@ if exist "%LEGACY_DIR%\Tempo.exe" (
   echo   Removing old install at %LEGACY_DIR% ...
   rd /s /q "%LEGACY_DIR%" >nul 2>&1
   >> "%LOG%" echo Removed: legacy install at %LEGACY_DIR%
+)
+REM  And this folder's program from before the rename to TempoClicker.exe - again
+REM  only now, with the new one in place. A sign-in entry that still starts it is
+REM  moved to the new name (Tempo moves shortcuts and taskbar pins itself on its
+REM  next start).
+if exist "%OLDEXE%" (
+  del /q "%OLDEXE%" >nul 2>&1
+  >> "%LOG%" echo Removed: %OLDEXE% ^(the program is TempoClicker.exe now^)
+)
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Tempo 2>nul | "%SystemRoot%\System32\find.exe" /i "%OLDEXE%" >nul
+if not errorlevel 1 (
+  reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Tempo /t REG_SZ /d "\"%EXE%\" --startup" /f >nul
+  >> "%LOG%" echo Moved  : sign-in entry to %EXE%
 )
 if exist "%SRC%Tempo.exe.sha256" copy /y "%SRC%Tempo.exe.sha256" "%INSTALL_DIR%\Tempo.exe.sha256" >nul
 if exist "%SRC%uninstall.cmd"     ( copy /y "%SRC%uninstall.cmd"     "%UNINST%" >nul ) else if exist "%~dp0uninstall.cmd" ( copy /y "%~dp0uninstall.cmd" "%UNINST%" >nul )
@@ -366,7 +389,7 @@ if exist "%SM_LNK%" (
 ) else (
   echo   Tempo is installed here ^(no Start Menu shortcut was created^):
   echo     %EXE%
-  echo   You can double-click that Tempo.exe to run it, or make your own shortcut.
+  echo   You can double-click that file to run it, or make your own shortcut.
 )
 echo   To remove it later: Settings ^> Apps, or run uninstall.cmd in:
 echo     %INSTALL_DIR%

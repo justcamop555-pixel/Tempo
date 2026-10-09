@@ -26,8 +26,7 @@ namespace AutoClicker.UI
         {
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             Text = Utils.Localization.T("Save Recording");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -121,6 +120,11 @@ namespace AutoClicker.UI
             AcceptButton = save;
 
             Button keep = UiFactory.Button("Keep default", 284, 258, 132, 40);
+            // As wide as its words ("Mantener predeterminado" needs 154 px), still ending at the right
+            // margin; Save gives up the difference.
+            UiFactory.FitToText96(keep, 132);
+            keep.Left = 416 - keep.Width;
+            save.Width = keep.Left - 10 - save.Left;
             keep.BackColor = theme.Surface2;
             keep.ForeColor = Theme.Readable(theme.TextMuted, theme.Surface2);
             keep.FlatAppearance.BorderColor = theme.Border;
@@ -129,6 +133,7 @@ namespace AutoClicker.UI
             CancelButton = keep;
 
             Shown += (s, e) => { _nameBox.Focus(); _nameBox.SelectAll(); };
+            UiFactory.ScaleToScreen(this);
         }
 
         private static Label MakeCaption(Theme theme, string text, int y)

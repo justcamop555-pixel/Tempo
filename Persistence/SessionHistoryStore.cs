@@ -24,6 +24,18 @@ namespace AutoClicker.Persistence
             WriteIndented = true
         };
 
+        /// <summary>Builds the JSON description of session records ahead of the first Load — see SettingsManager.WarmUp.</summary>
+        internal static void WarmUp()
+        {
+            try
+            {
+                // A round trip, so every property's accessors are made too (see SettingsManager.WarmUp).
+                string json = JsonSerializer.Serialize(new List<SessionRecord> { new SessionRecord() }, Options);
+                JsonSerializer.Deserialize<List<SessionRecord>>(json, Options);
+            }
+            catch (Exception ex) { Logger.Swallow("SessionHistoryStore.WarmUp", ex); }
+        }
+
         private readonly List<SessionRecord> _records = new List<SessionRecord>();
 
         public IReadOnlyList<SessionRecord> Records => _records;

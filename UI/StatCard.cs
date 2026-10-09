@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -10,7 +11,7 @@ namespace AutoClicker.UI
     /// top and a large bold value below it. Used to build the Statistics
     /// dashboard. Owner-drawn so it looks consistent across themes and DPI.
     /// </summary>
-    public sealed class StatCard : Control
+    public sealed class StatCard : Control, IPaintedText
     {
         private string _caption = "";
         private string _value = "0";
@@ -105,10 +106,10 @@ namespace AutoClicker.UI
             }
 
             using (var capBrush = new SolidBrush(CaptionColor))
-            using (var capFont = new Font("Segoe UI", 8.5f, FontStyle.Regular))
+            using (var capFont = new Font("Segoe UI", CaptionFontSize, FontStyle.Regular))
             {
                 string cap = _caption.ToUpperInvariant();
-                g.DrawString(cap, capFont, capBrush, 14, 24);
+                g.DrawString(cap, capFont, capBrush, CaptionX, CaptionY);
 
                 // The sublabel goes on the CAPTION row, right-aligned — not beside the
                 // value, where it used to live. The value is 18pt bold and a six-figure
@@ -144,6 +145,32 @@ namespace AutoClicker.UI
             {
                 g.DrawString(_value, valFont, valBrush, 12, 40);
             }
+        }
+
+        private const float CaptionFontSize = 8.5f;
+        private const int CaptionX = 14, CaptionY = 24;
+
+        /// <summary>
+        /// The upper-case caption, for the layout checks. It is drawn with nothing to clip or shorten
+        /// it, so a long translation simply runs off the card; its room ends inside the card's border.
+        /// </summary>
+        IEnumerable<PaintedText> IPaintedText.PaintedTexts(Graphics g, float unitsPerPixel)
+        {
+            if (string.IsNullOrEmpty(_caption) || g == null) { yield break; }
+            float u = unitsPerPixel > 0f ? unitsPerPixel : 1f;
+            string cap = _caption.ToUpperInvariant();
+            Size size;
+            using (var capFont = new Font("Segoe UI", CaptionFontSize, FontStyle.Regular))
+            {
+                size = Size.Ceiling(g.MeasureString(cap, capFont));
+            }
+            // The card is drawn from x = 1 and 4 px narrower than the control (its shadow), with a
+            // rounded border: the caption should end 8 px inside it. Painted pixels × u; the card's
+            // width is already in the layout's units.
+            int x = (int)Math.Round(CaptionX * u);
+            var ink = new Rectangle(x, (int)Math.Round(CaptionY * u), (int)Math.Ceiling(size.Width * u), (int)Math.Ceiling(size.Height * u));
+            var room = Rectangle.FromLTRB(x, 0, Math.Max(x, Width - (int)Math.Ceiling(12 * u)), Height);
+            yield return new PaintedText(cap, ink, room);
         }
 
         private static Color Lighten(Color c, double f)

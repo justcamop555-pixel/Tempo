@@ -383,16 +383,19 @@ namespace AutoClicker.Utils
             {
                 get
                 {
-                    string s = Family;
+                    // The sizes are names ("Large"); only the fallback is a phrase to translate.
+                    string s = Family == "Unknown size" ? Localization.T(Family) : Family;
                     if (Generation.Length > 0) { s += " " + Generation; }
                     if (IsTurbo) { s += " Turbo"; }
                     return s;
                 }
             }
 
+            // These read in the user's language: the model dialog and the Models… menu show them as they
+            // are, and every one of them was English in all six languages.
             public string LanguageText
             {
-                get { return IsMultilingual ? "any language" : "English only"; }
+                get { return Localization.T(IsMultilingual ? "any language" : "English only"); }
             }
 
             /// <summary>One line for a menu: "Large v3 Turbo · any language · Q5_0 · 547 MB".</summary>
@@ -409,15 +412,15 @@ namespace AutoClicker.Utils
             {
                 get
                 {
-                    if (IsTurbo) { return "Fast for its accuracy — the decoder is cut down, so it keeps up far better than a full Large."; }
+                    if (IsTurbo) { return Localization.T("Fast for its accuracy — the decoder is cut down, so it keeps up far better than a full Large."); }
                     switch (Family)
                     {
-                        case "Tiny": return "Instant even on weak PCs; accuracy is rough.";
-                        case "Base": return "Quick on any modern PC; decent accuracy.";
-                        case "Small": return "A good middle ground — noticeably better than Base, still real-time on most PCs.";
-                        case "Medium": return "Accurate, but needs a strong CPU or the GPU engine to stay live.";
-                        case "Large": return "The most accurate, and the heaviest — realistically needs the GPU engine for live captions.";
-                        default: return "Tempo doesn't recognise this size, so it can't predict whether it will keep up.";
+                        case "Tiny": return Localization.T("Instant even on weak PCs; accuracy is rough.");
+                        case "Base": return Localization.T("Quick on any modern PC; decent accuracy.");
+                        case "Small": return Localization.T("A good middle ground — noticeably better than Base, still real-time on most PCs.");
+                        case "Medium": return Localization.T("Accurate, but needs a strong CPU or the GPU engine to stay live.");
+                        case "Large": return Localization.T("The most accurate, and the heaviest — realistically needs the GPU engine for live captions.");
+                        default: return Localization.T("Tempo doesn't recognise this size, so it can't predict whether it will keep up.");
                     }
                 }
             }
@@ -428,8 +431,8 @@ namespace AutoClicker.Utils
                 get
                 {
                     return IsQuantised
-                        ? "Quantised (" + Precision + ") — about a third of the size and CPU of the full model, with almost no accuracy lost."
-                        : "Full precision (" + Precision + ") — the original weights, largest and slowest of this size.";
+                        ? Localization.F("Quantised ({0}) — about a third of the size and CPU of the full model, with almost no accuracy lost.", Precision)
+                        : Localization.F("Full precision ({0}) — the original weights, largest and slowest of this size.", Precision);
                 }
             }
         }

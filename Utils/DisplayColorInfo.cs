@@ -11,20 +11,19 @@ namespace AutoClicker.Utils
     /// causes that live entirely outside the app, and Tempo had no way to see any of them:
     ///
     ///  • HDR / Advanced Color turned ON. Tempo is an SDR application, so Windows
-    ///    tone-maps everything it draws into the HDR signal. Dark themes come out milky
-    ///    and greys lift; the app is painting exactly the colour it was told to and the
-    ///    compositor is changing it afterwards. This is by far the most common cause, and
-    ///    it is invisible from inside the process — GetPixel would still read the colour
-    ///    we drew.
+    ///    converts everything it draws into the HDR signal — and it decodes SDR with the
+    ///    piecewise sRGB curve, where an SDR monitor uses gamma 2.2. The two agree on
+    ///    white and mid-greys but not in the shadows: dark themes come out milky and
+    ///    near-blacks lift to charcoal. The app is painting exactly the colour it was told
+    ///    to and the compositor changes it afterwards, so GetPixel would still read the
+    ///    colour we drew. Theme.ForHdr pre-compensates for exactly that curve difference.
     ///  • A desktop below 32-bit colour. At 16-bit, every gradient and every blended
     ///    surface banding-steps, and near-identical greys collapse into one another.
     ///  • Wide-gamut panels running without colour management, where an sRGB value is
     ///    displayed against a much larger gamut and comes out oversaturated.
     ///
-    /// Everything here is read-only and best-effort: it explains what is happening rather
-    /// than trying to correct it, because an SDR app cannot undo the compositor's
-    /// tone-mapping from inside itself, and guessing a correction would make the colours
-    /// wrong in a second, less predictable way.
+    /// Everything here is read-only and best-effort: it reports what Windows is doing,
+    /// per screen, and the palette decides what to do about it.
     /// </summary>
     public static class DisplayColorInfo
     {
@@ -132,8 +131,48 @@ namespace AutoClicker.Utils
         [DllImport("user32.dll")]
         private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO requestPacket);
 
+        /// <summary>How bright Windows makes SDR white on an HDR output (the "SDR content brightness" slider).</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DISPLAYCONFIG_SDR_WHITE_LEVEL
+        {
+            public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+            /// <summary>In thousandths of 80 nits: 1000 = 80 nits.</summary>
+            public uint SDRWhiteLevel;
+        }
+
+        /// <summary>The GDI name (\\.\DISPLAY1) of a path's SOURCE — what Screen.DeviceName reports.</summary>
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DISPLAYCONFIG_SOURCE_DEVICE_NAME
+        {
+            public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string viewGdiDeviceName;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SDR_WHITE_LEVEL requestPacket);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SOURCE_DEVICE_NAME requestPacket);
+
         private const uint QDC_ONLY_ACTIVE_PATHS = 0x00000002;
+        private const int ERROR_INSUFFICIENT_BUFFER = 122;
+        private const uint DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME = 1;
         private const uint DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 9;
+        private const uint DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL = 11;
+
+        /// <summary>One active output: which screen it drives and what Windows does to SDR colour on it.</summary>
+        public struct Output
+        {
+            /// <summary>\\.\DISPLAY1 and so on — the same string as Screen.DeviceName; null if unknown.</summary>
+            public string GdiName;
+            public bool HdrSupported;
+            public bool HdrOn;
+            public bool WideGamut;
+            public uint BitsPerChannel;
+
+            /// <summary>SDR white in nits while HDR is on (80 at the slider's lowest, 480 at its highest); 0 if unknown.</summary>
+            public double SdrWhiteNits;
+        }
 
         /// <summary>The panel's advanced-colour state, as Windows reports it.</summary>
         public struct AdvancedColor
@@ -152,40 +191,63 @@ namespace AutoClicker.Utils
 
             /// <summary>True when the outputs disagree — one HDR, one not.</summary>
             public bool Mixed => Outputs > 1 && OutputsHdrOn > 0 && OutputsHdrOn < Outputs;
+
+            /// <summary>Each output that answered, in Windows' path order.</summary>
+            public Output[] PerOutput;
+
+            /// <summary>The dimmest SDR white among the HDR outputs, in nits; 0 when none is known.</summary>
+            public double LowestSdrWhiteNits;
         }
 
-        private static AdvancedColor? _cached;
+        /// <summary>
+        /// A boxed <see cref="AdvancedColor"/>, or null. Boxed so it is read and replaced as ONE
+        /// reference: the splash thread asks too, and a nullable struct of this size can be read
+        /// half-written.
+        /// </summary>
+        private static volatile object _cached;
 
         /// <summary>
-        /// Advanced-colour state for the primary output. Cached: it needs two P/Invokes
-        /// and a display-config query, and it can only change when the user changes a
-        /// display setting — which Tempo already handles by restarting its theme pass.
+        /// Advanced-colour state of every active output. Cached: it is a display-config query plus
+        /// three calls per output, and it only changes with the display configuration. MainForm
+        /// calls <see cref="Invalidate"/> when Windows reports a display change — it used to be
+        /// read ONCE, so switching HDR on or off with Tempo open left the colour correction, the
+        /// Settings note and Live debug on the old answer until Tempo was restarted.
         /// </summary>
         public static AdvancedColor Advanced()
         {
-            if (_cached.HasValue) { return _cached.Value; }
+            object hit = _cached;
+            if (hit != null) { return (AdvancedColor)hit; }
             var result = new AdvancedColor();
             try
             {
-                if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out uint pathCount,
-                                                out uint modeCount) != 0 || pathCount == 0)
+                // The configuration can change between sizing the buffers and filling them —
+                // most likely at the very moment this is asked, straight after Windows reports a
+                // display change. Windows says so with ERROR_INSUFFICIENT_BUFFER and the answer
+                // is to ask again. A query that still fails is NOT cached: cached, "no HDR
+                // anywhere" stood until the next display change, with HDR on.
+                uint pathCount = 0, modeCount = 0;
+                DISPLAYCONFIG_PATH_INFO[] paths = null;
+                int rc = ERROR_INSUFFICIENT_BUFFER;
+                for (int attempt = 0; attempt < 3 && rc == ERROR_INSUFFICIENT_BUFFER; attempt++)
                 {
-                    _cached = result; return result;
+                    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out pathCount, out modeCount) != 0
+                        || pathCount == 0)
+                    {
+                        return result;
+                    }
+                    paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
+                    var modes = new DISPLAYCONFIG_MODE_INFO[modeCount];
+                    rc = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref pathCount, paths,
+                                            ref modeCount, modes, IntPtr.Zero);
                 }
-
-                var paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
-                var modes = new DISPLAYCONFIG_MODE_INFO[modeCount];
-                if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref pathCount, paths,
-                                       ref modeCount, modes, IntPtr.Zero) != 0)
-                {
-                    _cached = result; return result;
-                }
+                if (rc != 0) { return result; }
 
                 // EVERY active output, not just the first. Outputs genuinely differ — the
                 // machine this was written on has HDR on across two panels running at 8
                 // and 10 bits per channel — and Tempo's window can be dragged onto any of
-                // them, so "is anything tone-mapping us?" is the question that matters.
+                // them, so the correction follows the window from one to the next (HdrOnFor).
                 // Mixed setups are reported as mixed rather than averaged into a fiction.
+                var outputs = new System.Collections.Generic.List<Output>();
                 for (int i = 0; i < pathCount; i++)
                 {
                     var req = new DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO();
@@ -207,7 +269,42 @@ namespace AutoClicker.Utils
                     result.Supported |= (req.value & 0x1) != 0;
                     result.Enabled |= enabled;
                     result.WideGamut |= (req.value & 0x4) != 0;
+
+                    var o = new Output
+                    {
+                        HdrSupported = (req.value & 0x1) != 0,
+                        HdrOn = enabled,
+                        WideGamut = (req.value & 0x4) != 0,
+                        BitsPerChannel = req.bitsPerColorChannel,
+                    };
+
+                    // Which screen this is, so the palette can follow the window: a SOURCE property.
+                    var name = new DISPLAYCONFIG_SOURCE_DEVICE_NAME();
+                    name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                    name.header.size = (uint)Marshal.SizeOf(typeof(DISPLAYCONFIG_SOURCE_DEVICE_NAME));
+                    name.header.adapterId = paths[i].sourceInfo.adapterId;
+                    name.header.id = paths[i].sourceInfo.id;
+                    if (DisplayConfigGetDeviceInfo(ref name) == 0) { o.GdiName = name.viewGdiDeviceName; }
+
+                    if (enabled)
+                    {
+                        var white = new DISPLAYCONFIG_SDR_WHITE_LEVEL();
+                        white.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+                        white.header.size = (uint)Marshal.SizeOf(typeof(DISPLAYCONFIG_SDR_WHITE_LEVEL));
+                        white.header.adapterId = paths[i].targetInfo.adapterId;
+                        white.header.id = paths[i].targetInfo.id;
+                        if (DisplayConfigGetDeviceInfo(ref white) == 0 && white.SDRWhiteLevel > 0)
+                        {
+                            o.SdrWhiteNits = white.SDRWhiteLevel / 1000.0 * 80.0;
+                            if (result.LowestSdrWhiteNits <= 0 || o.SdrWhiteNits < result.LowestSdrWhiteNits)
+                            {
+                                result.LowestSdrWhiteNits = o.SdrWhiteNits;
+                            }
+                        }
+                    }
+                    outputs.Add(o);
                 }
+                result.PerOutput = outputs.ToArray();
             }
             catch (Exception ex) { Logger.Swallow("DisplayColorInfo.Advanced", ex); }
 
@@ -217,6 +314,25 @@ namespace AutoClicker.Utils
 
         /// <summary>Forgets the cached answer, for when the display configuration changes.</summary>
         public static void Invalidate() { _cached = null; }
+
+        /// <summary>
+        /// Whether Windows converts SDR colour on the screen named <paramref name="gdiName"/>
+        /// (Screen.DeviceName, e.g. \\.\DISPLAY2). With HDR on one screen and not another, the
+        /// correction has to follow the window: applied on the SDR screen it would crush shadows
+        /// that Windows had not lifted. Falls back to "any output" when the screen can't be matched.
+        /// </summary>
+        public static bool HdrOnFor(string gdiName)
+        {
+            AdvancedColor a = Advanced();
+            if (!string.IsNullOrEmpty(gdiName) && a.PerOutput != null)
+            {
+                foreach (Output o in a.PerOutput)
+                {
+                    if (string.Equals(o.GdiName, gdiName, StringComparison.OrdinalIgnoreCase)) { return o.HdrOn; }
+                }
+            }
+            return a.Enabled;
+        }
 
         /// <summary>
         /// True when Windows is altering Tempo's colours before they reach the panel.
@@ -231,7 +347,7 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
-        /// One line for About and Live debug: what the display is doing to the colours.
+        /// One line for Live debug: what the display is doing to the colours.
         /// </summary>
         public static string Describe()
         {
@@ -251,6 +367,7 @@ namespace AutoClicker.Utils
                     {
                         sb.Append(" · HDR ON");
                         if (a.Outputs > 1) { sb.Append(" (").Append(a.OutputsHdrOn).Append('/').Append(a.Outputs).Append(" outputs)"); }
+                        if (a.LowestSdrWhiteNits > 0) { sb.Append(" · SDR white ").Append(a.LowestSdrWhiteNits.ToString("0")).Append(" nits"); }
                     }
                     else
                     {
@@ -261,31 +378,6 @@ namespace AutoClicker.Utils
                 return sb.ToString();
             }
             catch { return "display colour info unavailable"; }
-        }
-
-        /// <summary>
-        /// The plain-English consequence, or empty when nothing is interfering. Kept
-        /// separate from <see cref="Describe"/> so the UI can show the facts always and
-        /// the warning only when there is something to warn about.
-        /// </summary>
-        public static string ColourAccuracyNote()
-        {
-            var a = Advanced();
-            if (a.Enabled)
-            {
-                return "Windows HDR is on. Tempo draws in SDR, so Windows tone-maps its "
-                     + "colours into the HDR signal — dark themes look milky and greys lift. "
-                     + "The theme is painting the right colours; the compositor changes them "
-                     + "afterwards. Turning HDR off (or using Windows' SDR brightness slider) "
-                     + "restores them.";
-            }
-            if (ReducedColourDepth)
-            {
-                return "The desktop is running at " + BitsPerPixel + "-bit colour, so gradients "
-                     + "band and near-identical shades collapse together. Set the display to "
-                     + "32-bit (True Color) in Windows display settings.";
-            }
-            return "";
         }
     }
 }

@@ -50,8 +50,7 @@ namespace AutoClicker.UI
                               Func<List<Entry>> load, Func<string, bool> restoreOne, Action emptyAll,
                               string emptyLabel = null, bool closeOnRestore = false)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
             _load = load;
@@ -61,7 +60,8 @@ namespace AutoClicker.UI
             _closeOnRestore = closeOnRestore;
 
             Text = title;
-            Size = new Size(560, 400);
+            // The client area (was a 560×400 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(544, 361);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -76,10 +76,18 @@ namespace AutoClicker.UI
             helpLabel.ForeColor = theme.TextMuted;
             Controls.Add(helpLabel);
 
+            // Everything below the help starts below it, however many lines it wraps to. The restore
+            // points' help is three lines in five languages, and its third line ran under the list's
+            // header (scratchpad/dialogscan).
+            // (Measured in 100% units: the window is scaled after it is built — UiFactory.Measure96.)
+            int helpBottom = helpLabel.Top + UiFactory.Measure96(help, helpLabel.Font, 508, TextFormatFlags.Default).Height;
+            int shift = Math.Max(0, helpBottom + 10 - 58);
+            ClientSize = new Size(544, 361 + shift);
+
             _list = new ThemedListView
             {
                 Left = 18,
-                Top = 58,
+                Top = 58 + shift,
                 Width = 508,
                 Height = 224,
                 View = View.Details,
@@ -95,24 +103,34 @@ namespace AutoClicker.UI
             _list.DoubleClick += (s, e) => OnRestore(null, EventArgs.Empty);
             Controls.Add(_list);
 
-            _emptyNote = UiFactory.Label(emptyNote, 18, 140);
+            _emptyNote = UiFactory.Label(emptyNote, 18, 140 + shift);
             _emptyNote.AutoSize = false;
             _emptyNote.Width = 508;
-            _emptyNote.Height = 24;
+            // As tall as its words wrapped to the list's width: the restore points' note is two lines
+            // in five languages, and a one-line box drew only the first.
+            _emptyNote.Height = Math.Max(24, UiFactory.Measure96(emptyNote, _emptyNote.Font, 508, TextFormatFlags.Default).Height + 6);
             _emptyNote.TextAlign = ContentAlignment.MiddleCenter;
             _emptyNote.ForeColor = theme.TextMuted;
             _emptyNote.Visible = false;
             Controls.Add(_emptyNote);
+            LayoutFitter.DeclareOverlay(_emptyNote, "drawn on top of the list while it is empty");
 
-            _restore = UiFactory.PrimaryButton("Restore", 18, 296, 110, 32, theme);
+            // Each as wide as its word ("Wiederherstellen" needs 131 px), packed from its own end.
+            int by = 296 + shift;
+            _restore = UiFactory.PrimaryButton("Restore", 18, by, 110, 32, theme);
+            UiFactory.FitToText96(_restore, 110);
             _restore.Click += OnRestore;
             Controls.Add(_restore);
 
-            _empty = UiFactory.Button(string.IsNullOrEmpty(emptyLabel) ? "Empty the bin" : emptyLabel, 136, 296, 130, 32);
+            _empty = UiFactory.Button(string.IsNullOrEmpty(emptyLabel) ? "Empty the bin" : emptyLabel, 136, by, 130, 32);
+            UiFactory.FitToText96(_empty, 130);
+            _empty.Left = _restore.Right + 8;
             _empty.Click += OnEmpty;
             Controls.Add(_empty);
 
-            var close = UiFactory.Button("Close", 436, 296, 90, 32);
+            var close = UiFactory.Button("Close", 436, by, 90, 32);
+            UiFactory.FitToText96(close, 90);
+            close.Left = _list.Right - close.Width;
             close.Click += (s, e) => Close();
             Controls.Add(close);
             CancelButton = close;
@@ -121,6 +139,7 @@ namespace AutoClicker.UI
             _list.ApplyTheme(theme);
 
             Reload();
+            UiFactory.ScaleToScreen(this);
         }
 
         private void Reload()

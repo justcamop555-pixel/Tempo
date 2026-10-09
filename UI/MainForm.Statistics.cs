@@ -591,14 +591,8 @@ namespace AutoClicker.UI
                 return;
             }
 
-            double cps = _statistics.GetCurrentCps();
-
-            // Smooth the displayed rate so the number eases to its target instead
-            // of jittering frame to frame (exponential moving average).
-            double targetCps = _engine.IsRunning ? cps : 0;
-            _displayCps += (targetCps - _displayCps) * 0.35;
-            if (_displayCps < 0.05) _displayCps = targetCps <= 0 ? 0 : _displayCps;
-
+            // _displayCps, the smoothed rate, moves on every UI tick (SampleCpsForChart), not here: this
+            // runs only while the tab is showing, plus once per switch and per finished session.
             _cardSessionClicks.Value = _statistics.SessionClicks.ToString("N0");
             _cardTotalClicks.Value = _statistics.TotalClicks.ToString("N0");
             _cardCurrentCps.Value = _displayCps.ToString("0.0");
@@ -670,9 +664,27 @@ namespace AutoClicker.UI
 
             UpdateGoalProgress();
             UpdateMilestones(lifetimeClicks);
+        }
 
-            // Feed the live graph. Only sample while running so the line returns to
-            // zero and flattens when idle rather than freezing on the last value.
+        /// <summary>
+        /// One sample for the clicks-per-second chart, on every UI tick whichever tab is open — and the
+        /// smoothed rate the Current CPS card shows.
+        ///
+        /// It used to be taken only while the Statistics tab was showing (inside UpdateStatisticsTab). So
+        /// the chart knew nothing of a run made with another tab open; samples minutes apart were drawn
+        /// side by side as if 200 ms apart; and the tab opened on "Waiting for activity…", replaced by the
+        /// line a tick later in front of the user. Pushing to a hidden chart is a queue add — it paints
+        /// only when shown. Only a running engine counts, so the line returns to zero and flattens when idle
+        /// rather than freezing on the last value.
+        /// </summary>
+        private void SampleCpsForChart()
+        {
+            if (_cpsSparkline == null || _engine == null) { return; }
+            // Smooth the displayed rate so the number eases to its target instead
+            // of jittering frame to frame (exponential moving average).
+            double targetCps = _engine.IsRunning ? _statistics.GetCurrentCps() : 0;
+            _displayCps += (targetCps - _displayCps) * 0.35;
+            if (_displayCps < 0.05) { _displayCps = targetCps <= 0 ? 0 : _displayCps; }
             _cpsSparkline.Push(_engine.IsRunning ? _displayCps : 0);
         }
 
@@ -692,10 +704,10 @@ namespace AutoClicker.UI
             if (_statistics.SessionClicks > 0 || _statistics.TotalClicks > 0)
             {
                 var confirm = MessageBox.Show(this,
-                    "Reset the current session's statistics?\n\n" +
+                    Localization.T("Reset the current session's statistics?\n\n" +
                     "This clears the session counters, peak CPS and the live charts. " +
-                    "Your lifetime totals and saved history are not affected.",
-                    "Reset session",
+                    "Your lifetime totals and saved history are not affected."),
+                    Localization.T("Reset session"),
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question,
                     MessageBoxDefaultButton.Button2);
@@ -1581,7 +1593,7 @@ namespace AutoClicker.UI
             }
 
             var confirm = MessageBox.Show(this,
-                "Clear the recent-sessions history?",
+                Localization.T("Clear the recent-sessions history?"),
                 "Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (confirm != DialogResult.Yes)
             {
@@ -1722,8 +1734,8 @@ namespace AutoClicker.UI
         private void OnResetLifetime(object sender, EventArgs e)
         {
             var confirm = MessageBox.Show(this,
-                "Reset all lifetime totals (clicks, sessions, best CPS, runtime)?\n" +
-                "This cannot be undone.",
+                Localization.T("Reset all lifetime totals (clicks, sessions, best CPS, runtime)?\n" +
+                "This cannot be undone."),
                 "Tempo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);

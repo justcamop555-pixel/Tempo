@@ -20,8 +20,7 @@ namespace AutoClicker.UI
         {
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             Text = Utils.Localization.T("About speaker labels");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -41,7 +40,7 @@ namespace AutoClicker.UI
                 BackColor = theme.Accent
             });
 
-            Controls.Add(new Label
+            var heading = new Label
             {
                 Text = Utils.Localization.T("Speaker labels are AI guesses"),
                 Font = new Font("Segoe UI", 14f, FontStyle.Bold),
@@ -49,9 +48,10 @@ namespace AutoClicker.UI
                 AutoSize = false,
                 Location = new Point(24, 20),
                 Size = new Size(422, 30)
-            });
+            };
+            Controls.Add(heading);
 
-            Controls.Add(new Label
+            var body = new Label
             {
                 Text = Utils.Localization.T(
                        "The “Speaker 1 / Speaker 2” labels come from on-device AI that "
@@ -65,17 +65,33 @@ namespace AutoClicker.UI
                 Location = new Point(24, 54),
                 Size = new Size(422, 144),
                 ForeColor = theme.Text
-            });
+            };
+            Controls.Add(body);
 
-            Button ok = UiFactory.PrimaryButton("Got it", 24, 204, 280, 36, theme);
+            // The heading and the body each as tall as their words, one under the other, and the
+            // buttons under both: the Spanish and French headings are two lines and the French body
+            // a line longer than its box, which drew only the first line of each.
+            // (In 100% units: the window is scaled after it is built — UiFactory.Measure96.)
+            heading.Height = Math.Max(30, UiFactory.Measure96(heading.Text, heading.Font, 422, TextFormatFlags.Default).Height + 2);
+            body.Top = heading.Bottom + 4;
+            body.Height = Math.Max(144, UiFactory.Measure96(body.Text, Font, 422, TextFormatFlags.Default).Height + 2);
+            int by = body.Bottom + 6;
+
+            Button ok = UiFactory.PrimaryButton("Got it", 24, by, 280, 36, theme);
             ok.Click += (s, e) => { DialogResult = DialogResult.OK; Close(); };
             Controls.Add(ok);
             AcceptButton = ok;
             CancelButton = ok;
 
-            Button off = UiFactory.Button("Turn labels off", 312, 204, 134, 36);
+            // As wide as its words ("Beschriftungen ausschalten" needs 160 px of the 134); "Got it" gives
+            // up the difference.
+            Button off = UiFactory.Button("Turn labels off", 312, by, 134, 36);
+            UiFactory.FitToText96(off, 134);
+            off.Left = 446 - off.Width;
+            ok.Width = off.Left - 8 - ok.Left;
             off.Click += (s, e) => { DialogResult = DialogResult.No; Close(); };
             Controls.Add(off);
+            ClientSize = new Size(470, ok.Bottom + 12);
 
             // Auto-close like the welcome note, so a hotkey-triggered caption start is
             // never blocked for long. Countdown on the button keeps it predictable.
@@ -106,6 +122,7 @@ namespace AutoClicker.UI
             };
             autoClose.Start();
             FormClosed += (s, e) => { autoClose.Stop(); autoClose.Dispose(); };
+            UiFactory.ScaleToScreen(this);
         }
     }
 }

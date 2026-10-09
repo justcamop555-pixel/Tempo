@@ -847,6 +847,9 @@ namespace AutoClicker.Utils
                 _chunksDone = 0;
                 _chunksSilent = 0;
                 _chunksNearMiss = 0;
+                _noSpeechDropped = 0;
+                _vadSkipped = 0;
+                _vadHistory = Array.Empty<float>();
                 _emits = 0;
                 _avgInferMs = 0;
                 _droppedMs = 0;
@@ -1202,6 +1205,118 @@ namespace AutoClicker.Utils
         /// to be one of them, so those get 64. Ordinary speech never comes near either figure; only a
         /// decode that has run away into a loop does, and that is what the cap is there to end.
         /// </summary>
+        /// <summary>
+        /// How many tokens of the text already decoded whisper carries into the next pass as
+        /// context (0 = none, each pass decoded as if it were the whole recording). Stays 0: tried
+        /// at 64 (the way whisper_streaming prompts with its confirmed text), it doubled the words
+        /// shown twice at seams on scratchpad/syncprobe (14 against 7). Whisper carries ALL of its
+        /// last output, including the words the next window re-hears in its overlap, so it wrote
+        /// variants of them the seam join cannot match ("the setup yesterday" … "That up
+        /// yesterday"); whisper_streaming only prompts with text whose audio has left its window.
+        /// The seam punctuation it was hoping to fix is handled by FixSeamPunctuation instead.
+        /// </summary>
+        internal static int ContextTokens = 0;
+
+        /// <summary>The seam punctuation and one-word/number seam fixes (on; off only to measure them).</summary>
+        internal static bool SeamRepairs = true;
+
+        /// <summary>Dropping segments Whisper itself thinks are not speech (on; off only to measure it).</summary>
+        internal static bool NoSpeechGate = true;
+
+        // Segments dropped by the no-speech gate this session (Live debug; written by the worker only).
+        private volatile int _noSpeechDropped;
+
+        /// <summary>Segments dropped as words invented over non-speech this session.</summary>
+        public int NoSpeechDropped => _noSpeechDropped;
+
+        /// <summary>
+        /// Voice detection (Silero VAD) on every step before Whisper hears it (on; off only to
+        /// measure it). A step with sound but no VOICE — music, a fan, gunfire, a game's menus —
+        /// is skipped like silence, because that is where Whisper writes the words nobody said.
+        /// </summary>
+        internal static bool VadGate = true;
+
+        // The network, loaded once and reset for every step (worker thread only). Null when the
+        // embedded model cannot be read: captions then simply run without the gate.
+        private SileroVad _vad;
+        private bool _vadLoaded;
+
+        // Steps the voice detection skipped this session (Live debug; written by the worker only).
+        private volatile int _vadSkipped;
+
+        // The audio most recently taken for captioning, up to 2 s of it, heard or skipped. Silero
+        // warms up on it before judging the next step, so its memory is of the sound that really
+        // came before. Started cold on every step, it heard scratchpad/syncprobe's synthetic
+        // melody as a voice in 3 steps of 10; warmed on the 2 s before, in none — and still every
+        // step of the speech clip. Worker thread only; emptied wherever the stream breaks.
+        private float[] _vadHistory = Array.Empty<float>();
+        private const int VadHistorySamples = WhisperSampleRate * 2;
+
+        /// <summary>Steps skipped this session because Silero heard no voice in them.</summary>
+        public int VadSkipped => _vadSkipped;
+
+        /// <summary>False only once loading the voice detection has been tried and failed.</summary>
+        public bool VadAvailable => !_vadLoaded || _vad != null;
+
+        private volatile bool _voiceGateOn = true;
+
+        /// <summary>
+        /// The user's side of the voice gate: false when they want song lyrics captioned, which
+        /// the gate can skip as "no voice". Takes effect from the next step, mid-session.
+        /// </summary>
+        public bool VoiceGateEnabled
+        {
+            get => _voiceGateOn;
+            set => _voiceGateOn = value;
+        }
+
+        // Sign-offs Whisper learned from video endings and writes over music and noise.
+        private static readonly string[] OutroSignatures =
+        {
+            "see you in the next", "see you next time", "thanks for watching", "thank you for watching",
+            "don't forget to subscribe", "like and subscribe", "please subscribe", "subscribe to my",
+            "subscribe to the", "thumbs up", "hit the bell", "hit that bell", "in the next video"
+        };
+
+        /// <summary>True when a segment carries one of Whisper's learned video sign-offs.</summary>
+        internal static bool HasOutroSignature(string text)
+        {
+            string t = (text ?? string.Empty).ToLowerInvariant().Replace('’', '\'');
+            foreach (string sig in OutroSignatures)
+            {
+                if (t.Contains(sig)) { return true; }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// True for a decode LOOP rather than speech: one word or one pair of words making up most
+        /// of a segment of at least four ("WOAH WOAH WOAH WOAH WOAH", "This is this is this is…").
+        /// </summary>
+        internal static bool IsDecodeLoop(string text)
+        {
+            string[] words = (text ?? string.Empty).Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length < 4) { return false; }
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            int best = 0;
+            for (int i = 0; i < words.Length; i++)
+            {
+                string one = Normalize(words[i]);
+                if (one.Length == 0) { continue; }
+                counts.TryGetValue(one, out int c1);
+                counts[one] = ++c1;
+                if (c1 > best) { best = c1; }
+                if (i + 1 < words.Length)
+                {
+                    string two = one + " " + Normalize(words[i + 1]);
+                    counts.TryGetValue(two, out int c2);
+                    counts[two] = ++c2;
+                    if (c2 * 2 > best) { best = c2 * 2; }     // a pair covers two words
+                }
+            }
+            return best >= 4 && best * 10 >= words.Length * 6;
+        }
+
         internal static int TokenCapFor(string language)
         {
             switch ((language ?? "auto").Trim().ToLowerInvariant())
@@ -1243,8 +1358,10 @@ namespace AutoClicker.Utils
             if (audioCtx > 1500) { audioCtx = 1500; }
             var builder = factory.CreateBuilder()
                 .WithLanguage(string.IsNullOrEmpty(language) ? "auto" : language)
-                .WithThreads(threads)
-                .WithNoContext()
+                .WithThreads(threads);
+            if (ContextTokens > 0) { builder.WithMaxLastTextTokens(ContextTokens); }
+            else { builder.WithNoContext(); }
+            builder
                 .WithAudioContextSize(audioCtx)
                 // Per-segment confidence so obvious phantom words (noise the
                 // model wasn't sure about) can be dropped before display.
@@ -2422,6 +2539,15 @@ namespace AutoClicker.Utils
             // word split across a boundary is still seen whole by the next pass.
             float[] carry = Array.Empty<float>();
 
+            // How quiet the audio was at the seam between the previous step and this one — the
+            // previous step's quiet ending, any wholly silent steps skipped in between, and this
+            // step's quiet opening. -1 = unknown (audio was dropped or skipped unheard). It decides
+            // whether a full stop Whisper put at the end of a window is the speaker's or its own
+            // (FixSeamPunctuation).
+            int prevTailQuietMs = -1;
+            int skippedQuietMs = 0;
+            bool english = !multilingual || string.Equals(activeLang, "en", StringComparison.OrdinalIgnoreCase);
+
             // Auto-gain level carried across chunks (see below): smoothed so the
             // loudness Whisper hears doesn't pump 8× between chunks.
             double smoothGain = 1.0;
@@ -2703,6 +2829,9 @@ namespace AutoClicker.Utils
                 if (droppedThisPass > 0)
                 {
                     lastDropTick = Environment.TickCount64;
+                    prevTailQuietMs = -1;          // the audio at the seam was thrown away unheard
+                    skippedQuietMs = 0;
+                    _vadHistory = Array.Empty<float>();   // and it is not "what came before" any more
                 }
 
                 // Re-check the speaker's volume and mute while the session runs.
@@ -2755,6 +2884,9 @@ namespace AutoClicker.Utils
                     try { await _samplesReady.WaitAsync(100, token); } catch { }
                     continue;
                 }
+
+                // The pause this step OPENS with, measured before the quick-start trim removes it.
+                int leadQuietMs = QuietRunMs(step, fromEnd: false);
 
                 // With the loopback keep-alive, silence flows continuously, so a step
                 // taken just as someone starts talking is mostly leading silence with
@@ -2833,8 +2965,45 @@ namespace AutoClicker.Utils
                     // not tell apart.
                     if (gatePeak > gateFloor * 0.5) { _chunksNearMiss++; }
                     carry = Array.Empty<float>();
+                    skippedQuietMs += (int)(step.Length * 1000L / WhisperSampleRate);   // all of it pause
+                    RememberForVad(step, step.Length);
                     continue;
                 }
+
+                // Voice gate on the same step: sound is not speech. Over music, a fan or gunfire
+                // Whisper writes words nobody said — 15–35 in 30 seconds of scratchpad/syncprobe's
+                // noise clip before the no-speech gate, 1–5 after it. Silero, a network trained for
+                // exactly this question, heard a voice in no step of that clip and in every step of
+                // the speech clip, down to 1/100 of its volume. Skipped like silence: no carry into
+                // the next pass, and it counts as a pause at the next seam.
+                if (VadGate && _voiceGateOn && !StepHasVoice(step))
+                {
+                    _vadSkipped++;
+                    // Its last 256 ms go back to the buffer rather than away: a word that starts
+                    // there has too little of itself in this step to be heard as a voice, and the
+                    // next step then begins with its onset instead of 30 ms into it.
+                    int back = Math.Min(step.Length / 4, 8 * SileroVad.ChunkSamples);
+                    lock (_bufferLock)
+                    {
+                        _mono16k.InsertRange(0, new ArraySegment<float>(step, step.Length - back, back));
+                        _bufferedSamples = _mono16k.Count;
+                    }
+                    if (VerboseTrace)
+                    {
+                        Logger.Info("[Trace] no voice in " + (step.Length * 1000L / WhisperSampleRate)
+                            + " ms of sound — skipped (" + (back * 1000L / WhisperSampleRate) + " ms kept for the next step).");
+                    }
+                    carry = Array.Empty<float>();
+                    skippedQuietMs += (int)((step.Length - back) * 1000L / WhisperSampleRate);
+                    RememberForVad(step, step.Length - back);
+                    continue;
+                }
+                RememberForVad(step, step.Length);
+
+                // The pause this step ENDS on (after the cut above), and so the whole pause at the
+                // seam with the previous step: its quiet ending, silent steps between, this opening.
+                int tailQuietMs = QuietRunMs(step, fromEnd: true);
+                int seamPauseMs = prevTailQuietMs < 0 ? -1 : prevTailQuietMs + skippedQuietMs + leadQuietMs;
 
                 // Build the chunk to transcribe: previous tail (context) + new step.
                 // Whether it re-hears the previous chunk's tail decides how its opening
@@ -2912,9 +3081,15 @@ namespace AutoClicker.Utils
                         // own last words would open the OTHER party's first caption.
                         // Mirrors the silence gate's carry reset above.
                         carry = Array.Empty<float>();
+                        prevTailQuietMs = -1;      // speech went unheard: the seam is unknown
+                        skippedQuietMs = 0;
                         continue;
                     }
                 }
+
+                // This step is being heard: the next seam starts from ITS quiet ending.
+                prevTailQuietMs = tailQuietMs;
+                skippedQuietMs = 0;
 
                 // Automatic gain: Whisper hears QUIET audio badly (videos at low
                 // volume, distant voices). Lift soft chunks toward a healthy level —
@@ -3032,6 +3207,31 @@ namespace AutoClicker.Utils
                         if (!string.IsNullOrEmpty(seg.Language)) { segLang = seg.Language; }
                         float p = seg.Probability;
                         if (!float.IsNaN(p) && p > 0f) { probSum += p; probCount++; }
+                        if (VerboseTrace)
+                        {
+                            Logger.Info("[Trace] segment p " + p.ToString("0.00") + " · no-speech "
+                                + seg.NoSpeechProbability.ToString("0.00") + " · “" + seg.Text.Trim() + "”");
+                        }
+
+                        // Words invented over NON-speech — music, gunfire, a fan. Whisper's own
+                        // estimate that nobody is speaking is what gives them away: OpenAI's reference
+                        // transcriber (and faster-whisper, both MIT) drops a segment when that estimate
+                        // is over 0.6 and the words were unsure. The small models Tempo runs rarely get
+                        // that sure: on scratchpad/syncprobe's noise.wav (synthetic music, fan noise,
+                        // gunfire — nobody speaking) the invented segments read 0.05–0.59 while every
+                        // segment of real speech read 0.00–0.01. So the bar is lower, and it still
+                        // needs the unsure words (or a decode loop, "WOAH WOAH WOAH WOAH") to drop one.
+                        // Whisper's YouTube sign-offs ("…see you in the next one", "thanks for
+                        // watching") need only a hint of doubt: it learned them from millions of
+                        // video endings and writes them over any sound at all.
+                        float noSpeech = seg.NoSpeechProbability;
+                        if (NoSpeechGate && !float.IsNaN(noSpeech)
+                            && ((noSpeech >= 0.2f && !float.IsNaN(p) && p < 0.6f)
+                                || (noSpeech >= 0.05f && (IsDecodeLoop(seg.Text) || HasOutroSignature(seg.Text)))))
+                        {
+                            _noSpeechDropped++;
+                            continue;
+                        }
 
                         // Confidence gate: a SHORT segment the model itself was very
                         // unsure of is almost always noise heard as words ("phantom
@@ -3138,6 +3338,17 @@ namespace AutoClicker.Utils
                         // A decode loop that wrapped back to an earlier point and ran on to the
                         // token cap leaves a tail that repeats what is already on screen.
                         text = TrimRepeatedTail(chunksAdjacent ? ShownTail(_lastEmitted, retract, string.Empty) : string.Empty, text);
+                        // Full stops the WINDOW put in, not the speaker: each ~3 s window is decoded as
+                        // if it were a whole recording, so Whisper ends every one with a stop ("…from
+                        // the west. this morning."). The pause in the audio at the seam tells them apart.
+                        string beforeSeamFix = text;
+                        text = FixSeamPunctuation(chunksAdjacent ? _lastEmitted : string.Empty, text,
+                            chunksAdjacent ? seamPauseMs : int.MaxValue, english, ref retract);
+                        if (VerboseTrace)
+                        {
+                            Logger.Info("[Trace] seam pause " + (chunksAdjacent ? seamPauseMs + " ms" : "(after a gap)")
+                                + " · " + (text == beforeSeamFix ? "as heard" : "fixed → “" + text + "”"));
+                        }
                         if (text.Length > 0)
                         {
                             // Read by the host inside its handler, like the spoken times below.
@@ -3437,6 +3648,87 @@ namespace AutoClicker.Utils
             return env;
         }
 
+        /// <summary>Adds the first <paramref name="count"/> samples of a step to what Silero warms up on.</summary>
+        private void RememberForVad(float[] step, int count)
+        {
+            if (step == null || count <= 0) { return; }
+            float[] old = _vadHistory;
+            int keepOld = Math.Min(old.Length, Math.Max(0, VadHistorySamples - count));
+            int takeNew = Math.Min(count, VadHistorySamples);
+            var next = new float[keepOld + takeNew];
+            Array.Copy(old, old.Length - keepOld, next, 0, keepOld);
+            Array.Copy(step, count - takeNew, next, keepOld, takeNew);
+            _vadHistory = next;
+        }
+
+        /// <summary>
+        /// Whether Silero hears a voice in <paramref name="step"/>: at least 64 ms of it (two 32 ms
+        /// frames) at even odds or better, after warming up on the 2 s of audio that came before it.
+        ///
+        /// Quiet audio is lifted first, to a peak of 0.05 (at most 30x): loopback dialogue at a modest
+        /// volume arrives at 0.0004-0.0013 RMS, and at 1/100 of the speech clip's level one step in 29
+        /// went unheard without that. Louder audio is left alone — lifting everything to a fixed peak
+        /// made the synthetic melody read as a voice more often. True whenever the model is missing
+        /// or fails: then this gate simply is not there.
+        /// </summary>
+        private bool StepHasVoice(float[] step)
+        {
+            if (!_vadLoaded)
+            {
+                _vadLoaded = true;
+                _vad = SileroVad.LoadEmbedded();
+                Logger.Info(_vad != null
+                    ? "[Captions] voice detection: Silero VAD " + _vad.Version + " loaded."
+                    : "[Captions] voice detection unavailable — captions run without it.");
+            }
+            SileroVad vad = _vad;
+            if (vad == null || step == null || step.Length == 0) { return true; }
+            try
+            {
+                float[] history = _vadHistory;
+                int warm = history.Length - history.Length % SileroVad.ChunkSamples;
+                var x = new float[warm + step.Length];
+                if (warm > 0) { Array.Copy(history, history.Length - warm, x, 0, warm); }
+                Array.Copy(step, 0, x, warm, step.Length);
+
+                float peak = 0f;
+                for (int i = 0; i < x.Length; i++)
+                {
+                    float a = x[i] < 0 ? -x[i] : x[i];
+                    if (a > peak) { peak = a; }
+                }
+                if (peak <= 0f) { return false; }
+                float gain = peak < 0.05f ? Math.Min(0.05f / peak, 30f) : 1f;
+                if (gain > 1f)
+                {
+                    for (int i = 0; i < x.Length; i++) { x[i] *= gain; }
+                }
+
+                vad.Reset();
+                int voiced = 0;
+                float best = 0f;
+                bool trace = VerboseTrace;
+                for (int i = 0; i < x.Length; i += SileroVad.ChunkSamples)
+                {
+                    float p = vad.Process(x, i);
+                    if (i < warm) { continue; }
+                    if (p > best) { best = p; }
+                    if (p >= 0.5f && ++voiced >= 2 && !trace) { return true; }
+                }
+                if (trace)
+                {
+                    Logger.Info("[Trace] voice check: " + voiced + " voiced frame(s) of " + ((x.Length - warm + 511) / 512)
+                        + ", best " + best.ToString("0.00") + ", gain " + gain.ToString("0.0") + "x, warm-up " + warm + " samples.");
+                }
+                return voiced >= 2;
+            }
+            catch (Exception ex)
+            {
+                Logger.Swallow("Captions/VAD", ex);
+                return true;
+            }
+        }
+
         /// <summary>True when the last ~0.15 s of the chunk is quiet (utterance ended).</summary>
         private static bool TailIsSilent(float[] step)
         {
@@ -3563,9 +3855,28 @@ namespace AutoClicker.Utils
             "legendas pela equipe", "untertitel von stephanie geiges"
         };
 
+        /// <summary>True when a tag's words are a short sound descriptor ("Music", "outro music", "clapping").</summary>
+        private static bool IsSoundTag(string inner)
+        {
+            string[] words = inner.Trim().ToLowerInvariant().Split(new[] { ' ', '_', '-' },
+                StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length == 0 || words.Length > 4)
+            {
+                return false;                              // long content: real words, keep
+            }
+            foreach (string w in words)
+            {
+                foreach (string tag in SoundTagWords)
+                {
+                    if (w == tag) { return true; }
+                }
+            }
+            return false;
+        }
+
         /// <summary>
         /// Strips Whisper's non-speech tags anywhere in the text ("[Music]",
-        /// "(applause)", "♪♪") and suppresses whole-chunk hallucinated outro phrases
+        /// "(applause)", "*clap*", "♪♪") and suppresses whole-chunk hallucinated outro phrases
         /// when the audio was near-silent. Returns "" when nothing real remains.
         /// </summary>
         private static string CleanWhisperArtifacts(string text, double chunkRms)
@@ -3575,28 +3886,26 @@ namespace AutoClicker.Utils
             // Remove [tag] / (tag) runs whose content is a short sound descriptor.
             text = System.Text.RegularExpressions.Regex.Replace(text,
                 @"[\[\(]([^\]\)]{1,40})[\]\)]",
-                m =>
-                {
-                    string inner = m.Groups[1].Value.Trim().ToLowerInvariant();
-                    string[] words = inner.Split(new[] { ' ', '_', '-' },
-                        StringSplitOptions.RemoveEmptyEntries);
-                    if (words.Length == 0 || words.Length > 4)
-                    {
-                        return m.Value;                    // long content: keep as-is
-                    }
-                    foreach (string w in words)
-                    {
-                        foreach (string tag in SoundTagWords)
-                        {
-                            if (w == tag) { return ""; }   // descriptor tag: strip
-                        }
-                    }
-                    return m.Value;                        // real parenthesised words
-                });
+                m => IsSoundTag(m.Groups[1].Value) ? "" : m.Value);
+            // Sound effects between asterisks — how the English-only models write them ("*outro
+            // music*", "*clap*", "*boom*", "*DUN DUN DUN DUN*"), which went straight onto the bar —
+            // and asterisks left on their own ("* * * *"). Whisper never wraps spoken words in
+            // asterisks, so any short run of them is a sound, whatever it names. Seen on
+            // scratchpad/syncprobe's noise.wav; so was a bare "Inaudible".
+            text = System.Text.RegularExpressions.Regex.Replace(text,
+                @"\*([^*]{1,40})\*",
+                m => m.Groups[1].Value.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries).Length <= 5 ? "" : m.Value);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"(^|\s)\*+(?=\s|$)", "$1");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"(^|\s)inaudible[.!,]?(?=\s|$)", "$1",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
             // Musical-note-only output means "I heard music", not words.
             string bare = text.Replace("♪", "").Replace("♫", "").Trim();
             if (bare.Length == 0) return "";
+            // Nothing but punctuation left (a lone "." or "!") is not a caption either.
+            bool anyWord = false;
+            foreach (char c in bare) { if (char.IsLetterOrDigit(c)) { anyWord = true; break; } }
+            if (!anyWord) return "";
             text = System.Text.RegularExpressions.Regex.Replace(text, @"\s{2,}", " ").Trim();
 
             // Memorised subtitle-credit lines: never real speech, any volume.
@@ -3799,15 +4108,15 @@ namespace AutoClicker.Utils
             int maxK = Math.Min(6, Math.Min(p.Length, n.Length));
             for (int k = maxK; k >= 2; k--)
             {
-                int same = 0, letters = 0, misheard = 0;
-                bool ok = true, shortFront = false;
+                int same = 0, letters = 0, misheard = 0, exactLetters = 0;
+                bool ok = true, shortFront = false, firstFree = false;
                 for (int i = 0; i < k; i++)
                 {
                     string a = LettersOf(p, p.Length - k + i, 1);
                     string b = LettersOf(n, i, 1);
                     if (a.Length == 0 || b.Length == 0) { ok = false; break; }
                     letters += Math.Max(a.Length, b.Length);
-                    if (a == b) { same++; continue; }
+                    if (a == b) { same++; exactLetters += a.Length; continue; }
                     bool last = i == k - 1;
                     int longer = Math.Max(a.Length, b.Length);
                     int allowed = last ? (longer >= 4 ? 2 : 0) : (longer >= 7 ? 2 : longer >= 4 ? 1 : 0);
@@ -3815,8 +4124,19 @@ namespace AutoClicker.Utils
                     // The previous chunk's last word, cut off at its edge: "note" / "notebook",
                     // or misheard longer from its opening letters: "warmth" / "warm".
                     if (last && (StartsWithWord(b, a) || StartsWithWord(a, b))) { continue; }
+                    // ...or a number it cut short: "forty" written "40" before "two" arrived ("42").
+                    if (SeamRepairs && last && a[0] == b[0] && AllDigits(a) && AllDigits(b)) { continue; }
+                    // ...or heard as something else entirely, behind two or more exact words that
+                    // are real evidence (8+ letters — "jacket, some", not "then the"): the window's
+                    // edge cut into it ("…a warm jacket, some form" / "jacket, some water").
+                    if (SeamRepairs && last && same == i && !firstFree && k >= 3 && exactLetters >= 8) { continue; }
                     // The new chunk's first word, missing its front: "photographs" / "Graphs".
                     if (i == 0 && b.Length >= 3 && a.EndsWith(b, StringComparison.Ordinal)) { continue; }
+                    // ...or a number's: "forty-two" written "42", then only its "two" re-heard.
+                    if (SeamRepairs && i == 0 && AllDigits(a) && NumberWordEndsNumeral(b, a)) { continue; }
+                    // ...or heard as something else entirely, when every word after it is exact
+                    // ("We counted 42." / "They counted 42 boats").
+                    if (SeamRepairs && i == 0 && k >= 3) { firstFree = true; continue; }
                     // ...cut down to two letters ("setup" / "up") — needs every other word exact.
                     if (i == 0 && b.Length == 2 && a.Length > 2 && a.EndsWith(b, StringComparison.Ordinal))
                     {
@@ -3831,6 +4151,8 @@ namespace AutoClicker.Utils
                 }
                 if (!ok || same == 0 || letters < 8) { continue; }
                 if (shortFront && same < k - 1) { continue; }
+                // Every word after the free one exact, and enough of them to be evidence.
+                if (firstFree && (same < k - 1 || exactLetters < 8)) { continue; }
                 if (misheard > 0 && same < Math.Max(3, k - 2)) { continue; }
 
                 bool lastSame = LettersOf(p, p.Length - 1, 1) == LettersOf(n, k - 1, 1);
@@ -3841,7 +4163,226 @@ namespace AutoClicker.Utils
                 retractWords = 1;
                 return string.Join(" ", n, k - 1, n.Length - (k - 1)).Trim();
             }
+
+            // The previous chunk heard its last word in PIECES ("…for the map X or", then "for the map
+            // exercise."): the new chunk's opening matches the words just before the caption's end,
+            // not at it. Three or more words, all exact; the pieces (one or two words) come off.
+            if (SeamRepairs)
+            {
+                for (int j = 1; j <= 2; j++)
+                {
+                    int maxK2 = Math.Min(6, Math.Min(p.Length - j, n.Length - 1));
+                    for (int k = maxK2; k >= 3; k--)
+                    {
+                        bool all = true;
+                        for (int i = 0; i < k; i++)
+                        {
+                            string a = LettersOf(p, p.Length - j - k + i, 1);
+                            if (a.Length == 0 || a != LettersOf(n, i, 1)) { all = false; break; }
+                        }
+                        if (all)
+                        {
+                            retractWords = j;
+                            return string.Join(" ", n, k, n.Length - k).Trim();
+                        }
+                    }
+                }
+            }
+
+            // A single word of overlap, spelled differently: the new chunk re-heard only the previous
+            // caption's last word ("…boats in the harbour." then "harbor, which is…"), and nothing
+            // above looks at one word. Long words, one letter apart, only — the new hearing stays.
+            string prevLast = LettersOf(p, p.Length - 1, 1);
+            string nextFirst = LettersOf(n, 0, 1);
+            if (SeamRepairs && prevLast.Length >= 5 && nextFirst.Length >= 5 && prevLast != nextFirst
+                && EditDistance(prevLast, nextFirst, 1) <= 1)
+            {
+                retractWords = 1;
+                return next;
+            }
+            // ...or the same number, once in words and once in digits ("…at nine." then "9, and then…").
+            if (SeamRepairs && SameNumber(prevLast, nextFirst))
+            {
+                retractWords = 1;
+                return next;
+            }
             return next;
+        }
+
+        /// <summary>True for one number written once in words and once in digits ("nine" / "9").</summary>
+        private static bool SameNumber(string a, string b)
+        {
+            int wa = Array.IndexOf(NumberWords, a), wb = Array.IndexOf(NumberWords, b);
+            return (wa >= 0 && AllDigits(b) && b == wa.ToString()) || (wb >= 0 && AllDigits(a) && a == wb.ToString());
+        }
+
+        private static bool AllDigits(string s)
+        {
+            if (string.IsNullOrEmpty(s)) { return false; }
+            foreach (char c in s) { if (!char.IsDigit(c)) { return false; } }
+            return true;
+        }
+
+        private static readonly string[] NumberWords =
+        {
+            "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+            "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"
+        };
+
+        /// <summary>True when an English number word is how <paramref name="numeral"/> ENDS ("two" / "42", "twelve" / "112").</summary>
+        private static bool NumberWordEndsNumeral(string word, string numeral)
+        {
+            int value = Array.IndexOf(NumberWords, word);
+            return value >= 0 && numeral.Length > value.ToString().Length
+                   && numeral.EndsWith(value.ToString(), StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// How long a step stays quiet from its start (<paramref name="fromEnd"/> false: the pause
+        /// before its first word) or from its end (the pause after its last). Quiet is judged
+        /// against the step's OWN speech level, so a pause under a video's background music still
+        /// counts as the pause it is. Whole 20 ms frames; the full length if nothing is loud.
+        /// </summary>
+        internal static int QuietRunMs(float[] step, bool fromEnd)
+        {
+            const int frame = WhisperSampleRate / 50;
+            if (step == null) { return 0; }
+            int frames = step.Length / frame;
+            if (frames < 2) { return 0; }
+            var rms = new double[frames];
+            for (int f = 0; f < frames; f++)
+            {
+                double sq = 0;
+                int at = f * frame;
+                for (int i = at; i < at + frame; i++) { sq += (double)step[i] * step[i]; }
+                rms[f] = Math.Sqrt(sq / frame);
+            }
+            var sorted = (double[])rms.Clone();
+            Array.Sort(sorted);
+            double speech = sorted[Math.Min(frames - 1, (int)(frames * 0.85))];
+            double quiet = Math.Max(0.0006, speech * 0.18);
+            int run = 0;
+            if (fromEnd)
+            {
+                for (int f = frames - 1; f >= 0 && rms[f] < quiet; f--) { run++; }
+            }
+            else
+            {
+                for (int f = 0; f < frames && rms[f] < quiet; f++) { run++; }
+            }
+            return run * 20;
+        }
+
+        // Three kinds of seam, by the pause in the audio. Measured on the syncprobe speech: seams
+        // inside a phrase paused 0–80 ms, seams at its commas 260–460 ms, and seams between its
+        // sentences about 2.4 s. Under the first figure a full stop there is the window's alone;
+        // up to the second it is where a comma goes; past it, a sentence really ended.
+        private const int SeamStopIsWindowsMs = 200;
+        private const int SeamIsSentenceEndMs = 700;
+
+        // English words that carry a sentence on rather than start one — lowered when a window
+        // opened on them with a capital ("…on Friday. So check…"). Pronouns and articles are left
+        // out on purpose: those start real sentences too often to second-guess.
+        private static readonly HashSet<string> ContinuingWords = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "so", "and", "but", "or", "nor", "then", "which", "that", "who", "whom", "whose", "where",
+            "when", "while", "because", "if", "though", "although", "as", "to", "for", "with", "of",
+            "in", "on", "at", "by", "from", "into", "onto", "about", "after", "before", "until", "since",
+            "than", "like", "together", "tonight", "today", "yesterday", "tomorrow", "too", "also",
+            "instead", "again"
+        };
+
+        // Words whose full stop belongs to them.
+        private static readonly HashSet<string> Abbreviations = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "mr.", "mrs.", "ms.", "dr.", "st.", "jr.", "sr.", "vs.", "etc.", "inc.", "ltd.", "co.", "no.",
+            "a.m.", "p.m.", "e.g.", "i.e.", "u.s.", "u.k.", "approx.", "dept.", "fig.", "vol.", "mt.",
+            "ft.", "lt.", "gen.", "col.", "sgt.", "prof."
+        };
+
+        /// <summary>
+        /// Fixes the punctuation at the seam between the caption already shown
+        /// (<paramref name="prevShown"/>) and the next window's <paramref name="text"/>, from how
+        /// long the audio paused there (<paramref name="pauseMs"/>; -1 unknown, int.MaxValue for a
+        /// caption after a long gap).
+        ///
+        /// Each window is decoded as though it were a whole recording, so Whisper closes every one
+        /// with a full stop, and the next opens as if mid-thought. On the syncprobe speech every
+        /// mid-sentence seam read like "…from the west. this morning." or "…on Friday. So check the
+        /// board…", while a real sentence end once came out "…clearly. if the rain…".
+        ///  • A stop, and the next window opening in lower case (or on an English word that carries
+        ///    a sentence on): the stop is the window's, unless the pause says a sentence ended. The
+        ///    last word is taken back (<paramref name="retract"/> = 1) and goes out again joined on —
+        ///    with nothing between if the pause was a breath, with a comma if it was a comma's.
+        ///  • A real sentence-end pause, and the next window opening in lower case: a new sentence,
+        ///    so it gets its capital.
+        /// A word JoinSeam is already re-hearing is left to it.
+        /// </summary>
+        internal static string FixSeamPunctuation(string prevShown, string text, int pauseMs, bool english, ref int retract)
+        {
+            if (string.IsNullOrWhiteSpace(text) || !SeamRepairs) { return text; }
+            text = text.Trim();
+            int space = text.IndexOf(' ');
+            string first = space < 0 ? text : text.Substring(0, space);
+            string rest = space < 0 ? string.Empty : text.Substring(space + 1);
+            bool firstAllLower = first.Length > 0 && char.IsLower(first[0]);
+            for (int i = 1; i < first.Length && firstAllLower; i++)
+            {
+                if (char.IsUpper(first[i])) { firstAllLower = false; }     // "iPhone" keeps its shape
+            }
+
+            string[] prev = (prevShown ?? string.Empty).Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (prev.Length == 0 || pauseMs == int.MaxValue)
+            {
+                // Nothing on screen to join (or a long gap since): these words start something new.
+                return firstAllLower ? char.ToUpperInvariant(first[0]) + text.Substring(1) : text;
+            }
+            if (retract != 0 || pauseMs < 0) { return text; }
+
+            string last = prev[prev.Length - 1];
+            char end = last[last.Length - 1];
+            bool endsStop = end == '.' && !last.EndsWith("..", StringComparison.Ordinal);
+            bool endsSentence = end == '.' || end == '!' || end == '?';
+
+            // A window that trailed off ("…the quiz winners will be..." then "announced at…", or
+            // "…the bridge is.." then "closed for…"): the dots are the window running out, not the
+            // speaker, and nothing can be an abbreviation.
+            if ((last.EndsWith("..", StringComparison.Ordinal) || end == '…') && firstAllLower
+                && pauseMs < SeamIsSentenceEndMs)
+            {
+                string stem = last.TrimEnd('.', '…');
+                if (stem.Length > 0)
+                {
+                    retract = 1;
+                    return stem + (pauseMs < SeamStopIsWindowsMs ? string.Empty : ",") + " " + text;
+                }
+                return text;
+            }
+
+            if (endsStop && pauseMs < SeamIsSentenceEndMs)
+            {
+                string lastLower = last.ToLowerInvariant();
+                int letters = 0;
+                foreach (char c in last) { if (char.IsLetter(c)) { letters++; } }
+                bool initial = letters == 1 && char.IsUpper(last[0]);                // "J." of "J. Smith"
+                bool carriesOn = english && char.IsUpper(first[0])
+                                 && ContinuingWords.Contains(first.TrimEnd('.', ',', '!', '?', ';', ':').ToLowerInvariant());
+                if ((firstAllLower || carriesOn) && !Abbreviations.Contains(lastLower) && !initial && last.Length > 1)
+                {
+                    string joinedFirst = carriesOn ? char.ToLowerInvariant(first[0]) + first.Substring(1) : first;
+                    string mark = pauseMs < SeamStopIsWindowsMs ? string.Empty : ",";
+                    retract = 1;
+                    return last.Substring(0, last.Length - 1) + mark + " " + joinedFirst
+                           + (rest.Length > 0 ? " " + rest : string.Empty);
+                }
+                return text;
+            }
+
+            if (endsSentence && pauseMs >= SeamIsSentenceEndMs && firstAllLower)
+            {
+                return char.ToUpperInvariant(first[0]) + text.Substring(1);
+            }
+            return text;
         }
 
         /// <summary>
@@ -3977,13 +4518,9 @@ namespace AutoClicker.Utils
         /// The floor now means "the loudest 100 ms must reach this", which is the
         /// question actually being asked. True silence is still rejected: a chunk of
         /// dither at ~0.00002 peaks at 0.000024, far below any floor.
+        ///
+        /// Also reports the loudest 100 ms level it measured.
         /// </summary>
-        private static bool IsMostlySilent(float[] samples, double floor = 0.0015)
-        {
-            return IsMostlySilent(samples, floor, out _);
-        }
-
-        /// <summary>As above, also reporting the loudest 100 ms level it measured.</summary>
         private static bool IsMostlySilent(float[] samples, double floor, out double peak)
         {
             peak = 0;

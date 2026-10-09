@@ -20,11 +20,24 @@ namespace AutoClicker.Models
     /// </summary>
     public sealed class ProfileKeybinds
     {
+        /// <summary>
+        /// Fields written by a newer Tempo, kept so saving here cannot erase them. The profile
+        /// itself always had this (ClickProfile.UnknownFields); the snapshots inside it did not,
+        /// so anything a newer build added to them was dropped by the first save in an older one.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, System.Text.Json.JsonElement> UnknownFields { get; set; }
+
         public List<HotkeyBinding> Bindings { get; set; } = new List<HotkeyBinding>();
 
         public ProfileKeybinds Clone()
         {
-            var copy = new ProfileKeybinds();
+            var copy = new ProfileKeybinds
+            {
+                UnknownFields = UnknownFields != null
+                    ? new Dictionary<string, System.Text.Json.JsonElement>(UnknownFields)
+                    : null
+            };
             if (Bindings != null)
             {
                 foreach (var b in Bindings)
@@ -92,8 +105,20 @@ namespace AutoClicker.Models
     /// </summary>
     public sealed class ProfileAppSettings
     {
+        /// <summary>Fields written by a newer Tempo, kept so saving here cannot erase them.</summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, System.Text.Json.JsonElement> UnknownFields { get; set; }
+
         // Appearance
         public ThemeKind Theme { get; set; } = ThemeKind.Dark;
+
+        /// <summary>
+        /// "Match Windows" (Settings → Appearance), as it was when the snapshot was taken. Null in
+        /// snapshots older than this field, which then leave the setting as it is. Without it a
+        /// profile saved while following Windows, restored where it was off, came back fixed Dark;
+        /// and one saved with a plain Dark theme, restored while following, turned Light at night.
+        /// </summary>
+        public bool? FollowSystemTheme { get; set; }
         public bool CustomAccentEnabled { get; set; }
         public int CustomAccentArgb { get; set; }
 
@@ -125,6 +150,7 @@ namespace AutoClicker.Models
             return new ProfileAppSettings
             {
                 Theme = s.Theme,
+                FollowSystemTheme = s.FollowSystemTheme,
                 CustomAccentEnabled = s.CustomAccentEnabled,
                 CustomAccentArgb = s.CustomAccentArgb,
                 ShowTrayNotifications = s.ShowTrayNotifications,
@@ -147,6 +173,7 @@ namespace AutoClicker.Models
         {
             if (s == null) return;
             s.Theme = Theme;
+            if (FollowSystemTheme.HasValue) { s.FollowSystemTheme = FollowSystemTheme.Value; }
             s.CustomAccentEnabled = CustomAccentEnabled;
             s.CustomAccentArgb = CustomAccentArgb;
             s.ShowTrayNotifications = ShowTrayNotifications;

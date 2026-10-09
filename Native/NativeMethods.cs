@@ -115,9 +115,6 @@ namespace AutoClicker.Native
         [DllImport("user32.dll")]
         public static extern short GetAsyncKeyState(int vKey);
 
-        [DllImport("user32.dll")]
-        public static extern short GetKeyState(int nVirtKey);
-
         // ─────────────────────────────────────────────────────────────────────
         //  Global hotkeys
         // ─────────────────────────────────────────────────────────────────────
@@ -267,6 +264,7 @@ namespace AutoClicker.Native
         public const uint MOUSEEVENTF_XDOWN = 0x0080;
         public const uint MOUSEEVENTF_XUP = 0x0100;
         public const uint MOUSEEVENTF_WHEEL = 0x0800;
+        public const uint MOUSEEVENTF_HWHEEL = 0x01000;   // tilt wheel; mouseData > 0 = right
         public const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
         public const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
 
@@ -313,12 +311,32 @@ namespace AutoClicker.Native
         public const int WM_MBUTTONUP = 0x0208;
         public const int WM_XBUTTONDOWN = 0x020B;
         public const int WM_XBUTTONUP = 0x020C;
+        public const int WM_LBUTTONDBLCLK = 0x0203;
+        public const int WM_RBUTTONDBLCLK = 0x0206;
+        public const int WM_MBUTTONDBLCLK = 0x0209;
+
+        // Class style: the window class wants WM_xBUTTONDBLCLK for a double-click.
+        public const int GCL_STYLE = -26;
+        public const int CS_DBLCLKS = 0x0008;
+
+        [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")]
+        private static extern IntPtr GetClassLongPtr64(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "GetClassLongW")]
+        private static extern uint GetClassLong32(IntPtr hWnd, int nIndex);
+
+        /// <summary>GetClassLongPtr, which only exists as an export on 64-bit Windows.</summary>
+        public static long GetClassLongValue(IntPtr hWnd, int nIndex)
+        {
+            return IntPtr.Size == 8 ? GetClassLongPtr64(hWnd, nIndex).ToInt64() : GetClassLong32(hWnd, nIndex);
+        }
 
         // Low-level mouse hook flag: event was injected by SendInput / mouse_event.
         public const uint LLMHF_INJECTED = 0x00000001;
         // Low-level keyboard hook flag: event was injected by SendInput / keybd_event.
         public const uint LLKHF_INJECTED = 0x00000010;
         public const int WM_MOUSEWHEEL = 0x020A;
+        public const int WM_MOUSEHWHEEL = 0x020E;
 
         // Low level keyboard messages
         public const int WM_KEYDOWN = 0x0100;

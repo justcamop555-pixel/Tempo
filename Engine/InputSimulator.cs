@@ -124,33 +124,33 @@ namespace AutoClicker.Engine
         }
 
         /// <summary>
-        /// Moves the cursor by a RELATIVE delta via SendInput. Unlike SetCursorPos this
-        /// also feeds raw-input games the movement, which is what makes drag-to-pan /
-        /// hold-to-look work when a second-mouse button is held. Deltas are in mouse
-        /// counts (subject to the OS pointer-speed curve).
+        /// Moves the mouse BY (<paramref name="dx"/>, <paramref name="dy"/>) mouse counts — a
+        /// relative move, the kind a physical mouse makes. A game reading raw input turns its
+        /// camera by exactly these counts. An absolute move (<see cref="MoveTo"/>) reaches such
+        /// a game as a screen coordinate, which it ignores or misreads, so no camera ever turned
+        /// in playback. The pointer, where one is shown, moves by them with Windows' pointer
+        /// speed applied, like a real mouse's would.
         /// </summary>
         public static void MoveRelative(int dx, int dy)
         {
-            if (dx == 0 && dy == 0) { return; }
-            var input = new NativeMethods.INPUT
+            if (dx == 0 && dy == 0)
             {
-                type = NativeMethods.INPUT_MOUSE,
-                U = new NativeMethods.InputUnion
-                {
-                    mi = new NativeMethods.MOUSEINPUT
-                    {
-                        dx = dx,
-                        dy = dy,
-                        mouseData = 0,
-                        dwFlags = NativeMethods.MOUSEEVENTF_MOVE,
-                        time = 0,
-                        dwExtraInfo = CurrentExtraInfo
-                    }
-                }
+                return;
+            }
+
+            var inputs = new NativeMethods.INPUT[1];
+            inputs[0].type = NativeMethods.INPUT_MOUSE;
+            inputs[0].U.mi = new NativeMethods.MOUSEINPUT
+            {
+                dx = dx,
+                dy = dy,
+                mouseData = 0,
+                dwFlags = NativeMethods.MOUSEEVENTF_MOVE,
+                time = 0,
+                dwExtraInfo = CurrentExtraInfo
             };
-            var inputs = new NativeMethods.INPUT[] { input };
-            uint sent = NativeMethods.SendInput(1, inputs, InputStructSize);
-            if (sent == 0)
+
+            if (NativeMethods.SendInput(1, inputs, InputStructSize) == 0)
             {
                 NativeMethods.mouse_event(NativeMethods.MOUSEEVENTF_MOVE, unchecked((uint)dx), unchecked((uint)dy), 0, CurrentExtraInfo);
             }
@@ -210,41 +210,48 @@ namespace AutoClicker.Engine
         /// A REAL wheel notch at a screen point: briefly warps the pointer there, sends
         /// a genuine SendInput wheel (Windows routes wheel input to the window under the
         /// pointer — with the OS's default "scroll inactive windows" this scrolls the
-        /// target without focusing it), then restores the pointer. Used by the second
-        /// cursor so its mouse's wheel scrolls what's under the SECOND cursor, not
-        /// whatever sits under the parked real pointer.
+        /// target without focusing it), then puts the pointer at (<paramref name="restoreX"/>,
+        /// <paramref name="restoreY"/>). Used by the second cursor so its mouse's wheel
+        /// scrolls what's under the SECOND cursor, not whatever sits under the parked real
+        /// pointer. Call it from one thread at a time: each call is one ordered batch.
+        /// <paramref name="horizontal"/> sends the tilt wheel instead.
         /// </summary>
-        public static void RealWheelAtAndRestore(int x, int y, int delta, int restoreX, int restoreY)
+        public static void RealWheelAtAndRestore(int x, int y, int delta, int restoreX, int restoreY,
+                                                 bool horizontal = false)
         {
+            uint wheelFlag = horizontal ? NativeMethods.MOUSEEVENTF_HWHEEL : NativeMethods.MOUSEEVENTF_WHEEL;
             ScreenGeometry.Clamp(ref x, ref y);
-            MoveTo(x, y);
-            Wheel(delta);
             ScreenGeometry.Clamp(ref restoreX, ref restoreY);
-            NativeMethods.SetCursorPos(restoreX, restoreY);
-        }
 
-        /// <summary>
-        /// A REAL click at a screen point that then puts the cursor back where it was.
-        /// The move + down + up go out as one batched SendInput (so the click lands at
-        /// the target), then the cursor is restored to <paramref name="restoreX"/>/
-        /// <paramref name="restoreY"/>. Unlike posted messages, a real click actually
-        /// opens apps, hits desktop icons and any control — used by the second cursor so
-        /// a second mouse can genuinely click things while the main pointer stays parked.
-        /// The cursor only visits the target for the instant of the click.
-        /// </summary>
-        public static void RealClickAtAndRestore(int x, int y, MouseButtonType button, int restoreX, int restoreY)
-        {
-            ScreenGeometry.Clamp(ref x, ref y);
-            // Absolute SendInput move so raw-input games see the cursor at the target,
-            // then a real press/release with a short dwell — many games only register a
-            // click if the button is actually held for a frame or two, not an instant
-            // down+up. Finally, restore the pointer to where the main mouse left it.
+            // ONE batch: there, the notch, and back, which Windows processes strictly in
+            // order. The hand-back used to be SetCursorPos, which takes effect at once — while
+            // the injected move and wheel can still be waiting in the input queue behind a
+            // busy hook — so the notch could land after the pointer had already gone home, in
+            // the window under the parked pointer instead.
+            if (TryBuildAbsoluteMove(x, y, out NativeMethods.INPUT there) &&
+                TryBuildAbsoluteMove(restoreX, restoreY, out NativeMethods.INPUT back))
+            {
+                var inputs = new NativeMethods.INPUT[3];
+                inputs[0] = there;
+                inputs[1].type = NativeMethods.INPUT_MOUSE;
+                inputs[1].U.mi = new NativeMethods.MOUSEINPUT
+                {
+                    dx = 0,
+                    dy = 0,
+                    mouseData = unchecked((uint)delta),
+                    dwFlags = wheelFlag,
+                    time = 0,
+                    dwExtraInfo = CurrentExtraInfo
+                };
+                inputs[2] = back;
+                if (NativeMethods.SendInput(3, inputs, InputStructSize) != 0)
+                {
+                    return;
+                }
+            }
+
             MoveTo(x, y);
-            ButtonDown(button);
-            System.Threading.Thread.Sleep(24);
-            ButtonUp(button);
-            System.Threading.Thread.Sleep(8);
-            ScreenGeometry.Clamp(ref restoreX, ref restoreY);
+            SendWheel(wheelFlag, delta);
             NativeMethods.SetCursorPos(restoreX, restoreY);
         }
 
@@ -275,14 +282,14 @@ namespace AutoClicker.Engine
             }
         }
 
-        /// <summary>Presses (and holds) a button.</summary>
         /// <summary>
         /// Like <see cref="ClickStyled"/>, but holds each click's button down for
         /// <paramref name="holdMilliseconds"/> before releasing. Used for the optional
         /// "hold each click" feature; when hold is 0 the engine uses the faster
         /// batched <see cref="ClickStyled"/> instead, so normal clicking is unchanged.
         /// </summary>
-        public static void ClickStyledHeld(MouseButtonType button, ClickStyle style, int holdMilliseconds)
+        public static void ClickStyledHeld(MouseButtonType button, ClickStyle style, int holdMilliseconds,
+                                           System.Threading.ManualResetEventSlim cancel = null)
         {
             if (holdMilliseconds <= 0)
             {
@@ -294,11 +301,55 @@ namespace AutoClicker.Engine
             for (int i = 0; i < count; i++)
             {
                 ButtonDown(button);
-                System.Threading.Thread.Sleep(holdMilliseconds);
+                bool cancelled = HoldFor(holdMilliseconds, cancel);
+                // Released whatever happened during the hold — a stop must never leave the
+                // button down.
                 ButtonUp(button);
+                if (cancelled) { return; }
             }
         }
 
+        /// <summary>
+        /// Waits out a hold, returning true early when <paramref name="cancel"/> is set.
+        ///
+        /// Holds used to be a plain Sleep. With "hold each click" up to 5 s — ×4 for a Quadruple
+        /// click — Stop could not interrupt them: the engine gave up waiting for its worker after
+        /// 2 s and reported "stopped" while the button was still held down, for up to 20 s.
+        /// </summary>
+        private static bool HoldFor(int milliseconds, System.Threading.ManualResetEventSlim cancel)
+        {
+            if (cancel == null)
+            {
+                System.Threading.Thread.Sleep(milliseconds);
+                return false;
+            }
+            try { return cancel.Wait(milliseconds); }
+            catch (ObjectDisposedException) { return true; }
+        }
+
+        /// <summary>
+        /// Moves the pointer to (<paramref name="x"/>, <paramref name="y"/>) and presses — or
+        /// releases — <paramref name="button"/> there as ONE batch, so nothing, a hand on the
+        /// mouse included, can put the press or the release anywhere else. The second cursor's
+        /// real clicks are made of these.
+        /// </summary>
+        public static void MoveAndButton(int x, int y, MouseButtonType button, bool down)
+        {
+            ScreenGeometry.Clamp(ref x, ref y);
+            uint flag = ButtonFlag(button, down);
+            if (TryBuildAbsoluteMove(x, y, out NativeMethods.INPUT move))
+            {
+                var inputs = new[] { move, MakeButton(flag) };
+                if (NativeMethods.SendInput(2, inputs, InputStructSize) == 2)
+                {
+                    return;
+                }
+            }
+            MoveTo(x, y);
+            SendButton(button, down);
+        }
+
+        /// <summary>Presses (and holds) a button.</summary>
         public static void ButtonDown(MouseButtonType button)
         {
             SendButton(button, down: true);
@@ -308,6 +359,46 @@ namespace AutoClicker.Engine
         public static void ButtonUp(MouseButtonType button)
         {
             SendButton(button, down: false);
+        }
+
+        /// <summary>
+        /// Presses (and holds) a side button: 1 = X1 (Back), 2 = X2 (Forward). Kept apart from
+        /// <see cref="MouseButtonType"/>, which is the clicker's own choice of button and
+        /// fills its button list.
+        /// </summary>
+        public static void XButtonDown(int which)
+        {
+            SendXButton(which, down: true);
+        }
+
+        /// <summary>Releases a side button pressed with <see cref="XButtonDown"/>.</summary>
+        public static void XButtonUp(int which)
+        {
+            SendXButton(which, down: false);
+        }
+
+        private static void SendXButton(int which, bool down)
+        {
+            uint flag = down ? NativeMethods.MOUSEEVENTF_XDOWN : NativeMethods.MOUSEEVENTF_XUP;
+            // mouseData names the button, where a wheel event carries its delta.
+            uint data = which == 2 ? NativeMethods.XBUTTON2 : NativeMethods.XBUTTON1;
+            var inputs = new NativeMethods.INPUT[1];
+            inputs[0].type = NativeMethods.INPUT_MOUSE;
+            inputs[0].U.mi = new NativeMethods.MOUSEINPUT
+            {
+                dx = 0,
+                dy = 0,
+                mouseData = data,
+                dwFlags = flag,
+                time = 0,
+                dwExtraInfo = CurrentExtraInfo
+            };
+
+            uint sent = NativeMethods.SendInput(1, inputs, InputStructSize);
+            if (sent == 0)
+            {
+                NativeMethods.mouse_event(flag, 0, 0, data, CurrentExtraInfo);
+            }
         }
 
         /// <summary>
@@ -369,7 +460,8 @@ namespace AutoClicker.Engine
         /// Like <see cref="BackgroundClick"/>, but holds each click's button down for
         /// <paramref name="holdMilliseconds"/> before releasing.
         /// </summary>
-        public static bool BackgroundClickHeld(int x, int y, MouseButtonType button, ClickStyle style, int holdMilliseconds)
+        public static bool BackgroundClickHeld(int x, int y, MouseButtonType button, ClickStyle style, int holdMilliseconds,
+                                               System.Threading.ManualResetEventSlim cancel = null)
         {
             IntPtr hwnd = ResolveWindowAt(x, y);
             if (hwnd == IntPtr.Zero)
@@ -389,41 +481,38 @@ namespace AutoClicker.Engine
             ButtonMessages(button, out downMsg, out upMsg, out mk);
 
             int count = ClickCount(style);
+
+            // A real double-click reaches a window as DOWN, UP, DBLCLK, UP: Windows turns the
+            // second press into WM_xBUTTONDBLCLK for any window whose class asks for double-
+            // clicks (CS_DBLCLKS) — a file list, an editor, most games' menus. Posting DOWN
+            // twice never produces that, so a background "double click" arrived there as two
+            // single clicks. The same substitution Windows makes is made here, and only for
+            // the windows it would make it for.
+            uint secondPress = downMsg;
+            if (count > 1)
+            {
+                try
+                {
+                    if ((NativeMethods.GetClassLongValue(hwnd, NativeMethods.GCL_STYLE) & NativeMethods.CS_DBLCLKS) != 0)
+                    {
+                        secondPress = DoubleClickMessage(button);
+                    }
+                }
+                catch { /* no class style to read: plain presses, as before */ }
+            }
+
             for (int i = 0; i < count; i++)
             {
                 // A move first so hover-aware controls register the pointer, then the
                 // down/up pair. wParam on the down carries the "button held" flag.
                 NativeMethods.PostMessage(hwnd, (uint)NativeMethods.WM_MOUSEMOVE, IntPtr.Zero, lParam);
-                NativeMethods.PostMessage(hwnd, downMsg, (IntPtr)mk, lParam);
-                if (holdMilliseconds > 0)
-                {
-                    System.Threading.Thread.Sleep(holdMilliseconds);
-                }
+                NativeMethods.PostMessage(hwnd, i == 1 ? secondPress : downMsg, (IntPtr)mk, lParam);
+                bool cancelled = holdMilliseconds > 0 && HoldFor(holdMilliseconds, cancel);
+                // The UP goes out even when a stop cut the hold short: the window must never be
+                // left believing the button is still down.
                 NativeMethods.PostMessage(hwnd, upMsg, IntPtr.Zero, lParam);
+                if (cancelled) { break; }
             }
-            return true;
-        }
-
-        /// <summary>
-        /// Posts a mouse-wheel notch to the window under a screen point, without moving
-        /// the real cursor — used by the second cursor so a second mouse's wheel scrolls
-        /// the app beneath it. <paramref name="delta"/> is in WHEEL_DELTA units (120 per
-        /// notch, positive = away/up). Best-effort: some apps only scroll the focused
-        /// window, which a posted message can't change.
-        /// </summary>
-        public static bool BackgroundWheel(int x, int y, int delta)
-        {
-            if (delta == 0) { return false; }
-            IntPtr hwnd = ResolveWindowAt(x, y);
-            if (hwnd == IntPtr.Zero)
-            {
-                return false;
-            }
-            // Unlike the button messages, WM_MOUSEWHEEL carries SCREEN coordinates in
-            // lParam (not client), and the wheel delta in the high word of wParam.
-            IntPtr lParam = MakeLParam(x, y);
-            IntPtr wParam = (IntPtr)((delta & 0xFFFF) << 16);
-            NativeMethods.PostMessage(hwnd, (uint)NativeMethods.WM_MOUSEWHEEL, wParam, lParam);
             return true;
         }
 
@@ -472,6 +561,17 @@ namespace AutoClicker.Engine
             }
         }
 
+        /// <summary>The WM_xBUTTONDBLCLK that Windows sends for the second press of a double-click.</summary>
+        private static uint DoubleClickMessage(MouseButtonType button)
+        {
+            switch (button)
+            {
+                case MouseButtonType.Right: return (uint)NativeMethods.WM_RBUTTONDBLCLK;
+                case MouseButtonType.Middle: return (uint)NativeMethods.WM_MBUTTONDBLCLK;
+                default: return (uint)NativeMethods.WM_LBUTTONDBLCLK;
+            }
+        }
+
         private static IntPtr MakeLParam(int loWord, int hiWord)
         {
             return (IntPtr)((hiWord << 16) | (loWord & 0xFFFF));
@@ -501,6 +601,17 @@ namespace AutoClicker.Engine
         /// <summary>Scrolls the mouse wheel by the given delta.</summary>
         public static void Wheel(int delta)
         {
+            SendWheel(NativeMethods.MOUSEEVENTF_WHEEL, delta);
+        }
+
+        /// <summary>Tilts the wheel by the given delta: a horizontal scroll, positive to the right.</summary>
+        public static void HWheel(int delta)
+        {
+            SendWheel(NativeMethods.MOUSEEVENTF_HWHEEL, delta);
+        }
+
+        private static void SendWheel(uint flag, int delta)
+        {
             var inputs = new NativeMethods.INPUT[1];
             inputs[0].type = NativeMethods.INPUT_MOUSE;
             inputs[0].U.mi = new NativeMethods.MOUSEINPUT
@@ -508,7 +619,7 @@ namespace AutoClicker.Engine
                 dx = 0,
                 dy = 0,
                 mouseData = unchecked((uint)delta),
-                dwFlags = NativeMethods.MOUSEEVENTF_WHEEL,
+                dwFlags = flag,
                 time = 0,
                 dwExtraInfo = CurrentExtraInfo
             };
@@ -516,7 +627,7 @@ namespace AutoClicker.Engine
             uint sent = NativeMethods.SendInput(1, inputs, InputStructSize);
             if (sent == 0)
             {
-                NativeMethods.mouse_event(NativeMethods.MOUSEEVENTF_WHEEL, 0, 0, unchecked((uint)delta), CurrentExtraInfo);
+                NativeMethods.mouse_event(flag, 0, 0, unchecked((uint)delta), CurrentExtraInfo);
             }
         }
 
@@ -550,7 +661,12 @@ namespace AutoClicker.Engine
             inputs[1].type = NativeMethods.INPUT_KEYBOARD;
             inputs[1].U.ki = BuildKeyInput(vk, keyUp: true);
 
-            NativeMethods.SendInput(2, inputs, InputStructSize);
+            // Checked like every other keyboard send: a rejected press was the one case the
+            // "keyboard input is being blocked" warning could never explain.
+            if (NativeMethods.SendInput(2, inputs, InputStructSize) == 0)
+            {
+                WarnKeyboardBlocked();
+            }
         }
 
         // ─────────────────────────────────────────────────────────────────────

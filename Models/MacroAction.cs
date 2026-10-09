@@ -5,7 +5,9 @@ namespace AutoClicker.Models
 {
     /// <summary>
     /// One step in a recorded macro. Depending on <see cref="Type"/> the X/Y or
-    /// the delay/wheel fields are meaningful.
+    /// the delay/wheel fields are meaningful. For a
+    /// <see cref="MacroActionType.MouseMoveRelative"/> step X/Y are a MOVEMENT in mouse
+    /// counts, never a position.
     /// </summary>
     public sealed class MacroAction
     {
@@ -87,9 +89,21 @@ namespace AutoClicker.Models
                     return $"Key up {KeyName(VirtualKey)}";
                 case MacroActionType.Script:
                     return $"Run script {ScriptFileName()}";
+                case MacroActionType.MouseMoveRelative:
+                    return "Camera " + RelativeText(X, Y);
                 default:
                     return $"{Type} at ({X}, {Y})";
             }
+        }
+
+        /// <summary>
+        /// A camera step's movement for the step lists: "Δ +12, −3" (mouse counts, signed,
+        /// with a real minus sign). Not a position, so it reads nothing like "(12, 3)".
+        /// </summary>
+        public static string RelativeText(int dx, int dy)
+        {
+            string Signed(int v) => v > 0 ? "+" + v : v < 0 ? "−" + (-(long)v) : "0";
+            return "Δ " + Signed(dx) + ", " + Signed(dy);
         }
 
         /// <summary>
@@ -106,10 +120,11 @@ namespace AutoClicker.Models
         /// <summary>Best-effort friendly name for a virtual-key code.</summary>
         public static string KeyName(int vk)
         {
+            // The name printed on the key, as the Keybinds tab shows it ("1", "Enter", "Left Shift"),
+            // not the enum's ("D1", "Return", "LShiftKey"). The macro search matches what is shown.
             try
             {
-                var key = (System.Windows.Forms.Keys)vk;
-                return key.ToString();
+                return KeyNames.Friendly(vk);
             }
             catch
             {
@@ -120,24 +135,91 @@ namespace AutoClicker.Models
         /// <summary>
         /// A friendly, human-readable name for an action type, for the Live Monitor and
         /// step editor. Avoids showing raw enum identifiers like "LeftDown"/"KeyUp".
+        ///
+        /// Translated here, where the words are. They were returned as English literals and
+        /// every screen showing a step — the editor's Action column, the Live Monitor — showed
+        /// "Move" and "Delay" in all six languages. No scanner saw it: the text reaches the UI
+        /// through a return value, never through a call that looks like translation. Every
+        /// caller only displays the name or compares it with another name made here, so the
+        /// translation is consistent wherever it is used (and the macro search now matches
+        /// the words the user actually sees).
         /// </summary>
         public static string FriendlyType(MacroActionType t)
         {
             switch (t)
             {
-                case MacroActionType.LeftDown: return "Left ↓";
-                case MacroActionType.LeftUp: return "Left ↑";
-                case MacroActionType.RightDown: return "Right ↓";
-                case MacroActionType.RightUp: return "Right ↑";
-                case MacroActionType.MiddleDown: return "Middle ↓";
-                case MacroActionType.MiddleUp: return "Middle ↑";
-                case MacroActionType.MouseMove: return "Move";
-                case MacroActionType.Wheel: return "Scroll";
-                case MacroActionType.KeyDown: return "Key ↓";
-                case MacroActionType.KeyUp: return "Key ↑";
-                case MacroActionType.Delay: return "Delay";
-                case MacroActionType.Script: return "Script";
+                case MacroActionType.LeftDown: return Utils.Localization.T("Left ↓");
+                case MacroActionType.LeftUp: return Utils.Localization.T("Left ↑");
+                case MacroActionType.RightDown: return Utils.Localization.T("Right ↓");
+                case MacroActionType.RightUp: return Utils.Localization.T("Right ↑");
+                case MacroActionType.MiddleDown: return Utils.Localization.T("Middle ↓");
+                case MacroActionType.MiddleUp: return Utils.Localization.T("Middle ↑");
+                case MacroActionType.MouseMove: return Utils.Localization.T("Move");
+                case MacroActionType.Wheel: return Utils.Localization.T("Scroll");
+                case MacroActionType.KeyDown: return Utils.Localization.T("Key ↓");
+                case MacroActionType.KeyUp: return Utils.Localization.T("Key ↑");
+                case MacroActionType.Delay: return Utils.Localization.T("Delay");
+                case MacroActionType.Script: return Utils.Localization.T("Script");
+                // Named as the Keybinds tab names them ("Mouse X1 (Back)"), so a side button
+                // reads the same wherever Tempo mentions it. One translated name per button,
+                // shared with the Insert Click dialog; the arrow ends every step name in every
+                // language, so it is added here rather than translated four more times.
+                case MacroActionType.X1Down: return Utils.Localization.T("X1 (Back)") + " ↓";
+                case MacroActionType.X1Up: return Utils.Localization.T("X1 (Back)") + " ↑";
+                case MacroActionType.X2Down: return Utils.Localization.T("X2 (Forward)") + " ↓";
+                case MacroActionType.X2Up: return Utils.Localization.T("X2 (Forward)") + " ↑";
+                case MacroActionType.MouseMoveRelative: return Utils.Localization.T("Camera");
                 default: return t.ToString();
+            }
+        }
+
+        // ── Mouse buttons ────────────────────────────────────────────────────────
+        //
+        // One place that knows which release ends which press. The recorder, the player
+        // and the macro doctor each kept their own left/right/middle lists; a button added
+        // to one and missed in another is a macro that presses and never lets go.
+
+        /// <summary>True for a mouse-button press: left, right, middle, X1 or X2.</summary>
+        public static bool IsButtonPress(MacroActionType t)
+        {
+            return t == MacroActionType.LeftDown || t == MacroActionType.RightDown ||
+                   t == MacroActionType.MiddleDown || t == MacroActionType.X1Down ||
+                   t == MacroActionType.X2Down;
+        }
+
+        /// <summary>True for a mouse-button release: left, right, middle, X1 or X2.</summary>
+        public static bool IsButtonRelease(MacroActionType t)
+        {
+            return t == MacroActionType.LeftUp || t == MacroActionType.RightUp ||
+                   t == MacroActionType.MiddleUp || t == MacroActionType.X1Up ||
+                   t == MacroActionType.X2Up;
+        }
+
+        /// <summary>The release that ends <paramref name="press"/> (the type itself if it isn't a press).</summary>
+        public static MacroActionType ReleaseOf(MacroActionType press)
+        {
+            switch (press)
+            {
+                case MacroActionType.LeftDown: return MacroActionType.LeftUp;
+                case MacroActionType.RightDown: return MacroActionType.RightUp;
+                case MacroActionType.MiddleDown: return MacroActionType.MiddleUp;
+                case MacroActionType.X1Down: return MacroActionType.X1Up;
+                case MacroActionType.X2Down: return MacroActionType.X2Up;
+                default: return press;
+            }
+        }
+
+        /// <summary>The press that <paramref name="release"/> ends (the type itself if it isn't a release).</summary>
+        public static MacroActionType PressOf(MacroActionType release)
+        {
+            switch (release)
+            {
+                case MacroActionType.LeftUp: return MacroActionType.LeftDown;
+                case MacroActionType.RightUp: return MacroActionType.RightDown;
+                case MacroActionType.MiddleUp: return MacroActionType.MiddleDown;
+                case MacroActionType.X1Up: return MacroActionType.X1Down;
+                case MacroActionType.X2Up: return MacroActionType.X2Down;
+                default: return release;
             }
         }
     }

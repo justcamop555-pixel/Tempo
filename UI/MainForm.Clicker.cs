@@ -73,13 +73,21 @@ namespace AutoClicker.UI
             _deleteProfileBtn.Click += OnDeleteProfile;
             StyleDangerButton(_deleteProfileBtn);
             SetGlyph(_deleteProfileBtn, ActionGlyph.Trash);
+            // Sized from their captions, with the row's spare room at the end shared out so
+            // the icons fit too: "Nuevo" and "Guardar" were 3 and 8 px short and, until the
+            // buttons learned to drop an icon rather than cut a word, painted "Guar…".
+            PackGlyphRow(300, 708, 6, _newProfileBtn, _saveProfileBtn, _duplicateProfileBtn, _deleteProfileBtn);
 
             var nameLabel = UiFactory.Label(Localization.T("Name:"), 12, 50, FontStyle.Bold);
             nameLabel.Text = nameLabel.Text.Replace(":", string.Empty).ToUpperInvariant();
             _profileNameText = UiFactory.Text(70, 47, 220);
+            // The details dialog's limit. This box had none, so a name could be as long as the
+            // user cared to type — and the card, the tray and the header then cut it anyway.
+            _profileNameText.MaxLength = ClickProfile.MaxNameLength;
 
-            // Mirrors the Keybinds tab: edits live only in these controls until
-            // Save, and switching profiles silently discards them — say so.
+            // Mirrors the Keybinds tab: edits live only in these controls until Save. Switching
+            // profiles asks about them (or, from a hotkey, keeps them for when the profile is
+            // chosen again) — see SwitchToProfile.
             _profileDirtyLabel = new Label
             {
                 Text = Localization.T("\u25CF Unsaved changes \u2014 click Save"),
@@ -135,20 +143,39 @@ namespace AutoClicker.UI
             // ── Click options group ────────────────────────────────────────────
             var clickGroup = UiFactory.Group(Localization.T("Click Options"), 384, 84, 324, 110, CardIcon.Cursor);
 
-            clickGroup.Controls.Add(UiFactory.Caption("Button", 16, 28));
-            _buttonCombo = UiFactory.Combo(16, 46, 90, Utils.Localization.T("Left"), Utils.Localization.T("Right"), Utils.Localization.T("Middle"), Utils.Localization.T("Keyboard key"));
+            // "Keyboard", not "Keyboard key": beside Left / Right / Middle it says the same, and the
+            // longer words ended in "…" in the 90 px box in every language, English included
+            // ("Tasto della tastiera" needed 104 px of 66). The index is what is read, never the text.
+            var buttonCaption = UiFactory.Caption("Button", 16, 28);
+            clickGroup.Controls.Add(buttonCaption);
+            _buttonCombo = UiFactory.Combo(16, 46, 90, Utils.Localization.T("Left"), Utils.Localization.T("Right"), Utils.Localization.T("Middle"), Utils.Localization.T("Keyboard"));
             _buttonCombo.SelectedIndexChanged += OnClickTargetChanged;
             clickGroup.Controls.Add(_buttonCombo);
 
-            clickGroup.Controls.Add(UiFactory.Caption("Type", 116, 28));
+            var typeCaption = UiFactory.Caption("Type", 116, 28);
+            clickGroup.Controls.Add(typeCaption);
             _styleCombo = UiFactory.Combo(116, 46, 100, Utils.Localization.T("Single"), Utils.Localization.T("Double"), Utils.Localization.T("Triple"), Utils.Localization.T("Quadruple"));
-            _styleCombo.SelectedIndexChanged += (s, e) => UpdateIntervalHint();
+            _styleCombo.SelectedIndexChanged += (s, e) => { UpdateIntervalHint(); RepaintSpeedLabel(); };
             clickGroup.Controls.Add(_styleCombo);
 
-            clickGroup.Controls.Add(UiFactory.Caption("Mode", 216, 28));
+            var modeCaption = UiFactory.Caption("Mode", 216, 28);
+            clickGroup.Controls.Add(modeCaption);
             _modeCombo = UiFactory.Combo(216, 46, 100, Utils.Localization.T("Interval"), Utils.Localization.T("Hold"), Utils.Localization.T("Burst"));
             _modeCombo.SelectedIndexChanged += OnModeChanged;
             clickGroup.Controls.Add(_modeCombo);
+
+            // Each box as wide as its own widest choice, packed left to right with their captions:
+            // Italian "Tieni premuto" needed 82 px in the 76 the Mode box left for it.
+            if (_buttonCombo is FlatComboBox b0 && _styleCombo is FlatComboBox b1 && _modeCombo is FlatComboBox b2)
+            {
+                b0.Width = b0.WidthForChoices96(86);
+                b1.Left = b0.Right + 6;
+                b1.Width = b1.WidthForChoices96(90);
+                b2.Left = b1.Right + 6;
+                b2.Width = b2.WidthForChoices96(90);
+                typeCaption.Left = b1.Left;
+                modeCaption.Left = b2.Left;
+            }
 
             clickGroup.Controls.Add(UiFactory.Caption("Hold each click (ms)", 16, 80));
             _holdMsNum = UiFactory.Numeric(170, 78, 70, 0, 5000, 0);
@@ -222,6 +249,16 @@ namespace AutoClicker.UI
             _repeatDurationEstLabel.ForeColor = _theme.TextMuted;
             repeatGroup.Controls.Add(_repeatDurationEstLabel);
 
+            // One line ending in "…" when it runs long, with the whole estimate on hover —
+            // never a second line cut off by the 16 px box ("≈ 600 cliques" is wider than
+            // 74 px in Portuguese, and a big count is wider in every language). Both change
+            // with every keystroke, so the start-up fitter cannot size them.
+            foreach (Label est in new[] { _repeatCountEstLabel, _repeatDurationEstLabel })
+            {
+                est.AutoEllipsis = true;
+                TipStyle.FollowText(est);
+            }
+
             _repeatCountNum.ValueChanged += (s, e) => UpdateRepeatEstimates();
             _repeatDurationNum.ValueChanged += (s, e) => UpdateRepeatEstimates();
 
@@ -261,6 +298,8 @@ namespace AutoClicker.UI
             randGroup.Controls.Add(_posJitterNum);
 
             _humanizeBtn = UiFactory.Button(Localization.T("Humanize"), 596, 26, 100, 30);
+            // It reads "✓ Humanize" while on (see UpdateHumanizeButton): measured both ways.
+            LayoutFitter.DeclareCaptions(_humanizeBtn, Localization.T("Humanize"), "✓ " + Localization.T("Humanize"));
             _humanizeBtn.Click += OnHumanizeClicked;
             StylePurpleButton(_humanizeBtn);
             SetGlyph(_humanizeBtn, ActionGlyph.Person);
@@ -467,9 +506,19 @@ namespace AutoClicker.UI
             page.Controls.Add(speedGroup);
             page.Controls.Add(afGroup);
 
-            page.Controls.Add(BuildSecondCursorGroup());
-            page.Controls.Add(BuildBackgroundClickGroup());
-            page.Controls.Add(BuildClickSoundGroup());
+            Control secondCursorGroup = BuildSecondCursorGroup();
+            page.Controls.Add(secondCursorGroup);
+            Control bgClickGroup = BuildBackgroundClickGroup();
+            Control soundGroup = BuildClickSoundGroup();
+            // One row, one height: whichever card's words need more, both get. And under the
+            // Second Cursor card however tall its words made it (10 px, the gap it always had).
+            int bottomRowHeight = Math.Max(bgClickGroup.Height, soundGroup.Height);
+            bgClickGroup.Height = bottomRowHeight;
+            soundGroup.Height = bottomRowHeight;
+            bgClickGroup.Top = secondCursorGroup.Bottom + 10;
+            soundGroup.Top = secondCursorGroup.Bottom + 10;
+            page.Controls.Add(bgClickGroup);
+            page.Controls.Add(soundGroup);
 
             // Footer hint bar (matches the design): a faint info line under the cards.
             //
@@ -478,18 +527,24 @@ namespace AutoClicker.UI
             // the tip to 174px — so the line has been rendering as
             // "Tip: Press F6 to start/stop    •    All t…" in every language since the
             // card was added. It belongs below the last card, not on top of it.
-            var tipLabel = new Label
+            //
+            // And it names the key that is actually bound: it said "Press F6" whatever the Keybinds tab
+            // held, so rebinding Start / Stop, unbinding it or switching to Hold-to-click left the tip
+            // telling people to press a key that did something else or nothing. Refreshed with the
+            // other key hints (UpdateStartButtonHotkeyHint).
+            // Below the row it follows, wherever that ends. It was fixed at 1070 when the row
+            // ended at 1060; the row grew to 1074 and the line's top ran into the cards' border.
+            _clickerTipLabel = new Label
             {
-                Text = "ⓘ  " + Localization.T("Tip: Press F6 to start/stop")
-                     + "    •    " + Localization.T("All times in milliseconds"),
+                Text = ClickerFooterTip(),
                 Left = 14,
-                Top = 1070,
+                Top = bgClickGroup.Bottom + 8,
                 AutoSize = true,
                 Font = new Font("Segoe UI", 8.5f),
                 ForeColor = _theme.TextMuted,
                 BackColor = Color.Transparent
             };
-            page.Controls.Add(tipLabel);
+            page.Controls.Add(_clickerTipLabel);
 
             _tabs.TabPages.Add(page);
 
@@ -627,16 +682,29 @@ namespace AutoClicker.UI
             long ms = GetUiIntervalMs();
             if (ms < 1) ms = 1;
 
-            int styleFactor = (_styleCombo != null ? _styleCombo.SelectedIndex : 0) + 1;
-            if (styleFactor < 1) styleFactor = 1;
+            // Real clicks per press: 2 for a double click, and 1 for a keyboard key whatever the
+            // (then irrelevant) click-type box still says.
+            int styleFactor = ClicksPerPressUi();
 
-            string text;
             ClickMode mode = GetSelectedMode();
+
+            // Built in pieces, so a line too long for its card can shed its least useful piece
+            // instead of running off the edge: LEAD, the rate (accent-coloured); DETAIL, the
+            // interval restated (it is in the boxes right above); then the cap and the hold,
+            // which are warnings and are kept to the last.
+            string lead;
+            string shortLead = null;   // the rate without its working, for when nothing else is left to drop
+            string detail;
 
             // The fastest rate this line is about to claim, for the Anti-Freeze check
             // below. Set in every branch so the check can never read a stale zero.
             double claimedCps;
 
+            // Every sentence below goes through Localization. They were interpolated English, so
+            // the most-read line on the Clicker tab stayed English in all six languages — and no
+            // translation scan could see it, because nothing was ever offered for translation.
+            // The "   ·   " separator stays OUTSIDE the translated pieces.
+            const string Sep = "   ·   ";
             if (mode == ClickMode.Burst)
             {
                 // Average rate over a whole burst-plus-pause cycle.
@@ -645,7 +713,8 @@ namespace AutoClicker.UI
                 long pause = _burstPauseNum != null ? (long)_burstPauseNum.Value : 0;
                 double cycleMs = burst * ms + pause;
                 double avgCps = cycleMs > 0 ? burst * styleFactor * 1000.0 / cycleMs : 0;
-                text = $"≈ {avgCps:0.0} CPS avg   ·   burst {burst:N0} / {pause:N0} ms";
+                lead = Localization.F("≈ {0} CPS avg", avgCps.ToString("0.0"));
+                detail = Sep + Localization.F("burst {0} / {1} ms", burst.ToString("N0"), pause.ToString("N0"));
                 // Inside a burst the clicks come at the interval, and that is what the
                 // cap acts on — not the average across the pause.
                 claimedCps = 1000.0 / ms * styleFactor;
@@ -664,7 +733,9 @@ namespace AutoClicker.UI
                     long hi = ms + jitter;
                     double cpsHi = 1000.0 / lo * styleFactor;   // shortest delay = fastest
                     double cpsLo = 1000.0 / hi * styleFactor;   // longest delay = slowest
-                    text = $"≈ {cpsLo:0.0}–{cpsHi:0.0} CPS   ·   {ms:N0} ± {jitter:N0} ms";
+                    // Numbers and units only — nothing here to translate.
+                    lead = "≈ " + cpsLo.ToString("0.0") + "–" + cpsHi.ToString("0.0") + " CPS";
+                    detail = Sep + ms.ToString("N0") + " ± " + jitter.ToString("N0") + " ms";
                     claimedCps = cpsHi;                          // the cap bites at the top
                 }
                 else if (cps >= 1)
@@ -672,13 +743,22 @@ namespace AutoClicker.UI
                     // Say WHICH rate this is when a multi-click style is inflating it.
                     // Bare "114.3 CPS" next to Manual Speed's "29 CPS" (same interval,
                     // Quadruple) read as a straight contradiction.
-                    text = styleFactor > 1
-                        ? $"≈ {1000.0 / ms:0.0}/s × {styleFactor} = {cps:0.0} clicks/s   ·   {ms:N0} ms between clicks"
-                        : $"≈ {cps:0.0} CPS   ·   {ms:N0} ms between clicks";
+                    if (styleFactor > 1)
+                    {
+                        lead = Localization.F("≈ {0}/s × {1} = {2} clicks/s",
+                            (1000.0 / ms).ToString("0.0"), styleFactor, cps.ToString("0.0"));
+                        shortLead = "≈ " + cps.ToString("0.0") + " CPS";
+                    }
+                    else
+                    {
+                        lead = "≈ " + cps.ToString("0.0") + " CPS";
+                    }
+                    detail = Sep + Localization.F("{0} ms between clicks", ms.ToString("N0"));
                 }
                 else
                 {
-                    text = $"1 click every {ms / 1000.0:0.0} s   ·   {ms:N0} ms";
+                    lead = Localization.F("1 click every {0} s", (ms / 1000.0).ToString("0.0"));
+                    detail = Sep + ms.ToString("N0") + " ms";
                 }
             }
 
@@ -690,43 +770,51 @@ namespace AutoClicker.UI
             // and the interval; the long form ("capped to 300 CPS by Anti-Freeze") was cut
             // off at the card edge, which is how the Manual Speed label had been failing
             // unnoticed. The Anti-Freeze card beside it spells the rest out.
+            string tail = "";
             int afCap = EffectiveCap();
             if (claimedCps > afCap)
             {
-                text += Localization.F("   ·   max {0}", afCap);
+                tail += Localization.F("   ·   max {0}", afCap);
             }
 
             // If each click is held down, note it — and warn if the hold is long
-            // enough to cap the rate you asked for.
+            // enough to cap the rate you asked for. A press of a double click holds TWICE (each
+            // click is held), so it is the whole press that has to fit inside the interval; the
+            // warning compared a single hold and stayed quiet while a double click was capped.
             long hold = _holdMsNum != null ? (long)_holdMsNum.Value : 0;
             if (hold > 0)
             {
-                text += $"   ·   hold {hold:N0} ms";
-                if (mode != ClickMode.Burst && hold >= ms)
+                tail += Sep + Localization.F("hold {0} ms", hold.ToString("N0"));
+                if (mode != ClickMode.Burst && hold * styleFactor >= ms)
                 {
-                    text += " (caps rate)";
+                    tail += " " + Localization.T("(caps rate)");
                 }
             }
 
-            // Highlight the leading rate ("≈ 114.3 CPS") in the accent colour, keep the
-            // detail after the first separator muted.
+            // The rate in the accent colour, the rest muted.
             if (_intervalHint is SpeedTargetLabel seg)
             {
                 seg.AccentColor = _theme.Accent;
                 seg.MutedColor = _theme.TextMuted;
-                int sep = text.IndexOf("   ·   ", StringComparison.Ordinal);
-                if (sep > 0)
+
+                // The first version that fits: all of it; then without the interval restated; then
+                // the bare rate. Nothing here wraps or ellipsizes, and with a hold this line was
+                // 341 px in English (about 400 in French and German) in a 336 px label — the
+                // "(caps rate)" warning at its end was the part cut off.
+                string rest = detail + tail;
+                if (!seg.Fits("", lead, rest))
                 {
-                    seg.SetParts("", text.Substring(0, sep), text.Substring(sep));
+                    rest = tail;
+                    if (shortLead != null && !seg.Fits("", lead, rest))
+                    {
+                        lead = shortLead;
+                    }
                 }
-                else
-                {
-                    seg.SetParts("", text, "");
-                }
+                seg.SetParts("", lead, rest);
             }
             else
             {
-                _intervalHint.Text = text;
+                _intervalHint.Text = lead + detail + tail;
             }
             UpdateRepeatEstimates();
         }
@@ -742,19 +830,30 @@ namespace AutoClicker.UI
             long ms = GetUiIntervalMs();
             if (ms < 1) ms = 1;
 
-            // Each click can't fire faster than its hold time, so the real period
-            // between clicks is whichever is longer — keep the estimates honest.
+            // The real time between presses, so the estimates stay honest. A press can't finish
+            // faster than its hold — and a double click holds twice, once per click. Anti-Freeze
+            // spaces presses out to its cap (which counts clicks). These estimates ignored both
+            // the cap and the click type's holds, and in Burst mode ignored the pause between
+            // bursts: 1,000 presses in bursts of 10 at 10 ms with a 1 s pause was "≈ 10.0 s"
+            // for a run that takes 110.
             long hold = _holdMsNum != null ? (long)_holdMsNum.Value : 0;
-            long period = Math.Max(ms, hold);
+            int perPress = ClicksPerPressUi();
+            double capGap = 1000.0 * perPress / EffectiveCap();
+            double period = Math.Max(Math.Max(ms, hold * perPress), capGap);
+            if (GetSelectedMode() == ClickMode.Burst)
+            {
+                // Averaged over a burst plus its pause — the same cycle the rate line uses.
+                long burst = _burstSizeNum != null ? Math.Max(1, (long)_burstSizeNum.Value) : 1;
+                long pause = _burstPauseNum != null ? (long)_burstPauseNum.Value : 0;
+                period = (burst * period + Math.Max(pause, capGap)) / burst;
+            }
 
             long count = (long)_repeatCountNum.Value;
             double seconds = count * period / 1000.0;
             _repeatCountEstLabel.Text = "≈ " + FormatShortDuration(seconds);
 
             int dur = (int)_repeatDurationNum.Value;
-            int styleFactor = (_styleCombo != null ? _styleCombo.SelectedIndex : 0) + 1;
-            if (styleFactor < 1) styleFactor = 1;
-            double clicks = dur * 1000.0 / period * styleFactor;
+            double clicks = dur * 1000.0 / period * perPress;
             _repeatDurationEstLabel.Text = Localization.F("≈ {0} clicks", FormatShortCount(clicks));
 
             // Only show the estimate next to the mode that's actually selected.
@@ -846,6 +945,12 @@ namespace AutoClicker.UI
                 }
                 ApplyAntiFreezeToEngine();
 
+                // The labels were painted (by ApplySpeedUnlock) BEFORE the cap moved, and the
+                // suppressed numeric above doesn't repaint them — so unlocking left the rate line
+                // saying "max 200" under a 2,000 cap.
+                UpdateIntervalHint();
+                RepaintSpeedLabel();
+
                 SettingsManager.Save(_settings);
             }
         }
@@ -891,6 +996,91 @@ namespace AutoClicker.UI
                 : int.MaxValue;
         }
 
+        /// <summary>
+        /// Real clicks one press sends with the Clicker's current settings: 2 for a double click,
+        /// 4 for a quadruple — and 1 for a keyboard key, because the engine presses the key once
+        /// whatever the click-type box (still filled in beside it) says. Every rate on this tab,
+        /// and the Anti-Freeze cap, counts these clicks.
+        /// </summary>
+        private int ClicksPerPressUi()
+        {
+            if (_buttonCombo != null && _buttonCombo.SelectedIndex == KeyTargetIndex)
+            {
+                return 1;
+            }
+            int n = (_styleCombo != null ? _styleCombo.SelectedIndex : 0) + 1;
+            return n < 1 ? 1 : n;
+        }
+
+        // What the Target label says before the click-type multiplier and the Anti-Freeze cap are
+        // applied — kept so a change to either can repaint the label WITHOUT going back through
+        // the slider. Re-deriving the slider from the interval instead would round a profile
+        // loaded at 2,000 CPS down to 1,000 (its whole-millisecond interval is 1 ms).
+        private string _speedValueText = "";
+        private string _speedDetailText = "";
+        private double _speedPressCps;
+
+        /// <summary>Sets the Target label's base text (the press rate) and paints it.</summary>
+        private void PaintSpeedLabel(string valueText, string detailText, double pressCps)
+        {
+            _speedValueText = valueText;
+            _speedDetailText = detailText;
+            _speedPressCps = pressCps;
+            RepaintSpeedLabel();
+        }
+
+        /// <summary>
+        /// Paints the Target label from its base text, the click type and the Anti-Freeze cap.
+        /// Changing the click type or the cap used to leave this label describing the old ones,
+        /// because only the slider ever repainted it — and typing an interval repainted it
+        /// WITHOUT the "×4 = … clicks/s" part at all.
+        /// </summary>
+        private void RepaintSpeedLabel()
+        {
+            // Nothing painted yet (a click-type change while the tab is still being built): the
+            // slider's own first paint is still to come, and would find "Target: " with no value.
+            if (_speedLabel == null || _theme == null || string.IsNullOrEmpty(_speedValueText))
+            {
+                return;
+            }
+
+            // A Double/Triple/Quadruple click sends 2/3/4 real clicks per press, so this "CPS"
+            // (the PRESS rate the slider sets) is not the number of clicks the game receives.
+            // The interval hint above shows the multiplied figure, which meant the same screen
+            // displayed "29 CPS" and "114.3 CPS" for the very same setting, with nothing to
+            // explain the contradiction. Spell it out.
+            string prefix = Localization.T("Target:") + " ";
+            string detail = _speedDetailText;
+            int perPress = ClicksPerPressUi();
+            if (perPress > 1)
+            {
+                // What it adds up to matters more than the bracketed interval and per-minute figures
+                // (the interval is in the boxes above), and together they were 365 px in this 336 px
+                // label — "×2 = 180 clicks/s" was the part cut off, in every language.
+                string times = Localization.F("×{0} = {1} clicks/s",
+                    perPress, (_speedPressCps * perPress).ToString("N0"));
+                detail = _speedLabel.Fits(prefix, _speedValueText, detail + "  ·  " + times)
+                    ? detail + "  ·  " + times
+                    : "  (" + times + ")";
+            }
+
+            // REPLACES the ms/per-minute detail rather than following it: this label is ~330px
+            // inside a 360px card and the base text already fills it, so an appended warning was
+            // cut off mid-word. The cap counts CLICKS (as the engine does), so a quadruple click
+            // is capped at a quarter of the press rate — shown here in this label's own unit,
+            // presses, so "Target: 100 CPS (max 50 CPS)" reads as what will actually happen. It
+            // compared the PRESS rate with the click cap, and said nothing while a quadruple click
+            // at 100 was being cut to 50.
+            int cap = EffectiveCap();
+            if (_speedPressCps * perPress > cap)
+            {
+                detail = Localization.F("  (max {0} CPS · Anti-Freeze)", Math.Max(1, cap / perPress));
+            }
+            _speedLabel.AccentColor = _theme.Accent;
+            _speedLabel.MutedColor = _theme.TextMuted;
+            _speedLabel.SetParts(prefix, _speedValueText, detail);
+        }
+
         /// <summary>Maps the slider to the interval and live engine.</summary>
         private void OnSpeedSlider()
         {
@@ -928,32 +1118,9 @@ namespace AutoClicker.UI
                 ? $"  (~{precise:0.00} ms \u00b7 {perMin}/min)"
                 : $"  ({ms} ms \u00b7 {perMin}/min)";
 
-            // A Double/Triple/Quadruple click sends 2/3/4 real clicks per actuation, so
-            // this "CPS" (the PRESS rate the slider sets) is not the number of clicks the
-            // game receives. The interval hint above already showed the multiplied figure,
-            // which meant the same screen displayed "29 CPS" and "114.3 CPS" for the very
-            // same setting, with nothing to explain the contradiction. Spell it out.
-            int styleMul = (_styleCombo != null ? _styleCombo.SelectedIndex : 0) + 1;
-            if (styleMul > 1)
-            {
-                detail += $"  \u00b7  \u00d7{styleMul} = {cps * styleMul:N0} clicks/s";
-            }
-
-            // REPLACES the ms/per-minute detail rather than following it. This label is
-            // ~330px inside a 360px card and the base text already fills it, so the old
-            // appended "\u2014 capped to N by Anti-Freeze" was cut off mid-word ("capped t")
-            // \u2014 it had never actually been readable. The cap is the more useful of the
-            // two facts when it is in force, and the per-minute figure it displaces is a
-            // restatement of the CPS beside it. Also now translated: it was a raw
-            // interpolated literal, so this warning stayed English everywhere.
-            int cap = EffectiveCap();
-            if (cps > cap)
-            {
-                detail = Localization.F("  (max {0} CPS \u00b7 Anti-Freeze)", cap);
-            }
-            _speedLabel.AccentColor = _theme.Accent;
-            _speedLabel.MutedColor = _theme.TextMuted;
-            _speedLabel.SetParts(Localization.T("Target:") + " ", $"{cps} CPS", detail);
+            // The click-type multiplier and the Anti-Freeze cap are added by RepaintSpeedLabel,
+            // which the click type and the cap also call when THEY change.
+            PaintSpeedLabel($"{cps} CPS", detail, cps);
 
             if (_engine.IsRunning && GetSelectedMode() == ClickMode.Interval)
             {
@@ -1006,6 +1173,42 @@ namespace AutoClicker.UI
         private static void SetGlyph(Button b, ActionGlyph glyph)
         {
             if (b is RoundedButton rb) rb.Glyph = glyph;
+        }
+
+        /// <summary>
+        /// Lays a row of glyph buttons out left to right from <paramref name="left"/>, widening
+        /// each to fit its icon AND its caption for as long as the whole row still ends by
+        /// <paramref name="maxRight"/>. A button that cannot be widened keeps its designed
+        /// width and draws its caption without the icon (RoundedButton.GlyphFits) — never the
+        /// other way round. In English every button already fits, so nothing moves.
+        /// </summary>
+        private void PackGlyphRow(int left, int maxRight, int gap, params Button[] row)
+        {
+            if (row == null || row.Length == 0) { return; }
+            var widths = new int[row.Length];
+            int total = gap * (row.Length - 1);
+            for (int i = 0; i < row.Length; i++) { widths[i] = row[i].Width; total += widths[i]; }
+
+            for (int i = 0; i < row.Length; i++)
+            {
+                if (!(row[i] is RoundedButton rb)) { continue; }
+                // What the button paints is screen pixels; the row is in the window's units (100% ones
+                // while it is built): a 150% laptop widened these by half again.
+                int extra = (int)Math.Ceiling(rb.CaptionWidthWanted() * LayoutUnitsPerPixel) - widths[i];
+                if (extra > 0 && left + total + extra <= maxRight)
+                {
+                    widths[i] += extra;
+                    total += extra;
+                }
+            }
+
+            int x = left;
+            for (int i = 0; i < row.Length; i++)
+            {
+                row[i].Left = x;
+                row[i].Width = widths[i];
+                x += widths[i] + gap;
+            }
         }
 
         /// <summary>
@@ -1119,14 +1322,7 @@ namespace AutoClicker.UI
                 valueText = $"{v} CPS";
                 detailText = $"  ({ms} ms \u00b7 {perMin}/min)";
             }
-            int cap = EffectiveCap();
-            if (cps > cap)
-            {
-                detailText = Localization.F("  (max {0} CPS · Anti-Freeze)", cap);
-            }
-            _speedLabel.AccentColor = _theme.Accent;
-            _speedLabel.MutedColor = _theme.TextMuted;
-            _speedLabel.SetParts(Localization.T("Target:") + " ", valueText, detailText);
+            PaintSpeedLabel(valueText, detailText, cps);
 
             // This path sets the slider directly (not via OnSpeedSlider), so refresh the
             // active-preset highlight here too or it stays stuck on the startup value.
@@ -1175,6 +1371,11 @@ namespace AutoClicker.UI
             }
 
             UpdateAntiFreezeControlsEnabled();
+
+            // A Reset or an Import can change the cap, and the boxes above were filled with
+            // their events suppressed: bring the lines that quote it up to date.
+            UpdateIntervalHint();
+            RepaintSpeedLabel();
         }
 
         private void OnAntiFreezeChanged()
@@ -1186,9 +1387,14 @@ namespace AutoClicker.UI
 
             _settings.AntiFreezeEnabled = _antiFreezeCheck.Checked;
             _settings.MaxClicksPerSecond = (int)_maxCpsNum.Value;
-            // The Multi-Point tab's cycle time is floored by this cap, so it must hear about it.
-            UpdateCycleInfo();
             _settings.AntiFreezeCpuThreshold = (int)_cpuThresholdNum.Value;
+
+            // Everything that quotes the cap: the rate line's "max N", the Target label, the
+            // repeat estimates and the Multi-Point cycle time (UpdateIntervalHint does the last
+            // two). Only the Multi-Point line used to hear about it, so turning Anti-Freeze off
+            // left "max 200" on the rate line until some other field was touched.
+            UpdateIntervalHint();
+            RepaintSpeedLabel();
 
             // Apply live (engine reads these properties on the fly) and persist.
             ApplyAntiFreezeToEngine();
@@ -1214,6 +1420,11 @@ namespace AutoClicker.UI
         private void OnClickTargetChanged(object sender, EventArgs e)
         {
             RefreshKeyButton();
+
+            // A key press is one "click" whatever the click-type box says, so switching to or
+            // from a key changes every rate on the tab.
+            UpdateIntervalHint();
+            RepaintSpeedLabel();
         }
 
         /// <summary>Enables the "Set key" button in keyboard mode and shows the chosen key.</summary>
@@ -1238,7 +1449,9 @@ namespace AutoClicker.UI
                 HotkeyAction? clash = keyMode && _selectedKeyVk != 0
                     ? ActionFiredBy(_selectedKeyVk, false, false, false, false)
                     : null;
-                _keyClashTip.SetToolTip(_setKeyBtn, clash.HasValue
+                // Through TipStyle: the button's help tip is a second component, and the two
+                // used to pop up together, one on top of the other.
+                TipStyle.Set(_keyClashTip, _setKeyBtn, clash.HasValue
                     ? Localization.F(
                         "⚠ {0} is also bound to “{1}”. Tempo's own key presses fire its own hotkeys, "
                         + "so every press would run that action too. Pick another key, or rebind it "
@@ -1260,7 +1473,8 @@ namespace AutoClicker.UI
 
         private static string KeyLabel(int vk)
         {
-            try { return ((Keys)vk).ToString(); }
+            // Named as the Keybinds tab names it: "1", not "D1"; the layout's "Ö", not "Oemtilde".
+            try { return KeyNames.Friendly(vk); }
             catch { return "0x" + vk.ToString("X2"); }
         }
 
@@ -1453,12 +1667,23 @@ namespace AutoClicker.UI
             }
         }
 
-        private void LoadProfileIntoUi(ClickProfile p)
+        /// <summary>
+        /// Puts a profile into the Clicker and Multi-Point controls. <paramref name="asBaseline"/>
+        /// false leaves the unsaved-changes baseline alone: that is how a draft kept from a hotkey
+        /// switch comes back on top of its saved profile, still marked unsaved.
+        /// </summary>
+        private void LoadProfileIntoUi(ClickProfile p, bool asBaseline = true)
         {
             if (p == null)
             {
                 return;
             }
+
+            // An index a combo does not have — a value from a newer Tempo, say — threw half-way
+            // through this load and left the tab showing two profiles mixed. The nearest thing
+            // the combo has is shown instead (see ClickProfile.Sanitize).
+            int Index(ComboBox combo, int i, int limit) =>
+                i >= 0 && i < Math.Min(limit, combo.Items.Count) ? i : 0;
 
             _suppressProfileEvents = true;
             try
@@ -1472,10 +1697,10 @@ namespace AutoClicker.UI
                 _selectedKeyVk = p.KeyVirtualKey;
                 _buttonCombo.SelectedIndex = p.Target == ClickTarget.Key
                     ? KeyTargetIndex
-                    : (int)p.Button;
+                    : Index(_buttonCombo, (int)p.Button, KeyTargetIndex);
                 RefreshKeyButton();
-                _styleCombo.SelectedIndex = (int)p.Style;
-                _modeCombo.SelectedIndex = (int)p.Mode;
+                _styleCombo.SelectedIndex = Index(_styleCombo, (int)p.Style, int.MaxValue);
+                _modeCombo.SelectedIndex = Index(_modeCombo, (int)p.Mode, int.MaxValue);
 
                 _posCurrentRadio.Checked = p.PositionMode == PositionMode.CurrentPosition;
                 _posFixedRadio.Checked = p.PositionMode == PositionMode.FixedPosition;
@@ -1508,13 +1733,16 @@ namespace AutoClicker.UI
 
                 // Working points list.
                 _workingPoints.Clear();
-                foreach (var pt in p.Points)
+                if (p.Points != null)
                 {
-                    _workingPoints.Add(pt.Clone());
+                    foreach (var pt in p.Points)
+                    {
+                        if (pt != null) { _workingPoints.Add(pt.Clone()); }
+                    }
                 }
                 if (_pointOrderCombo != null)
                 {
-                    _pointOrderCombo.SelectedIndex = (int)p.PointOrder;
+                    _pointOrderCombo.SelectedIndex = Index(_pointOrderCombo, (int)p.PointOrder, int.MaxValue);
                 }
                 RefreshPointsList();
 
@@ -1533,11 +1761,15 @@ namespace AutoClicker.UI
             UpdateIntervalHint();
             SyncHumanizeButtonFromState();   // reflect the loaded randomizer state
 
-            // This load IS the new baseline — nothing is unsaved right now.
-            _profileSnapshotJson = SerializeProfileSafe();
-            if (_profileDirtyLabel != null)
+            // This load IS the new baseline — nothing is unsaved right now. (Not for a draft
+            // coming back over its saved profile: that one is unsaved, and the UI tick says so.)
+            if (asBaseline)
             {
-                _profileDirtyLabel.Visible = false;
+                _profileSnapshotJson = SerializeProfileSafe();
+                if (_profileDirtyLabel != null)
+                {
+                    _profileDirtyLabel.Visible = false;
+                }
             }
 
             // _currentProfileName was set above, and this is the only place it moves
@@ -1586,6 +1818,9 @@ namespace AutoClicker.UI
             {
                 SelectProfileInCombo(target.Name);
                 LoadProfileIntoUi(target);
+                // The remembered name can be one that is gone; the tray named it and ticked
+                // nothing until another profile was chosen.
+                _settings.LastProfileName = target.Name;
             }
         }
 
@@ -1627,15 +1862,29 @@ namespace AutoClicker.UI
                 _suppressProfileEvents = false;
             }
 
-            _statusProfile.Text = Localization.T("Profile: ") + name;
-            if (_header != null)
-            {
-                _header.ProfileText = Localization.T("Profile  •  ") + name;
-            }
+            ShowProfileNameInStatus(name);
 
             // Re-ring the active card. This only repaints, so it is cheap enough to
             // run on every profile switch — including the Ctrl+Tab cycle.
             RefreshProfileGridActive();
+        }
+
+        /// <summary>
+        /// The profile's name in the status bar and the header. The status bar is a tool strip,
+        /// which reads "&amp;" as a shortcut marker and swallows it: "Slow &amp; steady" showed as
+        /// "Slow  steady". Doubled, as the tray menu already does (MenuText). The header draws
+        /// its own text and shows it as it is.
+        /// </summary>
+        private void ShowProfileNameInStatus(string name)
+        {
+            if (_statusProfile != null)
+            {
+                _statusProfile.Text = Localization.T("Profile: ") + MenuText(name ?? "");
+            }
+            if (_header != null)
+            {
+                _header.ProfileText = Localization.T("Profile  •  ") + (name ?? "");
+            }
         }
 
         private void OnProfileSelected(object sender, EventArgs e)
@@ -1651,113 +1900,137 @@ namespace AutoClicker.UI
                 return;
             }
 
-            var profile = _profiles.GetByName(name);
-            if (profile != null)
+            // Safe to switch from here: this handler returns early on _suppressProfileEvents,
+            // which every programmatic combo change sets, so it runs only for a real user switch
+            // or the Next/Previous-profile hotkeys (CycleProfile, which says so).
+            var source = _profileSwitchByHotkey ? ProfileSwitchSource.Hotkey : ProfileSwitchSource.Ui;
+            if (!SwitchToProfile(name, source))
             {
-                LoadProfileIntoUi(profile);
-                _statusProfile.Text = Localization.T("Profile: ") + name;
-                if (_header != null)
-                {
-                    _header.ProfileText = Localization.T("Profile  •  ") + name;
-                }
-                _settings.LastProfileName = name;
+                // Cancelled (unsaved edits the user chose to keep working on): the dropdown
+                // goes back to the profile that is still loaded.
+                SelectProfileInCombo(_currentProfileName);
+            }
+        }
 
-                // A profile's saved keybinds (and appearance) used to follow it only when
-                // it was activated from the Profiles TAB — ApplyProfileExtras had exactly
-                // one caller. Switching from this dropdown loaded the intervals and the
-                // click settings but left the previous profile's hotkeys registered, so
-                // the app was running one profile's clicking with another's keys and
-                // nothing said so. The Next/Previous-profile HOTKEYS land here too, via
-                // CycleProfile setting SelectedIndex, so the one switch a user cannot
-                // watch happening was also the one that silently desynced.
-                //
-                // Safe to do here: this handler returns early on _suppressProfileEvents,
-                // which every programmatic combo change sets, so it runs only for a real
-                // user switch or that hotkey cycle.
-                ApplyProfileExtras(profile);
-
-                // Switching WHILE A RUN IS IN PROGRESS is not a no-op, and it looks like
-                // one. The engine picks the new interval up live, so the run becomes a
-                // hybrid — measured: two seconds at Default's 20 ms then two at another
-                // profile's 500 ms, 108 clicks where 206 were expected, with nothing on
-                // screen to explain the drop. The run stays credited to the profile it
-                // started under (see _runProfileName); this says so while it happens,
-                // in the one place that is visible with the window in the tray.
-                if (_engine != null && _engine.IsRunning &&
-                    !string.IsNullOrEmpty(_runProfileName) &&
-                    !string.Equals(_runProfileName, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    _statusProfile.Text = Localization.F("Profile: {0}  (run started on {1})",
-                        name, _runProfileName);
-                    Utils.Logger.Warn("[Profiles] switched to '" + name + "' while a run started on '" +
-                        _runProfileName + "' is going — the running clicker now uses '" + name +
-                        "' settings; the run stays credited to '" + _runProfileName + "'.");
-                }
-
-                // ApplyProfileExtras writes the bindings into _settings and LastProfileName
-                // changed above; neither survives a restart unless it is written down.
-                try { SettingsManager.Save(_settings); } catch { }
+        /// <summary>
+        /// Switching WHILE A RUN IS IN PROGRESS is not a no-op, and it looks like one. The
+        /// engine picks the new interval up live, so the run becomes a hybrid — measured: two
+        /// seconds at Default's 20 ms then two at another profile's 500 ms, 108 clicks where
+        /// 206 were expected, with nothing on screen to explain the drop. The run stays
+        /// credited to the profile it started under (see _runProfileName); this says so while
+        /// it happens, in the one place that is visible with the window in the tray.
+        ///
+        /// Called by EVERY way of switching: the Clicker dropdown and the profile hotkeys
+        /// always said so, but a switch from the Profiles tab did the same thing silently.
+        /// </summary>
+        private void NoteSwitchDuringRun(string name)
+        {
+            if (_engine != null && _engine.IsRunning &&
+                !string.IsNullOrEmpty(_runProfileName) &&
+                !string.Equals(_runProfileName, name, StringComparison.OrdinalIgnoreCase))
+            {
+                _statusProfile.Text = Localization.F("Profile: {0}  (run started on {1})",
+                    MenuText(name), MenuText(_runProfileName));
+                Utils.Logger.Warn("[Profiles] switched to '" + name + "' while a run started on '" +
+                    _runProfileName + "' is going — the running clicker now uses '" + name +
+                    "' settings; the run stays credited to '" + _runProfileName + "'.");
             }
         }
 
         private void OnNewProfile(object sender, EventArgs e)
         {
-            var profile = new ClickProfile("New Profile")
+            // The edits of the profile being left come first: answered Cancel, nothing is created
+            // (asked after, a Cancel left a new profile behind that was never opened).
+            if (!HandleUnsavedEditsBeforeSwitch(ProfileSwitchSource.Ui)) { return; }
+
+            // Named in the user's language, as the Profiles tab's New button always did — this
+            // one made "New Profile" in English whatever the language.
+            var profile = new ClickProfile(Localization.T("New Profile"))
             {
                 IntervalMilliseconds = 100
             };
 
             _profiles.Add(profile);
-            RefreshProfileCombo();
-            SelectProfileInCombo(profile.Name);
-            LoadProfileIntoUi(profile);
             _profiles.Save();
+            RefreshProfileCombo();
+            // Through the one switch every other path uses. Loading it directly skipped the rest:
+            // the tray kept ticking the old profile and a restart reopened it, because the last-used
+            // name never moved.
+            if (!SwitchToProfile(profile.Name, ProfileSwitchSource.Ui, askAboutEdits: false))
+            {
+                SelectProfileInCombo(_currentProfileName);
+            }
         }
 
         private void OnSaveProfile(object sender, EventArgs e)
+        {
+            SaveCurrentProfile(announce: true);
+        }
+
+        /// <summary>
+        /// Saves the Clicker tab's controls into the active profile. False when it could not
+        /// (it failed validation, or a rename would clash), after saying why — the unsaved-edits
+        /// prompt on a profile switch relies on that to stay put instead of losing the edits.
+        /// </summary>
+        private bool SaveCurrentProfile(bool announce)
         {
             ClickProfile edited = BuildProfileFromUi();
             string error = edited.Validate();
             if (error != null)
             {
                 ShowWarning(error);
-                return;
+                return false;
             }
 
-            // Renaming: if the name changed, update the stored entry's key.
-            if (!string.IsNullOrEmpty(_currentProfileName) &&
-                !string.Equals(_currentProfileName, edited.Name, StringComparison.OrdinalIgnoreCase))
+            string oldName = _currentProfileName;
+            ClickProfile stored = string.IsNullOrEmpty(oldName) ? null : _profiles.GetByName(oldName);
+
+            // Renaming: IN PLACE. This used to delete the old profile — into the recycle bin,
+            // as if the user had deleted it — and add the edited one as a new profile, which
+            // the manager quietly renamed "Name 2" when the new name was already taken.
+            bool renaming = stored != null &&
+                            !string.Equals(oldName, edited.Name, StringComparison.OrdinalIgnoreCase);
+            if (renaming)
             {
-                var existing = _profiles.GetByName(_currentProfileName);
-                if (existing != null)
+                if (_profiles.Exists(edited.Name))
                 {
-                    // Remove the old, add under new name (kept unique by manager).
-                    _profiles.Remove(_currentProfileName);
+                    ShowWarning(Localization.F("A profile called '{0}' already exists.", edited.Name));
+                    return false;
                 }
-                _profiles.Add(edited);
+                _profiles.Rename(oldName, edited.Name);
+                // A run in progress is credited by name when it stops.
+                if (string.Equals(_runProfileName, oldName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _runProfileName = edited.Name;
+                }
             }
-            else
-            {
-                _profiles.Update(edited);
-            }
+
+            // The controls hold only the clicking setup; everything else about the profile
+            // comes from the stored copy (see ClickProfile.KeepLibraryDataOf).
+            edited.KeepLibraryDataOf(stored);
+            _profiles.Update(edited);
+
+            // Saved: nothing is waiting under either name any more.
+            if (!string.IsNullOrEmpty(oldName)) { _profileDrafts.Remove(oldName); }
+            _profileDrafts.Remove(edited.Name);
 
             _profiles.Save();
             RefreshProfileCombo();
             SelectProfileInCombo(edited.Name);
             _currentProfileName = edited.Name;
             _settings.LastProfileName = edited.Name;
-            _statusProfile.Text = Localization.T("Profile: ") + edited.Name;
-            if (_header != null)
+            ShowProfileNameInStatus(edited.Name);
+            if (announce)
             {
-                _header.ProfileText = Localization.T("Profile  •  ") + edited.Name;
+                ShowInfo(Localization.F("Profile '{0}' saved.", edited.Name));
             }
-            ShowInfo(Localization.F("Profile '{0}' saved.", edited.Name));
 
             _profileSnapshotJson = SerializeProfileSafe();
             if (_profileDirtyLabel != null)
             {
                 _profileDirtyLabel.Visible = false;
             }
+            return true;
         }
 
         private void OnDuplicateProfile(object sender, EventArgs e)
@@ -1772,13 +2045,20 @@ namespace AutoClicker.UI
             // edge case where renaming first and then duplicating produced three
             // entries (the rename + the duplicate of the original) instead of
             // two. Users wanting to duplicate edits should press Save first.
+            //
+            // The copy is switched to, so unsaved edits are asked about — BEFORE copying, so that
+            // "Save" puts them into the copy too (asked after, the copy was of the old setup).
+            if (!HandleUnsavedEditsBeforeSwitch(ProfileSwitchSource.Ui)) { return; }
+
             var copy = _profiles.Duplicate(_currentProfileName);
             if (copy != null)
             {
                 _profiles.Save();
                 RefreshProfileCombo();
-                SelectProfileInCombo(copy.Name);
-                LoadProfileIntoUi(copy);
+                if (!SwitchToProfile(copy.Name, ProfileSwitchSource.Ui, askAboutEdits: false))
+                {
+                    SelectProfileInCombo(_currentProfileName);
+                }
             }
         }
 
@@ -1789,8 +2069,9 @@ namespace AutoClicker.UI
                 return;
             }
 
+            // The same words as the Profiles tab's Delete: it goes to the recycle bin from here too.
             var confirm = MessageBox.Show(this,
-                Localization.F("Delete profile '{0}'?", _currentProfileName),
+                Localization.F("Delete profile '{0}'? You can restore it from the recycle bin.", _currentProfileName),
                 "Tempo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
@@ -1800,15 +2081,17 @@ namespace AutoClicker.UI
                 return;
             }
 
-            _profiles.Remove(_currentProfileName);
+            string deleted = _currentProfileName;
+            _profiles.Remove(deleted);
+            _profileDrafts.Remove(deleted);
             _profiles.Save();
             RefreshProfileCombo();
 
             if (_profiles.Count > 0)
             {
-                var first = _profiles.Profiles[0];
-                SelectProfileInCombo(first.Name);
-                LoadProfileIntoUi(first);
+                // Its edits went with it, so nothing to ask about: straight onto what is left,
+                // with that profile's own keybinds and appearance (loading it directly skipped them).
+                SwitchToProfile(_profiles.Profiles[0].Name, ProfileSwitchSource.Ui, askAboutEdits: false);
             }
         }
 
@@ -1864,21 +2147,12 @@ namespace AutoClicker.UI
         /// </summary>
         private Control BuildBackgroundClickGroup()
         {
-            // 136 tall, not 122: the description wraps to three lines in every language
-            // but English, putting its last line 10px below the card's own bottom edge.
-            // Nothing sits under this row, so the card grows rather than the text losing
-            // a line.
+            // At least 136 tall, and as tall as its words need (see the end). Nothing sits under
+            // this row, so the card grows rather than the text losing a line.
             var g = UiFactory.Group(Localization.T("Background Clicking"), 12, 938, 360, 136, CardIcon.Cursor);
 
             _backgroundClickCheck = UiFactory.Check("Click without moving my cursor", 16, 28);
             g.Controls.Add(_backgroundClickCheck);
-
-            // Filled in by UpdatePositionControlsEnabled when the current position mode
-            // cannot post clicks; empty the rest of the time.
-            _backgroundClickNote = UiFactory.Caption("", 224, 30);
-            _backgroundClickNote.MaximumSize = new Size(124, 0);
-            _backgroundClickNote.AutoSize = true;
-            g.Controls.Add(_backgroundClickNote);
 
             var note = UiFactory.Caption(
                 "Sends each click straight to the window under the target point, so your " +
@@ -1891,6 +2165,22 @@ namespace AutoClicker.UI
             note.ForeColor = _theme.TextMuted;
             g.Controls.Add(note);
 
+            // Filled in by UpdatePositionControlsEnabled when the current position mode
+            // cannot post clicks; empty the rest of the time. Under the explanation, in a
+            // slot of its own. It sat beside the checkbox, 124 px wide, where it wrapped to
+            // three lines straight across the explanation's first ones — and the layout
+            // fitter's answer, squeezing the explanation to 198 px, cut the explanation's
+            // end off for good, in every language, English included, warning or no warning.
+            // A fixed slot, so the fitter measures the room it takes even while it is empty.
+            // In the window's units: the explanation above sizes itself in screen pixels while the
+            // window is built, and so does a font's height (LayoutBottom, LayoutUnitsPerPixel).
+            _backgroundClickNote = UiFactory.Caption("", 16, LayoutBottom(note) + 4);
+            _backgroundClickNote.AutoSize = false;
+            _backgroundClickNote.AutoEllipsis = true;
+            _backgroundClickNote.Size = new Size(330, (int)Math.Ceiling(_backgroundClickNote.Font.Height * LayoutUnitsPerPixel) * 2 + 2);
+            g.Controls.Add(_backgroundClickNote);
+
+            g.Height = Math.Max(g.Height, _backgroundClickNote.Bottom + 8);
             return g;
         }
 
@@ -1923,6 +2213,7 @@ namespace AutoClicker.UI
             note.ForeColor = _theme.TextMuted;
             g.Controls.Add(note);
 
+            g.Height = Math.Max(g.Height, LayoutBottom(note) + 8);
             return g;
         }
 
@@ -1943,7 +2234,10 @@ namespace AutoClicker.UI
             g.Controls.Add(_secondCursorEnableCheck);
 
             // Bind a second, real mouse (if one is plugged in) to the second cursor.
-            _secondMouseUseCheck = UiFactory.Check("Let a 2nd real mouse control it — move, click, right-click to spam (needs 2 mice)", 16, 50);
+            // "middle-click to spam": the MIDDLE button toggles spam — left and right are real
+            // clicks at the second cursor (see OnRawDeviceInput, and the hint below). This
+            // label said right-click, in all six languages, from before that changed.
+            _secondMouseUseCheck = UiFactory.Check("Let a 2nd real mouse control it — move, click, middle-click to spam (needs 2 mice)", 16, 50);
             _secondMouseUseCheck.AutoSize = true;
             _secondMouseUseCheck.CheckedChanged += (s, e) =>
             {
@@ -1974,6 +2268,9 @@ namespace AutoClicker.UI
                 _settings.SecondCursorMouseDeviceName = raw;
                 Persistence.SettingsManager.Save(_settings);
                 _secondCursor?.SetPreferredDevice(raw);
+                // "Ask by wiggling" asks now, like the same entry in the cursor's own menu. On
+                // its own it only forgot the chosen mouse, and one already bound stayed bound.
+                if (raw.Length == 0) { _secondCursor?.RepickSecondMouse(); }
                 RefreshMiceDetectedLabel();
             };
             g.Controls.Add(_secondMouseCombo);
@@ -1991,8 +2288,16 @@ namespace AutoClicker.UI
             hint.ForeColor = _theme.TextMuted;
             hint.AutoSize = false;
             hint.Width = 664;
-            hint.Height = 30;
+            // As written: with shortcut markers on, "opens apps & hits anything" lost its "&" in
+            // English ("opens apps  hits anything"), found by the layout check's ampersand pass.
+            hint.UseMnemonic = false;
+            // As tall as its words: three lines in French, German, Italian and Portuguese,
+            // where a fixed two stopped drawing mid-sentence — losing the Emergency-Stop part.
+            // The card grows to hold it, and BuildClickerTab moves the row below it down.
+            // In 100% units: the window is scaled after it is built (UiFactory.Measure96).
+            hint.Height = Math.Max(30, UiFactory.Measure96(hint.Text, hint.Font, hint.Width, TextFormatFlags.NoPrefix).Height + 2);
             g.Controls.Add(hint);
+            g.Height = Math.Max(g.Height, hint.Bottom + 8);
 
             // Keep detection live: a plugged-in mouse shows up within ~1.5 s even before
             // the mode is on (the controller's own watch only runs while the mode is on).
@@ -2031,7 +2336,7 @@ namespace AutoClicker.UI
                 try
                 {
                     _secondMouseCombo.Items.Clear();
-                    _secondMouseCombo.Items.Add(new MouseComboItem { Raw = "", Display = "Ask by wiggling" });
+                    _secondMouseCombo.Items.Add(new MouseComboItem { Raw = "", Display = Localization.T("Ask by wiggling") });
                     int selectIdx = 0;
                     for (int i = 0; i < mice.Count; i++)
                     {
@@ -2061,31 +2366,60 @@ namespace AutoClicker.UI
             try
             {
                 int count = Engine.SecondCursorController.DetectedMouseCount();
-                string text = "Detected: " + Engine.SecondCursorController.DetectedMouseSummary();
+                // In the user's language: this line was assembled from English pieces in
+                // every language (the engine's own summary stays English, for the log).
+                string text = Localization.F("Detected: {0}", MiceSummaryText());
                 if (_settings != null && _settings.SecondCursorUsePhysicalMouse)
                 {
                     if (_secondCursor != null && _secondCursor.SecondMouseBound)
                     {
                         string nm = _secondCursor.SecondMouseName;
-                        text += "  —  " + (nm.Length > 0 ? nm : "2nd mouse") + " is driving the cursor";
+                        text += "  —  " + Localization.F("{0} is driving the cursor", nm.Length > 0 ? nm : Localization.T("2nd mouse"));
                     }
                     else if (_secondCursor != null && _secondCursor.Assigning)
                     {
-                        text += "  —  now wiggle the mouse you want to use";
+                        text += "  —  " + Localization.T("now wiggle the mouse you want to use");
                     }
                     else if (count < 2)
                     {
-                        text += "  —  waiting: plug in a 2nd mouse";
+                        text += "  —  " + Localization.T("waiting: plug in a 2nd mouse");
                     }
                     else
                     {
-                        text += "  —  pick your 2nd mouse above";
+                        text += "  —  " + Localization.T("pick your 2nd mouse above");
                     }
                 }
                 _miceDetectedLabel.Text = text;
                 _miceDetectedLabel.ForeColor = (count >= 2) ? _theme.Text : _theme.TextMuted;
             }
             catch { }
+        }
+
+        /// <summary>
+        /// "2 mice: Razer DeathAdder, Logitech G305" in the user's language, for the Clicker
+        /// tab and the second cursor's menu. The engine's own summary is kept English for the
+        /// log and Live debug.
+        /// </summary>
+        private static string MiceSummaryText()
+        {
+            try
+            {
+                var mice = Native.SecondMouseListener.EnumerateRealMice();
+                if (mice.Count == 0)
+                {
+                    return Localization.T("No mice detected");
+                }
+                var names = new System.Text.StringBuilder();
+                for (int i = 0; i < mice.Count && i < 4; i++)
+                {
+                    if (i > 0) { names.Append(", "); }
+                    names.Append(mice[i].FriendlyName);
+                }
+                return mice.Count == 1
+                    ? Localization.F("{0} mouse: {1}", mice.Count, names.ToString())
+                    : Localization.F("{0} mice: {1}", mice.Count, names.ToString());
+            }
+            catch { return ""; }
         }
 
         /// <summary>(Re)creates the second-cursor controller and pushes the saved look / spam settings into it.</summary>
@@ -2103,6 +2437,13 @@ namespace AutoClicker.UI
                 // the picker + status line and the saved choice in sync with reality.
                 _secondCursor.MiceChanged += (s, e) => RunOnUi(RefreshMiceUi);
                 _secondCursor.SecondMouseBoundChanged += (s, e) => RunOnUi(OnSecondMouseBound);
+                _secondCursor.PositionChanged += (s, e) => RunOnUi(OnSecondCursorMoved);
+                _secondCursor.SpamChanged += (s, e) => RunOnUi(OnSecondCursorSpamChanged);
+                // Back where it was parked last time (onto a screen, if that one is gone).
+                if (_settings.SecondCursorX != int.MinValue && _settings.SecondCursorY != int.MinValue)
+                {
+                    _secondCursor.SetPosition(_settings.SecondCursorX, _settings.SecondCursorY);
+                }
             }
             var shape = (SecondCursorShape)Math.Max(0, Math.Min(3, _settings.SecondCursorShape));
             _secondCursor.SetAppearance(shape, Color.FromArgb(_settings.SecondCursorColorArgb),
@@ -2110,7 +2451,7 @@ namespace AutoClicker.UI
             int cps = Math.Max(1, _settings.SecondCursorSpamCps);
             _secondCursor.SetSpamSettings(
                 (MouseButtonType)Math.Max(0, Math.Min(2, _settings.SecondCursorSpamButton)),
-                ClickStyle.Single, Math.Max(1, 1000 / cps));
+                ClickStyle.Single, Math.Max(1, 1000 / cps), _settings.SecondCursorSpamRealClicks);
             _secondCursor.SetSecondMouseSensitivity(_settings.SecondCursorMouseSensitivity);
             _secondCursor.SetEnabled(_settings.SecondCursorEnabled);
             // Tell the controller which mouse the user chose BEFORE arming the mode, so it
@@ -2119,6 +2460,42 @@ namespace AutoClicker.UI
             // Arm the "2nd real mouse" mode if the user asked for it (needs the cursor
             // showing; it now waits for a 2nd mouse rather than hard-failing).
             _secondCursor.SetUsePhysicalMouse(_settings.SecondCursorEnabled && _settings.SecondCursorUsePhysicalMouse);
+        }
+
+        // Saves the parked spot a moment after the last move rather than on every one: a
+        // window being dragged carries the spot along up to a hundred times a second.
+        private System.Windows.Forms.Timer _secondCursorSaveTimer;
+
+        /// <summary>The second cursor was parked somewhere new — remember it for the next launch.</summary>
+        private void OnSecondCursorMoved()
+        {
+            if (_secondCursor == null || _settings == null) { return; }
+            _settings.SecondCursorX = _secondCursor.X;
+            _settings.SecondCursorY = _secondCursor.Y;
+            if (_secondCursorSaveTimer == null)
+            {
+                _secondCursorSaveTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+                _secondCursorSaveTimer.Tick += (s, e) =>
+                {
+                    _secondCursorSaveTimer.Stop();
+                    Persistence.SettingsManager.Save(_settings);
+                };
+            }
+            _secondCursorSaveTimer.Stop();
+            _secondCursorSaveTimer.Start();
+        }
+
+        /// <summary>
+        /// Spam-clicking started or stopped: the clicker's start / stop tones, when those are
+        /// on. It is mostly toggled from a hotkey or the second mouse's middle button with a
+        /// game in front, where nothing else says whether the toggle took.
+        /// </summary>
+        private void OnSecondCursorSpamChanged()
+        {
+            if (_secondCursor == null) { return; }
+            bool on = _secondCursor.Spamming;
+            if (on && _soundOnStartCheck != null && _soundOnStartCheck.Checked) { PlayRunTone(true); }
+            if (!on && _soundOnStopCheck != null && _soundOnStopCheck.Checked) { PlayRunTone(false); }
         }
 
         /// <summary>A mouse just got bound — persist which one so it re-binds next time.</summary>
@@ -2199,22 +2576,36 @@ namespace AutoClicker.UI
             // "&&", not "&". A ToolStripMenuItem reads a single ampersand as the mnemonic
             // prefix and EATS it, so "Grab & place" was rendering on screen as "Grab  place"
             // with a stray double space. Doubling it escapes the mnemonic.
-            menu.Items.Add(_secondCursor.Placing ? "Placing… (click to drop)" : "Grab && place", null,
+            // Through the translator, like every sibling below: these few were bare English
+            // literals, so the menu came up half translated in every other language.
+            menu.Items.Add(Localization.T(_secondCursor.Placing ? "Placing… (click to drop)" : "Grab && place"), null,
                 (s, ev) => _secondCursor.StartPlacement());
 
             // Spam clicks are posted, so they are invisible: a spam that has paused itself
             // because the window it was aimed at went away looks exactly like one that is
             // working. This menu is the thing the user opens to find out, so it answers.
-            string spamText = "Spam-click here";
+            string spamText = Localization.T("Spam-click here");
             if (_secondCursor.Spamming)
             {
                 string paused = _secondCursor.SpamPausedReason;
-                spamText = paused.Length > 0 ? "Stop spam-click  ·  paused: " + paused : "Stop spam-click";
+                spamText = paused.Length > 0
+                    ? Localization.F("Stop spam-click  ·  paused: {0}", Localization.T(paused))
+                    : Localization.T("Stop spam-click");
             }
             var spam = new ToolStripMenuItem(spamText)
             { Checked = _secondCursor.Spamming, CheckOnClick = false };
             spam.Click += (s, ev) => _secondCursor.ToggleSpam();
             menu.Items.Add(spam);
+            // What it is aimed at and how many clicks have gone out: spam aimed at the wrong
+            // window looks exactly like spam aimed at the right one. The title is the window's
+            // own text, so it is escaped like any other outside string.
+            if (_secondCursor.Spamming)
+            {
+                string aimedAt = _secondCursor.SpamTargetName;
+                menu.Items.Add(new ToolStripMenuItem(MenuText(Localization.F("Aimed at: {0}  ·  clicks: {1}",
+                    aimedAt.Length > 0 ? aimedAt : "…", _secondCursor.SpamClickCount.ToString("N0"))))
+                { Enabled = false });
+            }
 
             menu.Items.Add(new ToolStripSeparator());
 
@@ -2323,19 +2714,45 @@ namespace AutoClicker.UI
             buttonItem.Text = Localization.F("Spam button  ·  {0}", Localization.T(buttonNames[btnNow]));
             menu.Items.Add(buttonItem);
 
+            // How spam clicks. Posted clicks leave the pointer alone and work behind other
+            // windows, but a game that reads the mouse itself never sees them. Real clicks reach
+            // games, at the price of the pointer jumping there for each click.
+            var methodItem = new ToolStripMenuItem(Localization.T("Click method"));
+            (bool real, string text)[] methods =
+            {
+                (false, "In the background — your pointer stays free"),
+                (true, "Real clicks — for games: your pointer jumps there for each click, only while that game is in front"),
+            };
+            foreach (var m in methods)
+            {
+                bool real = m.real;
+                var it = new ToolStripMenuItem(Localization.T(m.text))
+                { Checked = _settings.SecondCursorSpamRealClicks == real, CheckOnClick = false };
+                it.Click += (s, ev) =>
+                {
+                    _settings.SecondCursorSpamRealClicks = real;
+                    Persistence.SettingsManager.Save(_settings);
+                    ApplySecondCursorSettings();
+                };
+                methodItem.DropDownItems.Add(it);
+            }
+            methodItem.Text = Localization.F("Click method  ·  {0}",
+                Localization.T(_settings.SecondCursorSpamRealClicks ? "Real clicks" : "In the background"));
+            menu.Items.Add(methodItem);
+
             // ── second physical mouse ──
             menu.Items.Add(new ToolStripSeparator());
             int miceCount = Engine.SecondCursorController.DetectedMouseCount();
-            menu.Items.Add(new ToolStripMenuItem(MenuText(Engine.SecondCursorController.DetectedMouseSummary())) { Enabled = false });
+            menu.Items.Add(new ToolStripMenuItem(MenuText(MiceSummaryText())) { Enabled = false });
 
             // With only one mouse the controller deliberately ARMS and waits for a second to
             // be plugged in, rather than refusing. That is the right behaviour, but the menu
             // said nothing about it: you ticked the item, the cursor carried on ignoring
             // your mouse, and the only explanation was a line in the log. Say it here.
-            string use2ndText = _settings.SecondCursorUsePhysicalMouse
+            string use2ndText = Localization.T(_settings.SecondCursorUsePhysicalMouse
                 ? (miceCount < 2 ? "Waiting for a 2nd mouse — click to stop" : "Stop using my 2nd mouse")
                 : (miceCount < 2 ? "Use my 2nd mouse — plug one in first (experimental)"
-                                 : "Use my 2nd mouse (experimental)");
+                                 : "Use my 2nd mouse (experimental)"));
             var use2nd = new ToolStripMenuItem(use2ndText)
             {
                 Checked = _settings.SecondCursorUsePhysicalMouse,
@@ -2443,13 +2860,22 @@ namespace AutoClicker.UI
                 ApplySecondCursorSettings();
             });
 
-            // Show the menu and force its OWN popup foreground so its item clicks
-            // register — WITHOUT popping Tempo's main window. When Tempo isn't the
-            // active app, Windows blocks SetForegroundWindow (the "foreground lock"),
-            // which is why item clicks were being treated as outside-clicks and the
-            // menu just closed. The documented workaround is to briefly attach our input
-            // thread to the currently-foreground window's thread, which lifts the lock.
-            menu.Show(new Point(e.X, e.Y));
+            ShowOverlayMenu(menu, new Point(e.X, e.Y));
+        }
+
+        /// <summary>
+        /// Shows a menu that belongs to one of Tempo's overlay windows (the second cursor, the caption
+        /// bar, the caption history) and gives the menu ITSELF the foreground.
+        ///
+        /// Force its OWN popup foreground so its item clicks register — WITHOUT popping Tempo's main
+        /// window. When Tempo isn't the active app, Windows blocks SetForegroundWindow (the
+        /// "foreground lock"), which is why item clicks were being treated as outside-clicks and the
+        /// menu just closed. The documented workaround is to briefly attach our input thread to the
+        /// currently-foreground window's thread, which lifts the lock.
+        /// </summary>
+        private void ShowOverlayMenu(ContextMenuStrip menu, Point at)
+        {
+            menu.Show(at);
             try
             {
                 IntPtr fg = GetForegroundWindow();
@@ -2611,7 +3037,11 @@ namespace AutoClicker.UI
             }
 
             index = ((index + delta) % count + count) % count;
-            _profileCombo.SelectedIndex = index; // fires OnProfileSelected -> loads it
+            // Marked as the hotkey's doing: unsaved edits are then kept as a draft rather than
+            // asked about — a dialog would take focus from the game the hotkey was pressed in.
+            _profileSwitchByHotkey = true;
+            try { _profileCombo.SelectedIndex = index; }   // fires OnProfileSelected -> switches
+            finally { _profileSwitchByHotkey = false; }
         }
 
         /// <summary>

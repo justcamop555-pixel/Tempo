@@ -39,13 +39,13 @@ namespace AutoClicker.UI
 
         public MacroEditorForm(Theme theme, Macro macro)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             _theme = theme ?? Theme.ForKind(ThemeKind.Dark);
             _working = (macro ?? new Macro("Macro")).Clone();
 
             Text = Utils.Localization.F("Edit Macro – {0}", _working.Name);
-            Size = new Size(660, 648);
+            // The client area (was a 660×648 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(644, 609);
             FormBorderStyle = FormBorderStyle.Sizable;
             MinimumSize = new Size(600, 580);
             MaximizeBox = true;
@@ -121,6 +121,15 @@ namespace AutoClicker.UI
             cancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
 
+            // Sized from their captions: at a fixed 80 px "Enregistrer" and "Speichern" were
+            // cut. The pair keeps its left edge and, if it grows past the window's margin,
+            // slides left as one rather than running off the edge.
+            UiFactory.FitToText96(ok, 80, 22);
+            UiFactory.FitToText96(cancel, 80, 22);
+            cancel.Left = ok.Right + 8;
+            int overRight = cancel.Right - (ClientSize.Width - 12);
+            if (overRight > 0) { ok.Left -= overRight; cancel.Left -= overRight; }
+
             Controls.Add(_list);
             Controls.Add(ok);
             Controls.Add(cancel);
@@ -130,6 +139,7 @@ namespace AutoClicker.UI
 
             RefreshList();
             ThemeManager.Apply(this, _theme);
+            UiFactory.ScaleToScreen(this);
         }
 
         private void RefreshList()
@@ -186,6 +196,8 @@ namespace AutoClicker.UI
                     return a.DelayMilliseconds + " ms";
                 case MacroActionType.MouseMove:
                     return $"({a.X}, {a.Y})";
+                case MacroActionType.MouseMoveRelative:
+                    return MacroAction.RelativeText(a.X, a.Y);
                 case MacroActionType.Wheel:
                     return "delta " + a.WheelDelta;
                 case MacroActionType.KeyDown:
@@ -272,8 +284,8 @@ namespace AutoClicker.UI
                 return;
             }
 
-            string input = TextPromptForm.Show(this, _theme, "Edit Delay",
-                "Delay in milliseconds:", a.DelayMilliseconds.ToString());
+            string input = TextPromptForm.Show(this, _theme, Localization.T("Edit Delay"),
+                Localization.T("Delay in milliseconds:"), a.DelayMilliseconds.ToString());
 
             if (TryParseInt(input, out int ms) && ms >= 0)
             {
@@ -288,8 +300,8 @@ namespace AutoClicker.UI
 
         private void InsertDelay()
         {
-            string input = TextPromptForm.Show(this, _theme, "Insert Delay",
-                "Delay in milliseconds:", "100");
+            string input = TextPromptForm.Show(this, _theme, Localization.T("Insert Delay"),
+                Localization.T("Delay in milliseconds:"), "100");
 
             if (!TryParseInt(input, out int ms) || ms < 0)
             {
@@ -313,8 +325,8 @@ namespace AutoClicker.UI
 
         private void ScaleDelays()
         {
-            string input = TextPromptForm.Show(this, _theme, "Scale Delays",
-                "Scale all delays by percent (e.g. 50 = half speed gaps, 200 = double):", "100");
+            string input = TextPromptForm.Show(this, _theme, Localization.T("Scale Delays"),
+                Localization.T("Scale every delay by a percentage (50 = half as long, 200 = twice as long):"), "100");
 
             if (!TryParseDouble(input, out double percent) || percent <= 0)
             {
@@ -387,14 +399,25 @@ namespace AutoClicker.UI
                 }
 
                 MacroActionType down, up;
-                switch (dlg.SelectedButton)
+                if (dlg.SelectedSideButton == 1)
                 {
-                    case MouseButtonType.Right:
-                        down = MacroActionType.RightDown; up = MacroActionType.RightUp; break;
-                    case MouseButtonType.Middle:
-                        down = MacroActionType.MiddleDown; up = MacroActionType.MiddleUp; break;
-                    default:
-                        down = MacroActionType.LeftDown; up = MacroActionType.LeftUp; break;
+                    down = MacroActionType.X1Down; up = MacroActionType.X1Up;
+                }
+                else if (dlg.SelectedSideButton == 2)
+                {
+                    down = MacroActionType.X2Down; up = MacroActionType.X2Up;
+                }
+                else
+                {
+                    switch (dlg.SelectedButton)
+                    {
+                        case MouseButtonType.Right:
+                            down = MacroActionType.RightDown; up = MacroActionType.RightUp; break;
+                        case MouseButtonType.Middle:
+                            down = MacroActionType.MiddleDown; up = MacroActionType.MiddleUp; break;
+                        default:
+                            down = MacroActionType.LeftDown; up = MacroActionType.LeftUp; break;
+                    }
                 }
 
                 int at = InsertIndex();
@@ -465,9 +488,7 @@ namespace AutoClicker.UI
             MacroAction a = _working.Actions[index];
             bool hasPosition =
                 a.Type == MacroActionType.MouseMove ||
-                a.Type == MacroActionType.LeftDown || a.Type == MacroActionType.LeftUp ||
-                a.Type == MacroActionType.RightDown || a.Type == MacroActionType.RightUp ||
-                a.Type == MacroActionType.MiddleDown || a.Type == MacroActionType.MiddleUp;
+                MacroAction.IsButtonPress(a.Type) || MacroAction.IsButtonRelease(a.Type);
 
             if (!hasPosition)
             {

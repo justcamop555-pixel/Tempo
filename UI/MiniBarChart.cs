@@ -33,6 +33,8 @@ namespace AutoClicker.UI
                 ControlStyles.ResizeRedraw,
                 true);
             Height = 120;
+            // The bar's value tip in the theme, like every other tip in Tempo.
+            TipStyle.Apply(_tip);
         }
 
         /// <summary>Sets the bar values (expected oldest-first), with optional labels.</summary>

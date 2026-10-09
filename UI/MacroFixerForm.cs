@@ -27,8 +27,7 @@ namespace AutoClicker.UI
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
             _findings = findings ?? new List<MacroFinding>();
 
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             Text = Utils.Localization.F("Fix macro — {0}", macro?.Name ?? "");
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -82,11 +81,18 @@ namespace AutoClicker.UI
                 ForeColor = theme.TextMuted,
                 BackColor = Color.Transparent
             };
+            // As tall as its words: two lines in French, German, Italian and Portuguese, where a
+            // one-line box drew only the first. Everything under it moves down by the difference.
+            // (In 100% units: the window is scaled after it is built — UiFactory.Measure96.)
+            int subHeight = Math.Max(20, UiFactory.Measure96(sub.Text, sub.Font, 528, TextFormatFlags.Default).Height + 2);
+            int shift = subHeight - 20;
+            sub.Height = subHeight;
+            ClientSize = new Size(560, 430 + shift);
             Controls.Add(sub);
 
             _list = new CheckedListBox
             {
-                Location = new Point(16, 66),
+                Location = new Point(16, 66 + shift),
                 Size = new Size(528, 190),
                 BackColor = theme.Surface,
                 ForeColor = theme.Text,
@@ -104,7 +110,7 @@ namespace AutoClicker.UI
 
             _detail = new Label
             {
-                Location = new Point(16, 266),
+                Location = new Point(16, 266 + shift),
                 Size = new Size(528, 82),
                 ForeColor = theme.TextMuted,
                 BackColor = Color.Transparent
@@ -114,7 +120,7 @@ namespace AutoClicker.UI
             var fix = new Button
             {
                 Text = Utils.Localization.T("Fix selected"),
-                Location = new Point(316, 366),
+                Location = new Point(316, 366 + shift),
                 Size = new Size(112, 32),
                 DialogResult = DialogResult.OK,
                 BackColor = theme.Accent,
@@ -134,7 +140,7 @@ namespace AutoClicker.UI
             var cancel = new Button
             {
                 Text = Utils.Localization.T("Cancel"),
-                Location = new Point(436, 366),
+                Location = new Point(436, 366 + shift),
                 Size = new Size(108, 32),
                 DialogResult = DialogResult.Cancel,
                 BackColor = theme.Surface2,
@@ -142,6 +148,11 @@ namespace AutoClicker.UI
                 FlatStyle = FlatStyle.Flat
             };
             Controls.Add(cancel);
+            // Each as wide as its words ("Reparar seleccionados" needs 132 px), packed from the right.
+            UiFactory.FitToText96(cancel, 108);
+            cancel.Left = 544 - cancel.Width;
+            UiFactory.FitToText96(fix, 112);
+            fix.Left = cancel.Left - 8 - fix.Width;
 
             AcceptButton = fix;
             CancelButton = cancel;
@@ -150,6 +161,7 @@ namespace AutoClicker.UI
             {
                 _list.SelectedIndex = 0;
             }
+            UiFactory.ScaleToScreen(this);
         }
 
         private void ShowDetail()

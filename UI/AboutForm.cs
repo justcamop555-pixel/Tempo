@@ -16,8 +16,7 @@ namespace AutoClicker.UI
 
         public AboutForm(Theme theme)
         {
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
 
             Text = Utils.Localization.T("About Tempo");
@@ -25,7 +24,8 @@ namespace AutoClicker.UI
             // Tempo does now rather than one sentence about clicking, and it was being
             // squeezed into 78px.
             // +22 for the Official ID row, which also gave "Open data folder" back a line of its own.
-            Size = new Size(470, 522);
+            // The client area (was a 470×522 window): see UiFactory.ScaleToScreen.
+            ClientSize = new Size(454, 483);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -81,9 +81,18 @@ namespace AutoClicker.UI
             dropHint.ForeColor = theme.TextMuted;
             dropHint.AutoSize = false;
             dropHint.Width = 410;
-            dropHint.Height = 30;
+            // As tall as its words: three lines in French and Portuguese, where a fixed two
+            // stopped drawing before "…even from a web page". Everything below it moves down
+            // by what it grew (`shift`, further down), and so does the window's bottom.
+            // (In 100% units: the window is scaled after it is built — UiFactory.Measure96.)
+            dropHint.Height = Math.Max(30, UiFactory.Measure96(dropHint.Text, dropHint.Font, dropHint.Width, TextFormatFlags.Default).Height + 2);
+            int shift = dropHint.Height - 30;
 
             var chooseLogo = UiFactory.Button("Choose image…", 330, 128, 104, 26);
+            // As wide as its caption needs, keeping the column's right edge at 434 ("Choisir un
+            // logo…" was a pixel short of its padding at a fixed 104).
+            UiFactory.FitToText96(chooseLogo, 104, 16);
+            chooseLogo.Left = 434 - chooseLogo.Width;
             chooseLogo.Name = "chooseLogo";
             chooseLogo.BackColor = theme.Surface2;
             chooseLogo.ForeColor = theme.Text;
@@ -106,8 +115,7 @@ namespace AutoClicker.UI
                 ActiveLinkColor = theme.Accent,
                 Visible = CustomLogo.Exists()
             };
-            resetLogo.Height = TextRenderer.MeasureText(resetLogo.Text, resetLogo.Font, new Size(resetLogo.Width, 0),
-                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height + 2;
+            resetLogo.Height = UiFactory.Measure96(resetLogo.Text, resetLogo.Font, resetLogo.Width, TextFormatFlags.Default).Height + 2;
             resetLogo.LinkClicked += (s, e) =>
             {
                 CustomLogo.Clear();
@@ -295,13 +303,16 @@ namespace AutoClicker.UI
                 osInfo.AutoSize = false;
                 // 300, not the full 410: the right-hand column from x=330 down to ~176
                 // belongs to the logo, its "Choose image…" button and the reset link.
-                // A full-width label here ran straight underneath them.
-                osInfo.Width = 300;
+                // A full-width label here ran straight underneath them. And never past the
+                // button itself: it is fitted to its caption and right-aligned at 434, so in
+                // French and German it starts at 321–323 — under this label's end at 324,
+                // which, added first and so on top, covered the button's left edge.
+                osInfo.Width = Math.Max(120, Math.Min(300, chooseLogo.Left - 6 - osInfo.Left));
                 osInfo.Height = 16;
                 osInfo.AutoEllipsis = true;
                 if (Utils.WindowsVersion.SupportNote().Length > 0)
                 {
-                    new ToolTip().SetToolTip(osInfo, Utils.WindowsVersion.SupportNote());
+                    TipStyle.Set(new ToolTip(), osInfo, Utils.WindowsVersion.SupportNote());
                 }
                 Controls.Add(osInfo);
             }
@@ -352,7 +363,7 @@ namespace AutoClicker.UI
             // what Tempo is now, and none of them were mentioned.
             var lead = UiFactory.Label(
                 "A clicking, macro and accessibility tool that runs entirely on your PC.",
-                24, 254, FontStyle.Bold, 9.5f);
+                24, 254 + shift, FontStyle.Bold, 9.5f);
             lead.AutoSize = false;
             lead.Width = 410;
             // Two lines of room, not one. At 9.5pt bold this sentence needs ~490px and
@@ -365,7 +376,7 @@ namespace AutoClicker.UI
             var description = new Label
             {
                 Left = 24,
-                Top = 296,
+                Top = 296 + shift,
                 Width = 410,
                 Height = 128,
                 AutoSize = false,
@@ -379,20 +390,29 @@ namespace AutoClicker.UI
                     + "•  Notifications — Tempo's own, plus a mirror of Windows' own\n"
                     + "•  Global hotkeys, themes, live statistics and a CPS test")
             };
+            // The same for the list: German needs 7 px more than the 128 it had, and its last
+            // line was not drawn.
+            description.Height = Math.Max(128, UiFactory.Measure96(description.Text, description.Font, description.Width,
+                TextFormatFlags.Default).Height + 2);
+            shift += description.Height - 128;
+            Height += shift;
 
-            var openLog = UiFactory.Button("Open Log Folder", 24, 436, 150, 32);
+            var openLog = UiFactory.Button("Open Log Folder", 24, 436 + shift, 150, 32);
             openLog.BackColor = theme.Surface2;
             openLog.ForeColor = theme.Text;
             openLog.Click += (s, e) => OpenLogFolder();
+            // "Ouvrir le dossier des journaux" needs 170 px; the two links after it move along
+            // with it (below) instead of being covered.
+            UiFactory.FitToText96(openLog, 150, 22);
 
-            var ok = UiFactory.PrimaryButton("Close", 344, 436, 90, 32, theme);
+            var ok = UiFactory.PrimaryButton("Close", 344, 436 + shift, 90, 32, theme);
             ok.Click += (s, e) => Close();
 
             var siteLink = new LinkLabel
             {
                 Text = Localization.T("Website"),
                 AutoSize = true,
-                Location = new Point(190, 444),
+                Location = new Point(190, 444 + shift),
                 LinkColor = theme.Accent,
                 ActiveLinkColor = theme.Accent,
                 BackColor = Color.Transparent
@@ -405,7 +425,7 @@ namespace AutoClicker.UI
                 // Not translated, deliberately: a brand name, like "Tempo" itself.
                 Text = "GitHub",
                 AutoSize = true,
-                Location = new Point(258, 444),
+                Location = new Point(258, 444 + shift),
                 LinkColor = theme.Accent,
                 ActiveLinkColor = theme.Accent,
                 BackColor = Color.Transparent
@@ -413,9 +433,16 @@ namespace AutoClicker.UI
             ghLink.LinkClicked += (s, e) => OpenUrl(OfficialSourceForm.GitHubUrl);
             Controls.Add(ghLink);
 
+            // The links follow the (measured) Open Log Folder button rather than fixed x's. The first link's
+            // width in 100% units, as the row is: its Right is the screen's pixels while this window is
+            // built, and on a 150% screen GitHub landed on the Close button in Spanish and French.
+            siteLink.Left = Math.Max(190, openLog.Right + 16);
+            ghLink.Left = siteLink.Left + UiFactory.Measure96(siteLink.Text, siteLink.Font, 0, TextFormatFlags.Default).Width + 14;
+
             Controls.AddRange(new Control[] { logo, dropHint, chooseLogo, resetLogo, title, version, sysInfo, buildInfo, dataInfo, description, openLog, ok });
 
             AcceptButton = ok;
+            UiFactory.ScaleToScreen(this);
         }
 
         /// <summary>
@@ -494,7 +521,7 @@ namespace AutoClicker.UI
             row.Size = new Size(300, 18);
             if (tip != null)
             {
-                new ToolTip { AutoPopDelay = 20000 }.SetToolTip(row, tip);
+                TipStyle.Set(new ToolTip { AutoPopDelay = 20000 }, row, tip);
             }
             return row;
         }

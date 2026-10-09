@@ -6,6 +6,20 @@ using System.Windows.Forms;
 namespace AutoClicker.UI
 {
     /// <summary>
+    /// A window that can host a <see cref="BackdropTabPage"/> and knows how to keep its
+    /// wallpaper clean while the page scrolls (by switching WS_EX_COMPOSITED on briefly).
+    ///
+    /// The page used to ask for <c>MainForm</c> by name. That stopped being the only
+    /// window a page can live in once the Accounts page could be detached into its own
+    /// window — and a page that only knows one host silently loses its scroll repair in
+    /// every other one.
+    /// </summary>
+    public interface IBackdropHost
+    {
+        void NotifyBackdropScroll();
+    }
+
+    /// <summary>
     /// A TabPage that can paint an animated GIF (or static image) as a full-page
     /// background "wallpaper": cover-scaled to fill the viewport with a readability
     /// scrim on top. Content controls sit above it as normal opaque cards, so the
@@ -244,7 +258,7 @@ namespace AutoClicker.UI
                     // transparent control leaving blit remnants over the pinned
                     // wallpaper, but holding it permanently cost ~95% of a CPU core, so
                     // it is armed here and released shortly after scrolling stops.
-                    try { (FindForm() as MainForm)?.NotifyBackdropScroll(); } catch { }
+                    try { (FindForm() as IBackdropHost)?.NotifyBackdropScroll(); } catch { }
 
                     // Repaint NOW, synchronously, not on the next paint cycle, so the
                     // shifted frame is overwritten before it's ever shown.

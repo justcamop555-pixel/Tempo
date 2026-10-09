@@ -35,6 +35,8 @@ namespace AutoClicker.UI
         /// </param>
         public RestartPromptForm(Theme theme, string headline, string saved, string why, string busyWarning)
         {
+            // Built in 100% units and scaled with the screen at the end (UiFactory.ScaleToScreen); text is
+            // measured in 100% units to match (UiFactory.Measure96).
             var t = theme ?? Theme.ForKind(ThemeKind.Dark);
             bool busy = !string.IsNullOrEmpty(busyWarning);
 
@@ -96,6 +98,7 @@ namespace AutoClicker.UI
             // is the ACCEPT button too, so leaning on Enter can't end the run by accident.
             CancelButton = later;
             AcceptButton = busy ? later : restart;
+            UiFactory.ScaleToScreen(this);
         }
 
         private int AddParagraph(string text, Color colour, int y, Theme t)
@@ -114,12 +117,7 @@ namespace AutoClicker.UI
             };
             // Measure so a long sentence in any language gets the height it needs rather
             // than being clipped at a hard-coded two lines.
-            using (var g = CreateGraphics())
-            {
-                Size need = TextRenderer.MeasureText(g, text, l.Font,
-                    new Size(452, 0), TextFormatFlags.WordBreak);
-                l.Height = Math.Max(20, need.Height + 2);
-            }
+            l.Height = Math.Max(20, UiFactory.Measure96(text, l.Font, 452, TextFormatFlags.Default).Height + 2);
             Controls.Add(l);
             return y + l.Height + 12;
         }
@@ -137,6 +135,8 @@ namespace AutoClicker.UI
                 Font = new Font("Segoe UI", 9.75f)
             };
             b.FlatAppearance.BorderColor = primary ? t.Accent : t.Border;
+            // At least as wide as its words: French "Redémarrer maintenant" needs 154 px of the 132.
+            UiFactory.FitToText96(b, b.Width, 24);
             return b;
         }
     }

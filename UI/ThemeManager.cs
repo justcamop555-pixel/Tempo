@@ -4,6 +4,17 @@ using System.Windows.Forms;
 namespace AutoClicker.UI
 {
     /// <summary>
+    /// A container that paints a surface of its own — a tinted notice box on a card — and so
+    /// knows what colour the labels on it stand on. <see cref="ThemeManager"/> asks it rather
+    /// than walking past it to the card, which would give each label a card-coloured box
+    /// inside the tint.
+    /// </summary>
+    internal interface IThemedSurface
+    {
+        Color SurfaceFor(Theme theme);
+    }
+
+    /// <summary>
     /// Applies a <see cref="Theme"/> to a control hierarchy. Handles the common
     /// WinForms control types used in this application.
     /// </summary>
@@ -72,6 +83,9 @@ namespace AutoClicker.UI
             form.HandleCreated += OnChromeHandleCreated;
             _chromeThemes.Remove(form);
             _chromeThemes.Add(form, theme);
+            // Every themed window comes through here, so this is where each one learns to fit the screen
+            // it opens on — a laptop's work area is far shorter than some dialogs (see ScreenFit).
+            ScreenFit.Attach(form);
         }
 
         // The theme each window was last chromed with, so a handle recreation can restore it.
@@ -89,6 +103,72 @@ namespace AutoClicker.UI
                 }
                 catch { }
             }
+        }
+
+        /// <summary>What a label was last given: the theme, the role, and the colour that meant.</summary>
+        private sealed class LabelInked
+        {
+            public Theme Theme;
+            public int Role;
+            public int Argb;
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, LabelInked>
+            _labelInks = new System.Runtime.CompilerServices.ConditionalWeakTable<Control, LabelInked>();
+
+        // A theme's label inks, indexed by role (0 is Text). Several are computed — the *Text
+        // colours solve for contrast — so each theme's are worked out once.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Theme, Color[]>
+            _roleInks = new System.Runtime.CompilerServices.ConditionalWeakTable<Theme, Color[]>();
+
+        private static Color[] RoleInks(Theme t)
+        {
+            return _roleInks.GetValue(t, th => new[]
+            {
+                th.Text, th.TextMuted, th.WarningText, th.DangerText, th.AccentText, th.SuccessText,
+                th.Warning, th.Danger, th.Accent, th.Success
+            });
+        }
+
+        private static int RoleOf(Color[] inks, int argb)
+        {
+            for (int i = 0; i < inks.Length; i++)
+            {
+                if (inks[i].ToArgb() == argb) { return i; }
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// The colour a label takes in <paramref name="theme"/>: the same ROLE it had — muted stays
+        /// muted, a warning stays a warning — and plain text when its colour is none of them.
+        ///
+        /// Every label used to be set to Text. More than a hundred are made muted when they are
+        /// built, and at start-up this pass ran after all of them, so hints and notes showed at full
+        /// text brightness from the first frame; any re-theme — picking a theme, Match Windows
+        /// following the system, the HDR correction switching as HDR is turned on or the window
+        /// crosses to another screen — did the same to the ones a refresher had fixed, and warnings
+        /// lost their colour.
+        ///
+        /// The role is REMEMBERED, not re-guessed from the colour each time: a label still showing
+        /// the colour it was given keeps that role. Guessing alone drifted wherever a theme gives two
+        /// roles one colour (an accent that is its success green): the label came out of that theme
+        /// as whichever role was checked first. A colour set since — by the label's own code, in the
+        /// palette it was last given — or by its builder with the theme being applied, is matched.
+        /// </summary>
+        private static Color LabelInk(Label label, Theme theme)
+        {
+            Color[] now = RoleInks(theme);
+            int argb = label.ForeColor.ToArgb();
+            int role = -1;
+            if (_labelInks.TryGetValue(label, out LabelInked last))
+            {
+                role = last.Argb == argb ? last.Role : RoleOf(RoleInks(last.Theme), argb);
+            }
+            if (role < 0) { role = RoleOf(now, argb); }
+            if (role < 0) { role = 0; }
+            _labelInks.AddOrUpdate(label, new LabelInked { Theme = theme, Role = role, Argb = now[role].ToArgb() });
+            return now[role];
         }
 
         /// <summary>
@@ -127,9 +207,25 @@ namespace AutoClicker.UI
             Control p = c?.Parent;
             while (p != null)
             {
+                // A container that paints a colour of its own (a tinted notice box) says which, so
+                // the labels on it match it instead of the card underneath.
+                if (p is IThemedSurface own)
+                {
+                    return own.SurfaceFor(theme);
+                }
                 if (p is CardGroupBox)
                 {
                     return theme.Surface;
+                }
+                // A panel tagged as a surface IS the thing the label sits on. This walk used to
+                // step straight past it to the page or the Form, so a label on a Surface-coloured
+                // panel got the PAGE colour and sat in a darker box of its own — the exact look
+                // reported on the detached Accounts window's header. ApplyToControl already
+                // paints these tags; the walk now agrees with it.
+                if (p is Panel surfacePanel && surfacePanel.Tag is string surfaceTag)
+                {
+                    if (surfaceTag == "surface") { return theme.Surface; }
+                    if (surfaceTag == "surface2") { return theme.Surface2; }
                 }
                 if (p is BackdropTabPage backdrop)
                 {
@@ -272,7 +368,7 @@ namespace AutoClicker.UI
                     break;
 
                 case Label label:
-                    label.ForeColor = theme.Text;
+                    label.ForeColor = LabelInk(label, theme);
                     label.BackColor = EffectiveBackColor(label, theme);
                     break;
 

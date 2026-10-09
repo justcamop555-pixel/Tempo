@@ -32,6 +32,7 @@ namespace AutoClicker.UI
         public OverlaySettingsForm(Theme theme, int corner, int opacity,
             bool showClicks, bool showCps, bool showElapsed)
         {
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
 
             Text = Localization.T("Tempo — running overlay");
@@ -122,6 +123,7 @@ namespace AutoClicker.UI
             // text: they read as headings at that weight instead of supporting detail.
             _opacityValue.ForeColor = theme.TextMuted;
             badgeCaption.ForeColor = theme.TextMuted;
+            UiFactory.ScaleToScreen(this);
         }
 
         private static CheckBox MakeCheck(Theme theme, string text, int x, int y, bool value)

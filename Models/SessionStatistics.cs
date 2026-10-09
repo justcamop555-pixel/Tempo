@@ -99,18 +99,6 @@ namespace AutoClicker.Models
             }
         }
 
-        /// <summary>Records that one click was performed.</summary>
-        public void RecordClick()
-        {
-            RecordClicksInternal(1, null);
-        }
-
-        /// <summary>Records that <paramref name="count"/> clicks were performed.</summary>
-        public void RecordClicks(int count)
-        {
-            RecordClicksInternal(count, null);
-        }
-
         /// <summary>
         /// Records <paramref name="count"/> clicks attributed to a specific mouse
         /// button, so the dashboard can show a per-button breakdown.

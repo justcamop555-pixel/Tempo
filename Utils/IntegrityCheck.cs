@@ -205,51 +205,77 @@ namespace AutoClicker.Utils
 
         /// <summary>
         /// Runs the check off the UI thread and reports back. Never throws, never blocks
-        /// start-up: hashing ~106 MB costs about 120 ms warm and 380 ms cold, which is
-        /// nothing on a worker and would be visible on the startup path.
+        /// start-up.
+        ///
+        /// <paramref name="gentle"/> is for the automatic check at start-up: it waits
+        /// <paramref name="delayMs"/>, then runs in background mode (<see cref="BackgroundWork"/>).
+        /// The check reads the exe AND all 266 unpacked files — 270 MB, 1.1–1.4 s on this project's
+        /// SSD (the "~106 MB, ~120 ms" this once said predates the unpacked-copy layer) — and it did
+        /// that at normal priority at the start of every launch, sign-in included. A check the user
+        /// asked for (Settings → Check again) is not gentle: they are waiting for the answer.
         /// </summary>
-        public static void RunInBackground(Models.AppSettings settings, Action<IntegrityVerdict> onDone)
+        public static void RunInBackground(Models.AppSettings settings, Action<IntegrityVerdict> onDone,
+                                           int delayMs = 0, bool gentle = false)
         {
-            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            if (gentle)
             {
-                IntegrityVerdict v;
-                try
-                {
-                    v = Run(settings);
+                BackgroundWork.Start("integrity check", delayMs, () => RunAndReport(settings, onDone));
+                return;
+            }
+            System.Threading.ThreadPool.QueueUserWorkItem(_ => RunAndReport(settings, onDone));
+        }
 
-                    // Then ask GitHub, which is the only party that can tell a genuine
-                    // build from a convincing one.
-                    //
-                    // Including when the local pass said Modified. GitHub outranks the
-                    // note this PC wrote to itself, and it can CLEAR a false alarm as
-                    // well as raise a true one: reinstalling the official exe over a
-                    // tampered one leaves a baseline that no longer matches, so the
-                    // local check calls the good file "modified". Asking GitHub turns
-                    // that into "genuine" instead of leaving the user with a warning
-                    // that reinstalling could never fix.
-                    //
-                    // Skipped for Damaged and Repackaged: a truncated or foreign file
-                    // has nothing to compare, and a network round trip would only delay
-                    // a verdict that is already certain.
-                    if (settings != null && settings.IntegrityCheckEnabled &&
-                        !string.IsNullOrEmpty(CurrentHash) &&
-                        (v == IntegrityVerdict.Ok || v == IntegrityVerdict.Baselined ||
-                         v == IntegrityVerdict.Modified))
-                    {
-                        v = VerifyAgainstGitHub(settings);
-                    }
-                }
-                catch (Exception ex)
+        /// <summary>
+        /// One check at a time. Both write the same verdict fields and the baseline in settings, and
+        /// the start-up check now waits before it runs, so "Check again" pressed in that wait used
+        /// to be able to run beside it. Taking turns leaves the later answer standing, intact.
+        /// </summary>
+        private static readonly object RunGate = new object();
+
+        private static void RunAndReport(Models.AppSettings settings, Action<IntegrityVerdict> onDone)
+        {
+            lock (RunGate) { RunAndReportLocked(settings, onDone); }
+        }
+
+        private static void RunAndReportLocked(Models.AppSettings settings, Action<IntegrityVerdict> onDone)
+        {
+            IntegrityVerdict v;
+            try
+            {
+                v = Run(settings);
+
+                // Then ask GitHub, which is the only party that can tell a genuine
+                // build from a convincing one.
+                //
+                // Including when the local pass said Modified. GitHub outranks the
+                // note this PC wrote to itself, and it can CLEAR a false alarm as
+                // well as raise a true one: reinstalling the official exe over a
+                // tampered one leaves a baseline that no longer matches, so the
+                // local check calls the good file "modified". Asking GitHub turns
+                // that into "genuine" instead of leaving the user with a warning
+                // that reinstalling could never fix.
+                //
+                // Skipped for Damaged and Repackaged: a truncated or foreign file
+                // has nothing to compare, and a network round trip would only delay
+                // a verdict that is already certain.
+                if (settings != null && settings.IntegrityCheckEnabled &&
+                    !string.IsNullOrEmpty(CurrentHash) &&
+                    (v == IntegrityVerdict.Ok || v == IntegrityVerdict.Baselined ||
+                     v == IntegrityVerdict.Modified))
                 {
-                    // A self-check that takes the app down is worse than the fault it
-                    // was looking for.
-                    Logger.Swallow("IntegrityCheck", ex);
-                    Verdict = IntegrityVerdict.Unverified;
-                    Summary = "could not be checked (" + ex.Message + ")";
-                    v = Verdict;
+                    v = VerifyAgainstGitHub(settings);
                 }
-                try { onDone?.Invoke(v); } catch (Exception ex) { Logger.Swallow("IntegrityCheck.onDone", ex); }
-            });
+            }
+            catch (Exception ex)
+            {
+                // A self-check that takes the app down is worse than the fault it
+                // was looking for.
+                Logger.Swallow("IntegrityCheck", ex);
+                Verdict = IntegrityVerdict.Unverified;
+                Summary = "could not be checked (" + ex.Message + ")";
+                v = Verdict;
+            }
+            try { onDone?.Invoke(v); } catch (Exception ex) { Logger.Swallow("IntegrityCheck.onDone", ex); }
         }
 
         /// <summary>
@@ -414,7 +440,7 @@ namespace AutoClicker.Utils
                 }
 
                 return Set(IntegrityVerdict.Modified,
-                    "Tempo.exe has changed since it was installed, but its version is still "
+                    Path.GetFileName(exe) + " has changed since it was installed, but its version is still "
                     + version + detail);
             }
 
@@ -601,7 +627,7 @@ namespace AutoClicker.Utils
             }
             if (manifest == null)
             {
-                PayloadSummary = "Tempo.exe carries no bundle manifest this check understands";
+                PayloadSummary = Path.GetFileName(exe) + " carries no bundle manifest this check understands";
                 Logger.Warn("[Integrity] unpacked copy: " + PayloadSummary);
                 return null;
             }
@@ -628,7 +654,7 @@ namespace AutoClicker.Utils
             string cost = (report.Bytes / (1024 * 1024)) + " MB in " + report.Milliseconds + " ms";
             if (!report.Tampered)
             {
-                PayloadSummary = report.Checked + " unpacked files match Tempo.exe (" + cost + ")"
+                PayloadSummary = report.Checked + " unpacked files match " + Path.GetFileName(exe) + " (" + cost + ")"
                     + (report.Missing.Count > 0
                         ? " · " + report.Missing.Count + " missing, restored on the next start"
                         : "");
@@ -647,8 +673,8 @@ namespace AutoClicker.Utils
                           + FirstFew(report.Unexpected) + ")");
             }
             PayloadSummary = string.Join("; ", found) + " — " + cost;
-            return "Tempo.exe is intact, but the unpacked copy it runs from was altered: "
-                + string.Join("; ", found) + " — the code running is not the code in Tempo.exe";
+            return Path.GetFileName(exe) + " is intact, but the unpacked copy it runs from was altered: "
+                + string.Join("; ", found) + " — the code running is not the code in " + Path.GetFileName(exe);
         }
 
         /// <summary>

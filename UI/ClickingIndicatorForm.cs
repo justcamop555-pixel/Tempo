@@ -44,14 +44,15 @@ namespace AutoClicker.UI
         {
             AutoScaleMode = AutoScaleMode.None; // positioned in raw screen pixels
             _theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
-            if (!string.IsNullOrEmpty(title)) _title = title;
+            // Translated: the badge was the one English thing a Spanish Tempo put on screen while clicking.
+            _title = !string.IsNullOrEmpty(title) ? title : Utils.Localization.T("Tempo — clicking");
             _dotColor = dotColor.A == 0 ? _theme.Success : dotColor;
 
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
-            Size = new Size(232, 46);
+            Size = new Size(D(MinBadgeWidth), D(46));
             DoubleBuffered = true;
             BackColor = _theme.Surface;
 
@@ -75,7 +76,7 @@ namespace AutoClicker.UI
         /// <summary>Updates the live "N clicks · X CPS" text shown in the badge.</summary>
         public void SetStats(long clicks, double cps)
         {
-            string next = $"{clicks:N0} clicks   \u00B7   {cps:0.0} CPS";
+            string next = Utils.Localization.F("{0} clicks", clicks.ToString("N0")) + $"   \u00B7   {cps:0.0} CPS";
             if (next != _stats)
             {
                 _stats = next;
@@ -113,7 +114,7 @@ namespace AutoClicker.UI
         {
             Screen scr = Screen.FromPoint(Cursor.Position) ?? Screen.PrimaryScreen;
             var wa = scr.WorkingArea;
-            const int m = 12;                        // margin from the screen edge
+            int m = D(12);                           // margin from the screen edge
             int x, y;
             switch (_corner)
             {
@@ -161,7 +162,7 @@ namespace AutoClicker.UI
         public void SetStats(long clicks, double cps, long elapsedSeconds)
         {
             var parts = new System.Collections.Generic.List<string>(3);
-            if (_showClicks) { parts.Add($"{clicks:N0} clicks"); }
+            if (_showClicks) { parts.Add(Utils.Localization.F("{0} clicks", clicks.ToString("N0"))); }
             if (_showCps) { parts.Add($"{cps:0.0} CPS"); }
             if (_showElapsed && elapsedSeconds >= 0)
             {
@@ -189,6 +190,14 @@ namespace AutoClicker.UI
         private const int MinBadgeWidth = 232;
 
         /// <summary>
+        /// One of this badge's 100% numbers in the screen's pixels. It is placed and drawn in raw pixels
+        /// (no WinForms scaling) while its fonts grow with the screen: on a 150% laptop its 10 pt title
+        /// is about 26 px tall, so in the 46 px badge the title and the line under it (drawn from y 25)
+        /// ran into each other.
+        /// </summary>
+        private int D(int px) => (int)Math.Round(px * DeviceDpi / 96f);
+
+        /// <summary>
         /// Grows the badge to whatever its longest line actually needs.
         ///
         /// The width was a hard-coded 232 px while the text was drawn at a fixed offset
@@ -212,18 +221,18 @@ namespace AutoClicker.UI
                     {
                         w = Math.Max(w, g.MeasureString(_hint, _subFont).Width);
                     }
-                    needed = TextLeft + (int)Math.Ceiling(w) + TextRightPad;
+                    needed = D(TextLeft) + (int)Math.Ceiling(w) + D(TextRightPad);
                 }
 
                 // Never below the original size, and never wider than the screen it sits on.
-                int max = MinBadgeWidth;
+                int max = D(MinBadgeWidth);
                 try
                 {
                     Screen scr = Screen.FromPoint(Cursor.Position) ?? Screen.PrimaryScreen;
-                    max = Math.Max(MinBadgeWidth, scr.WorkingArea.Width - 24);
+                    max = Math.Max(D(MinBadgeWidth), scr.WorkingArea.Width - D(24));
                 }
                 catch { }
-                int target = Math.Min(Math.Max(needed, MinBadgeWidth), max);
+                int target = Math.Min(Math.Max(needed, D(MinBadgeWidth)), max);
 
                 if (target != Width)
                 {
@@ -290,7 +299,7 @@ namespace AutoClicker.UI
             // Clip the window to a rounded shape so the corners aren't boxy.
             try
             {
-                using (var path = Rounded(new Rectangle(0, 0, Width, Height), 10))
+                using (var path = Rounded(new Rectangle(0, 0, Width, Height), D(10)))
                 {
                     Region = new Region(path);
                 }
@@ -305,7 +314,7 @@ namespace AutoClicker.UI
         public void SetHint(string hint)
         {
             _hint = hint ?? "";
-            int targetH = string.IsNullOrEmpty(_hint) ? 46 : 62;
+            int targetH = D(string.IsNullOrEmpty(_hint) ? 46 : 62);
             if (Height != targetH)
             {
                 Height = targetH;
@@ -340,21 +349,21 @@ namespace AutoClicker.UI
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
             var rect = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (var path = Rounded(rect, 10))
+            using (var path = Rounded(rect, D(10)))
             {
                 using (var fill = new SolidBrush(_theme.Surface))
                 {
                     g.FillPath(fill, path);
                 }
-                using (var pen = new Pen(_dotColor.A == 0 ? _theme.Success : _dotColor, 2))
+                using (var pen = new Pen(_dotColor.A == 0 ? _theme.Success : _dotColor, 2f * DeviceDpi / 96f))
                 {
                     g.DrawPath(pen, path);
                 }
             }
 
             // Pulsing status dot.
-            int dotD = 12;
-            var dot = new Rectangle(14, (Height - dotD) / 2, dotD, dotD);
+            int dotD = D(12);
+            var dot = new Rectangle(D(14), (Height - dotD) / 2, dotD, dotD);
             Color baseDot = _dotColor.A == 0 ? _theme.Success : _dotColor;
             Color dotColor = _dotOn ? baseDot : Blend(baseDot, _theme.Surface, 0.55);
             using (var db = new SolidBrush(dotColor))
@@ -365,11 +374,11 @@ namespace AutoClicker.UI
             using (var tb = new SolidBrush(_theme.Text))
             using (var mb = new SolidBrush(_theme.TextMuted))
             {
-                g.DrawString(_title, _titleFont, tb, TextLeft, 5);
-                g.DrawString(string.IsNullOrEmpty(_stats) ? Utils.Localization.T("running\u2026") : _stats, _subFont, mb, TextLeft, 25);
+                g.DrawString(_title, _titleFont, tb, D(TextLeft), D(5));
+                g.DrawString(string.IsNullOrEmpty(_stats) ? Utils.Localization.T("running\u2026") : _stats, _subFont, mb, D(TextLeft), D(25));
                 if (!string.IsNullOrEmpty(_hint))
                 {
-                    g.DrawString(_hint, _subFont, mb, TextLeft, 43);
+                    g.DrawString(_hint, _subFont, mb, D(TextLeft), D(43));
                 }
             }
         }

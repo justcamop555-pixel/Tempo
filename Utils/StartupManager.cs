@@ -386,5 +386,119 @@ namespace AutoClicker.Utils
             }
             catch { }
         }
+
+        // ── Keeping the entry working while Tempo runs ─────────────────────────────
+
+        [System.Runtime.InteropServices.DllImport("advapi32.dll")]
+        private static extern int RegNotifyChangeKeyValue(Microsoft.Win32.SafeHandles.SafeRegistryHandle key,
+            bool watchSubtree, int notifyFilter, Microsoft.Win32.SafeHandles.SafeWaitHandle changed, bool asynchronous);
+
+        private const int REG_NOTIFY_CHANGE_NAME = 0x1;
+        private const int REG_NOTIFY_CHANGE_LAST_SET = 0x4;
+
+        /// <summary>A look even when Windows signals nothing, in case a notification is ever lost.</summary>
+        private const int GuardBackstopMs = 10 * 60 * 1000;
+
+        private static System.Threading.ManualResetEvent _guardStop;
+
+        /// <summary>
+        /// Keeps Tempo's sign-in entry naming a file that exists, for as long as Tempo runs.
+        ///
+        /// Found 2026-09-25: after a sign-out the entry named …\TempoClicker\Tempo.exe — the file's
+        /// name from before the Discord rename — so at the next sign-in Windows skipped it (its
+        /// Shell-Core log lists every other startup app launched, and Tempo never attempted) and Tempo
+        /// did not start. Nothing Tempo logs made that change, and replaying every step of that
+        /// morning under a registry watch did not reproduce it. Whatever wrote it, a running Tempo now
+        /// puts the entry right moments after any write to the Run key (Windows signals them), and
+        /// again at sign-out, so the next sign-in finds an entry that works.
+        ///
+        /// Only an entry naming a file that does not exist is repaired. A MISSING entry is left to
+        /// <see cref="Reconcile"/> at the next start: the uninstaller deletes it while Tempo runs, and
+        /// that must not be undone behind its back.
+        /// </summary>
+        public static void GuardWhileRunning(Func<bool> wanted)
+        {
+            if (_guardStop != null) { return; }
+            var stop = new System.Threading.ManualResetEvent(false);
+            _guardStop = stop;
+            var t = new System.Threading.Thread(() => GuardLoop(Registry.CurrentUser, RunKeyPath, wanted,
+                                                                 IsDisabledByTaskManager, ResolveExePath, stop))
+            {
+                IsBackground = true,
+                Name = "Tempo sign-in entry guard",
+            };
+            t.Start();
+        }
+
+        /// <summary>Stops <see cref="GuardWhileRunning"/> (shutdown).</summary>
+        public static void StopGuard()
+        {
+            try { _guardStop?.Set(); } catch { }
+        }
+
+        /// <summary>
+        /// Test seam for <see cref="GuardWhileRunning"/>: the same loop against any key, with the Task
+        /// Manager check and the running exe supplied, so it never touches the real sign-in entry.
+        /// </summary>
+        internal static void GuardLoop(RegistryKey hive, string runKeyPath, Func<bool> wanted,
+                                       Func<bool> disabledByTaskManager, Func<string> runningExe,
+                                       System.Threading.WaitHandle stop)
+        {
+            try
+            {
+                using (var changed = new System.Threading.AutoResetEvent(false))
+                using (RegistryKey key = hive.OpenSubKey(runKeyPath, false))
+                {
+                    if (key == null) { return; }
+                    var waits = new System.Threading.WaitHandle[] { stop, changed };
+                    while (true)
+                    {
+                        // Armed BEFORE the look, so a write landing during the look still wakes the next.
+                        bool armed = RegNotifyChangeKeyValue(key.Handle, false,
+                            REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET, changed.SafeWaitHandle, true) == 0;
+                        RepairIfDangling(hive, runKeyPath, wanted, disabledByTaskManager, runningExe);
+                        if (System.Threading.WaitHandle.WaitAny(waits, armed ? GuardBackstopMs : 60000) == 0) { return; }
+                    }
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("StartupManager.GuardLoop", ex); }
+        }
+
+        /// <summary>
+        /// One look, now: repairs an entry naming a file that does not exist (see
+        /// <see cref="GuardWhileRunning"/>). Also called at sign-out. True when it rewrote the entry.
+        /// </summary>
+        public static bool RepairIfDangling(Func<bool> wanted) =>
+            RepairIfDangling(Registry.CurrentUser, RunKeyPath, wanted, IsDisabledByTaskManager, ResolveExePath);
+
+        internal static bool RepairIfDangling(RegistryKey hive, string runKeyPath, Func<bool> wanted,
+                                              Func<bool> disabledByTaskManager, Func<string> runningExe)
+        {
+            try
+            {
+                if (wanted == null || !wanted()) { return false; }
+                if (disabledByTaskManager != null && disabledByTaskManager()) { return false; }
+                using (RegistryKey key = hive.OpenSubKey(runKeyPath, true))
+                {
+                    string val = key?.GetValue(ValueName) as string;
+                    if (string.IsNullOrEmpty(val)) { return false; }            // missing: Reconcile's job
+                    string registered = ExePathFromCommand(val);
+                    if (!string.IsNullOrEmpty(registered) && File.Exists(registered)) { return false; }
+
+                    string running = runningExe?.Invoke();
+                    if (string.IsNullOrEmpty(running) || !File.Exists(running)) { return false; }
+                    string desired = "\"" + running + "\" --startup";
+                    key.SetValue(ValueName, desired);
+                    Logger.Warn("[Startup] the sign-in entry named " + (registered ?? val) + ", which does not exist, "
+                                + "so Windows would have skipped Tempo at the next sign-in — set it back to " + desired + ".");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Swallow("StartupManager.RepairIfDangling", ex);
+                return false;
+            }
+        }
     }
 }

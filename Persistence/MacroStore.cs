@@ -18,6 +18,20 @@ namespace AutoClicker.Persistence
             WriteIndented = true
         };
 
+        /// <summary>Builds the JSON description of macros ahead of the first Load — see SettingsManager.WarmUp.</summary>
+        internal static void WarmUp()
+        {
+            try
+            {
+                // A round trip, so every property's accessors are made too (see SettingsManager.WarmUp).
+                var m = new Macro("warm-up");
+                m.Actions.Add(new MacroAction());
+                string json = JsonSerializer.Serialize(new List<Macro> { m }, Options);
+                JsonSerializer.Deserialize<List<Macro>>(json, Options);
+            }
+            catch (Exception ex) { Logger.Swallow("MacroStore.WarmUp", ex); }
+        }
+
         private readonly List<Macro> _macros = new List<Macro>();
 
         /// <summary>
@@ -235,6 +249,17 @@ namespace AutoClicker.Persistence
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Takes a macro back out WITHOUT the recycle bin — for one that never really arrived: an
+        /// import the user turned down. Declining went through Remove(), so the refused script
+        /// macro was kept after all, one Restore away, and took a place in the 25-slot bin — the
+        /// oldest really deleted recording was pushed out to make room for it.
+        /// </summary>
+        public bool Discard(Macro macro)
+        {
+            return macro != null && _macros.Remove(macro);
         }
 
         /// <summary>
@@ -480,26 +505,52 @@ namespace AutoClicker.Persistence
         /// </summary>
         public int ImportAllFromFile(string path)
         {
+            List<Macro> added = ImportManyFromFile(path);
+            return added == null ? -1 : added.Count;
+        }
+
+        /// <summary>
+        /// Imports every macro in a file and returns the ones added (each under a unique name), an
+        /// empty list when the file holds none, or null when it can't be read as macros.
+        ///
+        /// Either shape: a collection (Export all — a JSON list) or one exported macro (a JSON
+        /// object). Each import button used to read only its own shape, so "Import…" on a backup
+        /// said "not a valid macro" and "Import all…" on a single macro "not a macro collection",
+        /// though both files were Tempo's own exports. The caller gets the macros themselves, so
+        /// it can ask about the ones that run scripts — Import all never did.
+        /// </summary>
+        public List<Macro> ImportManyFromFile(string path)
+        {
             try
             {
                 if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 {
-                    return -1;
+                    return null;
                 }
 
                 string json = File.ReadAllText(path);
                 if (string.IsNullOrWhiteSpace(json))
                 {
-                    return 0;
+                    return new List<Macro>();
                 }
 
-                var list = JsonSerializer.Deserialize<List<Macro>>(json, Options);
+                List<Macro> list;
+                bool single = json.TrimStart().StartsWith("{", StringComparison.Ordinal);
+                if (single)
+                {
+                    Macro one = JsonSerializer.Deserialize<Macro>(json, Options);
+                    list = one == null ? null : new List<Macro> { one };
+                }
+                else
+                {
+                    list = JsonSerializer.Deserialize<List<Macro>>(json, Options);
+                }
                 if (list == null)
                 {
-                    return -1;
+                    return null;
                 }
 
-                int count = 0;
+                var added = new List<Macro>();
                 foreach (Macro macro in list)
                 {
                     if (macro == null)
@@ -513,21 +564,22 @@ namespace AutoClicker.Persistence
                     }
                     if (string.IsNullOrWhiteSpace(macro.Name))
                     {
-                        macro.Name = "Macro";
+                        // A single exported macro without a name is called after its file, as before.
+                        macro.Name = single ? System.IO.Path.GetFileNameWithoutExtension(path) : "Macro";
                     }
 
                     macro.Name = MakeUniqueName(macro.Name);
                     _macros.Add(macro);
-                    count++;
+                    added.Add(macro);
                 }
 
-                Logger.Info($"[Macro] imported {count} macro(s) from {path}.");
-                return count;
+                Logger.Info($"[Macro] imported {added.Count} macro(s) from {path}.");
+                return added;
             }
             catch (Exception ex)
             {
-                Logger.Error("Failed to import all macros.", ex);
-                return -1;
+                Logger.Error("Failed to import macros.", ex);
+                return null;
             }
         }
 

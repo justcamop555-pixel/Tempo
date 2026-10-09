@@ -31,8 +31,14 @@ namespace AutoClicker.UI
         /// </summary>
         public Theme WithAccent(Color accent)
         {
+            Color chosen = accent;
+            // An HDR-corrected palette converts the user's own accent the same way as its own
+            // colours; otherwise the one colour they picked by eye would be the one still lifted.
+            if (_hdrCompensated) { accent = ForHdr(accent); }
             return new Theme
             {
+                _hdrCompensated = _hdrCompensated,
+                _designAccent = chosen,
                 Kind = Kind,
                 Background = Background,
                 Surface = Surface,
@@ -73,6 +79,19 @@ namespace AutoClicker.UI
         {
             return ContrastRatio(Color.White, bg) >= ContrastRatio(Color.Black, bg)
                 ? Color.White : Color.Black;
+        }
+
+        /// <summary>
+        /// <paramref name="a"/> moved <paramref name="t"/> of the way towards <paramref name="b"/>
+        /// (0 = a, 1 = b), opaque — the mix every tinted surface uses (a chip's wash, a notice box).
+        /// </summary>
+        public static Color Blend(Color a, Color b, double t)
+        {
+            t = Math.Max(0, Math.Min(1, t));
+            return Color.FromArgb(255,
+                (int)Math.Round(a.R + (b.R - a.R) * t),
+                (int)Math.Round(a.G + (b.G - a.G) * t),
+                (int)Math.Round(a.B + (b.B - a.B) * t));
         }
 
         /// <summary>WCAG 2.1 contrast ratio between two colours, 1.0 to 21.0.</summary>
@@ -206,77 +225,119 @@ namespace AutoClicker.UI
                 b > 255 ? 255 : b);
         }
 
-        /// <summary>
-        /// How hard to push surfaces away from mid-grey when Windows HDR is tone-mapping
-        /// Tempo's output. 0.35 is a per-channel gamma exponent, tuned to undo the
-        /// "milky blacks" lift without turning a dark theme into a black hole.
-        /// </summary>
-        private const double HdrSurfaceGamma = 0.35;
+        /// <summary>True when this palette went through <see cref="HdrCompensated"/>.</summary>
+        private bool _hdrCompensated;
+
+        private Color _designAccent;
 
         /// <summary>
-        /// Set by the app when the user has HDR compensation switched on AND a display is
-        /// actually tone-mapping. Static because every Theme is built through ForKind, and
-        /// threading a flag through 38 switch arms would be worse than one gate here.
+        /// The accent as designed or chosen, before the HDR correction — what Settings shows as
+        /// the accent's hex value. <see cref="Accent"/> is what is painted, and with the correction
+        /// on it is a different number: shown in the hex box, it was the value a commit saved as
+        /// the custom accent, which the palette then corrected a second time.
+        /// </summary>
+        public Color DesignAccent => _designAccent.IsEmpty ? Accent : _designAccent;
+
+        /// <summary>
+        /// Set by the app when the user has HDR compensation switched on AND the window's screen
+        /// has HDR on. Static because every Theme is built through ForKind, and threading a flag
+        /// through 38 switch arms would be worse than one gate here.
         /// </summary>
         public static bool CompensateForHdr { get; set; }
 
-        public static Theme ForKind(ThemeKind kind)
+        public static Theme ForKind(ThemeKind kind) => ForKind(kind, CompensateForHdr);
+
+        /// <summary>
+        /// ForKind with the HDR decision made by the caller: the splash, which runs on its own
+        /// thread before the window has made it.
+        /// </summary>
+        public static Theme ForKind(ThemeKind kind, bool compensateForHdr)
         {
             Theme t = BaseForKind(kind);
-            return CompensateForHdr ? t.HdrCompensated() : t;
+            return compensateForHdr ? t.HdrCompensated() : t;
         }
 
         /// <summary>
-        /// Pre-distorts the palette so it survives Windows' SDR→HDR tone-mapping.
+        /// A colour drawn outside the palette, corrected the same way while the palette is — for the
+        /// few surfaces that keep a fixed colour of their own.
+        /// </summary>
+        public static Color Corrected(Color c) => CompensateForHdr ? ForHdr(c) : c;
+
+        /// <summary>
+        /// A colour designed outside this palette (a section's icon colour), painted the way THIS
+        /// palette paints its own: through the HDR correction exactly when this palette went
+        /// through it. Unlike <see cref="Corrected"/>, it follows the palette in hand rather than
+        /// the global switch, so a menu or window can never mix corrected and uncorrected colours.
+        /// </summary>
+        public Color Painted(Color designed) => _hdrCompensated ? ForHdr(designed) : designed;
+
+        /// <summary>
+        /// Hands Windows the palette that, after its SDR→HDR conversion, gives the colours the
+        /// theme was designed as.
         ///
-        /// Windows composites SDR content into the HDR signal against an SDR white level,
-        /// and the visible result is that near-blacks LIFT: dark themes go milky, adjacent
-        /// dark surfaces collapse into one another, and the whole window reads flat. Tempo
-        /// cannot change that mapping — but it can hand the compositor a palette that lands
-        /// where the theme intended after the mapping is applied.
+        /// With HDR on, Windows turns an SDR colour into light with the piecewise sRGB curve.
+        /// The displays these themes were chosen on — like nearly every SDR monitor — follow a
+        /// plain 2.2 gamma. The two agree from the midtones up and part in the shadows, where the
+        /// sRGB curve's straight segment near black makes a colour at 5% of full scale come out
+        /// about three times brighter than designed (five times at 3%, 1.6 times at 10%). That is
+        /// the "milky" look: dark themes lift, near-black surfaces run together, and a light
+        /// theme's near-black text greys.
         ///
-        /// ONLY SURFACES MOVE. Text, muted text, the accent and the status colours are left
-        /// exactly as designed, and that is a correctness property rather than a
-        /// preference: all 38 themes are audited to WCAG AA against their own surfaces, so
-        /// darkening a dark theme's background while holding its text fixed can only
-        /// RAISE contrast. Nothing here can push a theme below the bar it already passes.
+        /// So each colour is replaced by the sRGB value whose sRGB decode EQUALS the 2.2-gamma
+        /// light of the colour as designed: c' = sRGB_encode(c^2.2). It is the exact inverse of
+        /// the mismatch rather than a tuned guess, so it needs no constant and no list of themes:
+        /// shadows go back down, midtones and highlights move at most one step, and every channel
+        /// follows the same curve, so hues hold and the order of any two colours never flips.
+        /// Text, accents and status colours are corrected too — the light a light theme's black
+        /// text gives off was lifted just like a dark theme's background.
         ///
-        /// Every surface takes the same gamma, so their relationships hold — a border stays
-        /// a step away from the surface it separates instead of merging into it.
+        /// It replaced a hand-tuned 1.35 gamma on the surfaces alone, which moved light themes the
+        /// wrong way (lighter, though their surfaces were never lifted) and left text uncorrected.
         /// </summary>
         private Theme HdrCompensated()
         {
-            // Which way is "away from mid-grey"? Ask the theme, not the name: a light
-            // theme is one whose TEXT is dark, and that holds for every custom accent and
-            // every future theme without a list to maintain.
-            bool darkTheme = Luminance(Text) > Luminance(Background);
-            double g = darkTheme ? 1.0 + HdrSurfaceGamma : 1.0 / (1.0 + HdrSurfaceGamma);
-
-            Background = Push(Background, g);
-            Surface = Push(Surface, g);
-            Surface2 = Push(Surface2, g);
-            Border = Push(Border, g);
-            InputBackground = Push(InputBackground, g);
+            if (_designAccent.IsEmpty) { _designAccent = Accent; }
+            Background = ForHdr(Background);
+            Surface = ForHdr(Surface);
+            Surface2 = ForHdr(Surface2);
+            Border = ForHdr(Border);
+            InputBackground = ForHdr(InputBackground);
+            Text = ForHdr(Text);
+            TextMuted = ForHdr(TextMuted);
+            Accent = ForHdr(Accent);
+            AccentHover = ForHdr(AccentHover);
+            Success = ForHdr(Success);
+            Danger = ForHdr(Danger);
+            Warning = ForHdr(Warning);
+            _hdrCompensated = true;
             return this;
         }
 
-        /// <summary>Per-channel gamma. Keeps hue, moves the colour toward black or white.</summary>
-        private static Color Push(Color c, double gamma)
+        /// <summary>sRGB_encode(v^2.2) per 8-bit channel value — see <see cref="HdrCompensated"/>.</summary>
+        private static readonly byte[] HdrLut = BuildHdrLut();
+
+        private static byte[] BuildHdrLut()
         {
-            return Color.FromArgb(c.A, Chan(c.R, gamma), Chan(c.G, gamma), Chan(c.B, gamma));
+            var lut = new byte[256];
+            for (int v = 0; v < 256; v++)
+            {
+                double light = Math.Pow(v / 255.0, 2.2);                     // what an SDR panel gives off
+                double enc = light <= 0.0031308                                // what Windows must be handed
+                    ? 12.92 * light                                            // to give off the same under HDR
+                    : 1.055 * Math.Pow(light, 1.0 / 2.4) - 0.055;
+                int o = (int)Math.Round(enc * 255.0);
+                lut[v] = (byte)(o < 0 ? 0 : (o > 255 ? 255 : o));
+            }
+            return lut;
         }
 
-        private static int Chan(int v, double gamma)
+        /// <summary>
+        /// One colour through the same conversion as the palette, for a colour drawn outside it.
+        /// Alpha is untouched.
+        /// </summary>
+        public static Color ForHdr(Color c)
         {
-            double n = Math.Pow(v / 255.0, gamma);
-            int outv = (int)Math.Round(n * 255.0);
-            return outv < 0 ? 0 : (outv > 255 ? 255 : outv);
-        }
-
-        /// <summary>Relative luminance, the sRGB-weighted kind the contrast audit uses.</summary>
-        private static double Luminance(Color c)
-        {
-            return 0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B;
+            return Color.FromArgb(c.A, HdrLut[c.R], HdrLut[c.G], HdrLut[c.B]);
         }
 
         private static Theme BaseForKind(ThemeKind kind)
@@ -746,7 +807,9 @@ namespace AutoClicker.UI
                         Danger = Color.FromArgb(200, 50, 50),
                         Warning = Color.FromArgb(196, 127, 4),
                         Text = Color.FromArgb(28, 44, 54),
-                        TextMuted = Color.FromArgb(92, 115, 131),
+                        // One step darker than it was: 4.53:1 cleared AA by the sRGB formula and
+                        // missed it on a real 2.2-gamma screen — and under HDR, once corrected.
+                        TextMuted = Color.FromArgb(91, 114, 130),
                         InputBackground = Color.FromArgb(248, 252, 254)
                     };
 
@@ -936,7 +999,9 @@ namespace AutoClicker.UI
                         Danger = Color.FromArgb(220, 38, 38),
                         Warning = Color.FromArgb(192, 131, 4),
                         Text = Color.FromArgb(74, 52, 44),
-                        TextMuted = Color.FromArgb(134, 108, 97),
+                        // One step darker than it was: 4.50:1 exactly by the sRGB formula, below
+                        // AA on a real 2.2-gamma screen — and under HDR, once corrected.
+                        TextMuted = Color.FromArgb(133, 107, 96),
                         InputBackground = Color.FromArgb(255, 250, 246)
                     };
 

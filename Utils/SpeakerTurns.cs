@@ -139,6 +139,10 @@ namespace AutoClicker.Utils
 
         private string _lastTurnFull = string.Empty;
 
+        // The time a turn's gaps are measured in. Real time here; scratchpad/labelsync swaps in a
+        // simulated clock (by reflection) so minutes of conversation run in a moment.
+        private Func<DateTime> _clock = () => DateTime.UtcNow;
+
         /// <summary>Forget everything — the next new words become "Speaker 1:".</summary>
         public void Reset()
         {
@@ -268,15 +272,18 @@ namespace AutoClicker.Utils
         /// When present it names the turn — so a returning speaker gets their old
         /// number back — and a changed voice can even split a turn that a short
         /// pause alone wouldn't have.
+        /// <paramref name="handOver"/>: the caller KNOWS the words added since the last call were
+        /// said by <paramref name="voiceSpeaker"/> after someone else — a caption cut in two at a
+        /// hand-over — so they start a new turn whatever the gap.
         /// </summary>
-        public string Label(string raw, int voiceSpeaker = 0)
+        public string Label(string raw, int voiceSpeaker = 0, bool handOver = false)
         {
             if (string.IsNullOrWhiteSpace(raw))
             {
                 return raw;
             }
 
-            DateTime now = DateTime.UtcNow;
+            DateTime now = _clock();
 
             // Whatever text is already on screen the moment captions turn on is not
             // part of any turn we should show — baseline it out so the first label
@@ -333,6 +340,17 @@ namespace AutoClicker.Utils
                     _turnStartUtc = now;
                     _history.Clear();                                // old conversation is over
                     _pendingHandoverText = null;
+                }
+                else if (handOver && voiceSpeaker > 0 && voiceSpeaker != _speaker)
+                {
+                    // A hand-over the caller placed exactly (see the parameter): new turn, their
+                    // number. Without this the two halves arrive a moment apart, and the second
+                    // "corrected" the first half's number in place instead of starting a turn.
+                    _speaker = voiceSpeaker;
+                    PushTurnToHistory(prevSpeaker);
+                    _pendingHandoverText = null;
+                    _baseline = _lastRaw;
+                    _turnStartUtc = now;
                 }
                 else if (gap >= TurnGapSeconds)
                 {

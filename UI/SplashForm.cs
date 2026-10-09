@@ -37,7 +37,11 @@ namespace AutoClicker.UI
         private Color _trackColor = Color.FromArgb(38, 40, 48);
         private Color _borderColor = Color.FromArgb(52, 54, 64);
 
-        private const int MinVisibleMs = 1100;   // never flash by quicker than this
+        // Never flash by quicker than this — and no longer than that. The main window waits for the
+        // splash to close before it appears, so this minimum is a floor under every visible start. It
+        // was 1100 ms when the window took ~1.2 s to build; since the start-up work (2026-09-26) the
+        // window is ready in about half a second, and 1100 ms had become most of the wait.
+        private const int MinVisibleMs = 400;
         private const int MaxVisibleMs = 8000;    // safety: never hang forever
         private const int StepMs = 320;           // cosmetic per-step tick cadence
 
@@ -194,7 +198,8 @@ namespace AutoClicker.UI
 
             if (_fadingOut)
             {
-                double next = Opacity - 0.12;
+                // ~5 ticks (~80 ms): the window waits for this fade to finish before it appears.
+                double next = Opacity - 0.2;
                 if (next <= 0)
                 {
                     _timer.Stop();
@@ -453,13 +458,20 @@ namespace AutoClicker.UI
                     var root = doc.RootElement;
                     int themeInt = root.TryGetProperty("Theme", out var tv) && tv.ValueKind == JsonValueKind.Number
                         ? tv.GetInt32() : 0;
-                    Theme th = Theme.ForKind((Models.ThemeKind)themeInt);
+                    // Corrected for HDR like the window that follows, or the splash is the one screen
+                    // that still looks milky — for the screen it opens on (CenterScreen: the one under
+                    // the pointer). Decided here, not through Theme.CompensateForHdr: that is the
+                    // window's, set on another thread, possibly while this runs.
+                    bool hdr = !(root.TryGetProperty("CompensateForHdr", out var hv) && hv.ValueKind == JsonValueKind.False)
+                               && Utils.DisplayColorInfo.HdrOnFor(Screen.FromPoint(Control.MousePosition).DeviceName);
+                    Theme th = Theme.ForKind((Models.ThemeKind)themeInt, hdr);
                     Color accent = th.Accent;
                     Color accent2 = th.AccentHover;
                     if (root.TryGetProperty("CustomAccentEnabled", out var ce) && ce.ValueKind == JsonValueKind.True &&
                         root.TryGetProperty("CustomAccentArgb", out var ca) && ca.ValueKind == JsonValueKind.Number)
                     {
                         accent = Color.FromArgb(ca.GetInt32());
+                        if (hdr) { accent = Theme.ForHdr(accent); }
                         accent2 = Lighten(accent, 0.16);
                     }
                     _bg = th.Surface;

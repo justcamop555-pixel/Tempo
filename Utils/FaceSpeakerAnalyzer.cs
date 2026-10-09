@@ -206,6 +206,393 @@ namespace AutoClicker.Utils
             // someone arriving after a speaker left inherits that speaker's number.
             // Recording the takeover lets Live debug show when that happened.
             public DateTime OccupiedSinceUtc;
+            // Who is in the slot: a number never reused, unlike the slot. What the caption
+            // speakers are linked to — a slot index would hand a departed person's speaker
+            // to whoever took their place.
+            public long OccupantId;
+            public DateTime ThumbUtc;           // when this occupant's kept picture was taken
+            public DateTime ThumbTriedUtc;      // when a picture was last tried (kept or not)
+            public double ThumbScore;           // how good the kept picture is (see MaybeTakeThumbnail)
+            // What the occupant looks like, close up and small (see Utils/FaceAppearance.cs) — the two
+            // are kept apart because one person's close-up and wide-shot looks are not comparable.
+            public FaceLook BigLook, SmallLook;
+            // A face not named yet (OccupantId 0): its first looks, until there are enough to tell
+            // whether it is someone seen before (see ResolvePendingFaces).
+            public FaceLook PendingLook;
+            public int PendingLooks, PendingSeen;
+        }
+
+        /// <summary>
+        /// Someone who was on screen and has gone: kept so that when they come back — after a camera
+        /// cut, a wide shot, the other person's close-up — they get their occupant id back, and with
+        /// it their speaker, name and picture. Memory only; forgotten on Stop and by ForgetFaces.
+        /// </summary>
+        private sealed class KnownFace
+        {
+            public long OccupantId;
+            public FaceLook BigLook, SmallLook;
+            public DateTime LastSeenUtc;
+        }
+
+        private readonly List<KnownFace> _knownFaces = new List<KnownFace>();
+        private const int KnownFacesKept = 24;
+        // A new face is named after this many looks (~0.5 s): one frame can catch a blink, motion blur
+        // or a face half into the frame.
+        private const int LooksToName = 3;
+        // ...or after this many detections without enough usable looks (a face at the frame's edge).
+        private const int SeenToName = 8;
+        // At a cut, a face that is this much bigger or smaller than the one the tracker had there is a
+        // new shot, not the same face.
+        private const double CutSizeChange = 1.5;
+        private volatile int _reidentified, _changedAtCut;
+        // Test seam (scratchpad/facereid replays the same footage with and without).
+        private bool _reidentify = true;
+
+        /// <summary>Faces recognised as someone seen earlier this session and given their id back.</summary>
+        public int Reidentified => _reidentified;
+
+        /// <summary>Times a different person turned up where a tracked face was (a cut between look-alike framings).</summary>
+        public int ChangedAtCut => _changedAtCut;
+
+        /// <summary>People seen this session who are off screen now but would be recognised on return.</summary>
+        public int KnownFaceCount { get { lock (_slotLock) { return _knownFaces.Count; } } }
+
+        /// <summary>Forgets everyone seen so far (new audio: new people).</summary>
+        public void ForgetFaces()
+        {
+            lock (_slotLock) { _knownFaces.Clear(); }
+        }
+
+        private static long _nextOccupant;
+
+        // A small picture of each recent occupant's face, for the Captions tab to show beside
+        // "Speaker N". Memory only, never written anywhere; dropped on Stop().
+        private readonly Dictionary<long, Bitmap> _thumbs = new Dictionary<long, Bitmap>();
+        private readonly Dictionary<long, double> _thumbScores = new Dictionary<long, double>();
+        private readonly List<long> _thumbOrder = new List<long>();
+        // 96 px, cut from the FULL-size capture. The first version cut 48 px from the 640-wide
+        // analysis frame, where a face is often 30–60 px across — so every picture was an upscaled
+        // smudge. The window is captured at its real size anyway, before being shrunk for the
+        // detector; the picture is now taken from that.
+        private const int ThumbSize = 96;
+        private const int ThumbsKept = 24;              // as many as the people it can recognise
+        private const int ThumbRefreshMs = 1500;
+        // Keep the best picture rather than the latest: a new one replaces it only when it is at least
+        // this good (bigger and/or sharper), or when the kept one is this old — people change angle.
+        private const double ThumbKeepBetterShare = 0.9;
+        private const int ThumbMaxAgeMs = 15000;
+
+        private long _speakerOccupant;                   // Interlocked; 0 = nobody confidently talking
+        private volatile long[] _visibleOccupants = new long[0];
+
+        /// <summary>The occupant id of the face visibly talking (see <see cref="CurrentVisualSpeaker"/>), or 0.</summary>
+        public long CurrentSpeakerOccupant => System.Threading.Interlocked.Read(ref _speakerOccupant);
+
+        /// <summary>Occupant ids of the living (not static) faces on screen in the last frame.</summary>
+        public long[] VisibleOccupants => _visibleOccupants;
+
+        /// <summary>
+        /// A copy of the latest picture of <paramref name="occupant"/>'s face, or null. The caller
+        /// owns (and disposes) the copy.
+        /// </summary>
+        public Bitmap GetFaceThumbnail(long occupant)
+        {
+            if (occupant <= 0) { return null; }
+            lock (_slotLock)
+            {
+                try
+                {
+                    return _thumbs.TryGetValue(occupant, out Bitmap b) && b != null ? new Bitmap(b) : null;
+                }
+                catch { return null; }
+            }
+        }
+
+        /// <summary>
+        /// A copy of the best picture among <paramref name="occupants"/> — one person's close-up and
+        /// wide-shot faces — or null. Best = the largest and sharpest (see MaybeTakeThumbnail). The
+        /// caller owns the copy.
+        /// </summary>
+        public Bitmap GetBestFaceThumbnail(IEnumerable<long> occupants)
+        {
+            if (occupants == null) { return null; }
+            lock (_slotLock)
+            {
+                long best = 0;
+                double bestScore = double.MinValue;
+                foreach (long o in occupants)
+                {
+                    if (o > 0 && _thumbs.ContainsKey(o) && _thumbScores.TryGetValue(o, out double sc) && sc > bestScore)
+                    {
+                        bestScore = sc;
+                        best = o;
+                    }
+                }
+                try { return best > 0 && _thumbs[best] != null ? new Bitmap(_thumbs[best]) : null; }
+                catch { return null; }
+            }
+        }
+
+        /// <summary>
+        /// Takes a square picture around <paramref name="s"/>'s face from this frame, at most every
+        /// ThumbRefreshMs. Called under _slotLock with the frame bitmap unlocked.
+        /// </summary>
+        private void MaybeTakeThumbnail(Slot s, DateTime now)
+        {
+            if (s.OccupantId <= 0 || s.W < MinFaceWidth) { return; }
+            // Rate-limited on the last TRY: a rejected worse picture must not make the next frame
+            // try again (a 96 px high-quality resample of a full-size frame, every frame).
+            if (s.ThumbTriedUtc != DateTime.MinValue && (now - s.ThumbTriedUtc).TotalMilliseconds < ThumbRefreshMs) { return; }
+            s.ThumbTriedUtc = now;
+            try
+            {
+                // From the full-size capture when there is one. The analysis frame is the same
+                // picture shrunk to 640 wide, so the face box scales straight across (per axis: a
+                // very short window's frame is held at 64 high, which bends the ratio).
+                bool full = _fullBmp != null && _fullW > 0 && _fullH > 0 && _frameW > 0 && _frameH > 0;
+                Bitmap source = full ? _fullBmp : _frameBmp;
+                if (source == null) { return; }
+                double sx = full ? _fullW / (double)_frameW : 1.0;
+                double sy = full ? _fullH / (double)_frameH : 1.0;
+                int srcW = full ? _fullW : _frameW;
+                int srcH = full ? _fullH : _frameH;
+
+                // A square a little wider than the detector's box, which cuts off the chin and the hair.
+                double side = Math.Max(s.W * sx, s.H * sy) * 1.3;
+                double cx = (s.X + s.W / 2) * sx, cy = (s.Y + s.H / 2) * sy;
+                var src = new RectangleF((float)(cx - side / 2), (float)(cy - side / 2), (float)side, (float)side);
+                src.Intersect(new RectangleF(0, 0, srcW, srcH));
+                // A face at the window's edge clips the square into a strip; square it again rather
+                // than stretch the face.
+                float sq = Math.Min(src.Width, src.Height);
+                src = new RectangleF(src.X + (src.Width - sq) / 2, src.Y + (src.Height - sq) / 2, sq, sq);
+                if (src.Width < 8 || src.Height < 8) { return; }
+
+                var thumb = new Bitmap(ThumbSize, ThumbSize, PixelFormat.Format24bppRgb);
+                using (var g = Graphics.FromImage(thumb))
+                {
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                    g.DrawImage(source, new Rectangle(0, 0, ThumbSize, ThumbSize), src, GraphicsUnit.Pixel);
+                }
+
+                // How good a picture: bigger (more real pixels behind the 96) and sharper (no motion
+                // blur mid-sentence) is better. A worse one does not replace a better one unless the
+                // kept picture has grown old.
+                double score = Math.Min(src.Width, 400) * (0.5 + Sharpness(thumb));
+                bool stale = s.ThumbUtc == DateTime.MinValue || (now - s.ThumbUtc).TotalMilliseconds >= ThumbMaxAgeMs;
+                bool have = _thumbs.ContainsKey(s.OccupantId);
+                if (have && !stale && score < s.ThumbScore * ThumbKeepBetterShare)
+                {
+                    thumb.Dispose();
+                    return;
+                }
+                if (_thumbs.TryGetValue(s.OccupantId, out Bitmap old)) { try { old?.Dispose(); } catch { } }
+                else { _thumbOrder.Add(s.OccupantId); }
+                _thumbs[s.OccupantId] = thumb;
+                _thumbScores[s.OccupantId] = score;
+                s.ThumbUtc = now;
+                s.ThumbScore = score;
+                while (_thumbOrder.Count > ThumbsKept)
+                {
+                    long gone = _thumbOrder[0];
+                    _thumbOrder.RemoveAt(0);
+                    if (_thumbs.TryGetValue(gone, out Bitmap g2)) { try { g2?.Dispose(); } catch { } }
+                    _thumbs.Remove(gone);
+                    _thumbScores.Remove(gone);
+                }
+            }
+            catch { }
+        }
+
+        // ── Recognising returning faces ─────────────────────────────────────
+        // A face that leaves the screen for longer than SlotTimeoutMs used to come back as a stranger:
+        // a new occupant, with no speaker, name or picture until it had talked long enough to be linked
+        // again. And a cut between two close-ups framed alike handed the second person the first one's
+        // occupant, because tracking went by position alone. Both are answered by what faces LOOK like
+        // (Utils/FaceAppearance.cs, tuned and checked on real footage in scratchpad/facereid).
+
+        private FaceLook MeasureLook(byte[] gray, int w, int hgt, double fx, double fy, double fw, double fh)
+        {
+            try
+            {
+                return FaceAppearance.Measure(_rawBuf, _rawStride, gray, w, hgt,
+                                              new RectangleF((float)fx, (float)fy, (float)fw, (float)fh));
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Folds a look into the close-up or small view it belongs to.</summary>
+        private static void AddLook(ref FaceLook big, ref FaceLook small, FaceLook look)
+        {
+            if (look == null) { return; }
+            if (FaceAppearance.IsBig(look))
+            {
+                if (big == null) { big = look.Clone(); } else { FaceAppearance.Accumulate(big, look); }
+            }
+            else
+            {
+                if (small == null) { small = look.Clone(); } else { FaceAppearance.Accumulate(small, look); }
+            }
+        }
+
+        /// <summary>
+        /// How surely <paramref name="probe"/> is the person with these views (NaN = not them): compared
+        /// with the view of its own size when there is one, else — under the stricter rule — the other.
+        /// </summary>
+        private static double ScoreAgainst(FaceLook big, FaceLook small, FaceLook probe)
+        {
+            bool isBig = FaceAppearance.IsBig(probe);
+            FaceLook same = isBig ? big : small;
+            if (same != null) { return FaceAppearance.MatchScore(same, probe); }
+            FaceLook other = isBig ? small : big;
+            return other != null ? FaceAppearance.MatchScore(other, probe) : double.NaN;
+        }
+
+        /// <summary>
+        /// At a cut, or when a lost face is found again at the same place: is it still the person the
+        /// slot holds? A face at a very different size is a different shot, whoever it is. With nothing
+        /// yet to compare at this size, position is all there is, and the track is kept.
+        /// </summary>
+        private static bool StillSamePerson(Slot s, FaceLook look, double fw)
+        {
+            double ratio = fw / Math.Max(1.0, s.W);
+            if (ratio > CutSizeChange || ratio < 1.0 / CutSizeChange) { return false; }
+            FaceLook view = FaceAppearance.IsBig(look) ? s.BigLook : s.SmallLook;
+            return view == null || !double.IsNaN(FaceAppearance.MatchScore(view, look));
+        }
+
+        /// <summary>Ends a slot's occupancy; the occupant is remembered in case they come back.</summary>
+        private void RetireOccupant(Slot s, DateTime now)
+        {
+            if (s.OccupantId > 0 && (s.BigLook != null || s.SmallLook != null))
+            {
+                _knownFaces.RemoveAll(k => k.OccupantId == s.OccupantId);
+                _knownFaces.Add(new KnownFace
+                {
+                    OccupantId = s.OccupantId,
+                    BigLook = s.BigLook,
+                    SmallLook = s.SmallLook,
+                    LastSeenUtc = s.LastSeenUtc,
+                });
+                while (_knownFaces.Count > KnownFacesKept)
+                {
+                    int oldest = 0;
+                    for (int i = 1; i < _knownFaces.Count; i++)
+                    {
+                        if (_knownFaces[i].LastSeenUtc < _knownFaces[oldest].LastSeenUtc) { oldest = i; }
+                    }
+                    _knownFaces.RemoveAt(oldest);
+                }
+            }
+            s.Alive = false;
+            s.MotionEma = 0;
+            s.PendingLook = null;
+            s.PendingLooks = 0;
+            s.PendingSeen = 0;
+        }
+
+        /// <summary>
+        /// Names the new faces that have been looked at enough: each gets back the id of someone seen
+        /// earlier who passes <see cref="FaceAppearance.MatchScore"/> — best pairings first, each
+        /// remembered person to one face at most — or else a new one.
+        /// </summary>
+        private void ResolvePendingFaces(DateTime now)
+        {
+            List<Slot> ready = null;
+            foreach (var s in _slots)
+            {
+                if (s.Alive && s.OccupantId == 0 && (s.PendingLooks >= LooksToName || s.PendingSeen >= SeenToName))
+                {
+                    (ready ?? (ready = new List<Slot>())).Add(s);
+                }
+            }
+            if (ready == null) { return; }
+
+            var options = new List<KeyValuePair<double, KeyValuePair<Slot, KnownFace>>>();
+            foreach (Slot s in ready)
+            {
+                if (s.PendingLook == null) { continue; }
+                foreach (KnownFace k in _knownFaces)
+                {
+                    double score = ScoreAgainst(k.BigLook, k.SmallLook, s.PendingLook);
+                    if (!double.IsNaN(score))
+                    {
+                        options.Add(new KeyValuePair<double, KeyValuePair<Slot, KnownFace>>(score, new KeyValuePair<Slot, KnownFace>(s, k)));
+                    }
+                }
+            }
+            options.Sort((a, b) => b.Key.CompareTo(a.Key));
+            var named = new HashSet<Slot>();
+            var claimed = new HashSet<KnownFace>();
+            foreach (var o in options)
+            {
+                Slot s = o.Value.Key;
+                KnownFace k = o.Value.Value;
+                if (named.Contains(s) || claimed.Contains(k)) { continue; }
+                named.Add(s);
+                claimed.Add(k);
+                s.OccupantId = k.OccupantId;
+                s.BigLook = k.BigLook;
+                s.SmallLook = k.SmallLook;
+                AddLook(ref s.BigLook, ref s.SmallLook, s.PendingLook);
+                _knownFaces.Remove(k);
+                _reidentified++;
+            }
+            foreach (Slot s in ready)
+            {
+                if (!named.Contains(s))
+                {
+                    s.OccupantId = System.Threading.Interlocked.Increment(ref _nextOccupant);
+                    s.BigLook = null;
+                    s.SmallLook = null;
+                    AddLook(ref s.BigLook, ref s.SmallLook, s.PendingLook);
+                }
+                s.PendingLook = null;
+                s.PendingLooks = 0;
+                s.PendingSeen = 0;
+            }
+        }
+
+        /// <summary>
+        /// How sharp a picture is, 0 (flat or blurred) to 1: the mean brightness step between
+        /// neighbouring pixels, where about 20 grey levels is a crisp face and 3–6 a blurred one.
+        /// </summary>
+        internal static double Sharpness(Bitmap bmp)
+        {
+            if (bmp == null || bmp.Width < 3 || bmp.Height < 3) { return 0; }
+            int w = bmp.Width, h = bmp.Height;
+            var bits = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            try
+            {
+                int stride = bits.Stride;
+                byte[] raw = new byte[stride * h];
+                Marshal.Copy(bits.Scan0, raw, 0, raw.Length);
+                var luma = new int[w * h];
+                for (int y = 0; y < h; y++)
+                {
+                    int p = y * stride;
+                    for (int x = 0; x < w; x++, p += 3)
+                    {
+                        luma[y * w + x] = (raw[p] * 29 + raw[p + 1] * 150 + raw[p + 2] * 77) >> 8;
+                    }
+                }
+                long sum = 0;
+                for (int y = 0; y < h - 1; y++)
+                {
+                    for (int x = 0; x < w - 1; x++)
+                    {
+                        int i = y * w + x;
+                        sum += Math.Abs(luma[i + 1] - luma[i]) + Math.Abs(luma[i + w] - luma[i]);
+                    }
+                }
+                double mean = sum / (2.0 * (w - 1) * (h - 1));
+                return Math.Min(1.0, mean / 20.0);
+            }
+            finally
+            {
+                bmp.UnlockBits(bits);
+            }
         }
         private readonly List<Slot> _slots = new List<Slot>();
 
@@ -352,6 +739,8 @@ namespace AutoClicker.Utils
         {
             _running = false;       // the next tick entry bails immediately
             _visualSpeaker = 0;
+            System.Threading.Interlocked.Exchange(ref _speakerOccupant, 0);
+            _visibleOccupants = new long[0];
             _faceCount = 0;
             _talkingFaces = 0;
             _slotRecycles = 0;      // per session, like the slots themselves
@@ -404,9 +793,17 @@ namespace AutoClicker.Utils
             }
             _fullBmp = null; _frameBmp = null;
             _fullW = _fullH = _frameW = _frameH = 0;
+            _reidentified = 0;
+            _changedAtCut = 0;
             lock (_slotLock)
             {
                 _slots.Clear();
+                _knownFaces.Clear();
+                // The pictures go with the session: nothing of anyone's face outlives the captions.
+                foreach (Bitmap b in _thumbs.Values) { try { b?.Dispose(); } catch { } }
+                _thumbs.Clear();
+                _thumbScores.Clear();
+                _thumbOrder.Clear();
             }
         }
 
@@ -485,6 +882,8 @@ namespace AutoClicker.Utils
                     {
                         _pausedLogged = true;
                         _visualSpeaker = 0;
+                        System.Threading.Interlocked.Exchange(ref _speakerOccupant, 0);
+                        _visibleOccupants = new long[0];
                         _faceCount = 0;
                         // Crosstalk must clear too: latched TRUE through a whole game
                         // session it silently suppressed every voice-driven label
@@ -533,19 +932,42 @@ namespace AutoClicker.Utils
             }
         }
 
+        // Test seams, set by reflection from scratchpad/facereid and never in the app: a picture to
+        // analyse in place of capturing a window (recorded footage, frame by frame), and the clock the
+        // tracker reads, so minutes of video replay in seconds on their own timeline.
+        private Func<Bitmap> _frameSourceForTest;
+        private Func<DateTime> _clock = () => DateTime.UtcNow;
+
+        // The analysis frame's colour rows (in _rawBuf), for measuring what faces look like.
+        private int _rawStride;
+
         private void AnalyzeOneFrame()
         {
             // 1. Pick the window to read: prefer the one PLAYING AUDIO (any app, even
             //    behind other windows), else the foreground window.
-            IntPtr preferred = IntPtr.Zero;
-            try { preferred = PreferredWindow != null ? PreferredWindow() : IntPtr.Zero; } catch { }
-            bool usePreferred = preferred != IntPtr.Zero && IsWindow(preferred) && !IsIconic(preferred);
-            IntPtr h = usePreferred ? preferred : GetForegroundWindow();
-            if (h == IntPtr.Zero || !GetWindowRect(h, out RECT r))
+            Bitmap testFrame = _frameSourceForTest?.Invoke();
+            IntPtr h = IntPtr.Zero;
+            RECT r = default(RECT);
+            bool usePreferred = false;
+            int srcW, srcH;
+            if (testFrame != null)
             {
-                return;
+                srcW = testFrame.Width;
+                srcH = testFrame.Height;
             }
-            int srcW = r.Right - r.Left, srcH = r.Bottom - r.Top;
+            else
+            {
+                IntPtr preferred = IntPtr.Zero;
+                try { preferred = PreferredWindow != null ? PreferredWindow() : IntPtr.Zero; } catch { }
+                usePreferred = preferred != IntPtr.Zero && IsWindow(preferred) && !IsIconic(preferred);
+                h = usePreferred ? preferred : GetForegroundWindow();
+                if (h == IntPtr.Zero || !GetWindowRect(h, out r))
+                {
+                    return;
+                }
+                srcW = r.Right - r.Left;
+                srcH = r.Bottom - r.Top;
+            }
             if (srcW < 120 || srcH < 90)
             {
                 return;
@@ -578,10 +1000,18 @@ namespace AutoClicker.Utils
                     {
                         var full = _fullBmp;
                         bool captured = false;
+                        if (testFrame != null)
+                        {
+                            using (var gt = Graphics.FromImage(full))
+                            {
+                                gt.DrawImage(testFrame, new Rectangle(0, 0, srcW, srcH));
+                            }
+                            captured = true;
+                        }
                         // PrintWindow reads the window's own surface, so it works for
                         // windows sitting BEHIND others; PW_RENDERFULLCONTENT makes
                         // DWM include hardware-accelerated video frames.
-                        if (usePreferred)
+                        else if (usePreferred)
                         {
                             try
                             {
@@ -611,6 +1041,7 @@ namespace AutoClicker.Utils
                 try
                 {
                     int stride = bits.Stride;
+                    _rawStride = stride;
                     int rawLen = stride * hgt;
                     if (_rawBuf == null || _rawBuf.Length != rawLen) { _rawBuf = new byte[rawLen]; }
                     byte[] raw = _rawBuf;
@@ -699,7 +1130,7 @@ namespace AutoClicker.Utils
                 }
             }
 
-            DateTime now = DateTime.UtcNow;
+            DateTime now = _clock();
 
             // GLOBAL-MOTION GUARD: a scene cut or a hard camera pan changes nearly
             // every pixel at once. The mouth-minus-upper cancellation is built for
@@ -773,6 +1204,19 @@ namespace AutoClicker.Utils
                         bestDist = dist; best = s;
                     }
                 }
+
+                // What this face looks like — and, at a cut or when a face the tracker had lost is
+                // found again, whether it is still the SAME PERSON. Matching by position alone handed
+                // the next person the previous one's identity whenever a cut went between two
+                // close-ups framed alike: on a news conference, four astronauts shared one track.
+                FaceLook look = _reidentify ? MeasureLook(gray, w, hgt, fx, fy, fw, fh) : null;
+                if (best != null && best.OccupantId > 0 && look != null && (globalJolt || !best.MatchedPrevFrame)
+                    && !StillSamePerson(best, look, fw))
+                {
+                    RetireOccupant(best, now);
+                    _changedAtCut++;
+                    best = null;
+                }
                 if (best == null)
                 {
                     // Recycle an expired slot first — videos cut between scenes
@@ -792,6 +1236,14 @@ namespace AutoClicker.Utils
                         _slots.Add(best);
                     }
                     best.OccupiedSinceUtc = now;     // a new occupant: may be a different person
+                    // Unnamed at first when recognising faces: its first few looks decide whether this
+                    // is someone seen before (ResolvePendingFaces), and until then it is nobody's.
+                    best.OccupantId = _reidentify ? 0 : System.Threading.Interlocked.Increment(ref _nextOccupant);
+                    best.BigLook = null; best.SmallLook = null;
+                    best.PendingLook = null; best.PendingLooks = 0; best.PendingSeen = 0;
+                    best.ThumbUtc = DateTime.MinValue;
+                    best.ThumbTriedUtc = DateTime.MinValue;
+                    best.ThumbScore = 0;
                     best.X = fx; best.Y = fy; best.W = fw; best.H = fh;
                     best.MotionEma = 0;              // a fresh face starts with a clean history
                     best.FreshMotion = true;
@@ -817,6 +1269,21 @@ namespace AutoClicker.Utils
                 best.LastSeenUtc = now;
                 best.Alive = true;
                 best.MatchedThisFrame = true;
+                if (best.OccupantId > 0)
+                {
+                    if (look != null) { AddLook(ref best.BigLook, ref best.SmallLook, look); }
+                }
+                else if (_reidentify)
+                {
+                    best.PendingSeen++;
+                    if (look != null)
+                    {
+                        if (best.PendingLook == null) { best.PendingLook = look; }
+                        else { FaceAppearance.Accumulate(best.PendingLook, look); }
+                        best.PendingLooks++;
+                    }
+                }
+                MaybeTakeThumbnail(best, now);
 
                 // Centre velocity, EMA'd only across CONSECUTIVE detections (a fresh
                 // slot and the re-appearance jump after coasting are excluded — see
@@ -869,6 +1336,9 @@ namespace AutoClicker.Utils
                         now);
                 }
             }
+
+            // New faces with enough looks: someone seen before, or someone new.
+            if (_reidentify) { ResolvePendingFaces(now); }
 
             // COASTING: slots the detector missed this frame — a head turned to the
             // side, tipped down or up (the OS detector is near-frontal only) — keep
@@ -937,8 +1407,7 @@ namespace AutoClicker.Utils
                 int graceMs = s.MotionEma >= SpeakMotion ? SlotTimeoutMs + 1500 : SlotTimeoutMs;
                 if (s.Alive && (now - s.LastSeenUtc).TotalMilliseconds > graceMs)
                 {
-                    s.Alive = false;
-                    s.MotionEma = 0;
+                    RetireOccupant(s, now);         // remembered, in case they come back
                 }
                 if (s.Alive) alive++;
             }
@@ -1012,6 +1481,14 @@ namespace AutoClicker.Utils
             _talkingFaces = talking;
             bool confident = top >= SpeakMotion && (second <= 0.01 || top >= second * SpeakLead);
             _visualSpeaker = confident ? speaker : 0;
+            System.Threading.Interlocked.Exchange(ref _speakerOccupant,
+                confident && speaker >= 1 && speaker <= _slots.Count ? _slots[speaker - 1].OccupantId : 0);
+            var visible = new List<long>(_slots.Count);
+            foreach (var s in _slots)
+            {
+                if (s.Alive && !s.IsStatic && s.OccupantId > 0) { visible.Add(s.OccupantId); }
+            }
+            _visibleOccupants = visible.ToArray();
 
             // Publish the winner's correlation for Live debug.
             double winnerCorr = double.NaN;
@@ -1147,6 +1624,10 @@ namespace AutoClicker.Utils
                                      : cx > _prevW * 0.67 ? "right" : "centre";
                         sb.Append("    face ").Append(i + 1)
                           .Append(_visualSpeaker == i + 1 ? " ● TALKING" : "        ")
+                          // Who it is: the occupant id speakers are linked to, or — for its first
+                          // looks — not yet decided between someone seen before and someone new.
+                          .Append(s.OccupantId > 0 ? " · #" + s.OccupantId
+                              : " · looking (" + s.PendingLooks + "/" + LooksToName + ")")
                           .Append(" · ").Append(where)
                           // How long THIS occupant has held the slot: a short time next
                           // to a long-running conversation marks a newcomer who took over

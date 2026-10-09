@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -11,7 +12,7 @@ namespace AutoClicker.UI
     /// PAUSED, etc.). Owner-drawn with GDI+ so it looks the same on every theme
     /// and DPI setting.
     /// </summary>
-    public sealed class StatusPill : Control
+    public sealed class StatusPill : Control, IPaintedText
     {
         private Color _pillColor = Color.FromArgb(120, 132, 152);
 
@@ -94,6 +95,32 @@ namespace AutoClicker.UI
             })
             {
                 g.DrawString(Text ?? string.Empty, Font, brush, rect, format);
+            }
+        }
+
+        /// <summary>
+        /// The word on the pill — now, and every word it switches to (declared where it is built:
+        /// IDLE, RUNNING, PAUSED …) — for the layout checks. Drawn on one line and cut with "…", so a
+        /// state whose translation is wider than the pill shows half a word.
+        /// </summary>
+        IEnumerable<PaintedText> IPaintedText.PaintedTexts(Graphics g, float unitsPerPixel)
+        {
+            if (g == null) { yield break; }
+            float u = unitsPerPixel > 0f ? unitsPerPixel : 1f;
+            // The rounded ends close in on the text by a few pixels at its top and bottom.
+            int inset = (int)Math.Ceiling(3 * u);
+            var room = Rectangle.Inflate(new Rectangle(0, 0, Width - 1, Height - 1), -inset, 0);
+            foreach (string word in LayoutFitter.CaptionsOf(this))
+            {
+                Size size;
+                using (var format = new StringFormat { FormatFlags = StringFormatFlags.NoWrap })
+                {
+                    size = Size.Ceiling(g.MeasureString(word, Font, new SizeF(float.MaxValue, float.MaxValue), format));
+                }
+                // The word is painted in pixels; the pill's size is a layout number.
+                int w = (int)Math.Ceiling(size.Width * u), h = (int)Math.Ceiling(size.Height * u);
+                var ink = new Rectangle((Width - 1 - w) / 2, (Height - 1 - h) / 2, w, h);
+                yield return new PaintedText(word, ink, room);
             }
         }
 

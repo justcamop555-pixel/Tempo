@@ -553,7 +553,13 @@ namespace AutoClicker.Utils
                 return icon.Trim().Trim('"');
             }
             string dir = entry.GetValue("InstallLocation") as string;
-            if (!string.IsNullOrWhiteSpace(dir)) { return Path.Combine(dir.Trim(), "Tempo.exe"); }
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                // The installed name, unless the folder still holds an install from before the rename.
+                string renamed = Path.Combine(dir.Trim(), DeploymentInfo.InstalledExeName);
+                string old = Path.Combine(dir.Trim(), DeploymentInfo.LegacyExeName);
+                return File.Exists(renamed) || !File.Exists(old) ? renamed : old;
+            }
             return StartupManager.ExePathFromCommand(entry.GetValue("UninstallString") as string);
         }
 

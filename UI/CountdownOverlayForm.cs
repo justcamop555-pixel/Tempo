@@ -41,9 +41,12 @@ namespace AutoClicker.UI
             StartPosition = FormStartPosition.CenterScreen;
             ShowInTaskbar = false;
             TopMost = true;
-            Size = new Size(240, 184);
+            // Its numbers are 100% ones in the screen's pixels (D): the window is not scaled by WinForms,
+            // and its fonts grow with the screen — at 150% the 56 pt digit needs about 150 px of the 132
+            // a 240×184 card left it.
+            Size = new Size(D(240), D(184));
             BackColor = _theme.Surface;
-            Region = RoundedRegion(240, 184, 16);
+            Region = RoundedRegion(Width, Height, D(16));
             ForeColor = _theme.Text;
             DoubleBuffered = true;
 
@@ -69,7 +72,7 @@ namespace AutoClicker.UI
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Dock = DockStyle.Bottom,
-                Height = 52,
+                Height = D(52),
                 BackColor = Color.Transparent
             };
 
@@ -145,7 +148,7 @@ namespace AutoClicker.UI
             }
             else
             {
-                _bigNumber.Text = "GO!";
+                _bigNumber.Text = Utils.Localization.T("GO!");
                 _bigNumber.ForeColor = _theme.SuccessText;
                 if (_beep) { Beep(1320, 150); }
                 _tick.Stop();
@@ -167,12 +170,15 @@ namespace AutoClicker.UI
         {
             // Rounded accent border around the overlay.
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var path = RoundedPath(Width, Height, 16))
-            using (var pen = new Pen(_theme.Accent, 2))
+            using (var path = RoundedPath(Width, Height, D(16)))
+            using (var pen = new Pen(_theme.Accent, 2f * DeviceDpi / 96f))
             {
                 e.Graphics.DrawPath(pen, path);
             }
         }
+
+        /// <summary>One of this card's 100% numbers in the screen's pixels.</summary>
+        private int D(int px) => (int)Math.Round(px * DeviceDpi / 96f);
 
         private static GraphicsPath RoundedPath(int w, int h, int r)
         {

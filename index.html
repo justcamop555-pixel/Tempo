@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tempo — a precision auto-clicker for Windows</title>
-<meta name="description" content="A free precision auto-clicker for Windows. Multi-point sequences, macro record &amp; replay, offline live captions, a Roblox account manager, 38 themes and 6 languages. Runs entirely on your PC — no account, no telemetry.">
+<meta name="description" content="A free precision auto-clicker for Windows: multi-point routes, macro record &amp; replay with Python steps, offline live captions that tell speakers apart, a Roblox account manager, 38 themes and 6 languages. Runs entirely on your PC — no account, no telemetry.">
 <meta name="theme-color" content="#E7E2D2">
 <link rel="canonical" href="https://justcamop555-pixel.github.io/Tempo/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Tempo">
 <meta property="og:title" content="Tempo — a precision auto-clicker for Windows">
-<meta property="og:description" content="Multi-point sequences, macro record &amp; replay, offline live captions, a Roblox account manager, 38 themes and 6 languages. Free, source-available, and entirely local.">
+<meta property="og:description" content="Multi-point routes, macros, offline live captions that tell speakers apart, a Roblox account manager, 38 themes and 6 languages. Free, source-available, and entirely local.">
 <meta property="og:url" content="https://justcamop555-pixel.github.io/Tempo/">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Tempo — a precision auto-clicker for Windows">
 <meta name="twitter:description" content="Free, source-available, entirely local. Multi-point sequences, macros, offline captions and more.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%2317140C'/%3E%3Cpath d='M13 3 5 14h5.2l-.9 7 8-11h-5.2l.9-7z' fill='%23E64014'/%3E%3C/svg%3E">
@@ -20,18 +20,30 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#E7E2D2;--panel:#F4F0E5;--panel-2:#DED7C4;--sunk:#E0DAC8;--ink:#17140C;--ink-soft:#2c2819;--muted:#6b6650;--faint:#9a957e;--line:#cec8b3;--line-2:#bcb69f;--signal-rgb:230,64,20;--signal:rgb(230,64,20);--signal-deep:#b8380f;--scope:#141009;--scope-line:rgba(245,236,210,.09);--ok:#2f7d33;--mono:"JetBrains Mono",ui-monospace,Menlo,monospace;--disp:"Bricolage Grotesque",system-ui,sans-serif;--sans:"Space Grotesk",system-ui,sans-serif;--maxw:1220px;--gut:26px}
+/* Every colour that carries words reaches WCAG AA on every surface it sits on: 4.5:1 for
+   ordinary text, 3:1 for large text and icons. --muted (4.0:1) and --faint (2.1:1) used to
+   fall short on the darker panels — the small labels and hints were the hardest words to
+   read. --signal is the accent itself and is only ever a fill, a line or a dot; anything
+   WRITTEN in the accent uses a variant fitted to where it sits (see the theme switcher):
+   --signal-ink small text on light surfaces, --signal-big large text and icons,
+   --signal-glow text on the dark panels, --signal-btn + --on-signal a filled button.
+   The values here are what the switcher computes for this page's own orange. */
+:root{--bg:#E7E2D2;--panel:#F4F0E5;--panel-2:#DED7C4;--sunk:#E0DAC8;--ink:#17140C;--ink-soft:#2c2819;--muted:#55513d;--faint:#625d47;--line:#cec8b3;--line-2:#bcb69f;--signal-rgb:230,64,20;--signal:rgb(230,64,20);--signal-ink:#AA2F0F;--signal-big:#E64014;--signal-glow:#E7481D;--signal-btn:#D43B12;--on-signal:#fff;--scope:#141009;--scope-line:rgba(245,236,210,.09);--ok:#256628;--amber:#855600;--bad:#a8201a;--p-blue:#356194;--p-green:#216C35;--p-amber:#855600;--p-violet:#6B5499;--mono:"JetBrains Mono",ui-monospace,Menlo,monospace;--disp:"Bricolage Grotesque",system-ui,sans-serif;--sans:"Space Grotesk",system-ui,sans-serif;--maxw:1220px;--gut:26px}
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
 body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:17px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;background-image:radial-gradient(rgba(23,20,12,.028) 1px,transparent 1.4px);background-size:5px 5px}
 a{color:inherit;text-decoration:none}
-::selection{background:var(--signal);color:#fff}
-:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+::selection{background:var(--signal-btn);color:var(--on-signal)}
+:focus-visible{outline:2.5px solid var(--signal-big);outline-offset:2px}
+.scope :focus-visible,.oneline :focus-visible,.final-card :focus-visible{outline-color:var(--signal-glow)}
+/* The UA's [hidden] rule loses to any class that sets display, so #verChip showed
+   "Latest —" whenever the GitHub request failed. */
+[hidden]{display:none!important}
 img,canvas{display:block}
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 var(--gut)}
 .disp{font-family:var(--disp);font-weight:800;letter-spacing:-.02em;line-height:.98}
 .mono{font-family:var(--mono)}
-.sig{color:var(--signal)}
+.sig{color:var(--signal-big)}
 .upcase{text-transform:uppercase;letter-spacing:.14em}
 .tnum{font-variant-numeric:tabular-nums}
 #prog{position:fixed;top:0;left:0;height:3px;width:100%;transform:scaleX(0);transform-origin:0 50%;background:var(--signal);z-index:120}
@@ -43,7 +55,7 @@ img,canvas{display:block}
 header{position:sticky;top:0;z-index:100;background:rgba(231,226,210,.86);backdrop-filter:blur(10px);border-bottom:1.5px solid var(--ink)}
 .nav{display:flex;align-items:center;justify-content:space-between;height:60px}
 .brand{display:flex;align-items:center;gap:11px}
-.brand .mk{width:32px;height:32px;background:var(--ink);color:var(--signal);display:grid;place-items:center}
+.brand .mk{width:32px;height:32px;background:var(--ink);color:var(--signal-glow);display:grid;place-items:center}
 .brand .mk svg{width:17px;height:17px}
 .brand .nm{font-family:var(--disp);font-weight:800;font-size:1.32rem;letter-spacing:-.01em}
 .brand .tag{font-family:var(--mono);font-size:.6rem;color:var(--muted);border:1px solid var(--line-2);padding:2px 5px;letter-spacing:.12em;align-self:center}
@@ -56,13 +68,13 @@ header{position:sticky;top:0;z-index:100;background:rgba(231,226,210,.86);backdr
 @media(max-width:940px){.nav-links,.nav-clock{display:none}}
 .btn{display:inline-flex;align-items:center;gap:9px;font-family:var(--mono);font-weight:700;font-size:.76rem;text-transform:uppercase;letter-spacing:.1em;padding:12px 20px;border:1.5px solid var(--ink);cursor:pointer;transition:background .16s,color .16s,transform .12s;background:var(--ink);color:var(--bg)}
 .btn:hover{transform:translateY(-2px)}
-.btn-primary{background:var(--signal);border-color:var(--signal);color:#fff}
-.btn-primary:hover{background:var(--ink);border-color:var(--ink)}
+.btn-primary{background:var(--signal-btn);border-color:var(--signal-btn);color:var(--on-signal)}
+.btn-primary:hover{background:var(--ink);border-color:var(--ink);color:var(--bg)}
 .btn-ghost{background:transparent;color:var(--ink)}
 .btn-ghost:hover{background:var(--ink);color:var(--bg)}
 .btn-sm{padding:9px 15px;font-size:.7rem}
 .eyebrow{display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:20px}
-.eyebrow b{color:var(--signal);font-weight:700}
+.eyebrow b{color:var(--signal-ink);font-weight:700}
 .eyebrow::before{content:"";width:26px;height:1.5px;background:var(--ink)}
 .sec{padding:92px 0;border-top:1.5px solid var(--ink);position:relative}
 .sechead{max-width:720px;margin-bottom:52px}
@@ -75,7 +87,7 @@ header{position:sticky;top:0;z-index:100;background:rgba(231,226,210,.86);backdr
 .hero-eye span{display:inline-flex;align-items:center;gap:7px}
 .hero-eye .sq{width:8px;height:8px;background:var(--signal)}
 .hero h1{font-family:var(--disp);font-weight:800;font-size:clamp(3rem,7vw,5.6rem);line-height:.94;letter-spacing:-.04em;margin-bottom:26px}
-.hero h1 .u{position:relative;color:var(--signal);white-space:nowrap}
+.hero h1 .u{position:relative;color:var(--signal-big);white-space:nowrap}
 .hero h1 .u::after{content:"";position:absolute;left:0;right:0;bottom:.06em;height:0;border-bottom:3px solid var(--signal);background:repeating-linear-gradient(90deg,var(--signal) 0 2px,transparent 2px 6px);height:8px;bottom:-.14em}
 .hero .lead{color:var(--ink-soft);font-size:1.14rem;line-height:1.62;max-width:52ch;margin-bottom:30px}
 .hero .lead b{font-weight:600}
@@ -94,13 +106,13 @@ header{position:sticky;top:0;z-index:100;background:rgba(231,226,210,.86);backdr
 .scope-read{font-family:var(--mono);color:#fff;font-weight:700;font-size:3rem;line-height:.9;letter-spacing:-.02em}
 .scope-read small{font-size:.7rem;font-weight:400;letter-spacing:.1em;color:rgba(245,236,210,.55);display:block;margin-top:8px}
 .scope-chan{text-align:right;font-family:var(--mono);font-size:.64rem;letter-spacing:.08em;color:rgba(245,236,210,.5);line-height:1.7}
-.scope-chan b{color:var(--signal);font-weight:700}
-.watermark{position:absolute;right:-2px;top:38%;transform:rotate(90deg);transform-origin:right top;font-family:var(--mono);font-size:.62rem;letter-spacing:.34em;color:var(--faint);text-transform:uppercase;pointer-events:none}
+.scope-chan b{color:var(--signal-glow);font-weight:700}
+.watermark{position:absolute;right:-2px;top:38%;transform:rotate(90deg);transform-origin:right top;font-family:var(--mono);font-size:.62rem;letter-spacing:.34em;color:rgba(245,236,210,.5);text-transform:uppercase;pointer-events:none}
 .ticker{border-top:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);background:var(--ink);overflow:hidden;padding:9px 0}
 .ticker .mq{display:flex;width:max-content;animation:mq 34s linear infinite}
 .ticker:hover .mq{animation-play-state:paused}
 .ticker .mq span{font-family:var(--mono);font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--bg);padding:0 24px;white-space:nowrap;opacity:.85}
-.ticker .mq span b{color:var(--signal)}
+.ticker .mq span b{color:var(--signal-glow)}
 @keyframes mq{to{transform:translateX(-50%)}}
 .instr{border:1.5px solid var(--ink);background:var(--panel);box-shadow:8px 8px 0 rgba(23,20,12,.1)}
 .instr-bar{display:flex;align-items:center;gap:8px;padding:11px 15px;border-bottom:1.5px solid var(--ink);background:var(--panel-2)}
@@ -111,11 +123,12 @@ header{position:sticky;top:0;z-index:100;background:rgba(231,226,210,.86);backdr
 .app{display:grid;grid-template-columns:184px 1fr;min-height:356px}
 .side{border-right:1.5px solid var(--ink);padding:14px 12px;display:flex;flex-direction:column;gap:3px;background:var(--sunk)}
 .side .lbl{font-family:var(--mono);font-size:.58rem;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);padding:4px 8px 10px}
-.nav-i{display:flex;align-items:center;gap:10px;padding:9px 11px;font-family:var(--mono);font-size:.78rem;color:var(--muted);cursor:pointer;border:1.5px solid transparent;transition:.14s;letter-spacing:.02em}
+.tabsl{display:flex;flex-direction:column;gap:3px}
+.nav-i{display:flex;align-items:center;gap:10px;padding:9px 11px;font-family:var(--mono);font-size:.78rem;color:var(--muted);cursor:pointer;border:1.5px solid transparent;transition:.14s;letter-spacing:.02em;background:transparent;text-align:left}
 .nav-i:hover{color:var(--ink);background:var(--panel)}
 .nav-i .ix{color:var(--faint);font-size:.66rem}
 .nav-i.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
-.nav-i.on .ix{color:var(--signal)}
+.nav-i.on .ix{color:var(--signal-glow)}
 .main{padding:20px 22px;position:relative}
 .pane{display:none;animation:fade .3s ease}
 .pane.on{display:block}
@@ -127,7 +140,7 @@ header{position:sticky;top:0;z-index:100;background:rgba(231,226,210,.86);backdr
 .box{height:34px;border:1.5px solid var(--line-2);background:var(--bg);display:flex;align-items:center;padding:0 10px;font-family:var(--mono);font-size:.92rem;font-weight:500}
 .box.big{font-size:1.05rem}
 .prow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.startbtn{display:inline-flex;align-items:center;gap:9px;background:var(--signal);color:#fff;font-family:var(--mono);font-weight:700;font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;padding:11px 18px;border:1.5px solid var(--signal)}
+.startbtn{display:inline-flex;align-items:center;gap:9px;background:var(--signal-btn);color:var(--on-signal);font-family:var(--mono);font-weight:700;font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;padding:11px 18px;border:1.5px solid var(--signal-btn)}
 .idle{margin-left:auto;font-family:var(--mono);font-weight:700;font-size:1.1rem;letter-spacing:.12em;color:var(--faint)}
 .beat{display:flex;align-items:flex-end;gap:5px;height:52px}
 .beat i{width:9px;background:var(--signal);animation:bt 1.1s ease-in-out infinite}
@@ -136,16 +149,25 @@ header{position:sticky;top:0;z-index:100;background:rgba(231,226,210,.86);backdr
 .ptable th{text-align:left;font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:7px 8px;border-bottom:1.5px solid var(--line-2)}
 .ptable td{padding:8px 8px;border-bottom:1px solid var(--line);color:var(--muted)}
 .ptable td.on{color:var(--ok)}
+.ptable td.amb{color:var(--amber)}
+.ptable td.bad{color:var(--bad)}
 .statg{display:grid;grid-template-columns:repeat(4,1fr);gap:11px}
 .sc{border:1.5px solid var(--line-2);background:var(--panel);padding:12px}
 .sc .l{font-family:var(--mono);font-size:.56rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
 .sc .v{font-family:var(--mono);font-weight:700;font-size:1.35rem;margin-top:5px}
-.sc .v.sig{color:var(--signal)}
+.sc .v.sig{color:var(--signal-big)}
 .mlist{font-family:var(--mono);font-size:.82rem;color:var(--muted);line-height:2.1}
 .mlist b{color:var(--ink);font-weight:500}
 .kv{font-family:var(--mono);font-size:.86rem;color:var(--muted);line-height:2.3}
-.kv b{color:var(--signal);font-weight:700}
-@media(max-width:620px){.app{grid-template-columns:1fr}.side{flex-direction:row;flex-wrap:wrap}.side .lbl{width:100%}.fields{grid-template-columns:repeat(2,1fr)}.statg{grid-template-columns:repeat(2,1fr)}}
+.kv b{color:var(--signal-ink);font-weight:700}
+.capbar{background:var(--scope);color:#f5ecd2;border:1.5px solid var(--ink);padding:14px 16px;font-size:.95rem;line-height:1.55}
+.capbar p+p{margin-top:6px}
+.capbar b{font-family:var(--mono);font-size:.78rem;letter-spacing:.04em;margin-right:9px}
+.spk{display:flex;flex-wrap:wrap;gap:8px}
+.spk span{display:inline-flex;align-items:center;gap:8px;border:1.5px solid var(--line-2);background:var(--bg);padding:6px 11px;font-family:var(--mono);font-size:.78rem;color:var(--ink)}
+.spk i{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
+.spk .q{color:var(--muted)}
+@media(max-width:620px){.app{grid-template-columns:1fr}.side{flex-direction:row;flex-wrap:wrap}.side .lbl{width:100%}.tabsl{flex:1 1 100%;flex-direction:row;flex-wrap:wrap}.fields{grid-template-columns:repeat(2,1fr)}.statg{grid-template-columns:repeat(2,1fr)}}
 .console{display:grid;grid-template-columns:1fr .92fr;gap:0;border:1.5px solid var(--ink);box-shadow:8px 8px 0 rgba(23,20,12,.1)}
 @media(max-width:860px){.console{grid-template-columns:1fr}}
 .con-l{padding:30px;background:var(--panel);border-right:1.5px solid var(--ink)}
@@ -153,7 +175,7 @@ header{position:sticky;top:0;z-index:100;background:rgba(231,226,210,.86);backdr
 .con-r{padding:30px;background:var(--panel-2);display:flex;flex-direction:column}
 .crow{margin-bottom:24px}
 .crow .cl{font-family:var(--mono);font-size:.64rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:11px;display:flex;justify-content:space-between}
-.crow .cl b{color:var(--signal);font-weight:700}
+.crow .cl b{color:var(--signal-ink);font-weight:700}
 .chips{display:flex;gap:8px;flex-wrap:wrap}
 .chip{cursor:pointer;border:1.5px solid var(--line-2);background:var(--bg);color:var(--muted);padding:9px 15px;font-family:var(--mono);font-size:.76rem;font-weight:500;text-transform:uppercase;letter-spacing:.04em;transition:.14s}
 .chip:hover{border-color:var(--ink);color:var(--ink)}
@@ -178,17 +200,17 @@ input[type=range]::-moz-range-thumb{width:18px;height:24px;border-radius:0;backg
 .pad-wrap{border:1.5px solid var(--ink);background:var(--panel);padding:26px;box-shadow:8px 8px 0 rgba(23,20,12,.1)}
 .tapwave{height:104px;border:1.5px solid var(--ink);background:var(--scope);margin-bottom:20px;position:relative;overflow:hidden}
 .tapwave canvas{position:absolute;inset:0;width:100%;height:100%}
-.pad{user-select:none;cursor:pointer;width:100%;border:1.5px solid var(--ink);background:var(--signal);color:#fff;font-family:var(--mono);font-weight:700;font-size:1rem;letter-spacing:.1em;text-transform:uppercase;padding:26px;transition:transform .05s}
+.pad{user-select:none;cursor:pointer;width:100%;border:1.5px solid var(--ink);background:var(--signal-btn);color:var(--on-signal);font-family:var(--mono);font-weight:700;font-size:1rem;letter-spacing:.1em;text-transform:uppercase;padding:26px;transition:transform .05s}
 .pad:active{transform:translateY(2px)}
 .tapread{display:flex;gap:14px;margin-top:20px}
 .tapread div{flex:1;border:1.5px solid var(--line-2);padding:14px;text-align:center}
 .tapread .b{font-family:var(--mono);font-weight:700;font-size:2rem;line-height:1}
-.tapread .b.sig{color:var(--signal)}
+.tapread .b.sig{color:var(--signal-big)}
 .tapread .k{font-family:var(--mono);font-size:.56rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-top:6px}
 .tapbar{height:8px;border:1.5px solid var(--ink);margin-top:16px;background:var(--bg)}
 .tapbar i{display:block;height:100%;width:0;background:var(--signal);transition:width .12s}
 .calib-note{border:1.5px solid var(--ink);background:var(--panel);padding:30px;display:flex;flex-direction:column;justify-content:center}
-.calib-note .huge{font-family:var(--disp);font-weight:800;font-size:3.4rem;color:var(--signal);line-height:1;margin-bottom:14px}
+.calib-note .huge{font-family:var(--disp);font-weight:800;font-size:3.4rem;color:var(--signal-big);line-height:1;margin-bottom:14px}
 .calib-note p{color:var(--muted);font-size:1rem}
 .calib-note b{color:var(--ink);font-weight:600}
 .fgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1.5px solid var(--ink)}
@@ -197,14 +219,14 @@ input[type=range]::-moz-range-thumb{width:18px;height:24px;border-radius:0;backg
 .feat{padding:28px;border-right:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);position:relative;background:var(--panel);transition:background .18s}
 .feat:hover{background:var(--panel-2)}
 .feat .fno{font-family:var(--mono);font-size:.64rem;letter-spacing:.12em;color:var(--faint);margin-bottom:18px;display:flex;align-items:center;gap:9px}
-.feat .fno b{color:var(--signal)}
+.feat .fno b{color:var(--signal-ink)}
 .feat .ic{width:44px;height:44px;border:1.5px solid var(--ink);display:grid;place-items:center;color:var(--ink);margin-bottom:16px}
 .feat .ic svg{width:22px;height:22px}
 .feat h3{font-family:var(--disp);font-weight:700;font-size:1.24rem;letter-spacing:-.01em;margin-bottom:8px}
 .feat > p{color:var(--muted);font-size:.94rem;margin-bottom:15px}
 .feat ul{list-style:none;display:flex;flex-direction:column;gap:8px}
 .feat li{font-family:var(--mono);font-size:.78rem;color:var(--muted);display:flex;gap:9px;line-height:1.5}
-.feat li::before{content:"→";color:var(--signal);font-weight:700}
+.feat li::before{content:"→";color:var(--signal-ink);font-weight:700}
 .modes{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
 @media(max-width:780px){.modes{grid-template-columns:1fr}}
 .mode{border:1.5px solid var(--ink);background:var(--panel)}
@@ -212,30 +234,34 @@ input[type=range]::-moz-range-thumb{width:18px;height:24px;border-radius:0;backg
 .mode h4{font-family:var(--disp);font-weight:700;font-size:1.2rem;margin-bottom:7px;display:flex;align-items:center;justify-content:space-between}
 .mode h4 span{font-family:var(--mono);font-size:.62rem;color:var(--faint);letter-spacing:.1em}
 .mode p{color:var(--muted);font-size:.9rem}
-.mode .diag{border-top:1.5px solid var(--ink);background:var(--scope);height:96px;position:relative}
+.mode .diag{border-top:1.5px solid var(--ink);background:var(--scope);height:96px;position:relative;color:var(--signal-glow)}
 .mode .diag svg{position:absolute;inset:0;width:100%;height:100%}
 .readout{display:grid;grid-template-columns:repeat(5,1fr);gap:0;border:1.5px solid var(--ink)}
 @media(max-width:820px){.readout{grid-template-columns:repeat(2,1fr)}}
 .rd{padding:30px 20px;text-align:center;border-right:1.5px solid var(--ink);background:var(--panel)}
 .rd .v{font-family:var(--disp);font-weight:800;font-size:2.9rem;line-height:1;letter-spacing:-.03em}
-.rd .v.sig{color:var(--signal)}
+.rd .v.sig{color:var(--signal-big)}
 .rd .k{font-family:var(--mono);font-size:.64rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:11px}
 .themewrap{border:1.5px solid var(--ink);background:var(--panel);box-shadow:8px 8px 0 rgba(23,20,12,.1)}
 .themehead{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:22px 26px;border-bottom:1.5px solid var(--ink);background:var(--panel-2)}
 .themehead .now{font-family:var(--mono);font-size:.82rem;color:var(--muted);letter-spacing:.04em}
-.themehead .now b{color:var(--signal);font-weight:700}
+.themehead .now b{color:var(--signal-ink);font-weight:700}
+.themehead .now .tk{font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-left:8px}
+.themehead .reset{font-family:var(--mono);font-weight:700;font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;border:1.5px solid var(--ink);background:var(--panel);color:var(--ink);padding:5px 10px;cursor:pointer}
+.themehead .reset:hover{background:var(--ink);color:var(--bg)}
 .themehead .hx{font-family:var(--mono);font-size:.82rem;color:var(--ink);display:flex;gap:16px}
 .themehead .hx span{color:var(--faint)}
 .swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(58px,1fr));gap:0;padding:0}
-.swatch{aspect-ratio:1;border:none;border-right:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);cursor:pointer;position:relative;transition:transform .1s;overflow:hidden}
-.swatch .cix{position:absolute;top:4px;left:5px;font-family:var(--mono);font-size:.52rem;color:rgba(255,255,255,.75)}
+.swatch{aspect-ratio:1;border:none;border-right:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);cursor:pointer;position:relative;transition:transform .1s;overflow:hidden;background:var(--sw-bg,#10121b)}
+.swatch::before{content:"";position:absolute;left:22%;right:22%;top:44%;height:18%;border-radius:999px;background:var(--sw-ac,#7c5cff)}
+.swatch .cix{position:absolute;top:4px;left:5px;font-family:var(--mono);font-size:.56rem;color:var(--sw-ix,#fff)}
 .swatch:hover{z-index:2;transform:scale(1.14);outline:1.5px solid var(--ink)}
-.swatch.on::after{content:"";position:absolute;inset:6px;border:2px solid #fff}
+.swatch.on::after{content:"";position:absolute;inset:5px;border:2px solid var(--sw-ac,#fff)}
 .usesg{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1.5px solid var(--ink)}
 @media(max-width:820px){.usesg{grid-template-columns:1fr 1fr}}
 @media(max-width:480px){.usesg{grid-template-columns:1fr}}
 .use{padding:26px;border-right:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);background:var(--panel)}
-.use .ic{width:38px;height:38px;border:1.5px solid var(--ink);display:grid;place-items:center;color:var(--signal);margin-bottom:15px}
+.use .ic{width:38px;height:38px;border:1.5px solid var(--ink);display:grid;place-items:center;color:var(--signal-big);margin-bottom:15px}
 .use .ic svg{width:19px;height:19px}
 .use h4{font-family:var(--disp);font-weight:700;font-size:1.06rem;margin-bottom:7px}
 .use p{color:var(--muted);font-size:.88rem}
@@ -243,7 +269,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:24px;border-radius:0;backg
 @media(max-width:780px){.steps3{grid-template-columns:1fr}}
 .step3{border:1.5px solid var(--ink);background:var(--panel);padding:28px;position:relative;counter-increment:st}
 .step3::before{content:"0" counter(st);position:absolute;top:20px;right:22px;font-family:var(--disp);font-weight:800;font-size:2.4rem;color:var(--line-2)}
-.step3 .sh{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--signal);margin-bottom:14px}
+.step3 .sh{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--signal-ink);margin-bottom:14px}
 .step3 h4{font-family:var(--disp);font-weight:700;font-size:1.18rem;margin-bottom:9px}
 .step3 p{color:var(--muted);font-size:.92rem}
 .step3 code{font-family:var(--mono);font-size:.84em;background:var(--panel-2);border:1px solid var(--line-2);padding:1px 6px}
@@ -255,7 +281,7 @@ kbd{font-family:var(--mono);font-size:.78rem;font-weight:700;background:var(--pa
 .cmp{width:100%;border-collapse:collapse;border:1.5px solid var(--ink);font-size:.94rem}
 .cmp th,.cmp td{padding:15px 18px;border-bottom:1px solid var(--line);text-align:left}
 .cmp thead th{font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--panel-2);border-bottom:1.5px solid var(--ink)}
-.cmp thead th:last-child{color:var(--signal)}
+.cmp thead th:last-child{color:var(--signal-ink)}
 .cmp tbody td{color:var(--muted);font-family:var(--mono);font-size:.84rem}
 .cmp tbody tr td:first-child{color:var(--ink);font-family:var(--sans);font-size:.94rem;font-weight:500}
 .cmp td.tempo{color:var(--ink);font-weight:500}
@@ -268,23 +294,23 @@ kbd{font-family:var(--mono);font-size:.78rem;font-weight:700;background:var(--pa
 .card{border:1.5px solid var(--ink);background:var(--panel);padding:30px;position:relative}
 .card.feat-c{box-shadow:8px 8px 0 var(--signal)}
 .card .tag{position:absolute;top:-1.5px;left:24px;transform:translateY(-50%);font-family:var(--mono);font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;font-weight:700;border:1.5px solid var(--ink)}
-.card.feat-c .tag{background:var(--signal);color:#fff;border-color:var(--signal)}
+.card.feat-c .tag{background:var(--signal-btn);color:var(--on-signal);border-color:var(--signal-btn)}
 .card.plain .tag{background:var(--panel-2);color:var(--muted)}
 .card h3{font-family:var(--disp);font-weight:700;font-size:1.3rem;margin:6px 0 6px}
 .card .hint{font-family:var(--mono);font-size:.74rem;color:var(--faint);margin-bottom:22px;letter-spacing:.02em;line-height:1.7}
 ol.steps{list-style:none;counter-reset:s;display:flex;flex-direction:column;gap:15px}
 ol.steps li>.st-t{min-width:0}ol.steps li{counter-increment:s;display:flex;gap:14px;font-size:.96rem;color:var(--ink-soft)}
-ol.steps li::before{content:counter(s,decimal-leading-zero);flex:0 0 auto;font-family:var(--mono);font-weight:700;font-size:.8rem;color:var(--signal);border:1.5px solid var(--ink);width:28px;height:28px;display:grid;place-items:center}
+ol.steps li::before{content:counter(s,decimal-leading-zero);flex:0 0 auto;font-family:var(--mono);font-weight:700;font-size:.8rem;color:var(--signal-ink);border:1.5px solid var(--ink);width:28px;height:28px;display:grid;place-items:center}
 ol.steps code,.note code{font-family:var(--mono);font-size:.84em;background:var(--panel-2);border:1px solid var(--line-2);padding:1px 6px}
-ol.steps a{color:var(--signal);border-bottom:1px solid var(--signal)}
+ol.steps a{color:var(--signal-ink);border-bottom:1px solid var(--signal-ink)}
 .oneline{position:relative;border:1.5px solid var(--ink);background:var(--scope);color:#f5ecd2;padding:32px 30px 28px;margin-bottom:24px;box-shadow:8px 8px 0 var(--signal)}
-.oneline .tag{position:absolute;top:-1.5px;left:24px;transform:translateY(-50%);font-family:var(--mono);font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;font-weight:700;border:1.5px solid var(--signal);background:var(--signal);color:#fff}
+.oneline .tag{position:absolute;top:-1.5px;left:24px;transform:translateY(-50%);font-family:var(--mono);font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;font-weight:700;border:1.5px solid var(--signal-btn);background:var(--signal-btn);color:var(--on-signal)}
 .oneline h3{font-family:var(--disp);font-weight:700;font-size:1.45rem;margin:2px 0 6px;color:#fff}
 .oneline .sub{color:rgba(245,236,210,.66);font-size:.95rem;max-width:62ch}
 .cmd{display:flex;align-items:center;gap:12px;background:rgba(245,236,210,.06);border:1px solid rgba(245,236,210,.2);padding:0 0 0 16px;margin:20px 0 18px}
 .cmd code{font-family:var(--mono);font-size:.85rem;color:#f5ecd2;flex:1;overflow-x:auto;white-space:nowrap;padding:15px 0;scrollbar-width:thin}
 .cmd button{flex:0 0 auto;align-self:stretch;font-family:var(--mono);font-weight:700;font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;padding:0 18px;border:0;border-left:1px solid rgba(245,236,210,.2);background:transparent;color:#f5ecd2;cursor:pointer;transition:background .15s,color .15s}
-.cmd button:hover{background:var(--signal);color:#fff}
+.cmd button:hover{background:var(--signal-btn);color:var(--on-signal)}
 .cmd button.done{background:var(--ok);color:#fff}
 .why{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:9px 28px;font-size:.92rem;color:rgba(245,236,210,.78)}
 @media(max-width:780px){.why{grid-template-columns:1fr}.cmd{align-items:stretch}.cmd code{font-size:.74rem;white-space:normal;word-break:break-all;line-height:1.5}}
@@ -294,7 +320,7 @@ ol.steps a{color:var(--signal);border-bottom:1px solid var(--signal)}
 .why b{color:#fff;font-weight:600}
 .oneline .tiny{margin-top:18px;font-family:var(--mono);font-size:.72rem;color:rgba(245,236,210,.5)}
 .oneline .tiny a{color:rgba(245,236,210,.8);border-bottom:1px solid rgba(245,236,210,.35)}
-.oneline .tiny a:hover{color:var(--signal);border-color:var(--signal)}
+.oneline .tiny a:hover{color:var(--signal-glow);border-color:var(--signal-glow)}
 .dl{width:100%;justify-content:center;margin-bottom:20px}
 .dl-meta{font-weight:400;letter-spacing:.06em;opacity:.7;text-transform:none}
 .verchip{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line-2);padding:4px 9px;margin-left:12px;vertical-align:middle}
@@ -304,32 +330,61 @@ ol.steps a{color:var(--signal);border-bottom:1px solid var(--signal)}
 .note b{color:var(--ink);font-weight:600}
 .trust{display:flex;flex-wrap:wrap;gap:0;border:1.5px solid var(--ink)}
 .pill{flex:1;min-width:200px;display:flex;align-items:center;gap:11px;padding:18px 22px;border-right:1.5px solid var(--ink);font-family:var(--mono);font-size:.8rem;letter-spacing:.02em;color:var(--ink)}
-.pill svg{width:17px;height:17px;color:var(--signal);flex:0 0 auto}
+.pill svg{width:17px;height:17px;color:var(--signal-big);flex:0 0 auto}
 .faq{display:flex;flex-direction:column;gap:0;border:1.5px solid var(--ink);max-width:880px}
 details.fq{border-bottom:1.5px solid var(--ink);background:var(--panel)}
 details.fq:last-child{border-bottom:none}
 details.fq summary{list-style:none;cursor:pointer;padding:20px 24px;font-family:var(--disp);font-weight:700;font-size:1.06rem;display:flex;align-items:center;justify-content:space-between;gap:14px}
 details.fq summary::-webkit-details-marker{display:none}
-details.fq summary .pl{flex:0 0 auto;font-family:var(--mono);color:var(--signal);font-size:1.3rem;transition:transform .2s}
+details.fq summary .pl{flex:0 0 auto;font-family:var(--mono);color:var(--signal-big);font-size:1.3rem;transition:transform .2s}
 details.fq[open] summary .pl{transform:rotate(45deg)}
 details.fq p{color:var(--muted);font-size:.94rem;padding:0 24px 22px;max-width:74ch}
 details.fq p code{font-family:var(--mono);font-size:.86em;background:var(--panel-2);border:1px solid var(--line-2);padding:1px 6px}
 .final{padding:0}
 .final-card{border:1.5px solid var(--ink);background:var(--ink);color:var(--bg);padding:70px 40px;text-align:center;position:relative;overflow:hidden}
 .final-card h2{font-family:var(--disp);font-weight:800;font-size:clamp(2.4rem,5.5vw,4rem);letter-spacing:-.03em;line-height:.98;margin-bottom:18px}
-.final-card h2 .sig{color:var(--signal)}
+.final-card h2 .sig{color:var(--signal-glow)}
 .final-card p{color:rgba(231,226,210,.7);font-size:1.1rem;max-width:46ch;margin:0 auto 30px}
 .final-card .scan{position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(245,236,210,.03) 0 1px,transparent 1px 4px)}
 footer{border-top:1.5px solid var(--ink);padding:44px 0 34px}
 .foot{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:24px}
 .foot .cols{display:flex;gap:20px;flex-wrap:wrap;font-family:var(--mono);font-size:.76rem;text-transform:uppercase;letter-spacing:.06em}
 .foot .cols a{color:var(--muted)}
-.foot .cols a:hover{color:var(--signal)}
+.foot .cols a:hover{color:var(--signal-ink)}
 .colophon{margin-top:26px;padding-top:22px;border-top:1px solid var(--line);font-family:var(--mono);font-size:.68rem;color:var(--faint);line-height:1.8;letter-spacing:.03em;max-width:88ch}
 #totop{position:fixed;right:22px;bottom:22px;width:46px;height:46px;background:var(--ink);color:var(--bg);border:1.5px solid var(--ink);cursor:pointer;display:grid;place-items:center;opacity:0;transform:translateY(12px);pointer-events:none;transition:.24s;z-index:90}
 #totop.show{opacity:1;transform:none;pointer-events:auto}
-#totop:hover{background:var(--signal);border-color:var(--signal)}
+#totop:hover{background:var(--signal-btn);border-color:var(--signal-btn);color:var(--on-signal)}
 #totop svg{width:19px;height:19px}
+/* What's new — one tile per headline of the release. */
+.newchip{display:inline-flex;align-items:center;gap:10px;max-width:100%;font-family:var(--mono);font-size:.74rem;letter-spacing:.03em;color:var(--ink);border:1.5px solid var(--ink);background:var(--panel);padding:5px 12px 5px 5px;margin-bottom:22px;transition:background .15s}
+.newchip:hover{background:var(--panel-2)}
+.newchip b{flex:0 0 auto;background:var(--signal-btn);color:var(--on-signal);padding:3px 8px;font-size:.64rem;letter-spacing:.12em}
+.newchip span{min-width:0}
+.newg{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1.5px solid var(--ink)}
+@media(max-width:940px){.newg{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.newg{grid-template-columns:1fr}}
+.nw{padding:24px;border-right:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);background:var(--panel)}
+.nw .k{font-family:var(--mono);font-weight:700;font-size:.64rem;letter-spacing:.12em;text-transform:uppercase;color:var(--signal-ink);margin-bottom:10px}
+.nw h4{font-family:var(--disp);font-weight:700;font-size:1.1rem;line-height:1.25;margin-bottom:7px}
+.nw p{color:var(--muted);font-size:.9rem}
+.newmore{margin-top:20px;display:flex;flex-wrap:wrap;gap:10px 26px;font-family:var(--mono);font-size:.8rem}
+.newmore a{color:var(--signal-ink);border-bottom:1px solid currentColor}
+.newmore a:hover{color:var(--ink)}
+/* Privacy — the same four rows as the panel at the foot of Tempo's Settings, in the same
+   four hues (blue, green, amber, violet), each fitted to 4.8:1 on this panel. */
+.priv{border:1.5px solid var(--ink);background:var(--panel);box-shadow:8px 8px 0 rgba(23,20,12,.1);margin-bottom:28px}
+.pr{display:grid;grid-template-columns:200px 1fr;gap:18px;padding:18px 24px;border-bottom:1px solid var(--line)}
+.pr:last-child{border-bottom:none}
+.pn{font-family:var(--mono);font-weight:700;font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;display:flex;align-items:flex-start;gap:9px;line-height:1.5}
+.pn::before{content:"";flex:0 0 auto;width:9px;height:9px;margin-top:5px;background:currentColor}
+.pn.b{color:var(--p-blue)}.pn.g{color:var(--p-green)}.pn.a{color:var(--p-amber)}.pn.v{color:var(--p-violet)}
+.pt{color:var(--ink-soft);font-size:.96rem;min-width:0}
+.pt b{color:var(--ink);font-weight:600}
+@media(max-width:640px){.pr{grid-template-columns:1fr;gap:6px;padding:16px 18px}}
+.keycap{font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.keyset+.keyset{margin-top:28px}
+details.fq p a{color:var(--signal-ink);border-bottom:1px solid currentColor}
 /* Scroll-reveal is an ENHANCEMENT and must never be load-bearing. The page is
    visible by default; only once the script has actually started (it sets .js on
    <html>) is anything hidden, and any script error removes .js again. This page
@@ -343,24 +398,25 @@ html.js .reveal.in{opacity:1;transform:none}
 </head>
 <body>
 <div id="prog"></div>
-<header><div class="wrap nav"><a class="brand" href="#top"><span class="mk"><svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor"></path></svg></span><span class="nm">Tempo</span><span class="tag">TMP·38</span></a><nav class="nav-links" aria-label="Primary"><a href="#panel">Panel</a><a href="#console">Console</a><a href="#capabilities">Capabilities</a><a href="#signal">Signal</a><a href="#install">Install</a><a href="#faq">FAQ</a></nav><div class="nav-meta"><span class="nav-clock"><span class="rec"></span><span id="clock">00:00:00</span></span><a class="btn btn-primary btn-sm" href="#install">Install</a></div></div></header>
+<header><div class="wrap nav"><a class="brand" href="#top"><span class="mk"><svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor"></path></svg></span><span class="nm">Tempo</span><span class="tag">TMP·38</span></a><nav class="nav-links" aria-label="Primary"><a href="#new">What's new</a><a href="#capabilities">Capabilities</a><a href="#signal">Themes</a><a href="#privacy">Privacy</a><a href="#install">Install</a><a href="#faq">FAQ</a></nav><div class="nav-meta"><span class="nav-clock"><span class="rec"></span><span id="clock">00:00:00</span></span><a class="btn btn-primary btn-sm" href="#install">Install</a></div></div></header>
 <a id="top"></a>
-<section class="hero"><div class="wrap"><div class="hero-grid"><div><div class="hero-eye reveal"><span><span class="sq"></span> FIG.01 — Metronome</span><span>REV 4.0</span><span>Win 10 / 11 · x64</span></div><h1 class="reveal">Click in perfect <span class="u">tempo</span>.</h1><p class="lead reveal">A precision auto-clicker for Windows that behaves like an instrument, not a toy — multi-point sequences, full macro record &amp; replay, live statistics, rebindable hotkeys, <b>38 themes</b> and <b>6 languages</b>. It runs entirely on your PC. No account, no telemetry.</p><div class="cta-row reveal"><a class="btn btn-primary" id="heroDl" href="https://github.com/justcamop555-pixel/Tempo/releases/latest/download/Tempo.exe"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"></path><path d="M5 21h14"></path></svg>Download for Windows</a><a class="btn btn-ghost" href="#install">Install with one command</a></div><div class="specline reveal"><span><b>Free</b> &amp; source-available</span><span>·</span><span>.NET runtime <b>bundled</b></span><span>·</span><span><b>No install</b> required</span></div></div><div class="reveal"><div class="scope"><span class="corners lite"></span><div class="scope-top"><span>CH1 · Click signal</span><span class="metro" aria-hidden="true"><span class="arm"><i></i></span></span></div><div class="scope-scr"><canvas id="wave"></canvas></div><div class="scope-bot"><div class="scope-read"><span id="cpsBig" class="tnum">240</span><small>Clicks / sec · live</small></div><div class="scope-chan"><div>RATE <b>VAR</b></div><div>TRIG AUTO</div><div>t 4ms/div</div></div></div><div class="watermark">TMP·38 / OSCILLOSCOPE</div></div></div></div></div><div class="ruler wrap" aria-hidden="true"><span class="tick-lab" style="left:26px">0</span><span class="tick-lab" style="left:24%">CPS</span><span class="tick-lab" style="left:49%">·</span><span class="tick-lab" style="right:26px">∞</span></div></section>
+<section class="hero"><div class="wrap"><div class="hero-grid"><div><div class="hero-eye reveal"><span><span class="sq"></span> FIG.01 — Metronome</span><span>REV 4.0</span><span>Win 10 / 11 · x64</span></div><a class="newchip reveal" href="#new"><b>NEW</b><span>1.0.323 — captions that know who's talking, hotkeys that fire with Shift or Ctrl held</span></a><h1 class="reveal">Click in perfect <span class="u">tempo</span>.</h1><p class="lead reveal">A precision auto-clicker for Windows that behaves like an instrument, not a toy — multi-point sequences, full macro record &amp; replay, live statistics, rebindable hotkeys, offline live captions, <b>38 themes</b> and <b>6 languages</b>. It runs entirely on your PC. No account, no telemetry.</p><div class="cta-row reveal"><a class="btn btn-primary" id="heroDl" href="https://github.com/justcamop555-pixel/Tempo/releases/latest/download/Tempo.exe"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"></path><path d="M5 21h14"></path></svg>Download for Windows</a><a class="btn btn-ghost" href="#install">Install with one command</a></div><div class="specline reveal"><span><b>Free</b> &amp; source-available</span><span>·</span><span>.NET runtime <b>bundled</b></span><span>·</span><span><b>No install</b> required</span></div></div><div class="reveal"><div class="scope"><span class="corners lite"></span><div class="scope-top"><span>CH1 · Click signal</span><span class="metro" aria-hidden="true"><span class="arm"><i></i></span></span></div><div class="scope-scr"><canvas id="wave"></canvas></div><div class="scope-bot"><div class="scope-read"><span id="cpsBig" class="tnum">240</span><small>Clicks / sec · live</small></div><div class="scope-chan"><div>RATE <b>VAR</b></div><div>TRIG AUTO</div><div>t 4ms/div</div></div></div><div class="watermark" aria-hidden="true">TMP·38 / OSCILLOSCOPE</div></div></div></div></div><div class="ruler wrap" aria-hidden="true"><span class="tick-lab" style="left:26px">0</span><span class="tick-lab" style="left:24%">CPS</span><span class="tick-lab" style="left:49%">·</span><span class="tick-lab" style="right:26px">∞</span></div></section>
 <div class="ticker" aria-hidden="true"><div class="mq" id="mq"></div></div>
-<section class="sec" id="panel"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.02</b> The instrument panel</div><h2 class="h2">A real app, not a gimmick</h2><p class="intro">Flip through Tempo's actual interface — the same flat, hairline-precise UI you get on first launch. Every tab is live.</p></div><div class="instr reveal"><div class="instr-bar"><span class="lt"></span><span class="lt"></span><span class="lt on"></span><span class="nm">Tempo — Clicker</span><span class="rt">%LOCALAPPDATA%\AutoClicker</span></div><div class="app"><aside class="side"><div class="lbl">Modules</div><div class="nav-i on" data-tab="clicker"><span class="ix">01</span> Clicker</div><div class="nav-i" data-tab="multi"><span class="ix">02</span> Multi-Point</div><div class="nav-i" data-tab="macros"><span class="ix">03</span> Macros</div><div class="nav-i" data-tab="stats"><span class="ix">04</span> Statistics</div><div class="nav-i" data-tab="keys"><span class="ix">05</span> Keybinds</div></aside><div class="main"><div class="pane on" data-pane="clicker"><div class="pc"><div class="pc-h"><span>Click interval</span><span>HH · MM · SS · MS</span></div><div class="fields"><div class="field"><label>Hours</label><div class="box">0</div></div><div class="field"><label>Minutes</label><div class="box">0</div></div><div class="field"><label>Seconds</label><div class="box">0</div></div><div class="field"><label>Millis</label><div class="box big">100</div></div></div></div><div class="pc"><div class="pc-h"><span>Live · clicks per second</span><span>CH1</span></div><div class="beat" id="beat" aria-hidden="true"></div></div><div class="prow"><span class="startbtn">▶ Start · F6</span><span class="idle">IDLE</span></div></div><div class="pane" data-pane="multi"><div class="pc"><div class="pc-h"><span>Point sequence</span><span>Order · ping-pong</span></div><table class="ptable"><thead><tr><th>#</th><th>Label</th><th>X</th><th>Y</th><th>Type</th><th>On</th></tr></thead><tbody><tr><td>1</td><td>Skill 1</td><td>820</td><td>540</td><td>Single</td><td class="on">●</td></tr><tr><td>2</td><td>Skill 2</td><td>910</td><td>540</td><td>Single</td><td class="on">●</td></tr><tr><td>3</td><td>Loot</td><td>640</td><td>700</td><td>Double</td><td class="on">●</td></tr></tbody></table></div></div><div class="pane" data-pane="macros"><div class="pc"><div class="pc-h"><span>Saved macros</span><span>Loop ∞ · 1.0×</span></div><div class="mlist">▸ <b>Daily login</b> &nbsp;·&nbsp; 341 steps &nbsp;·&nbsp; 2.7 s<br>▸ <b>Farm rotation</b> &nbsp;·&nbsp; 147 steps &nbsp;·&nbsp; 1.2 s<br>▸ <b>Form filler</b> &nbsp;·&nbsp; 736 steps &nbsp;·&nbsp; 6.6 s</div></div><div class="prow"><span class="startbtn">▶ Play</span><span class="idle" style="font-size:.8rem;letter-spacing:.06em">SPEED 1.0×</span></div></div><div class="pane" data-pane="stats"><div class="pc"><div class="pc-h"><span>Lifetime</span><span>Since install</span></div><div class="statg"><div class="sc"><div class="l">Clicks</div><div class="v sig">193,790</div></div><div class="sc"><div class="l">Sessions</div><div class="v">54</div></div><div class="sc"><div class="l">Best CPS</div><div class="v">788</div></div><div class="sc"><div class="l">Runtime</div><div class="v">10:05</div></div></div></div></div><div class="pane" data-pane="keys"><div class="pc"><div class="pc-h"><span>Global hotkeys</span><span>Rebindable</span></div><div class="kv">Start / Stop &nbsp;→&nbsp; <b>F6</b><br>Pause / Resume &nbsp;→&nbsp; <b>F9</b><br>Pick position &nbsp;→&nbsp; <b>F7</b><br>Emergency stop &nbsp;→&nbsp; <b>F8</b></div></div></div></div></div></div></div></section>
+<section class="sec" id="new"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>REV</b> 1.0.323</div><h2 class="h2">What's new</h2><p class="intro">Captions that know who is talking, hotkeys that keep working while you play, and a Tempo that starts three times faster — plus hundreds of fixes.</p></div><div class="newg"><div class="nw reveal"><div class="k">Captions</div><h4>Only speech becomes words</h4><p>A voice detector checks each stretch of audio first, so music, fans and game sound no longer turn into invented captions.</p></div><div class="nw reveal"><div class="k">Speakers</div><h4>Who said what, by name</h4><p>Voices are matched to the faces in the video, and the new Speakers card turns “Speaker 2” into “Mia”.</p></div><div class="nw reveal"><div class="k">Hotkeys</div><h4>Fire while you sprint</h4><p>F6 works while you hold Shift or Ctrl, and hotkeys work again while Tempo sits in the tray.</p></div><div class="nw reveal"><div class="k">Speed</div><h4>Three times faster to start</h4><p>Ready in the tray in about 0.45 s instead of 1.2 s, quiet while it waits, and tabs that switch in one piece.</p></div><div class="nw reveal"><div class="k">Accounts</div><h4>A window of its own</h4><p>Open Accounts beside your game. Multi-instance no longer closes the Roblox game you are already in.</p></div><div class="nw reveal"><div class="k">Discord</div><h4>Not the Steam game</h4><p>The installed program is now TempoClicker.exe, so Discord stops showing you as playing “Tempo”.</p></div><div class="nw reveal"><div class="k">Laptops</div><h4>Fits 125% and 150%</h4><p>Every window grows with its text on laptop scaling, instead of cutting the words off.</p></div><div class="nw reveal"><div class="k">Updates</div><h4>Updates that finish</h4><p>Downloads pick up where a dropped connection stopped them, and a failed update says so.</p></div></div><div class="newmore"><a href="https://github.com/justcamop555-pixel/Tempo/releases/tag/v1.0.323">Full notes for 1.0.323 →</a><a href="https://github.com/justcamop555-pixel/Tempo/blob/main/CHANGELOG.md">Every change, in the changelog →</a></div></div></section>
+<section class="sec" id="panel"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.02</b> The instrument panel</div><h2 class="h2">A real app, not a gimmick</h2><p class="intro">A sketch of what is inside — flip through the tabs, with the mouse or the arrow keys. Tempo itself wears whichever of its 38 themes you pick.</p></div><div class="instr reveal"><div class="instr-bar"><span class="lt"></span><span class="lt"></span><span class="lt on"></span><span class="nm" id="instrName">Tempo — Clicker</span><span class="rt">%LOCALAPPDATA%\AutoClicker</span></div><div class="app"><aside class="side"><div class="lbl" id="modLbl">Modules</div><div class="tabsl" role="tablist" aria-labelledby="modLbl"><button type="button" class="nav-i on" role="tab" id="tab-clicker" aria-controls="pane-clicker" aria-selected="true" data-tab="clicker" data-name="Clicker"><span class="ix">01</span> Clicker</button><button type="button" class="nav-i" role="tab" id="tab-multi" aria-controls="pane-multi" aria-selected="false" tabindex="-1" data-tab="multi" data-name="Multi-Point"><span class="ix">02</span> Multi-Point</button><button type="button" class="nav-i" role="tab" id="tab-macros" aria-controls="pane-macros" aria-selected="false" tabindex="-1" data-tab="macros" data-name="Macros"><span class="ix">03</span> Macros</button><button type="button" class="nav-i" role="tab" id="tab-stats" aria-controls="pane-stats" aria-selected="false" tabindex="-1" data-tab="stats" data-name="Statistics"><span class="ix">04</span> Statistics</button><button type="button" class="nav-i" role="tab" id="tab-keys" aria-controls="pane-keys" aria-selected="false" tabindex="-1" data-tab="keys" data-name="Keybinds"><span class="ix">05</span> Keybinds</button><button type="button" class="nav-i" role="tab" id="tab-captions" aria-controls="pane-captions" aria-selected="false" tabindex="-1" data-tab="captions" data-name="Captions"><span class="ix">06</span> Captions</button><button type="button" class="nav-i" role="tab" id="tab-accounts" aria-controls="pane-accounts" aria-selected="false" tabindex="-1" data-tab="accounts" data-name="Accounts"><span class="ix">07</span> Accounts</button></div></aside><div class="main"><div class="pane on" data-pane="clicker" role="tabpanel" id="pane-clicker" aria-labelledby="tab-clicker"><div class="pc"><div class="pc-h"><span>Click interval</span><span>HH · MM · SS · MS</span></div><div class="fields"><div class="field"><label>Hours</label><div class="box">0</div></div><div class="field"><label>Minutes</label><div class="box">0</div></div><div class="field"><label>Seconds</label><div class="box">0</div></div><div class="field"><label>Millis</label><div class="box big">100</div></div></div></div><div class="pc"><div class="pc-h"><span>Live · clicks per second</span><span>CH1</span></div><div class="beat" id="beat" aria-hidden="true"></div></div><div class="prow"><span class="startbtn">▶ Start · F6</span><span class="idle">IDLE</span></div></div><div class="pane" data-pane="multi" role="tabpanel" id="pane-multi" aria-labelledby="tab-multi"><div class="pc"><div class="pc-h"><span>Point sequence</span><span>Order · ping-pong</span></div><table class="ptable"><thead><tr><th>#</th><th>Label</th><th>X</th><th>Y</th><th>Type</th><th>On</th></tr></thead><tbody><tr><td>1</td><td>Skill 1</td><td>820</td><td>540</td><td>Single</td><td class="on">●</td></tr><tr><td>2</td><td>Skill 2</td><td>910</td><td>540</td><td>Single</td><td class="on">●</td></tr><tr><td>3</td><td>Loot</td><td>640</td><td>700</td><td>Double</td><td class="on">●</td></tr></tbody></table></div></div><div class="pane" data-pane="macros" role="tabpanel" id="pane-macros" aria-labelledby="tab-macros"><div class="pc"><div class="pc-h"><span>Saved macros</span><span>Loop ∞ · 1.0×</span></div><div class="mlist">▸ <b>Daily login</b> &nbsp;·&nbsp; 341 steps &nbsp;·&nbsp; 2.7 s<br>▸ <b>Farm rotation</b> &nbsp;·&nbsp; 147 steps &nbsp;·&nbsp; 1.2 s<br>▸ <b>Form filler</b> &nbsp;·&nbsp; 736 steps &nbsp;·&nbsp; 6.6 s</div></div><div class="prow"><span class="startbtn">▶ Play</span><span class="idle" style="font-size:.8rem;letter-spacing:.06em">SPEED 1.0×</span></div></div><div class="pane" data-pane="stats" role="tabpanel" id="pane-stats" aria-labelledby="tab-stats"><div class="pc"><div class="pc-h"><span>Lifetime</span><span>Since install</span></div><div class="statg"><div class="sc"><div class="l">Clicks</div><div class="v sig">193,790</div></div><div class="sc"><div class="l">Sessions</div><div class="v">54</div></div><div class="sc"><div class="l">Best CPS</div><div class="v">788</div></div><div class="sc"><div class="l">Runtime</div><div class="v">10:05</div></div></div></div></div><div class="pane" data-pane="keys" role="tabpanel" id="pane-keys" aria-labelledby="tab-keys"><div class="pc"><div class="pc-h"><span>Global hotkeys</span><span>Rebindable</span></div><div class="kv">Start / Stop &nbsp;→&nbsp; <b>F6</b><br>Pause / Resume &nbsp;→&nbsp; <b>F9</b><br>Pick position &nbsp;→&nbsp; <b>F7</b><br>Emergency stop &nbsp;→&nbsp; <b>F8</b><br>With Shift or Ctrl held &nbsp;→&nbsp; <b>still fire</b></div></div></div><div class="pane" data-pane="captions" role="tabpanel" id="pane-captions" aria-labelledby="tab-captions"><div class="pc"><div class="pc-h"><span>Caption bar</span><span>Offline · on this PC</span></div><div class="capbar"><p><b style="color:#5ca8ff">Mia</b>Okay, the boss spawns on the left this time.</p><p><b style="color:#f0b04a">Speaker 2</b>Then I'll take the right side.</p></div></div><div class="pc"><div class="pc-h"><span>Speakers</span><span>Voice + face</span></div><div class="spk"><span><i style="background:#5ca8ff"></i>Mia</span><span><i style="background:#f0b04a"></i>Speaker 2</span><span class="q">♪ Music — not captioned</span></div></div></div><div class="pane" data-pane="accounts" role="tabpanel" id="pane-accounts" aria-labelledby="tab-accounts"><div class="pc"><div class="pc-h"><span>Roblox accounts</span><span>Encrypted vault</span></div><table class="ptable"><thead><tr><th>Account</th><th>Session</th><th>Launch into</th></tr></thead><tbody><tr><td>Main</td><td class="on">● good</td><td>Place ID</td></tr><tr><td>Builder</td><td class="amb">● not checked</td><td>Private server</td></tr><tr><td>Alt</td><td class="bad">● expired</td><td>Re-login first</td></tr></tbody></table></div><div class="prow"><span class="startbtn">▶ Launch</span><span class="idle" style="font-size:.8rem;letter-spacing:.06em">OFF UNTIL YOU TURN IT ON</span></div></div></div></div></div></div></section>
 <section class="sec" id="console"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.03</b> Control console</div><h2 class="h2">Build your click</h2><p class="intro">Turn the dials and read the output — the same controls that live inside Tempo, wired to a live pulse train.</p></div><div class="console reveal"><div class="con-l"><div class="crow"><div class="cl">Mode</div><div class="chips" data-group="mode"><button class="chip on" type="button">Interval</button><button class="chip" type="button">Hold</button><button class="chip" type="button">Burst</button></div></div><div class="crow"><div class="cl">Mouse button</div><div class="chips" data-group="button"><button class="chip on" type="button">Left</button><button class="chip" type="button">Right</button><button class="chip" type="button">Middle</button></div></div><div class="crow"><div class="cl">Click type</div><div class="chips" data-group="type"><button class="chip on" type="button">Single</button><button class="chip" type="button">Double</button><button class="chip" type="button">Triple</button></div></div><div class="crow" style="margin-bottom:8px"><div class="cl">Rate <b><span id="cfgCpsLabel">20</span> CPS</b></div><input type="range" id="cfgCps" min="1" max="500" value="20" aria-label="Clicks per second"></div><div class="cwave"><canvas id="cfgWave"></canvas></div></div><div class="con-r"><div class="con-big"><span id="cfgEff" class="tnum">20</span><small>clicks / sec · effective</small></div><div class="con-sum" id="cfgSummary">Interval · Left · Single</div><div class="con-metrics"><div class="cm"><div class="v tnum" id="cfgMs">50</div><div class="k">ms between</div></div><div class="cm"><div class="v tnum" id="cfgPerMin">1,200</div><div class="k">clicks / min</div></div><div class="cm"><div class="v tnum" id="cfgRate">20</div><div class="k">actuations / s</div></div><div class="cm"><div class="v tnum" id="cfgPerHour">72,000</div><div class="k">clicks / hour</div></div></div><div class="con-fire"><span class="dot" id="cfgDot"></span><span id="cfgFire">firing 20 times a second</span></div></div></div></div></section>
 <section class="sec" id="calibrate"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.04</b> Calibration</div><h2 class="h2">How fast can <span class="sig">you</span> click?</h2><p class="intro">Mash the plate and watch your own signal trace. Then compare it to what Tempo holds without breaking a sweat.</p></div><div class="calib"><div class="pad-wrap reveal"><div class="tapwave"><canvas id="tapWave"></canvas></div><button class="pad" id="pad" type="button">◉ Strike the plate</button><div class="tapread"><div><div class="b tnum" id="cpsNow">0</div><div class="k">your CPS</div></div><div><div class="b sig tnum" id="cpsBest">0</div><div class="k">your peak</div></div></div><div class="tapbar"><i id="cpsFill"></i></div></div><div class="calib-note reveal"><div class="huge tnum">1,000+</div><p>Most people top out around <b>6–10 CPS</b>. Tempo holds a steady rate well into the <b>thousands</b> — precisely, indefinitely, on a fixed point or a full multi-point route. Its anti-freeze protection keeps Windows responsive even when you push it.</p></div></div></div></section>
-<section class="sec" id="capabilities"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.05</b> Capabilities</div><h2 class="h2">Everything you need, nothing you don't</h2><p class="intro">A serious feature set in a fast, quiet app — and every byte of it runs locally on your machine.</p></div><div class="fgrid"><div class="feat reveal"><div class="fno"><b>01</b> / Core</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 4 7 16 2-7 7-2L4 4z"></path></svg></span><h3>Precision clicker</h3><p>The core, tuned for accuracy and speed.</p><ul><li>Interval, hold-to-click &amp; burst modes</li><li>Single to quadruple, any mouse button</li><li>Fixed point, follow-cursor or multi-point</li><li>Repeat by count or time · CPS presets</li><li>Scroll the slider or type an exact rate</li></ul></div><div class="feat reveal"><div class="fno"><b>02</b> / Routing</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2"></circle><circle cx="18" cy="8" r="2"></circle><circle cx="9" cy="18" r="2"></circle><path d="M8 7l8 1M16 9l-7 8"></path></svg></span><h3>Multi-point sequences</h3><p>Click a whole route, not just one spot.</p><ul><li>Sequential, reverse, random or ping-pong</li><li>Per-point button, style &amp; dwell time</li><li>Per-point repeat counts</li><li>On-screen numbered markers</li><li>Quick-capture a sequence in seconds</li></ul></div><div class="feat reveal"><div class="fno"><b>03</b> / Automation</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 6 4-6 4V8z" fill="currentColor" stroke="none"></path></svg></span><h3>Macro record &amp; replay</h3><p>Capture mouse + keyboard, then play it back.</p><ul><li>Edit steps, loop, 0.5×–4× speed</li><li>Countdown, loop delay &amp; step monitor</li><li>Pin favourites, add notes, search</li><li>Export / import individual macros</li><li>Run a Python script as a macro step</li><li>Fix… repairs stuck keys · robotic timing</li><li>Bind Record &amp; Play to hotkeys</li></ul></div><div class="feat reveal"><div class="fno"><b>04</b> / Telemetry</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path></svg></span><h3>Live statistics</h3><p>See exactly what Tempo's been doing.</p><ul><li>Live session, current &amp; peak CPS</li><li>Lifetime totals, records &amp; insights</li><li>Charts by session, day &amp; hour</li><li>Session goal with quick presets</li><li>Searchable history · CSV export</li></ul></div><div class="feat reveal"><div class="fno"><b>05</b> / Control</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="1"></rect><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h6"></path></svg></span><h3>Rebindable hotkeys</h3><p>Drive everything without touching the window.</p><ul><li>Global keyboard <i>and</i> mouse shortcuts</li><li>Live conflict detection</li><li>Works from the system tray</li><li>Emergency stop &amp; Escape safety</li><li>Automatic fallback for stubborn keys</li></ul></div><div class="feat reveal"><div class="fno"><b>06</b> / Identity</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"></path></svg></span><h3>Make it yours</h3><p>38 themes and a UI that follows your taste.</p><ul><li>38 colour themes + custom accent</li><li>Optional animated wallpapers</li><li>Six languages, auto-matched</li><li>System tray · launch at startup</li><li>Per-tab scroll memory · captions overlay</li></ul></div><div class="feat reveal"><div class="fno"><b>07</b> / Accessibility</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10v4h4l5 4V6L7 10H3z"></path><path d="M16 8a5 5 0 0 1 0 8"></path></svg></span><h3>Offline live captions</h3><p>Subtitles for anything your PC plays, with nothing uploaded.</p><ul><li>Runs on your machine · no cloud, no account</li><li>Coloured speaker labels · 90+ languages</li><li>Optional GPU engine, or CPU anywhere</li><li>On-screen bar plus a searchable history</li><li>Steps down by itself if a model lags</li></ul></div><div class="feat reveal"><div class="fno"><b>08</b> / Trust</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6l7-3z"></path><path d="m9 12 2 2 4-4"></path></svg></span><h3>Checks it hasn’t been tampered with</h3><p>Every launch, against the release published on GitHub.</p><ul><li>Compares its own file to GitHub’s</li><li>Catches a patched or damaged copy</li><li>Says so plainly in Settings</li><li>Offline is never treated as suspicious</li><li>Tamper-evident, not tamper-proof</li></ul></div><div class="feat reveal"><div class="fno"><b>09</b> / Resilience</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6l3-3"></path><path d="M4 12a8 8 0 1 0 8-8"></path></svg></span><h3>Built not to lose your work</h3><p>The unglamorous parts, done properly.</p><ul><li>Anti-freeze cap plus a CPU-aware throttle</li><li>Saves keep the previous copy as a fallback</li><li>Recovers settings a crash left unreadable</li><li>Live debug · health, stats, event stream</li><li>Errors surface as cards, not buried logs</li></ul></div></div></div></section>
-<section class="sec"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.06</b> Waveforms</div><h2 class="h2">Pick the rhythm that fits</h2><p class="intro">Tempo isn't one-size-fits-all — choose how the clicks come out. Each mode has its own signature on the scope.</p></div><div class="modes"><div class="mode reveal"><div class="mtop"><h4>Interval <span>≡ EVEN</span></h4><p>A steady, even beat at exactly the rate you set — from one click an hour to thousands a second.</p></div><div class="diag"><svg viewBox="0 0 300 96" preserveAspectRatio="none"><path d="M0 70 H40 V26 H50 V70 H100 V26 H110 V70 H160 V26 H170 V70 H220 V26 H230 V70 H280 V26 H290 V70 H300" fill="none" stroke="rgb(230,64,20)" stroke-width="2"></path></svg></div></div><div class="mode reveal"><div class="mtop"><h4>Hold-to-click <span>▭ SUSTAIN</span></h4><p>Clicks only while you hold the trigger down — release to stop. Bursts you control by hand.</p></div><div class="diag"><svg viewBox="0 0 300 96" preserveAspectRatio="none"><path d="M0 70 H60 V26 H240 V70 H300" fill="none" stroke="rgb(230,64,20)" stroke-width="2"></path></svg></div></div><div class="mode reveal"><div class="mtop"><h4>Burst <span>⋮⋮ GROUPED</span></h4><p>Fire a fixed number of rapid clicks, pause, repeat — great for double or triple taps on a cadence.</p></div><div class="diag"><svg viewBox="0 0 300 96" preserveAspectRatio="none"><path d="M0 70 H24 V30 H32 V70 H44 V30 H52 V70 H64 V30 H72 V70 H150 V30 H158 V70 H170 V30 H178 V70 H190 V30 H198 V70 H276 V30 H284 V70 H300" fill="none" stroke="rgb(230,64,20)" stroke-width="2"></path></svg></div></div></div></div></section>
-<section class="sec"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Readout</div><h2 class="h2">Small download, big toolbox</h2><p class="intro">One self-contained file — and a remarkable amount packed inside.</p></div><div class="readout reveal"><div class="rd"><div class="v tnum"><span data-count="6">0</span></div><div class="k">feature tabs</div></div><div class="rd"><div class="v sig tnum"><span data-count="38">0</span></div><div class="k">colour themes</div></div><div class="rd"><div class="v tnum"><span data-count="3">0</span></div><div class="k">click modes</div></div><div class="rd"><div class="v tnum"><span data-count="6">0</span></div><div class="k">languages</div></div><div class="rd"><div class="v sig tnum"><span data-count="0">0</span></div><div class="k">trackers, ever</div></div></div></div></section>
-<section class="sec" id="signal"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.07</b> Signal colour</div><h2 class="h2">Recolour the app — and this page</h2><p class="intro">Tap a chip to repaint Tempo's accent. This whole page reskins live, exactly like the app does. These are the real built-in themes.</p></div><div class="themewrap reveal"><div class="themehead"><div class="now">Signal: <b id="themeName">Ember</b></div><div class="hx"><span>IDX <b id="themeIndex" style="color:var(--ink)">01</b>/<span id="themeCount">38</span></span><span>HEX <b id="themeHex" style="color:var(--ink)">#E64014</b></span></div></div><div class="swatches" id="swatches"></div></div></div></section>
+<section class="sec" id="capabilities"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.05</b> Capabilities</div><h2 class="h2">Everything you need, nothing you don't</h2><p class="intro">A serious feature set in a fast, quiet app — and every byte of it runs locally on your machine.</p></div><div class="fgrid"><div class="feat reveal"><div class="fno"><b>01</b> / Core</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 4 7 16 2-7 7-2L4 4z"></path></svg></span><h3>Precision clicker</h3><p>The core, tuned for accuracy and speed.</p><ul><li>Interval, hold-to-click &amp; burst modes</li><li>Single to quadruple, any mouse button</li><li>Fixed point, follow-cursor or multi-point</li><li>Repeat by count or time · CPS presets</li><li>Scroll the slider or type an exact rate</li></ul></div><div class="feat reveal"><div class="fno"><b>02</b> / Routing</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2"></circle><circle cx="18" cy="8" r="2"></circle><circle cx="9" cy="18" r="2"></circle><path d="M8 7l8 1M16 9l-7 8"></path></svg></span><h3>Multi-point sequences</h3><p>Click a whole route, not just one spot.</p><ul><li>Sequential, reverse, random or ping-pong</li><li>Per-point button, style &amp; dwell time</li><li>Per-point repeat counts</li><li>On-screen numbered markers</li><li>Quick-capture a sequence in seconds</li></ul></div><div class="feat reveal"><div class="fno"><b>03</b> / Automation</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 6 4-6 4V8z" fill="currentColor" stroke="none"></path></svg></span><h3>Macro record &amp; replay</h3><p>Capture mouse + keyboard, then play it back.</p><ul><li>Edit steps, loop, 0.5×–4× speed</li><li>Countdown, loop delay &amp; step monitor</li><li>Pin favourites, add notes, search</li><li>Export / import individual macros</li><li>Run a Python script as a macro step</li><li>Fix… repairs stuck keys · robotic timing</li><li>Records camera turns &amp; side buttons</li></ul></div><div class="feat reveal"><div class="fno"><b>04</b> / Telemetry</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path></svg></span><h3>Live statistics</h3><p>See exactly what Tempo's been doing.</p><ul><li>Live session, current &amp; peak CPS</li><li>Lifetime totals, records &amp; insights</li><li>Charts by session, day &amp; hour</li><li>Session goal with quick presets</li><li>Searchable history · CSV export</li></ul></div><div class="feat reveal"><div class="fno"><b>05</b> / Control</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="1"></rect><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h6"></path></svg></span><h3>Rebindable hotkeys</h3><p>Drive everything without touching the window.</p><ul><li>Global keyboard and mouse shortcuts</li><li>Fire while you hold Shift or Ctrl</li><li>Work from the system tray</li><li>Conflict detection &amp; clash warnings</li><li>Emergency stop &amp; Esc safety stop</li></ul></div><div class="feat reveal"><div class="fno"><b>06</b> / Identity</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"></path></svg></span><h3>Make it yours</h3><p>38 themes and a UI that follows your taste.</p><ul><li>38 colour themes + custom accent</li><li>Optional animated wallpapers</li><li>Six languages, auto-matched</li><li>System tray · launch at startup</li><li>Per-tab scroll memory · captions overlay</li></ul></div><div class="feat reveal"><div class="fno"><b>07</b> / Accessibility</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10v4h4l5 4V6L7 10H3z"></path><path d="M16 8a5 5 0 0 1 0 8"></path></svg></span><h3>Offline live captions</h3><p>Subtitles for anything your PC plays, with nothing uploaded.</p><ul><li>Runs on your machine · no cloud, no account</li><li>Only speech becomes captions, not music</li><li>Speakers by voice and face · name them</li><li>90+ languages · GPU engine or any CPU</li><li>Caption bar, history &amp; subtitle files</li></ul></div><div class="feat reveal"><div class="fno"><b>08</b> / Trust</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6l7-3z"></path><path d="m9 12 2 2 4-4"></path></svg></span><h3>Checks it hasn’t been tampered with</h3><p>At every launch, and against GitHub once per release.</p><ul><li>Compares its own file to GitHub’s</li><li>Catches a patched or damaged copy</li><li>Says so plainly in Settings</li><li>Offline is never treated as suspicious</li><li>Tamper-evident, not tamper-proof</li></ul></div><div class="feat reveal"><div class="fno"><b>09</b> / Resilience</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6l3-3"></path><path d="M4 12a8 8 0 1 0 8-8"></path></svg></span><h3>Built not to lose your work</h3><p>The unglamorous parts, done properly.</p><ul><li>Anti-freeze cap plus a CPU-aware throttle</li><li>Saves keep the previous copy as a fallback</li><li>Recovers settings a crash left unreadable</li><li>Live debug · health, stats, event stream</li><li>Errors surface as cards, not buried logs</li></ul></div><div class="feat reveal"><div class="fno"><b>10</b> / Accounts</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg></span><h3>Roblox account manager</h3><p>Several accounts, one click each. Off until you turn it on.</p><ul><li>Sign in through your own browser</li><li>AES-256-GCM vault, sealed again by Windows</li><li>Launch by Place ID or private server</li><li>Session dots: good, expired, not checked</li><li>Its own tab, or a window beside your game</li></ul></div><div class="feat reveal"><div class="fno"><b>11</b> / Profiles</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3 9 5-9 5-9-5 9-5z"></path><path d="m3 13 9 5 9-5"></path></svg></span><h3>Profiles</h3><p>Whole setups, one click away.</p><ul><li>Clicker and multi-point setup in one</li><li>Each keeps its own keybinds and look</li><li>Switch from the tab, tray or a hotkey</li><li>Unsaved changes are never lost silently</li><li>Remembers the last one for next start</li></ul></div><div class="feat reveal"><div class="fno"><b>12</b> / Footprint</div><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 18a8 8 0 1 1 16 0"></path><path d="m12 18 4-6"></path></svg></span><h3>Light on your PC</h3><p>Quick to start, quiet while it waits.</p><ul><li>Ready in the tray in about 0.45 s</li><li>Quiet while it sits in the tray</li><li>Tabs switch in one piece</li><li>One file · .NET built in</li><li>Fits laptops at 125% and 150%</li></ul></div></div></div></section>
+<section class="sec"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.06</b> Waveforms</div><h2 class="h2">Pick the rhythm that fits</h2><p class="intro">Tempo isn't one-size-fits-all — choose how the clicks come out. Each mode has its own signature on the scope.</p></div><div class="modes"><div class="mode reveal"><div class="mtop"><h4>Interval <span>≡ EVEN</span></h4><p>A steady, even beat at exactly the rate you set — from one click an hour to thousands a second.</p></div><div class="diag"><svg viewBox="0 0 300 96" preserveAspectRatio="none"><path d="M0 70 H40 V26 H50 V70 H100 V26 H110 V70 H160 V26 H170 V70 H220 V26 H230 V70 H280 V26 H290 V70 H300" fill="none" stroke="currentColor" stroke-width="2"></path></svg></div></div><div class="mode reveal"><div class="mtop"><h4>Hold-to-click <span>▭ SUSTAIN</span></h4><p>Clicks only while you hold the trigger down — release to stop. Bursts you control by hand.</p></div><div class="diag"><svg viewBox="0 0 300 96" preserveAspectRatio="none"><path d="M0 70 H60 V26 H240 V70 H300" fill="none" stroke="currentColor" stroke-width="2"></path></svg></div></div><div class="mode reveal"><div class="mtop"><h4>Burst <span>⋮⋮ GROUPED</span></h4><p>Fire a fixed number of rapid clicks, pause, repeat — great for double or triple taps on a cadence.</p></div><div class="diag"><svg viewBox="0 0 300 96" preserveAspectRatio="none"><path d="M0 70 H24 V30 H32 V70 H44 V30 H52 V70 H64 V30 H72 V70 H150 V30 H158 V70 H170 V30 H178 V70 H190 V30 H198 V70 H276 V30 H284 V70 H300" fill="none" stroke="currentColor" stroke-width="2"></path></svg></div></div></div></div></section>
+<section class="sec"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Readout</div><h2 class="h2">One file, a whole toolbox</h2><p class="intro">One self-contained download — and a remarkable amount packed inside.</p></div><div class="readout reveal"><div class="rd"><div class="v tnum"><span data-count="8">0</span></div><div class="k">feature tabs</div></div><div class="rd"><div class="v sig tnum"><span data-count="38">0</span></div><div class="k">colour themes</div></div><div class="rd"><div class="v tnum"><span data-count="3">0</span></div><div class="k">click modes</div></div><div class="rd"><div class="v tnum"><span data-count="6">0</span></div><div class="k">languages</div></div><div class="rd"><div class="v sig tnum"><span data-count="0">0</span></div><div class="k">trackers, ever</div></div></div></div></section>
+<section class="sec" id="signal"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>FIG.07</b> Themes</div><h2 class="h2">38 themes — try one on this page</h2><p class="intro">These are Tempo's real built-in themes, each shown in its own background and accent. Tap one to lend its accent to this page — the words here stay readable whichever you pick. The app also has <b>Match Windows</b>, which follows the system's light or dark mode, and an accent colour of your own.</p></div><div class="themewrap reveal"><div class="themehead"><div class="now">Theme: <b id="themeName">this page's own orange</b><span class="tk" id="themeKind"></span></div><div class="hx"><span>IDX <b id="themeIndex" style="color:var(--ink)">—</b>/<span id="themeCount">38</span></span><span>ACCENT <b id="themeHex" style="color:var(--ink)">#E64014</b></span><button type="button" class="reset" id="themeReset" hidden>Reset</button></div></div><div class="swatches" id="swatches" role="group" aria-label="Tempo's 38 themes"></div></div></div></section>
 <section class="sec" id="field"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Field use</div><h2 class="h2">What people use it for</h2><p class="intro">Repetitive clicking shows up everywhere. Tempo handles the boring part so you don't have to.</p></div><div class="usesg"><div class="use reveal"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M7 12h3M9 10v4M15 11h.01M18 13h.01"></path></svg></span><h4>Idle &amp; clicker games</h4><p>Hold a rate, run a route, or replay a rotation while you're away.</p></div><div class="use reveal"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></span><h4>QA &amp; UI testing</h4><p>Stress a button, repeat a flow thousands of times, and measure your real click rate.</p></div><div class="use reveal"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h12"></path></svg></span><h4>Forms &amp; data entry</h4><p>Record a fill-in macro once, then replay it across rows with one hotkey.</p></div><div class="use reveal"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z"></path></svg></span><h4>Accessibility</h4><p>Reduce repetitive strain, and read on-screen captions with the overlay.</p></div></div></div></section>
-<section class="sec"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Procedure</div><h2 class="h2">Clicking in three steps</h2><p class="intro">No setup, no sign-up — from download to running in about a minute.</p></div><div class="steps3"><div class="step3 reveal"><div class="sh">Step</div><h4>Install it</h4><p>One line in PowerShell, or download <code>Tempo.exe</code> and double-click it. The .NET runtime is built in — nothing else to install.</p></div><div class="step3 reveal"><div class="sh">Step</div><h4>Set your rate</h4><p>On the Clicker tab, tap a CPS preset or type an exact rate, pick the button, and choose where to click.</p></div><div class="step3 reveal"><div class="sh">Step</div><h4>Press F6</h4><p>Hit your hotkey to start or stop — even when Tempo's hidden in the tray. That's the whole loop.</p></div></div></div></section>
-<section class="sec"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Bindings</div><h2 class="h2">Default hotkeys</h2><p class="intro">Every action is rebindable on the Keybinds tab — these are just the defaults. They work even when the window is hidden in the tray.</p></div><div class="keys reveal"><div class="keyrow"><span>Start / Stop clicking</span><kbd>F6</kbd></div><div class="keyrow"><span>Pause / Resume</span><kbd>F9</kbd></div><div class="keyrow"><span>Pick a position on screen</span><kbd>F7</kbd></div><div class="keyrow"><span>Emergency stop</span><kbd>F8</kbd></div><div class="keyrow"><span>Safety stop (while running)</span><kbd>Esc</kbd></div><div class="keyrow"><span>Full screen</span><kbd>F11</kbd></div></div></div></section>
-<section class="sec"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Comparison</div><h2 class="h2">More than the usual free clicker</h2><p class="intro">Most free auto-clickers stop at "click here, this fast." Tempo goes further — and stays private.</p></div><table class="cmp reveal"><thead><tr><th>Capability</th><th>Typical free clicker</th><th>Tempo</th></tr></thead><tbody><tr><td>Single-point clicking</td><td class="yes">Yes</td><td class="tempo">Yes</td></tr><tr><td>Multi-point routes</td><td class="no">Rarely</td><td class="tempo">Sequential / random / ping-pong</td></tr><tr><td>Macro record &amp; replay</td><td class="no">No</td><td class="tempo">Mouse + keyboard, editable</td></tr><tr><td>Live statistics &amp; history</td><td class="no">No</td><td class="tempo">Dashboard, charts, CSV</td></tr><tr><td>Anti-freeze protection</td><td class="no">No</td><td class="tempo">CPS cap + CPU-adaptive</td></tr><tr><td>Themes &amp; languages</td><td class="no">One look</td><td class="tempo">38 themes · 6 languages</td></tr><tr><td>Ads / telemetry / account</td><td class="no">Often</td><td class="tempo">None — 100% local</td></tr><tr><td>Price</td><td>Free-ish</td><td class="tempo">Free &amp; open</td></tr></tbody></table></div></section>
-<section class="sec" id="install"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Install</div><h2 class="h2">One command, or one file<span class="verchip" id="verChip" hidden>Latest <b id="verNum">—</b><span id="verDate"></span></span></h2><p class="intro">Install Tempo straight from here. No account, no administrator, nothing else to download — the .NET runtime is bundled.</p></div><div class="oneline reveal"><span class="corners lite"></span><span class="tag">Recommended · Windows 10 / 11</span><h3>Install from PowerShell</h3><p class="sub">Open PowerShell — the ordinary one, not "as administrator" — paste this, and press Enter.</p><div class="cmd"><code id="cmdText">irm https://justcamop555-pixel.github.io/Tempo/install.ps1 | iex</code><button type="button" id="copyCmd" aria-label="Copy the install command">Copy</button></div><ul class="why"><li><span>Fetches the <b id="verInline">latest</b> official release</span></li><li><span>Checks its <b>SHA-256</b> against the one GitHub published — and stops if it differs</span></li><li><span>Installs <b>for you only</b>, never as administrator</span></li><li><span>Start-Menu entry, and a clean uninstall from Settings › Apps</span></li></ul><p class="tiny">Rather read it before you run it? It is plain text: <a href="install.ps1">install.ps1</a>. Add <code>-Portable</code> to just download the exe instead.</p></div><div class="instl reveal"><div class="card plain"><span class="tag">Portable · no install</span><h3>Just the file</h3><p class="hint">One self-contained file · runs in place · settings in AppData · USB-friendly</p><a class="btn btn-ghost dl" id="dlExe" href="https://github.com/justcamop555-pixel/Tempo/releases/latest/download/Tempo.exe"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"></path><path d="M5 21h14"></path></svg>Tempo.exe <span class="dl-meta" id="metaExe"></span></a><ol class="steps"><li><span class="st-t">Double-click it — the runtime is built in, nothing else to install.</span></li><li><span class="st-t">Settings, profiles &amp; macros live in your AppData folder.</span></li></ol></div><div class="card plain"><span class="tag">Installer zip</span><h3>Unzip and run</h3><p class="hint">Start-Menu shortcut · listed in Settings › Apps · clean uninstall</p><a class="btn btn-ghost dl" id="dlZip" href="https://github.com/justcamop555-pixel/Tempo/releases/latest"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"></path><path d="M5 21h14"></path></svg>Setup zip <span class="dl-meta" id="metaZip"></span></a><ol class="steps"><li><span class="st-t">Unzip it anywhere.</span></li><li><span class="st-t">Double-click <code>install.cmd</code> — no administrator rights needed.</span></li></ol></div></div><div class="note warn reveal"><b>First-run note.</b> Because Tempo isn't code-signed, Windows may show <b>"Windows protected your PC"</b> / <b>"Unknown publisher."</b> That's normal for a small free app — click <b>More info → Run anyway</b>. The PowerShell installer checks the download's SHA-256 against GitHub's own record for you; if you download by hand, you can do the same with <code>certutil -hashfile Tempo.exe SHA256</code>, or look for the <b>Official ID</b> in Tempo's About box — the first 16 characters of that same SHA-256, shown once GitHub has confirmed your copy.</div><div class="note reveal"><b>Reading the source?</b> Most of Tempo is published on <a href="https://github.com/justcamop555-pixel/Tempo">GitHub</a> — the clicker, macros, captions, themes, the installer scripts and this page. The Roblox <b>Accounts</b> stack (the encrypted vault, the browser sign-in and the launcher) is not, so a clone is there to read rather than to build.</div></div></section>
-<section class="sec" id="privacy"><div class="wrap" style="text-align:center"><div class="sechead" style="max-width:640px;margin:0 auto 44px"><div class="eyebrow" style="justify-content:center"><b>·</b> Private by design</div><h2 class="h2">Yours, and only yours</h2><p class="intro" style="margin:0 auto">Tempo runs entirely on your PC. Your clicks, macros, profiles, statistics and captions never leave your computer, and nothing is uploaded or collected. Tempo reaches the network only for things you start: checking for an update, downloading one, verifying its own file against the published release, fetching a speech model, or loading a logo URL you entered. Every one of those is optional.</p></div><div class="trust reveal"><span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"></path></svg> Free &amp; source-available</span><span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"></path></svg> Runs on your PC</span><span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"></path></svg> No account or telemetry</span><span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"></path></svg> Checksums each release</span></div></div></section>
-<section class="sec" id="faq"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> FAQ</div><h2 class="h2">Common questions</h2></div><div class="faq reveal"><details class="fq"><summary>Is Tempo really free?<span class="pl">+</span></summary><p>Yes — completely free and open, no account, no ads, no telemetry. It runs entirely on your PC.</p></details><details class="fq"><summary>Why does Windows say "Unknown publisher"?<span class="pl">+</span></summary><p>Tempo isn't code-signed (certificates are costly for a free app), so SmartScreen shows a caution the first time. Click <b>More info → Run anyway</b>. You can verify your build with <code>certutil -hashfile Tempo.exe SHA256</code> against the SHA-256 GitHub lists beside <code>Tempo.exe</code> on the release page — its first 16 characters are the <b>Official ID</b> Tempo shows in About.</p></details><details class="fq"><summary>Will it get me banned from a game?<span class="pl">+</span></summary><p>Possibly. Auto-clicking can violate a game's terms of service, and some anti-cheat systems detect it. Use it responsibly — you're responsible for how you use it. Reasonable speeds and the randomization options soften the obvious-robot pattern, but nothing makes it undetectable.</p></details><details class="fq"><summary>What's a safe clicking speed?<span class="pl">+</span></summary><p>For most uses the low hundreds of CPS is plenty. Very high speeds can trip anti-cheat and stress your PC. Tempo's anti-freeze protection is on by default — leave it on. The CPS presets (10 / 50 / 100 / 200) are good starting points.</p></details><details class="fq"><summary>Where are my settings stored?<span class="pl">+</span></summary><p>In <code>%LOCALAPPDATA%\AutoClicker</code>. That folder survives updates and can be backed up or deleted. There's no cloud copy.</p></details><details class="fq"><summary>Does it slow down or freeze my PC at high speeds?<span class="pl">+</span></summary><p>Tempo has built-in anti-freeze protection: a CPS cap plus a CPU-adaptive throttle that automatically eases off if your system gets busy, so the machine stays responsive. It's on by default.</p></details><details class="fq"><summary>What languages does it support?<span class="pl">+</span></summary><p>Six: English, Spanish, French, German, Italian and Portuguese. Tempo matches your Windows display language on first run, and you can change it any time in Settings.</p></details><details class="fq"><summary>Does it work on Mac or Linux?<span class="pl">+</span></summary><p>No — Tempo is a Windows app (64-bit Windows 10 or 11). The .NET runtime is built in, so there's nothing else to install.</p></details></div></div></section>
+<section class="sec"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Procedure</div><h2 class="h2">Clicking in three steps</h2><p class="intro">No setup, no sign-up — from download to running in about a minute.</p></div><div class="steps3"><div class="step3 reveal"><div class="sh">Step</div><h4>Install it</h4><p>One line in PowerShell, or download <code>Tempo.exe</code> and double-click it. The .NET runtime is built in — nothing else to install.</p></div><div class="step3 reveal"><div class="sh">Step</div><h4>Set your rate</h4><p>On the Clicker tab, tap a CPS preset or type an exact rate, pick the button, and choose where to click.</p></div><div class="step3 reveal"><div class="sh">Step</div><h4>Press F6</h4><p>Hit your hotkey to start or stop — even when Tempo's hidden in the tray, or while you hold Shift or Ctrl in a game. That's the whole loop.</p></div></div></div></section>
+<section class="sec" id="hotkeys"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Bindings</div><h2 class="h2">Default hotkeys</h2><p class="intro">Any action can go on a key or a mouse button on the Keybinds tab — these are just the defaults. The global ones work while Tempo is hidden in the tray, and while you hold Shift or Ctrl in a game.</p></div><div class="keyset reveal"><div class="keycap">Global — anywhere in Windows</div><div class="keys"><div class="keyrow"><span>Start / Stop clicking</span><kbd>F6</kbd></div><div class="keyrow"><span>Pause / Resume</span><kbd>F9</kbd></div><div class="keyrow"><span>Pick a position on screen</span><kbd>F7</kbd></div><div class="keyrow"><span>Emergency stop</span><kbd>F8</kbd></div></div></div><div class="keyset reveal"><div class="keycap">In the Tempo window</div><div class="keys"><div class="keyrow"><span>Stop a run (you can turn this off)</span><kbd>Esc</kbd></div><div class="keyrow"><span>Full screen</span><kbd>F11</kbd></div><div class="keyrow"><span>Jump to a tab</span><kbd>Ctrl + 1–9</kbd></div><div class="keyrow"><span>Next tab</span><kbd>Ctrl + Tab</kbd></div></div></div></div></section>
+<section class="sec"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Comparison</div><h2 class="h2">More than the usual free clicker</h2><p class="intro">Most free auto-clickers stop at "click here, this fast." Tempo goes further — and stays private.</p></div><table class="cmp reveal"><thead><tr><th>Capability</th><th>Typical free clicker</th><th>Tempo</th></tr></thead><tbody><tr><td>Single-point clicking</td><td class="yes">Yes</td><td class="tempo">Yes</td></tr><tr><td>Multi-point routes</td><td class="no">Rarely</td><td class="tempo">Sequential / random / ping-pong</td></tr><tr><td>Macro record &amp; replay</td><td class="no">No</td><td class="tempo">Mouse + keyboard, editable</td></tr><tr><td>Offline live captions</td><td class="no">No</td><td class="tempo">Speakers named · 90+ languages</td></tr><tr><td>Live statistics &amp; history</td><td class="no">No</td><td class="tempo">Dashboard, charts, CSV</td></tr><tr><td>Anti-freeze protection</td><td class="no">No</td><td class="tempo">CPS cap + CPU-adaptive</td></tr><tr><td>Themes &amp; languages</td><td class="no">One look</td><td class="tempo">38 themes · 6 languages</td></tr><tr><td>Ads / telemetry / account</td><td class="no">Often</td><td class="tempo">None — 100% local</td></tr><tr><td>Price</td><td>Free-ish</td><td class="tempo">Free · source-available</td></tr></tbody></table></div></section>
+<section class="sec" id="install"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Install</div><h2 class="h2">One command, or one file<span class="verchip" id="verChip" hidden>Latest <b id="verNum">—</b><span id="verDate"></span></span></h2><p class="intro">Install Tempo straight from here. No account, no administrator, nothing else to download — the .NET runtime is bundled.</p></div><div class="oneline reveal"><span class="corners lite"></span><span class="tag">Recommended · Windows 10 / 11</span><h3>Install from PowerShell</h3><p class="sub">Open PowerShell — the ordinary one, not "as administrator" — paste this, and press Enter.</p><div class="cmd"><code id="cmdText">irm https://justcamop555-pixel.github.io/Tempo/install.ps1 | iex</code><button type="button" id="copyCmd" aria-label="Copy the install command">Copy</button></div><ul class="why"><li><span>Fetches the <b id="verInline">latest</b> official release</span></li><li><span>Checks its <b>SHA-256</b> against the one GitHub published — and stops if it differs</span></li><li><span>Installs <b>for you only</b>, never as administrator</span></li><li><span>Start-Menu entry, and a clean uninstall from Settings › Apps</span></li></ul><p class="tiny">Rather read it before you run it? It is plain text: <a href="install.ps1">install.ps1</a>. Add <code>-Portable</code> to just download the exe instead.</p></div><div class="instl reveal"><div class="card plain"><span class="tag">Portable · no install</span><h3>Just the file</h3><p class="hint">One self-contained file · runs in place · settings in AppData · USB-friendly</p><a class="btn btn-ghost dl" id="dlExe" href="https://github.com/justcamop555-pixel/Tempo/releases/latest/download/Tempo.exe"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"></path><path d="M5 21h14"></path></svg>Tempo.exe <span class="dl-meta" id="metaExe"></span></a><ol class="steps"><li><span class="st-t">Double-click it — the runtime is built in, nothing else to install.</span></li><li><span class="st-t">Settings, profiles &amp; macros live in your AppData folder.</span></li><li><span class="st-t">It offers once to install itself — say no and it won't ask again.</span></li></ol></div><div class="card plain"><span class="tag">Installer zip</span><h3>Unzip and run</h3><p class="hint">Start-Menu shortcut · listed in Settings › Apps · uninstall keeps your settings</p><a class="btn btn-ghost dl" id="dlZip" href="https://github.com/justcamop555-pixel/Tempo/releases/latest"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"></path><path d="M5 21h14"></path></svg>Setup zip <span class="dl-meta" id="metaZip"></span></a><ol class="steps"><li><span class="st-t">Unzip it anywhere.</span></li><li><span class="st-t">Double-click <code>install.cmd</code> — no administrator rights needed.</span></li><li><span class="st-t">Start Tempo from the Start Menu. It runs as <code>TempoClicker.exe</code>, so Discord won't mistake it for the Steam game “Tempo”.</span></li></ol></div></div><div class="note warn reveal"><b>First-run note.</b> Because Tempo isn't code-signed, Windows may show <b>"Windows protected your PC"</b> / <b>"Unknown publisher."</b> That's normal for a small free app — click <b>More info → Run anyway</b>. The PowerShell installer checks the download's SHA-256 against GitHub's own record for you; if you download by hand, you can do the same with <code>certutil -hashfile Tempo.exe SHA256</code>, or look for the <b>Official ID</b> in Tempo's About box — the first 16 characters of that same SHA-256, shown once GitHub has confirmed your copy.</div><div class="note reveal"><b>Reading the source?</b> Most of Tempo is published on <a href="https://github.com/justcamop555-pixel/Tempo">GitHub</a> — the clicker, macros, captions, themes, the installer scripts and this page. The Roblox <b>Accounts</b> stack (the encrypted vault, the browser sign-in and the launcher) is not, so a clone is there to read rather than to build.</div></div></section>
+<section class="sec" id="privacy"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> Private by design</div><h2 class="h2">Yours, and only yours</h2><p class="intro">Your clicks, macros, profiles, statistics, settings and captions stay on your PC. There is no sign-up, no tracking and no analytics. Tempo goes online only for the four things below — the same list it shows at the foot of its Settings — and each can be switched off or simply left unused.</p></div><div class="priv reveal"><div class="pr"><div class="pn b">Update check</div><div class="pt">Asks GitHub whether a newer version is out — when Tempo starts, and again while it stays open. Switch it off with <b>Check for updates</b> in Behaviour.</div></div><div class="pr"><div class="pn g">Release check</div><div class="pt">Compares a new release with the copy GitHub published, once per version; test builds never ask. Switch it off with <b>Check that Tempo hasn't been tampered with</b> in Data &amp; Backup.</div></div><div class="pr"><div class="pn a">When you use them</div><div class="pt">Downloading an update you chose or a speech model (from Hugging Face), setting a logo from a web address, and the Roblox account manager, which signs in through your own browser, checks sessions and launches games through Roblox. With the Accounts tab off, Tempo never contacts Roblox.</div></div><div class="pr"><div class="pn v">Local API</div><div class="pt">Off unless you turn it on. It answers only programs on this PC — nothing on your network or the internet can reach it.</div></div></div><div class="trust reveal"><span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"></path></svg> Free · source-available</span><span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"></path></svg> Runs on your PC</span><span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"></path></svg> No account or telemetry</span><span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"></path></svg> Checks itself against GitHub</span></div></div></section>
+<section class="sec" id="faq"><div class="wrap"><div class="sechead"><div class="eyebrow"><b>·</b> FAQ</div><h2 class="h2">Common questions</h2></div><div class="faq reveal"><details class="fq"><summary>Is Tempo really free?<span class="pl">+</span></summary><p>Yes — free, with no account, no ads and no telemetry, and it runs entirely on your PC. It is source-available: most of its code is public on <a href="https://github.com/justcamop555-pixel/Tempo">GitHub</a> for anyone to read.</p></details><details class="fq"><summary>Why does Windows say "Unknown publisher"?<span class="pl">+</span></summary><p>Tempo isn't code-signed (certificates are costly for a free app), so SmartScreen shows a caution the first time. Click <b>More info → Run anyway</b>. You can verify your build with <code>certutil -hashfile Tempo.exe SHA256</code> against the SHA-256 GitHub lists beside <code>Tempo.exe</code> on the release page — its first 16 characters are the <b>Official ID</b> Tempo shows in About.</p></details><details class="fq"><summary>Does Tempo go online?<span class="pl">+</span></summary><p>Only for what is listed under <a href="#privacy">Private by design</a>: the update check and the release check, each with its own switch, plus a speech model, a logo address or the Roblox account manager when you use them. Nothing about your clicks, macros, profiles or captions is ever sent.</p></details><details class="fq"><summary>Do the hotkeys work while I'm in a game?<span class="pl">+</span></summary><p>Yes. They are global, so they work while Tempo is minimised or in the tray, and since 1.0.323 they also fire while you hold Shift or Ctrl — F6 still works while you sprint or crouch. Keys that type a character (letters, digits, arrows, Enter) still need their exact combination.</p></details><details class="fq"><summary>Why did Discord say I was playing “Tempo”?<span class="pl">+</span></summary><p>Discord's game detection takes any program called <code>Tempo.exe</code> for a Steam game of that name. Since 1.0.323 an installed Tempo runs as <code>TempoClicker.exe</code> and is no longer mistaken for it; a portable copy can simply be renamed.</p></details><details class="fq"><summary>Will it get me banned from a game?<span class="pl">+</span></summary><p>Possibly. Auto-clicking can violate a game's terms of service, and some anti-cheat systems detect it. Use it responsibly — you're responsible for how you use it. Reasonable speeds and the randomization options soften the obvious-robot pattern, but nothing makes it undetectable.</p></details><details class="fq"><summary>What's a safe clicking speed?<span class="pl">+</span></summary><p>For most uses the low hundreds of CPS is plenty. Very high speeds can trip anti-cheat and stress your PC. Tempo's anti-freeze protection is on by default — leave it on. The CPS presets (10 / 50 / 100 / 200) are good starting points.</p></details><details class="fq"><summary>Where are my settings stored?<span class="pl">+</span></summary><p>In <code>%LOCALAPPDATA%\AutoClicker</code>. That folder survives updates and can be backed up or deleted. There's no cloud copy.</p></details><details class="fq"><summary>Does it slow down or freeze my PC at high speeds?<span class="pl">+</span></summary><p>Tempo has built-in anti-freeze protection: a CPS cap plus a CPU-adaptive throttle that automatically eases off if your system gets busy, so the machine stays responsive. It's on by default.</p></details><details class="fq"><summary>What languages does it support?<span class="pl">+</span></summary><p>Six: English, Spanish, French, German, Italian and Portuguese. Tempo matches your Windows display language on first run, and you can change it any time in Settings.</p></details><details class="fq"><summary>Does it work on Mac or Linux?<span class="pl">+</span></summary><p>No — Tempo is a Windows app (64-bit Windows 10 or 11). The .NET runtime is built in, so there's nothing else to install.</p></details></div></div></section>
 <section class="sec final"><div class="wrap"><div class="final-card reveal"><span class="scan"></span><span class="corners lite"></span><h2>Set the <span class="sig">pace</span>.</h2><p>Download Tempo and have it clicking in about a minute. Free, forever.</p><a class="btn btn-primary" href="#install" style="border-color:var(--signal)"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"></path><path d="M5 21h14"></path></svg>Download for Windows</a></div></div></section>
 <footer><div class="wrap"><div class="foot"><div class="brand" style="align-items:center"><span class="mk" style="width:28px;height:28px"><svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor"></path></svg></span><span class="nm" style="font-size:1.1rem">Tempo</span><span class="tag">TMP·38</span></div><div class="cols"><a href="https://github.com/justcamop555-pixel/Tempo">GitHub</a><a href="https://github.com/justcamop555-pixel/Tempo/releases">Releases</a><a href="https://github.com/justcamop555-pixel/Tempo/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/justcamop555-pixel/Tempo/issues">Report a bug</a></div></div><p class="colophon">TEMPO · MODEL TMP·38 · PRECISION AUTO-CLICKER FOR WINDOWS 10/11 x64 · Only install from this site or the official GitHub Releases page. Use responsibly — auto-clicking may violate the terms of service of some games and apps, and you are responsible for how you use it. Free · source-available · runs 100% on your PC · no account · no telemetry.</p></div></footer>
 <button id="totop" type="button" aria-label="Back to top"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m0 0-7 7m7-7 7 7"></path></svg></button>
@@ -393,12 +449,13 @@ html.js .reveal.in{opacity:1;transform:none}
 
     const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
     // Defaults that the design tool used to inject as props.
-    const P = { signalTheme: 'Ember', animatedWaveforms: true };
+    const P = { animatedWaveforms: true };
     const wavesOn = (P.animatedWaveforms ?? true) && !REDUCE;
     const $ = (s, r) => (r || document).querySelector(s);
     const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
-    // shared signal color, updated on theme change
-    const SIG = { css: getComputedStyle(document.documentElement).getPropertyValue('--signal').trim() || 'rgb(230,64,20)' };
+    // The colour the scopes draw in, updated on theme change. The scopes are dark
+    // panels, so it is the accent fitted for dark (--signal-glow), not the raw one.
+    const SIG = { css: getComputedStyle(document.documentElement).getPropertyValue('--signal-glow').trim() || '#E7481D' };
 
     const fit = (cv) => {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -526,7 +583,7 @@ html.js .reveal.in{opacity:1;transform:none}
     // ---- ticker ----
     (() => {
       const t = $('#mq'); if (!t) return;
-      const tags = ['Interval', 'Hold-to-click', 'Burst', 'Multi-point routes', 'Macro record & replay', 'Python macro steps', 'Offline live captions', 'Roblox account manager', 'Live statistics', 'Rebindable hotkeys', '38 themes', '6 languages', 'Anti-freeze', 'Randomization', 'CSV export', 'Session goals', 'System tray', 'Launch at startup', '100% local', 'No telemetry', 'Free & open'];
+      const tags = ['Interval', 'Hold-to-click', 'Burst', 'Multi-point routes', 'Macro record & replay', 'Python macro steps', 'Offline live captions', 'Speakers by voice & face', 'Roblox account manager', 'Live statistics', 'Rebindable hotkeys', 'Hotkeys with Shift or Ctrl held', '38 themes', '6 languages', 'Anti-freeze', 'Randomization', 'CSV export', 'Session goals', 'System tray', 'Launch at startup', '100% local', 'No telemetry', 'Free · source-available'];
       const build = () => tags.map(x => '<span><b>◆</b> ' + x + '</span>').join('');
       t.innerHTML = build() + build();
     })();
@@ -577,13 +634,34 @@ html.js .reveal.in{opacity:1;transform:none}
     })();
 
     // ---- tab switcher ----
+    // The tabs are buttons in a tablist, so a keyboard reaches every pane: Tab
+    // into the list, then the arrow keys (or Home / End) move between tabs. They
+    // used to be <div>s that only a mouse could open.
     (() => {
-      $$('.nav-i[data-tab]').forEach(t => t.addEventListener('click', () => {
-        $$('.nav-i[data-tab]').forEach(x => x.classList.remove('on'));
-        $$('.pane').forEach(p => p.classList.remove('on'));
-        t.classList.add('on');
-        const pane = $('.pane[data-pane="' + t.dataset.tab + '"]'); if (pane) pane.classList.add('on');
-      }));
+      const tabs = $$('.nav-i[data-tab]'); if (!tabs.length) return;
+      const title = $('#instrName');
+      const show = (t, focus) => {
+        tabs.forEach(x => {
+          const on = x === t;
+          x.classList.toggle('on', on);
+          x.setAttribute('aria-selected', on ? 'true' : 'false');
+          x.tabIndex = on ? 0 : -1;
+        });
+        $$('.pane').forEach(p => p.classList.toggle('on', p.dataset.pane === t.dataset.tab));
+        if (title && t.dataset.name) { title.textContent = 'Tempo — ' + t.dataset.name; }
+        if (focus) { t.focus(); }
+      };
+      tabs.forEach((t, i) => {
+        t.addEventListener('click', () => show(t, false));
+        t.addEventListener('keydown', e => {
+          let j = -1;
+          if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { j = (i + 1) % tabs.length; }
+          else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { j = (i - 1 + tabs.length) % tabs.length; }
+          else if (e.key === 'Home') { j = 0; }
+          else if (e.key === 'End') { j = tabs.length - 1; }
+          if (j >= 0) { e.preventDefault(); show(tabs[j], true); }
+        });
+      });
     })();
 
     // ---- control console ----
@@ -664,47 +742,101 @@ html.js .reveal.in{opacity:1;transform:none}
       }, 100);
     })();
 
-    // ---- signal (theme) switcher ----
+    // ---- theme switcher ----
+    // Tempo's real 38 themes, as UI/Theme.cs defines them: [name, background,
+    // accent]. This list used to be 38 invented names and colours ("Ember",
+    // "Neon", "Signal"…) captioned "the real built-in themes", with Dracula,
+    // Monokai, Gruvbox and Synthwave nowhere on it.
+    //
+    // Picking one lends its accent to this page. An accent designed for a dark
+    // window can be unreadable as text on this cream page (Carbon's is near-white,
+    // Honey's and Monokai's are pale), so every place that WRITES in the accent
+    // gets a variant fitted to where it sits: the same hue, moved toward black or
+    // white in 2% steps until it reaches the contrast text of its size needs.
+    //   --signal-ink   small text on the four light surfaces   4.6:1 on each
+    //   --signal-big   large text and icons                    3.1:1 on bg and panel
+    //   --signal-glow  text and lines on the dark panels       4.6:1 on ink
+    //   --signal-btn   a filled button. --on-signal, its text, is white when the
+    //                  accent can carry white (3:1, then deepened to 4.6:1), else ink.
+    // The defaults in :root are exactly what this computes for the page's own orange.
     (() => {
       const themes = [
-        ['Ember', '230,64,20'], ['Cobalt', '37,99,235'], ['Forest', '34,150,72'], ['Crimson', '220,38,60'],
-        ['Solar', '202,138,4'], ['Violet', '124,92,255'], ['Nord', '94,129,172'], ['Lime', '124,168,20'],
-        ['Gold', '190,140,20'], ['Neon', '224,32,140'], ['Coffee', '150,96,52'], ['Grape', '150,60,200'],
-        ['Cosmos', '108,88,224'], ['Rose', '224,80,150'], ['Slate', '70,110,150'], ['Sunset', '234,88,20'],
-        ['Mint', '20,160,120'], ['Sand', '176,120,8'], ['Lavender', '138,110,224'], ['Sakura', '210,66,128'],
-        ['Emerald', '10,158,110'], ['Steel', '80,120,160'], ['Fuchsia', '196,40,196'], ['Arctic', '10,140,168'],
-        ['Indigo', '84,88,224'], ['Teal', '16,150,140'], ['Tangerine', '230,96,16'], ['Bubblegum', '224,60,140'],
-        ['Carbon', '90,92,100'], ['Honey', '210,150,20'], ['Sapphire', '40,110,220'], ['Olive', '128,132,40'],
-        ['Cyan', '18,150,180'], ['Peach', '224,96,72'], ['Wine', '158,44,72'], ['Magenta', '200,50,170'],
-        ['Ocean', '16,120,190'], ['Signal', '230,48,12']
+        ['Dark', [16, 18, 27], [124, 92, 255]], ['Light', [248, 249, 252], [79, 70, 229]], ['Midnight', [8, 11, 22], [56, 189, 248]],
+        ['Ocean', [11, 17, 32], [14, 165, 233]], ['Forest', [12, 20, 15], [34, 197, 94]], ['Crimson', [22, 12, 14], [244, 63, 94]],
+        ['Solarized', [253, 246, 227], [38, 139, 210]], ['AMOLED', [0, 0, 0], [124, 92, 255]], ['Nord', [46, 52, 64], [136, 192, 208]],
+        ['Dracula', [40, 42, 54], [189, 147, 249]], ['Monokai', [39, 40, 34], [166, 226, 46]], ['Gruvbox', [40, 40, 40], [215, 153, 33]],
+        ['Synthwave', [26, 20, 41], [255, 45, 149]], ['Coffee', [38, 30, 24], [199, 145, 88]], ['Cosmos', [16, 14, 28], [167, 139, 250]],
+        ['Rose', [28, 20, 24], [244, 114, 182]], ['Slate', [24, 28, 35], [56, 189, 248]], ['Sunset', [28, 22, 28], [251, 146, 60]],
+        ['Mint', [14, 26, 24], [52, 211, 153]], ['Sand', [245, 240, 232], [186, 127, 4]], ['Lavender', [22, 20, 30], [167, 139, 250]],
+        ['Sakura', [252, 242, 245], [219, 68, 134]], ['Emerald', [8, 22, 20], [16, 185, 129]], ['Steel', [18, 22, 28], [96, 165, 200]],
+        ['Grape', [26, 14, 34], [217, 70, 239]], ['Arctic', [238, 246, 250], [6, 150, 180]], ['Indigo', [15, 16, 32], [99, 102, 241]],
+        ['Teal', [10, 24, 26], [20, 184, 166]], ['Tangerine', [20, 16, 12], [249, 115, 22]], ['Bubblegum', [250, 244, 250], [236, 72, 153]],
+        ['Carbon', [18, 18, 19], [212, 212, 216]], ['Honey', [24, 20, 12], [245, 185, 38]], ['Sapphire', [10, 18, 38], [56, 132, 255]],
+        ['Olive', [22, 22, 14], [160, 168, 58]], ['Cyan', [8, 16, 18], [34, 211, 238]], ['Peach', [253, 245, 240], [227, 106, 87]],
+        ['Wine', [26, 12, 16], [190, 58, 84]], ['Magenta', [20, 12, 22], [217, 70, 199]]
       ];
-      const wrap = $('#swatches'), name = $('#themeName'), hex = $('#themeHex'), idx = $('#themeIndex'), count = $('#themeCount');
+      const PAGE = [230, 64, 20];   // this page's own orange, before a theme is picked
+      const wrap = $('#swatches'), name = $('#themeName'), kind = $('#themeKind'), hexEl = $('#themeHex'),
+            idx = $('#themeIndex'), count = $('#themeCount'), reset = $('#themeReset');
       if (!wrap) return; if (count) count.textContent = themes.length;
       const root = document.documentElement.style;
-      const toHex = rgb => '#' + rgb.split(',').map(n => (+n).toString(16).padStart(2, '0')).join('').toUpperCase();
-      const deep = rgb => 'rgb(' + rgb.split(',').map(n => Math.max(0, Math.round(+n * 0.78))).join(',') + ')';
-      const apply = (th, i) => {
-        root.setProperty('--signal-rgb', th[1]);
-        root.setProperty('--signal', 'rgb(' + th[1] + ')');
-        root.setProperty('--signal-deep', deep(th[1]));
-        SIG.css = 'rgb(' + th[1] + ')';
-        if (name) name.textContent = th[0];
-        if (hex) hex.textContent = toHex(th[1]);
-        if (idx) idx.textContent = String(i + 1).padStart(2, '0');
+
+      // WCAG 2 relative luminance and contrast ratio.
+      const lin = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+      const lum = c => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+      const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+      const toward = (c, to, t) => c.map((v, i) => Math.round(v + (to[i] - v) * t));
+      const fit = (c, surfaces, need, to) => {
+        for (let k = 0; k <= 50; k++) {
+          const x = toward(c, to, k / 50);
+          if (surfaces.every(s => ratio(x, s) >= need)) { return x; }
+        }
+        return to;
       };
-      const want = (P.signalTheme || '').toString().toLowerCase();
-      let start = 0; if (want) { const j = themes.findIndex(t => t[0].toLowerCase() === want); if (j >= 0) start = j; }
+      const BLACK = [0, 0, 0], WHITE = [255, 255, 255], INK = [23, 20, 12], SCOPE = [20, 16, 9];
+      const LIGHT = [[231, 226, 210], [244, 240, 229], [222, 215, 196], [224, 218, 200]];   // bg, panel, panel-2, sunk
+      const css = c => 'rgb(' + c.join(',') + ')';
+      const hex = c => '#' + c.map(n => n.toString(16).padStart(2, '0')).join('').toUpperCase();
+
+      const apply = accent => {
+        const white = ratio(WHITE, accent) >= 3;
+        const glow = fit(accent, [INK, SCOPE], 4.6, WHITE);
+        root.setProperty('--signal-rgb', accent.join(','));
+        root.setProperty('--signal', css(accent));
+        root.setProperty('--signal-ink', css(fit(accent, LIGHT, 4.6, BLACK)));
+        root.setProperty('--signal-big', css(fit(accent, LIGHT.slice(0, 2), 3.1, BLACK)));
+        root.setProperty('--signal-glow', css(glow));
+        root.setProperty('--signal-btn', css(white ? fit(accent, [WHITE], 4.6, BLACK) : fit(accent, [INK], 4.6, WHITE)));
+        root.setProperty('--on-signal', white ? '#fff' : css(INK));
+        SIG.css = css(glow);
+      };
+
+      // -1 = no theme: the page's own orange.
+      const swatches = [];
+      const pick = i => {
+        swatches.forEach((s, j) => { s.classList.toggle('on', j === i); s.setAttribute('aria-pressed', j === i ? 'true' : 'false'); });
+        const th = i >= 0 ? themes[i] : null;
+        apply(th ? th[2] : PAGE);
+        if (name) { name.textContent = th ? th[0] : 'this page’s own orange'; }
+        if (kind) { kind.textContent = th ? (lum(th[1]) > 0.5 ? 'light' : 'dark') : ''; }
+        if (idx) { idx.textContent = th ? String(i + 1).padStart(2, '0') : '—'; }
+        if (hexEl) { hexEl.textContent = hex(th ? th[2] : PAGE); }
+        if (reset) { reset.hidden = !th; }
+      };
       themes.forEach((th, i) => {
-        const s = document.createElement('button'); s.type = 'button';
-        s.className = 'swatch' + (i === start ? ' on' : '');
-        s.style.background = 'rgb(' + th[1] + ')';
-        s.title = th[0] + ' · ' + toHex(th[1]);
-        s.setAttribute('aria-label', 'Signal: ' + th[0]);
+        const s = document.createElement('button'); s.type = 'button'; s.className = 'swatch';
+        s.style.setProperty('--sw-bg', css(th[1]));
+        s.style.setProperty('--sw-ac', css(th[2]));
+        s.style.setProperty('--sw-ix', ratio(WHITE, th[1]) >= ratio(INK, th[1]) ? '#fff' : css(INK));
+        s.title = th[0] + ' · accent ' + hex(th[2]);
+        s.setAttribute('aria-label', th[0] + ' theme');
+        s.setAttribute('aria-pressed', 'false');
         s.innerHTML = '<span class="cix">' + String(i + 1).padStart(2, '0') + '</span>';
-        s.addEventListener('click', () => { apply(th, i); $$('.swatch').forEach(x => x.classList.remove('on')); s.classList.add('on'); });
-        wrap.appendChild(s);
+        s.addEventListener('click', () => pick(i));
+        wrap.appendChild(s); swatches.push(s);
       });
-      apply(themes[start], start);
+      if (reset) { reset.addEventListener('click', () => pick(-1)); }
+      pick(-1);
     })();
 
     // ---- reveal on scroll ----

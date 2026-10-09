@@ -138,9 +138,66 @@ namespace AutoClicker.UI
     //  painting differs. Each exposes ApplyTheme(Theme) and is wired into ThemeManager.
     // ──────────────────────────────────────────────────────────────────────────
 
-    /// <summary>A flat, accent-filled checkbox drawn entirely by us.</summary>
-    public sealed class ModernCheckBox : CheckBox
+    /// <summary>
+    /// A control that paints its own caption, and knows where that caption starts.
+    ///
+    /// The layout checker has to know where a checkbox's TEXT is to tell whether it runs
+    /// into its neighbour, and it used to assume every tick box put the text 24 px in. A
+    /// ModernCheckBox starts it at 20; a ToggleSwitch — a 38 px track and an 8 px gap —
+    /// at 46. So a toggle's caption could run 22 px into the control beside it with the
+    /// check measuring a gap that was not there. Each control now says for itself, from
+    /// the same constants it paints with, so the two can never drift apart.
+    /// </summary>
+    internal interface ICaptionOffset
     {
+        /// <summary>X, in the control's own coordinates, where its caption begins.</summary>
+        int CaptionLeft { get; }
+    }
+
+    /// <summary>
+    /// An auto-sized control that takes its OWN size, the way a label does, instead of whatever its
+    /// bounds are set to. WinForms' DPI scaling sets every control to 1.5× its bounds and leaves it to the
+    /// next layout of its container to bring an auto-sized one back to its size — and a card nothing
+    /// re-lays out never gets one. On a 150% screen 52 tick boxes came out of the scaling half as wide and
+    /// half as tall again as their words, and four stayed so with their page on screen: captions sitting
+    /// lower than their row, in boxes running over their neighbours.
+    /// </summary>
+    internal static class SelfSize
+    {
+        /// <summary>
+        /// Whether <paramref name="c"/> should be its own size: auto-sized, and not sized by its container
+        /// instead — docked, stretched between two anchors, or in a flow or table layout.
+        /// </summary>
+        internal static bool Applies(Control c)
+        {
+            if (c == null || !c.AutoSize || c.Dock != DockStyle.None) { return false; }
+            if (c.Parent is FlowLayoutPanel || c.Parent is TableLayoutPanel) { return false; }
+            AnchorStyles a = c.Anchor;
+            return (a & (AnchorStyles.Left | AnchorStyles.Right)) != (AnchorStyles.Left | AnchorStyles.Right)
+                && (a & (AnchorStyles.Top | AnchorStyles.Bottom)) != (AnchorStyles.Top | AnchorStyles.Bottom);
+        }
+
+        /// <summary>For SetBoundsCore: the control's own size in place of the one it was given.</summary>
+        internal static void Apply(Control c, ref int width, ref int height)
+        {
+            if (!Applies(c)) { return; }
+            Size p = c.GetPreferredSize(Size.Empty);
+            width = p.Width;
+            height = p.Height;
+        }
+
+        /// <summary>For a text or font change: take the new size now, not at the container's next layout.</summary>
+        internal static void Refit(Control c)
+        {
+            if (Applies(c)) { c.Size = c.GetPreferredSize(Size.Empty); }
+        }
+    }
+
+    /// <summary>A flat, accent-filled checkbox drawn entirely by us.</summary>
+    public sealed class ModernCheckBox : CheckBox, ICaptionOffset
+    {
+        int ICaptionOffset.CaptionLeft => Box + Gap;
+
         private Theme _theme;
         private bool _hover;
         // Kept close to the native checkbox's footprint so this drop-in replacement
@@ -171,6 +228,16 @@ namespace AutoClicker.UI
             // native control don't collide with this slightly-different replacement.
             return new Size(Box + Gap + t.Width + 2, Math.Max(Box + 2, t.Height + 2));
         }
+
+        // Its own size while AutoSize is on, whatever it is given (SelfSize).
+        protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
+        {
+            SelfSize.Apply(this, ref width, ref height);
+            base.SetBoundsCore(x, y, width, height, specified);
+        }
+
+        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); SelfSize.Refit(this); }
+        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); SelfSize.Refit(this); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -226,8 +293,10 @@ namespace AutoClicker.UI
     }
 
     /// <summary>An iOS-style pill toggle switch (drop-in for a CheckBox).</summary>
-    public sealed class ToggleSwitch : CheckBox
+    public sealed class ToggleSwitch : CheckBox, ICaptionOffset
     {
+        int ICaptionOffset.CaptionLeft => TrackW + Gap;
+
         private Theme _theme;
         private bool _hover;
         private const int TrackW = 38;
@@ -254,6 +323,16 @@ namespace AutoClicker.UI
             Size t = TextRenderer.MeasureText(Text ?? string.Empty, Font);
             return new Size(TrackW + Gap + t.Width + 2, Math.Max(TrackH + 2, t.Height + 2));
         }
+
+        // Its own size while AutoSize is on, whatever it is given (SelfSize).
+        protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
+        {
+            SelfSize.Apply(this, ref width, ref height);
+            base.SetBoundsCore(x, y, width, height, specified);
+        }
+
+        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); SelfSize.Refit(this); }
+        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); SelfSize.Refit(this); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -292,8 +371,10 @@ namespace AutoClicker.UI
     }
 
     /// <summary>A flat, accent-filled radio button drawn entirely by us.</summary>
-    public sealed class ModernRadioButton : RadioButton
+    public sealed class ModernRadioButton : RadioButton, ICaptionOffset
     {
+        int ICaptionOffset.CaptionLeft => Dot + Gap;
+
         private Theme _theme;
         private bool _hover;
         private const int Dot = 16;
@@ -319,6 +400,16 @@ namespace AutoClicker.UI
             Size t = TextRenderer.MeasureText(Text ?? string.Empty, Font);
             return new Size(Dot + Gap + t.Width + 2, Math.Max(Dot + 2, t.Height + 2));
         }
+
+        // Its own size while AutoSize is on, whatever it is given (SelfSize).
+        protected override void SetBoundsCore(int x, int y, int width, int height, BoundsSpecified specified)
+        {
+            SelfSize.Apply(this, ref width, ref height);
+            base.SetBoundsCore(x, y, width, height, specified);
+        }
+
+        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); SelfSize.Refit(this); }
+        protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); SelfSize.Refit(this); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -368,12 +459,94 @@ namespace AutoClicker.UI
         public FlatComboBox()
         {
             FlatStyle = FlatStyle.Flat;
+            // ItemHeight BEFORE the owner-draw mode. Set after it, WinForms' ItemHeight setter creates
+            // the native window on the spot (ComboBox.UpdateItemHeight → CreateControl), and every
+            // property set after that costs real window messages: DropDownStyle destroys the window and
+            // makes it again, SetBounds becomes SetWindowPos, each item a CB_ADDSTRING. Profiled at
+            // start-up, 565 ms of the 1,113 ms MainForm constructor went on that — windows for combos on
+            // tabs nobody had opened, and on a start to the tray, for no one at all. Without a window
+            // the values are only stored, and WM_MEASUREITEM answers from them when the window is made.
+            ItemHeight = DesiredItemHeight;
             DrawMode = DrawMode.OwnerDrawFixed;
-            ItemHeight = Math.Max(20, Font.Height + 8);
         }
 
-        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); RoundRegion(); }
-        protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); RoundRegion(); }
+        // Keep the owner-drawn drop-down row height tied to the (DPI-scaled) font so list text isn't
+        // vertically clipped at 125%/150%/200% display scaling.
+        private int DesiredItemHeight => Math.Max(20, Font.Height + 8);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        private const int WmSetRedraw = 0x000B;
+
+        /// <summary>What the code last asked for (Visible = …); a new control is visible.</summary>
+        private bool _wantVisible = true;
+
+        protected override void SetVisibleCore(bool value)
+        {
+            _wantVisible = value;
+            base.SetVisibleCore(value);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            // WinForms puts every item into the new window here, one message each, and a combo made on
+            // a showing page redraws for every one: measured on this machine, a 38-item combo took
+            // ~80 ms to make and ~40 ms with redraw held off — the Settings page has ~120 items across
+            // its combos, all made the first time it is shown. Only for a combo meant to be SEEN:
+            // WM_SETREDRAW(TRUE) sets the visible style, and would show one meant to stay hidden. (Not
+            // read from the window's style: WinForms makes a child window hidden and shows it after.)
+            bool hold = _wantVisible;
+            if (hold) { SendMessage(Handle, WmSetRedraw, IntPtr.Zero, IntPtr.Zero); }
+            try { base.OnHandleCreated(e); }
+            finally
+            {
+                if (hold)
+                {
+                    SendMessage(Handle, WmSetRedraw, (IntPtr)1, IntPtr.Zero);
+                    Invalidate();
+                }
+            }
+            RoundRegion();
+        }
+
+        protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); RoundRegion(); UpdateClosedTip(); }
+
+        /// <summary>
+        /// The height this combo has once its window exists: the owner-drawn row plus Windows' frame,
+        /// 30 px at 100% scale. Without a window WinForms reports the height of its FONT (23 px) and
+        /// will not take any other, and the layout checks measure controls on tabs that have not been
+        /// shown — so they ask this (LayoutFitter.LaidOutBounds). Windows' own answer for this row
+        /// height, measured once from a real combo made the way these used to be, and reused.
+        /// </summary>
+        internal int ClosedHeight
+        {
+            get
+            {
+                if (IsHandleCreated || DropDownStyle == ComboBoxStyle.Simple) { return Height; }
+                try { return ClosedHeightFor(ItemHeight, DropDownStyle, Font); }
+                catch { return Height; }
+            }
+        }
+
+        private static readonly System.Collections.Generic.Dictionary<(int, ComboBoxStyle), int> ClosedHeights =
+            new System.Collections.Generic.Dictionary<(int, ComboBoxStyle), int>();
+
+        private static int ClosedHeightFor(int itemHeight, ComboBoxStyle style, Font font)
+        {
+            lock (ClosedHeights)
+            {
+                if (ClosedHeights.TryGetValue((itemHeight, style), out int h)) { return h; }
+                using (var probe = new ComboBox { FlatStyle = FlatStyle.Flat, DropDownStyle = style, Font = font })
+                {
+                    probe.DrawMode = DrawMode.OwnerDrawFixed;
+                    probe.ItemHeight = itemHeight;    // creates the probe's window: the one this costs
+                    probe.CreateControl();
+                    h = probe.Height;
+                }
+                ClosedHeights[(itemHeight, style)] = h;
+                return h;
+            }
+        }
 
         private void RoundRegion()
         {
@@ -385,12 +558,27 @@ namespace AutoClicker.UI
             }
         }
 
-        // Keep the owner-drawn drop-down row height tied to the (DPI-scaled) font so
-        // list text isn't vertically clipped at 125%/150%/200% display scaling.
         protected override void OnFontChanged(EventArgs e)
         {
             base.OnFontChanged(e);
-            try { ItemHeight = Math.Max(20, Font.Height + 8); } catch { }
+            try
+            {
+                if (IsHandleCreated)
+                {
+                    ItemHeight = DesiredItemHeight;
+                }
+                else if (ItemHeight != DesiredItemHeight)
+                {
+                    // Stored without making the window (see the constructor): the setter only creates
+                    // it while an owner-draw mode is on.
+                    DrawMode mode = DrawMode;
+                    DrawMode = DrawMode.Normal;
+                    ItemHeight = DesiredItemHeight;
+                    DrawMode = mode;
+                }
+            }
+            catch { }
+            UpdateClosedTip();
         }
 
         public void ApplyTheme(Theme theme)
@@ -425,10 +613,124 @@ namespace AutoClicker.UI
             if (e.Index >= 0 && e.Index < Items.Count)
             {
                 string s = GetItemText(Items[e.Index]);
-                var r = new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 6, e.Bounds.Height);
-                TextRenderer.DrawText(e.Graphics, s, Font, r, fg,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                var r = new Rectangle(e.Bounds.X + ListTextLeft, e.Bounds.Y, e.Bounds.Width - ListTextLeft, e.Bounds.Height);
+                TextRenderer.DrawText(e.Graphics, s, Font, r, fg, ItemFlags);
             }
+        }
+
+        // How a choice is drawn, in the open list and in the closed box. NoPrefix: a choice is shown as
+        // written. Without it a lone "&" — in a profile, macro or device name — was taken for a shortcut
+        // marker: dropped, with the letter after it underlined.
+        private const TextFormatFlags ItemFlags =
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+        private const int ListTextLeft = 6, ClosedTextLeft = 6, ClosedArrowZone = 24;
+
+        /// <summary>
+        /// How wide this box must be to show its widest choice uncut when CLOSED — in 100% units, for a
+        /// layout built before the window is scaled (UiFactory.Measure96) — and never below
+        /// <paramref name="minWidth"/>.
+        /// </summary>
+        internal int WidthForChoices96(int minWidth)
+        {
+            int widest = 0;
+            foreach (object item in Items)
+            {
+                widest = Math.Max(widest, UiFactory.Measure96(GetItemText(item), Font, 0, ItemFlags & ~TextFormatFlags.EndEllipsis).Width);
+            }
+            return Math.Max(minWidth, widest + ClosedArrowZone + 2);
+        }
+
+        /// <summary>How wide <paramref name="choice"/> is as drawn (for the layout checks).</summary>
+        internal int ChoiceWidth(string choice) =>
+            TextRenderer.MeasureText(choice ?? string.Empty, Font, new Size(int.MaxValue, int.MaxValue),
+                ItemFlags & ~TextFormatFlags.EndEllipsis).Width;
+
+        /// <summary>The room the CLOSED box draws its choice in (see PaintClosedCombo).</summary>
+        internal int ClosedTextRoom => Math.Max(1, Width - ClosedArrowZone);
+
+        /// <summary>The room a row of the OPEN list has: its width, less the list's border and scroll bar.</summary>
+        internal int ListTextRoom => Math.Max(1, OpenListWidth - 2 - ListScrollBar - ListTextLeft);
+
+        private int ListScrollBar => Items.Count > MaxDropDownItems ? SystemInformation.VerticalScrollBarWidth : 0;
+
+        /// <summary>
+        /// <see cref="ClosedTextRoom"/> in a layout's units, where a painted pixel is
+        /// <paramref name="unitsPerPixel"/> of them (LayoutFitter.SetUnitsPerPixel): the box's width is a
+        /// layout number, its arrow is pixels it paints.
+        /// </summary>
+        internal int ClosedTextRoomIn(float unitsPerPixel) =>
+            Math.Max(1, Width - (int)Math.Ceiling(ClosedArrowZone * unitsPerPixel));
+
+        /// <summary><see cref="ListTextRoom"/> in a layout's units (see <see cref="ClosedTextRoomIn"/>).</summary>
+        internal int ListTextRoomIn(float unitsPerPixel)
+        {
+            int widest = 0;
+            foreach (object item in Items) { widest = Math.Max(widest, ChoiceWidth(GetItemText(item))); }
+            int edges = 2 + ListScrollBar + ListTextLeft;
+            int list = Math.Max(Width, (int)Math.Ceiling((widest + edges + 4) * unitsPerPixel));
+            return Math.Max(1, list - (int)Math.Ceiling(edges * unitsPerPixel));
+        }
+
+        /// <summary>
+        /// How wide the list opens: as wide as its widest choice — never narrower than the box, never
+        /// past the edge of the screen it opens on — so every choice reads in full while choosing. It
+        /// was always the box's own width, and a long translated choice was cut in the list as well.
+        /// </summary>
+        internal int OpenListWidth
+        {
+            get
+            {
+                try
+                {
+                    int widest = 0;
+                    foreach (object item in Items) { widest = Math.Max(widest, ChoiceWidth(GetItemText(item))); }
+                    int want = widest + ListTextLeft + 2 + ListScrollBar + 4;
+                    int max = Width;
+                    if (IsHandleCreated)
+                    {
+                        Rectangle wa = Screen.FromControl(this).WorkingArea;
+                        max = Math.Max(Width, wa.Right - PointToScreen(Point.Empty).X - 4);
+                    }
+                    else
+                    {
+                        max = Math.Max(Width, 640);
+                    }
+                    return Math.Max(Width, Math.Min(want, max));
+                }
+                catch { return Width; }
+            }
+        }
+
+        protected override void OnDropDown(EventArgs e)
+        {
+            try
+            {
+                int width = OpenListWidth;
+                if (DropDownWidth != width) { DropDownWidth = width; }
+            }
+            catch { }
+            base.OnDropDown(e);
+        }
+
+        protected override void OnSelectedIndexChanged(EventArgs e)
+        {
+            base.OnSelectedIndexChanged(e);
+            UpdateClosedTip();
+        }
+
+        /// <summary>
+        /// A choice too long for the closed box ends in "…" there; its whole text is on hover — the
+        /// same as a caption the layout pass shortens — and the tip goes away when it fits again.
+        /// </summary>
+        private void UpdateClosedTip()
+        {
+            try
+            {
+                string s = SelectedIndex >= 0 && SelectedIndex < Items.Count ? GetItemText(Items[SelectedIndex]) : Text;
+                bool cut = !string.IsNullOrEmpty(s) && ChoiceWidth(s) > ClosedTextRoom;
+                TipStyle.SetCaption(this, cut ? s : null);
+            }
+            catch { }
         }
 
         private const int WmEraseBkgnd = 0x0014;
@@ -537,9 +839,8 @@ namespace AutoClicker.UI
                 : Text;
             if (!string.IsNullOrEmpty(s))
             {
-                var tr = new Rectangle(6, 0, Math.Max(1, Width - 24), Height);
-                TextRenderer.DrawText(g, s, Font, tr, Enabled ? text : muted,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                var tr = new Rectangle(ClosedTextLeft, 0, ClosedTextRoom, Height);
+                TextRenderer.DrawText(g, s, Font, tr, Enabled ? text : muted, ItemFlags);
             }
 
             // Drop arrow.
@@ -614,12 +915,32 @@ namespace AutoClicker.UI
             Invalidate();
         }
 
+        private const TextFormatFlags SegFlags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
+                                                 TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix;
+
+        /// <summary>
+        /// True when the three parts, drawn as OnPaint draws them, fit the label's width. Nothing
+        /// here wraps or ellipsizes: a line that is too long is simply cut off at the edge, so a
+        /// caller with a long and a short way to say something asks first.
+        /// </summary>
+        public bool Fits(string prefix, string value, string suffix)
+        {
+            int w = 0;
+            foreach (var seg in new[] { (prefix, Font), (value, ValueFont), (suffix, Font) })
+            {
+                if (!string.IsNullOrEmpty(seg.Item1))
+                {
+                    w += TextRenderer.MeasureText(seg.Item1, seg.Item2, new Size(int.MaxValue, Height), SegFlags).Width;
+                }
+            }
+            return w <= ClientSize.Width;
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.Clear(BackColor.A == 255 ? BackColor : (Parent != null ? Parent.BackColor : BackColor));
-            const TextFormatFlags flags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
-                                          TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix;
+            const TextFormatFlags flags = SegFlags;
             int x = 0;
             x += DrawSeg(g, _prefix, ForeColor, x, Font, flags);
             x += DrawSeg(g, _value, AccentColor, x, ValueFont, flags);
@@ -1049,6 +1370,72 @@ namespace AutoClicker.UI
                 }
             }
             catch { /* the outline is cosmetic; never let painting throw */ }
+            finally
+            {
+                ReleaseDC(Handle, hdc);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A RichTextBox whose frame is painted in the theme.
+    ///
+    /// Windows draws a RichTextBox's FixedSingle border as the classic 2 px sunken edge — grey on
+    /// the top and left, #FFFFFF and #E3E3E3 on the bottom and right — whatever the theme, so the
+    /// Captions transcript sat in a bright white frame on every dark theme (measured off the
+    /// window). After Windows paints that edge, it is painted over: the outer pixel in the theme's
+    /// input outline (the colour FlatTextBox uses), the inner one in the box's own background, so
+    /// the text keeps exactly the inset it had.
+    /// </summary>
+    public sealed class ThemedRichTextBox : RichTextBox
+    {
+        private const int WmPaint = 0x000F;
+        private const int WmNcPaint = 0x0085;
+
+        private Color _frame = SystemColors.ControlDark;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr GetWindowDC(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+        /// <summary>Takes the frame and background colours from <paramref name="theme"/>.</summary>
+        public void ApplyTheme(Theme theme)
+        {
+            if (theme == null) { return; }
+            _frame = Theme.Readable(theme.Border, theme.InputBackground, 3.0);
+            BackColor = theme.InputBackground;
+            ForeColor = theme.Text;
+            PaintFrame();
+        }
+
+        protected override void OnBackColorChanged(EventArgs e) { base.OnBackColorChanged(e); PaintFrame(); }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (m.Msg == WmNcPaint || m.Msg == WmPaint)
+            {
+                PaintFrame();
+            }
+        }
+
+        private void PaintFrame()
+        {
+            if (!IsHandleCreated || BorderStyle == BorderStyle.None || Width <= 4 || Height <= 4) { return; }
+            IntPtr hdc = GetWindowDC(Handle);          // the whole window, the frame included
+            if (hdc == IntPtr.Zero) { return; }
+            try
+            {
+                using (var g = Graphics.FromHdc(hdc))
+                using (var inner = new Pen(BackColor, 1f))
+                using (var edge = new Pen(_frame, 1f))
+                {
+                    g.DrawRectangle(inner, 1, 1, Width - 3, Height - 3);
+                    g.DrawRectangle(edge, 0, 0, Width - 1, Height - 1);
+                }
+            }
+            catch { /* the frame is cosmetic; never let painting throw */ }
             finally
             {
                 ReleaseDC(Handle, hdc);

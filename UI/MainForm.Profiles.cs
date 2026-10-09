@@ -56,8 +56,38 @@ namespace AutoClicker.UI
         /// <summary>True while a grid rebuild is already posted, so several requests collapse into one.</summary>
         private bool _profileGridRebuildQueued;
 
-        /// <summary>Stops an activation from re-entering itself mid-rebuild.</summary>
+        /// <summary>Stops a switch from re-entering itself (a prompt below it runs a message loop).</summary>
         private bool _activatingProfile;
+
+        private Button _profileNewButton;
+        private Button _profileImportButton;
+        private Label _profileHintLabel;
+
+        /// <summary>Where a profile switch came from. It decides what happens to unsaved edits.</summary>
+        private enum ProfileSwitchSource
+        {
+            /// <summary>The Clicker dropdown or the Profiles tab: the window is in front, so it can ask.</summary>
+            Ui,
+            /// <summary>The Next/Previous-profile hotkeys: no dialog, it would take focus from the game.</summary>
+            Hotkey,
+            /// <summary>The tray menu: the window may be hidden, so no dialog either.</summary>
+            Tray
+        }
+
+        /// <summary>True while a profile hotkey drives the Clicker dropdown (see CycleProfile).</summary>
+        private bool _profileSwitchByHotkey;
+
+        /// <summary>
+        /// Unsaved Clicker-tab edits of profiles that were switched away from without a question
+        /// (by a hotkey or from the tray), by profile name. They come back, still marked unsaved,
+        /// when that profile is chosen again. Kept for this session only.
+        ///
+        /// Every switch used to reload the Clicker tab from the saved profile and drop whatever
+        /// had been changed there. The "Unsaved changes" note warned about exactly this, and no
+        /// way of switching ever asked: one press of Next profile in a game threw the edits away.
+        /// </summary>
+        private readonly Dictionary<string, ClickProfile> _profileDrafts =
+            new Dictionary<string, ClickProfile>(StringComparer.OrdinalIgnoreCase);
 
         // ─────────────────────────────────────────────────────────────────────
         //  Build
@@ -107,13 +137,16 @@ namespace AutoClicker.UI
                 _profileSortCombo.AccessibleName = Localization.T("Sort profiles");
                 _profileSortCombo.SelectedIndexChanged += OnProfileFilterChanged;
                 page.Controls.Add(_profileSortCombo);
+                // As wide as its longest choice: German "Am häufigsten verwendet" needed 143 px of the
+                // 136 it had. The tick box after it moves along.
+                if (_profileSortCombo is FlatComboBox sortBox) { sortBox.Width = sortBox.WidthForChoices96(160); }
             }
             finally
             {
                 _suppressProfileFilterEvents = false;
             }
 
-            _profileFavOnly = UiFactory.Check("Favourites only", 560, row + 3);
+            _profileFavOnly = UiFactory.Check("Favourites only", Math.Max(560, _profileSortCombo.Right + 14), row + 3);
             _profileFavOnly.CheckedChanged += OnProfileFilterChanged;
             page.Controls.Add(_profileFavOnly);
 
@@ -123,18 +156,22 @@ namespace AutoClicker.UI
             var newBtn = UiFactory.PrimaryButton("New profile", 16, row, 122, 30, _theme);
             newBtn.Click += OnProfileLibNew;
             page.Controls.Add(newBtn);
+            _profileNewButton = newBtn;
 
             var importBtn = UiFactory.Button("Import…", 146, row, 96, 30);
             importBtn.Click += OnProfileLibImport;
             page.Controls.Add(importBtn);
+            _profileImportButton = importBtn;
 
             _profileRecycleButton = UiFactory.Button("Recycle bin", 250, row, 122, 30);
             _profileRecycleButton.Click += OnProfileLibRecycleBin;
             page.Controls.Add(_profileRecycleButton);
 
-            var hint = UiFactory.Caption("Click a card to switch to it. Right-click for more.", 386, row + 8);
+            // Also where the tab says why a card will not switch right now (RefreshProfileLock).
+            var hint = UiFactory.Caption(ProfileHintText, 386, row + 8);
             hint.ForeColor = _theme.TextMuted;
             page.Controls.Add(hint);
+            _profileHintLabel = hint;
 
             // ── Grid ──────────────────────────────────────────────────────────
             //
@@ -151,6 +188,8 @@ namespace AutoClicker.UI
             _profileEmptyLabel.ForeColor = _theme.TextMuted;
             _profileEmptyLabel.Visible = false;
             page.Controls.Add(_profileEmptyLabel);
+            LayoutFitter.DeclareOverlay(_profileEmptyLabel,
+                "shown in the card grid's place only when a search matches no card");
 
             BuildProfileCardMenu();
 
@@ -167,8 +206,16 @@ namespace AutoClicker.UI
                 (_profileCardMenu.Renderer as ThemedMenuRenderer)?.Dispose();
             ApplyThemeToProfileMenu();
 
-            _profileCardMenu.Items.Add(Localization.T("Switch to this profile"), null,
-                (s, e) => WithMenuProfile(ActivateProfileByName));
+            var switchItem = new ToolStripMenuItem(Localization.T("Switch to this profile"));
+            switchItem.Click += (s, e) => WithMenuProfile(ActivateProfileByName);
+            _profileCardMenu.Items.Add(switchItem);
+
+            // The star on the card is a mouse-only target; this is the same toggle for the
+            // keyboard (Shift+F10 / the menu key on a focused card) and for anyone who never
+            // noticed the star. Its wording follows the card it was opened on.
+            var favItem = new ToolStripMenuItem(Localization.T("Add to favourites"));
+            favItem.Click += (s, e) => WithMenuProfile(ToggleProfileFavorite);
+            _profileCardMenu.Items.Add(favItem);
             _profileCardMenu.Items.Add(new ToolStripSeparator());
             _profileCardMenu.Items.Add(Localization.T("Edit details…"), null,
                 (s, e) => WithMenuProfile(OnProfileLibEdit));
@@ -177,8 +224,69 @@ namespace AutoClicker.UI
             _profileCardMenu.Items.Add(Localization.T("Export…"), null,
                 (s, e) => WithMenuProfile(OnProfileLibExport));
             _profileCardMenu.Items.Add(new ToolStripSeparator());
-            _profileCardMenu.Items.Add(Localization.T("Delete"), null,
-                (s, e) => WithMenuProfile(OnProfileLibDelete));
+            var deleteItem = new ToolStripMenuItem(Localization.T("Delete"));
+            deleteItem.Click += (s, e) => WithMenuProfile(OnProfileLibDelete);
+            _profileCardMenu.Items.Add(deleteItem);
+
+            _profileCardMenu.Opening += (s, e) =>
+            {
+                var card = _profileCardMenu.SourceControl as ProfileCard;
+                favItem.Text = Localization.T(card != null && card.Favorite
+                    ? "Remove from favourites" : "Add to favourites");
+
+                // Mid-run, the same rule as the Clicker tab's dropdown and the tray: no switching,
+                // and the loaded profile cannot be deleted from under the run. "Switch" to the
+                // profile already loaded does nothing, so it says so by being greyed.
+                bool locked = ProfileLockReason() != null;
+                bool active = card != null && card.IsActive;
+                switchItem.Enabled = !locked && !active;
+                deleteItem.Enabled = !(locked && active);
+            };
+        }
+
+        private const string ProfileHintText = "Click a card to switch to it. Right-click for more.";
+
+        /// <summary>
+        /// Why profiles cannot be switched right now, or null when they can. One rule for the
+        /// Clicker tab's dropdown, the Profiles tab and the tray: while Tempo is clicking, playing
+        /// a macro or recording one. (The Next/Previous-profile hotkeys still switch mid-run, on
+        /// purpose — see NoteSwitchDuringRun.)
+        ///
+        /// Only the dropdown and the tray were locked. A card on the Profiles tab switched mid-run
+        /// — handing the running clicker another profile's settings — and "New profile",
+        /// "Import…" (replacing the loaded profile) and deleting the loaded profile all did the
+        /// same thing by another route.
+        /// </summary>
+        private string ProfileLockReason()
+        {
+            if (_liveRecording) { return "Stop recording to switch profile"; }
+            if (_player != null && _player.IsPlaying) { return "Stop the macro to switch profile"; }
+            if (_engine != null && (_engine.IsRunning || _engine.IsPaused)) { return "Stop clicking to switch profile"; }
+            return null;
+        }
+
+        /// <summary>The loaded profile's name for display, falling back to the one remembered for start-up.</summary>
+        private string ActiveProfileName()
+        {
+            if (!string.IsNullOrWhiteSpace(_currentProfileName)) { return _currentProfileName; }
+            if (_settings != null && !string.IsNullOrEmpty(_settings.LastProfileName)) { return _settings.LastProfileName; }
+            return "Default";
+        }
+
+        /// <summary>Greys what would switch or replace the loaded profile, and says why. Called from RefreshBusyLock.</summary>
+        private void RefreshProfileLock()
+        {
+            string reason = ProfileLockReason();
+            if (_profileNewButton != null) { _profileNewButton.Enabled = reason == null; }
+            if (_profileImportButton != null) { _profileImportButton.Enabled = reason == null; }
+            if (_profileHintLabel != null)
+            {
+                string text = Localization.T(reason ?? ProfileHintText);
+                if (!string.Equals(_profileHintLabel.Text, text, StringComparison.Ordinal))
+                {
+                    _profileHintLabel.Text = text;
+                }
+            }
         }
 
         /// <summary>
@@ -239,19 +347,25 @@ namespace AutoClicker.UI
                 // is for. Within each group the chosen order applies.
                 if (a.Favorite != b.Favorite) { return a.Favorite ? -1 : 1; }
 
+                // Every order ends in the name. List.Sort is not stable, so two profiles
+                // with the same use count (every never-used one, for a start) could swap
+                // places on any rebuild — and a rebuild follows every click on a card, so
+                // cards you did not touch jumped around under the pointer.
+                int byName = string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
                 switch (sort)
                 {
                     case 1:
-                        return string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
+                        return byName;
                     case 2:
-                        return b.TimesUsed.CompareTo(a.TimesUsed);
+                        int byCount = b.TimesUsed.CompareTo(a.TimesUsed);
+                        return byCount != 0 ? byCount : byName;
                     case 3:
-                        return b.CreatedUtc.CompareTo(a.CreatedUtc);
+                        int byAge = b.CreatedUtc.CompareTo(a.CreatedUtc);
+                        return byAge != 0 ? byAge : byName;
                     default:
                         // Recently used, with never-used profiles falling to the back.
                         int byUse = b.LastUsedUtc.CompareTo(a.LastUsedUtc);
-                        if (byUse != 0) { return byUse; }
-                        return string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
+                        return byUse != 0 ? byUse : byName;
                 }
             });
 
@@ -301,11 +415,22 @@ namespace AutoClicker.UI
 
             var shown = VisibleProfiles();
 
+            // Which card had the keyboard. Every card is about to be replaced, and pressing
+            // Enter on one (switch) or toggling its star is exactly what triggers this — so
+            // focus used to vanish with the old card and a keyboard user was sent back to
+            // the start of the tab order after every action.
+            string focusedName = null;
+            foreach (var card in _profileCards)
+            {
+                if (card.Focused) { focusedName = card.ProfileName; break; }
+            }
+
             _profilesPage.SuspendLayout();
             try
             {
                 foreach (var card in _profileCards)
                 {
+                    TipStyle.Set(_tips, card, null);   // the tooltip lets go of it too
                     _profilesPage.Controls.Remove(card);
                     card.Dispose();
                 }
@@ -337,10 +462,17 @@ namespace AutoClicker.UI
                     };
                     card.AccessibleName = p.Name;
                     card.AccessibleDescription = ProfileUsageText(p);
+                    card.TipText = ProfileCardTip(p);
+                    // At the window's scale: the grid is rebuilt long after the window has scaled,
+                    // and new cards came out at 100% size on a 125%/150% laptop, the first row on
+                    // top of the New profile / Import buttons (scratchpad/mainscan, "dpi").
+                    float k = AppliedWindowScale;
+                    card.Size = new Size((int)Math.Round(ProfileCard.CardWidth * k), (int)Math.Round(ProfileCard.CardHeight * k));
 
                     string name = p.Name;
                     card.Activated += (s, e) => ActivateProfileByName(name);
                     card.FavoriteToggled += (s, e) => ToggleProfileFavorite(name);
+                    card.KeyDown += (s, e) => OnProfileCardKey(name, e);
 
                     _profileCards.Add(card);
                     _profilesPage.Controls.Add(card);
@@ -353,6 +485,16 @@ namespace AutoClicker.UI
 
             ApplyThemeToProfileCards();
             LayoutProfileGrid();
+            RefreshProfileCardTips();
+
+            // Hand the keyboard back to the same profile's new card (wherever the sort has
+            // put it now).
+            if (focusedName != null)
+            {
+                var again = _profileCards.Find(c =>
+                    string.Equals(c.ProfileName, focusedName, StringComparison.OrdinalIgnoreCase));
+                if (again != null && again.CanFocus) { again.Focus(); }
+            }
 
             int total = _profiles != null ? _profiles.Count : 0;
             if (_profileCountLabel != null)
@@ -381,13 +523,23 @@ namespace AutoClicker.UI
         {
             if (_profilesPage == null) { return; }
 
+            // Every number here is a 100% one, multiplied by the scale the window has applied:
+            // this runs again on every rebuild and resize, long after the window scaled, and at
+            // 100% numbers the grid sat on the buttons above it on a 125%/150% laptop.
+            float k = AppliedWindowScale;
+            int gridLeft = (int)Math.Round(ProfileGridLeft * k);
+            int gap = (int)Math.Round(ProfileGridGap * k);
+            int cardWidth = (int)Math.Round(ProfileCard.CardWidth * k);
+            int cardHeight = (int)Math.Round(ProfileCard.CardHeight * k);
+            int gridTop = (int)Math.Round(_profileGridTop * k);
+
             // Use the page's client width, less the left margin and a right margin
             // wide enough that the vertical scrollbar never sits on top of a card.
-            int available = _profilesPage.ClientSize.Width - (ProfileGridLeft * 2) - 8;
-            if (available < ProfileCard.CardWidth) { available = ProfileCard.CardWidth; }
+            int available = _profilesPage.ClientSize.Width - (gridLeft * 2) - (int)Math.Round(8 * k);
+            if (available < cardWidth) { available = cardWidth; }
 
-            int step = ProfileCard.CardWidth + ProfileGridGap;
-            int columns = Math.Max(1, (available + ProfileGridGap) / step);
+            int step = cardWidth + gap;
+            int columns = Math.Max(1, (available + gap) / step);
 
             // Child coordinates on an AutoScroll page are relative to the SCROLLED
             // origin, so a relayout while scrolled down would otherwise plant every
@@ -398,15 +550,14 @@ namespace AutoClicker.UI
             {
                 int col = i % columns;
                 int rowIndex = i / columns;
-                _profileCards[i].Left = origin.X + ProfileGridLeft + (col * step);
-                _profileCards[i].Top = origin.Y + _profileGridTop +
-                                       (rowIndex * (ProfileCard.CardHeight + ProfileGridGap));
+                _profileCards[i].Left = origin.X + gridLeft + (col * step);
+                _profileCards[i].Top = origin.Y + gridTop + (rowIndex * (cardHeight + gap));
             }
 
             if (_profileEmptyLabel != null)
             {
-                _profileEmptyLabel.Left = origin.X + ProfileGridLeft;
-                _profileEmptyLabel.Top = origin.Y + _profileGridTop + 12;
+                _profileEmptyLabel.Left = origin.X + gridLeft;
+                _profileEmptyLabel.Top = origin.Y + gridTop + (int)Math.Round(12 * k);
             }
         }
 
@@ -515,6 +666,42 @@ namespace AutoClicker.UI
             return used + "  ·  " + FormatProfileRuntime(p.TotalRuntimeSeconds);
         }
 
+        /// <summary>
+        /// A card's tooltip: the whole name and description — a card shows about 20 characters
+        /// of a name the editors allow 60 of, and cut both off with "…" and no way to read the
+        /// rest — and what switching to it puts back besides the clicking setup.
+        /// </summary>
+        private static string ProfileCardTip(ClickProfile p)
+        {
+            if (p == null) { return ""; }
+            var sb = new System.Text.StringBuilder(p.Name ?? "");
+            string desc = Localization.T(p.Description ?? "");
+            if (!string.IsNullOrWhiteSpace(desc)) { sb.Append('\n').Append(desc.Trim()); }
+            if (p.Keybinds != null || p.AppSettings != null)
+            {
+                sb.Append("\n\n").Append(Localization.T(
+                    p.Keybinds != null && p.AppSettings != null
+                        ? "Switching to it also puts back its saved keybinds, theme, overlay and caption look."
+                        : p.Keybinds != null
+                            ? "Switching to it also puts back its saved keybinds."
+                            : "Switching to it also puts back its saved theme, overlay and caption look."));
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Hands each card's tip to the main tooltip. Also called once the tooltips exist: the
+        /// first grid is built during start-up, before them, and its cards had no tip at all.
+        /// </summary>
+        private void RefreshProfileCardTips()
+        {
+            if (_tips == null) { return; }
+            foreach (var card in _profileCards)
+            {
+                if (card != null && !card.IsDisposed) { TipStyle.Set(_tips, card, card.TipText); }
+            }
+        }
+
         private static string FormatProfileRuntime(long seconds)
         {
             if (seconds < 60) { return Localization.F("{0}s", seconds.ToString()); }
@@ -534,53 +721,181 @@ namespace AutoClicker.UI
         //  Commands
         // ─────────────────────────────────────────────────────────────────────
 
-        /// <summary>
-        /// Makes a profile the active one: loads it into the Clicker tab, records
-        /// the use, and applies whatever optional snapshots it carries.
-        /// </summary>
+        /// <summary>A card, the card menu or a new profile: switched from the Profiles tab.</summary>
         private void ActivateProfileByName(string name)
+        {
+            ActivateProfileByName(name, ProfileSwitchSource.Ui);
+        }
+
+        /// <summary>
+        /// Switches from the Profiles tab or the tray, which are locked while Tempo is busy — as
+        /// the Clicker tab's dropdown always was (see ProfileLockReason).
+        /// </summary>
+        private void ActivateProfileByName(string name, ProfileSwitchSource source)
         {
             if (string.IsNullOrEmpty(name) || _profiles == null) { return; }
 
+            string locked = ProfileLockReason();
+            if (locked != null)
+            {
+                Logger.Info("[profiles] not switching to '" + name + "': " + locked + ".");
+                RefreshProfileLock();   // the tab says why
+                return;
+            }
+
+            SwitchToProfile(name, source);
+        }
+
+        /// <summary>
+        /// THE way to make a profile the loaded one; the Clicker dropdown, the profile hotkeys,
+        /// the Profiles tab, the tray, New, Duplicate and Delete all come through here. Loads it
+        /// into the Clicker and Multi-Point tabs, brings back any unsaved edits kept for it,
+        /// remembers it for the next start and applies the keybinds and look saved with it.
+        ///
+        /// Before, each way of switching did its own subset. New, Duplicate and Delete on the
+        /// Clicker tab loaded the next profile directly: its keybinds and look were not applied
+        /// and it was not remembered for the next start, so the tray kept ticking the old one
+        /// and a restart reopened it. The Profiles tab counted a use and nothing else did, and a
+        /// hotkey switch into clashing keybinds put a dialog over the game.
+        ///
+        /// Returns false when nothing changed: the profile is gone, a switch is already under
+        /// way, or the user chose to keep working on unsaved edits.
+        ///
+        /// <paramref name="askAboutEdits"/> false: the edits are already dealt with — the caller
+        /// asked (New, Duplicate), or they belonged to a profile that is gone (Delete) — and the
+        /// target is loaded even if it has the same name (deleting the only "Default" makes a
+        /// fresh one).
+        /// </summary>
+        private bool SwitchToProfile(string name, ProfileSwitchSource source, bool askAboutEdits = true)
+        {
+            if (string.IsNullOrEmpty(name) || _profiles == null) { return false; }
+
             var profile = _profiles.GetByName(name);
-            if (profile == null) { return; }
+            if (profile == null) { return false; }
 
-            // Activating rebuilds the grid, which destroys and recreates the cards.
-            // A second activation arriving while that is in flight would bump the use
-            // count for a click nobody made, so one at a time.
-            if (_activatingProfile) { return; }
+            // One at a time: the unsaved-edits question runs a message loop, and a hotkey or a
+            // second click arriving under it would start another switch half-way through this one.
+            if (_activatingProfile) { return false; }
+
+            bool same = string.Equals(profile.Name, _currentProfileName, StringComparison.OrdinalIgnoreCase);
             _activatingProfile = true;
-
             try
             {
-                LoadProfileIntoUi(profile);
-                SelectProfileInCombo(profile.Name);
-                _settings.LastProfileName = profile.Name;
-
-                // The use count and last-used stamp are history, so they follow the
-                // same privacy switch as the session history: with recording off,
-                // activating a profile leaves no trace.
-                if (_settings.RecordSessionHistory)
+                if (same && askAboutEdits)
                 {
-                    _profiles.MarkUsed(profile.Name);
+                    // Already loaded. Reloading it threw the Clicker tab's unsaved edits away
+                    // for a click on the card that was already ringed as active.
+                    SelectProfileInCombo(profile.Name);
+                    return true;
                 }
 
-                ApplyProfileExtras(profile);
-                _profiles.Save();
+                if (askAboutEdits && !HandleUnsavedEditsBeforeSwitch(source))
+                {
+                    return false;
+                }
 
-                // ApplyProfileExtras writes the profile's keybinds and appearance into
-                // _settings, and LastProfileName changed above. None of that is worth
-                // anything if it is not written down — without this the theme a profile
-                // restored would be back to the old one after a restart.
-                try { SettingsManager.Save(_settings); } catch { }
+                // Asking may have saved (and renamed) the outgoing profile, which rebuilds the
+                // library — so look the target up again rather than trusting the old reference.
+                profile = _profiles.GetByName(name);
+                if (profile == null) { return false; }
+
+                LoadProfileIntoUi(profile);
+                RestoreDraftIfAny(profile);
+                SelectProfileInCombo(profile.Name);
+                NoteSwitchDuringRun(profile.Name);
+                _settings.LastProfileName = profile.Name;
+                ApplyProfileExtras(profile, quiet: source != ProfileSwitchSource.Ui);
+
+                // ApplyProfileExtras writes the profile's keybinds and look into _settings, and
+                // LastProfileName changed above. Without saving, the theme a profile restored
+                // was back to the old one after a restart.
+                try { SettingsManager.Save(_settings); } catch (Exception ex) { Logger.Swallow("profiles", ex); }
             }
             finally
             {
                 _activatingProfile = false;
             }
 
-            RefreshProfileGrid();
-            Logger.Info("[profiles] switched to '" + profile.Name + "'.");
+            Logger.Info("[profiles] switched to '" + profile.Name + "' (" + source + ").");
+            return true;
+        }
+
+        /// <summary>True when the Clicker/Multi-Point tabs differ from the loaded profile as saved.</summary>
+        private bool ProfileHasUnsavedEdits()
+        {
+            if (_profileSnapshotJson == null || string.IsNullOrEmpty(_currentProfileName)) { return false; }
+            string now = SerializeProfileSafe();
+            return now != null && !string.Equals(now, _profileSnapshotJson, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Unsaved edits of the loaded profile, before another is loaded over them. From the
+        /// window: asked — save, discard, or stay. From a hotkey or the tray: kept as a draft
+        /// that comes back with the profile, because a dialog there would take focus from the
+        /// game or pop up over a hidden window. False means stay.
+        /// </summary>
+        private bool HandleUnsavedEditsBeforeSwitch(ProfileSwitchSource source)
+        {
+            if (!ProfileHasUnsavedEdits()) { return true; }
+
+            if (source != ProfileSwitchSource.Ui)
+            {
+                StashProfileDraft();
+                return true;
+            }
+
+            var answer = MessageBox.Show(this,
+                Localization.F("“{0}” has unsaved changes. Save them before switching?", _currentProfileName),
+                "Tempo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (answer == DialogResult.Cancel) { return false; }
+            if (answer == DialogResult.Yes)
+            {
+                // A save that fails (validation, a name clash) has already said why; stay put
+                // with the edits rather than lose them.
+                return SaveCurrentProfile(announce: false);
+            }
+
+            // Don't save: the edits go, and so does any older draft of them.
+            _profileDrafts.Remove(_currentProfileName);
+            return true;
+        }
+
+        /// <summary>Keeps the loaded profile's unsaved edits to come back with it (see _profileDrafts).</summary>
+        private void StashProfileDraft()
+        {
+            if (string.IsNullOrEmpty(_currentProfileName)) { return; }
+            try
+            {
+                _profileDrafts[_currentProfileName] = BuildProfileFromUi();
+                Logger.Info("[profiles] kept the unsaved changes to '" + _currentProfileName
+                            + "' for when it is chosen again.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Swallow("profiles.StashProfileDraft", ex);
+            }
+        }
+
+        /// <summary>
+        /// Puts a kept draft back over the profile just loaded, still marked unsaved: the saved
+        /// profile stays the baseline, so Save and the unsaved note work as if it had never left.
+        /// </summary>
+        private bool RestoreDraftIfAny(ClickProfile profile)
+        {
+            if (profile == null || !_profileDrafts.TryGetValue(profile.Name, out ClickProfile draft) || draft == null)
+            {
+                return false;
+            }
+            _profileDrafts.Remove(profile.Name);
+
+            LoadProfileIntoUi(draft, asBaseline: false);
+            // The draft carries the name as it was typed, which may not be saved yet; the loaded
+            // profile is still this one.
+            _currentProfileName = profile.Name;
+            RefreshProfileGridActive();
+            UpdateProfileDirty();
+            Logger.Info("[profiles] brought back the unsaved changes to '" + profile.Name + "'.");
+            return true;
         }
 
         /// <summary>
@@ -589,8 +904,11 @@ namespace AutoClicker.UI
         /// Both are null unless the user ticked the box in the details dialog, and a
         /// null one is left strictly alone — a profile never changes something it
         /// was not asked to carry.
+        ///
+        /// <paramref name="quiet"/>: switched by a hotkey or from the tray, so a clash is reported
+        /// as a notification instead of a dialog that would take focus from the game.
         /// </summary>
-        private void ApplyProfileExtras(ClickProfile profile)
+        private void ApplyProfileExtras(ClickProfile profile, bool quiet = false)
         {
             if (profile == null || _settings == null) { return; }
 
@@ -630,13 +948,10 @@ namespace AutoClicker.UI
                 {
                     _keybindsDirtyLabel.Visible = false;
                 }
-                if (_keybindsTakenLabel != null)
-                {
-                    _keybindsTakenLabel.Visible = false;   // it described the old binding
-                }
+                SetKeybindNotice(_keybindsTakenLabel, null, restack: false);   // it described the old binding
 
                 ApplyHotkeysFromSettings();
-                HighlightConflicts();
+                HighlightConflicts();   // re-stacks the notices
 
                 // Say it out loud if the profile's keys now collide with something.
                 //
@@ -652,10 +967,21 @@ namespace AutoClicker.UI
                 string clashes = FindConflicts();
                 if (!string.IsNullOrEmpty(clashes))
                 {
-                    ShowWarning(Utils.Localization.F(
-                        "The keybinds saved with “{0}” collide with combinations already in use. "
-                        + "Windows cannot reserve one combination twice, so a single press will run BOTH "
-                        + "actions:\n\n{1}", profile.Name, clashes));
+                    // "Only one responds": the hotkey manager leaves the second action on a shared
+                    // combination unbound (it used to say a press would run both).
+                    string message = Utils.Localization.F(
+                        "The keybinds saved with “{0}” collide with combinations already in use. Only one "
+                        + "action will respond to each of these keys — give the others a different one on "
+                        + "the Keybinds tab:\n\n{1}", profile.Name, clashes);
+                    Logger.Warn("[profiles] the keybinds saved with '" + profile.Name + "' clash: " + clashes.Replace("\n", "; "));
+                    if (quiet)
+                    {
+                        TempoNotify(8000, "Tempo", message, ToolTipIcon.Warning, always: true);
+                    }
+                    else
+                    {
+                        ShowWarning(message);
+                    }
                 }
 
                 Logger.Info("[profiles] applied the keybinds saved with '" + profile.Name + "'.");
@@ -670,6 +996,25 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>
+        /// Keys on a focused card, matching the macro list: Delete deletes (it still asks,
+        /// and the recycle bin keeps a copy), F2 opens the details to rename.
+        /// </summary>
+        private void OnProfileCardKey(string name, KeyEventArgs e)
+        {
+            if (e == null || string.IsNullOrEmpty(name)) { return; }
+            if (e.KeyCode == Keys.Delete && e.Modifiers == Keys.None)
+            {
+                e.Handled = true;
+                OnProfileLibDelete(name);
+            }
+            else if (e.KeyCode == Keys.F2 && e.Modifiers == Keys.None)
+            {
+                e.Handled = true;
+                OnProfileLibEdit(name);
+            }
+        }
+
         private void ToggleProfileFavorite(string name)
         {
             if (string.IsNullOrEmpty(name) || _profiles == null) { return; }
@@ -680,6 +1025,10 @@ namespace AutoClicker.UI
 
         private void OnProfileLibNew(object sender, EventArgs e)
         {
+            // It switches to the new profile, so it follows the switching rule (the button is
+            // greyed as well; this covers a click already on its way).
+            if (ProfileLockReason() != null) { RefreshProfileLock(); return; }
+
             var profile = new ClickProfile(Localization.T("New Profile"))
             {
                 IntervalMilliseconds = 100
@@ -689,10 +1038,14 @@ namespace AutoClicker.UI
             // its own is the thing the old combo-only flow produced over and over.
             if (!ProfileDetailsForm.Edit(this, _theme, profile, _settings)) { return; }
 
+            // Then the loaded profile's unsaved edits, before anything is created: Cancel stays
+            // on it and makes nothing.
+            if (!HandleUnsavedEditsBeforeSwitch(ProfileSwitchSource.Ui)) { return; }
+
             _profiles.Add(profile);
             _profiles.Save();
             RefreshProfileCombo();
-            ActivateProfileByName(profile.Name);
+            SwitchToProfile(profile.Name, ProfileSwitchSource.Ui, askAboutEdits: false);
         }
 
         private void OnProfileLibEdit(string name)
@@ -701,24 +1054,40 @@ namespace AutoClicker.UI
             if (profile == null) { return; }
 
             string oldName = profile.Name;
+            // Asked BEFORE the name can change under the Clicker tab (see FollowProfileRename).
+            bool loaded = string.Equals(_currentProfileName, oldName, StringComparison.OrdinalIgnoreCase);
+            bool hadEdits = loaded && ProfileHasUnsavedEdits();
             if (!ProfileDetailsForm.Edit(this, _theme, profile, _settings)) { return; }
 
             // The dialog writes the new name straight onto the object, which would
             // happily create a second "Fishing". Check for the clash here, where the
             // old name is still known, and put it back rather than silently merging.
-            if (!string.Equals(oldName, profile.Name, StringComparison.OrdinalIgnoreCase))
+            // Compared exactly: a change of case alone ("fishing" → "Fishing") is a rename too,
+            // and the Clicker tab's Save used to put the old spelling straight back.
+            if (!string.Equals(oldName, profile.Name, StringComparison.Ordinal))
             {
-                var clash = _profiles.GetByName(profile.Name);
-                if (clash != null && !ReferenceEquals(clash, profile))
+                // Every other profile, not GetByName: that returns the FIRST match, which is this
+                // profile itself whenever it comes earlier in the list — and the clash went
+                // unnoticed, leaving two profiles with one name.
+                bool taken = false;
+                foreach (var other in _profiles.Profiles)
+                {
+                    if (other != null && !ReferenceEquals(other, profile) &&
+                        string.Equals(other.Name, profile.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        taken = true;
+                        break;
+                    }
+                }
+
+                if (taken)
                 {
                     ShowWarning(Localization.F("A profile called '{0}' already exists.", profile.Name));
                     profile.Name = oldName;
                 }
-                else if (string.Equals(_currentProfileName, oldName, StringComparison.OrdinalIgnoreCase))
+                else
                 {
-                    // The active profile was renamed underneath us; follow it.
-                    _currentProfileName = profile.Name;
-                    _settings.LastProfileName = profile.Name;
+                    FollowProfileRename(oldName, profile.Name, hadEdits);
                 }
             }
 
@@ -728,6 +1097,67 @@ namespace AutoClicker.UI
             {
                 SelectProfileInCombo(profile.Name);
             }
+        }
+
+        /// <summary>
+        /// Everything that holds a profile's name follows a rename made in the details dialog.
+        ///
+        /// The Clicker tab's name box did not. It kept the old name, so the next press of its Save
+        /// — which saves under whatever the box says — renamed the profile straight back.
+        /// </summary>
+        private void FollowProfileRename(string oldName, string newName, bool hadEdits)
+        {
+            if (string.Equals(_currentProfileName, oldName, StringComparison.OrdinalIgnoreCase))
+            {
+                _currentProfileName = newName;
+                _settings.LastProfileName = newName;
+
+                _suppressProfileEvents = true;
+                try { _profileNameText.Text = newName; }
+                finally { _suppressProfileEvents = false; }
+
+                // The saved state now carries the new name. With nothing else unsaved, the box and
+                // the profile agree again; with edits waiting, they stay unsaved, but the name is
+                // not one of them.
+                if (!hadEdits)
+                {
+                    _profileSnapshotJson = SerializeProfileSafe();
+                }
+                else if (_profileSnapshotJson != null)
+                {
+                    try
+                    {
+                        var baseline = System.Text.Json.JsonSerializer.Deserialize<ClickProfile>(_profileSnapshotJson);
+                        if (baseline != null)
+                        {
+                            baseline.Name = newName;
+                            _profileSnapshotJson = System.Text.Json.JsonSerializer.Serialize(baseline);
+                        }
+                    }
+                    catch (Exception ex) { Logger.Swallow("profiles.FollowProfileRename", ex); }
+                }
+                UpdateProfileDirty();
+                ShowProfileNameInStatus(newName);
+            }
+
+            // A run in progress is credited by NAME when it stops. Renamed mid-run,
+            // that name no longer matched anything and the run's time was dropped.
+            if (string.Equals(_runProfileName, oldName, StringComparison.OrdinalIgnoreCase))
+            {
+                _runProfileName = newName;
+            }
+
+            // Unsaved edits kept for it follow it too; a name typed into them stays as typed.
+            if (_profileDrafts.TryGetValue(oldName, out ClickProfile draft))
+            {
+                _profileDrafts.Remove(oldName);
+                if (draft != null)
+                {
+                    if (string.Equals(draft.Name, oldName, StringComparison.Ordinal)) { draft.Name = newName; }
+                    _profileDrafts[newName] = draft;
+                }
+            }
+            Logger.Info("[profiles] renamed '" + oldName + "' to '" + newName + "'.");
         }
 
         private void OnProfileLibDuplicate(string name)
@@ -742,22 +1172,34 @@ namespace AutoClicker.UI
         {
             if (string.IsNullOrEmpty(name) || _profiles == null) { return; }
 
+            bool wasActive = string.Equals(name, _currentProfileName, StringComparison.OrdinalIgnoreCase);
+
+            // The loaded profile, mid-run: deleting it switches to another (below), which is
+            // what the lock is there to stop. The menu item is greyed; this is the Delete key.
+            if (wasActive && ProfileLockReason() != null)
+            {
+                System.Media.SystemSounds.Beep.Play();
+                RefreshProfileLock();
+                return;
+            }
+
             var confirm = MessageBox.Show(this,
                 Localization.F("Delete profile '{0}'? You can restore it from the recycle bin.", name),
                 "Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (confirm != DialogResult.Yes) { return; }
 
-            bool wasActive = string.Equals(name, _currentProfileName, StringComparison.OrdinalIgnoreCase);
             _profiles.Remove(name);
+            _profileDrafts.Remove(name);   // its unsaved edits went with it
             _profiles.Save();
             RefreshProfileCombo();
 
             // Removing the active profile leaves the Clicker tab showing settings that
             // no longer belong to anything, so move it onto whatever is left. The
-            // manager guarantees the library is never empty.
+            // manager guarantees the library is never empty. Nothing to ask about: the
+            // edits belonged to the profile that is gone.
             if (wasActive && _profiles.Count > 0)
             {
-                ActivateProfileByName(_profiles.Profiles[0].Name);
+                SwitchToProfile(_profiles.Profiles[0].Name, ProfileSwitchSource.Ui, askAboutEdits: false);
             }
         }
 
@@ -799,6 +1241,10 @@ namespace AutoClicker.UI
 
         private void OnProfileLibImport(object sender, EventArgs e)
         {
+            // Replacing the loaded profile reloads the Clicker tab, which mid-run hands the running
+            // clicker the imported settings — the switching rule applies.
+            if (ProfileLockReason() != null) { RefreshProfileLock(); return; }
+
             using (var dlg = new OpenFileDialog
             {
                 Title = Localization.T("Import profile"),
@@ -828,6 +1274,26 @@ namespace AutoClicker.UI
                     return;
                 }
 
+                // Keybinds and a look saved on someone else's PC come in with the file, and would
+                // replace this user's own the first time they switch to it — their hotkeys moved,
+                // their theme changed, from a file they only meant to try. Their call, asked here.
+                if (parsed.Keybinds != null || parsed.AppSettings != null)
+                {
+                    var keep = MessageBox.Show(this,
+                        Localization.F(
+                            "“{0}” brings its own keybinds or theme and caption look, saved on the PC it " +
+                            "came from. Switching to it would put them in place of yours.\n\n" +
+                            "Keep them with the profile? Choose No to import only its clicking setup.",
+                            parsed.Name),
+                        "Tempo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                    if (keep == DialogResult.Cancel) { return; }
+                    if (keep == DialogResult.No)
+                    {
+                        parsed.Keybinds = null;
+                        parsed.AppSettings = null;
+                    }
+                }
+
                 // A name clash is the user's call, not a silent overwrite of something
                 // they may still be using.
                 var conflict = ProfileManager.ImportConflict.Rename;
@@ -835,8 +1301,8 @@ namespace AutoClicker.UI
                 {
                     var answer = MessageBox.Show(this,
                         Localization.F(
-                            "You already have a profile called '{0}'. Replace it? " +
-                            "Choose No to keep both.", parsed.Name),
+                            "You already have a profile called '{0}'. Replace it? The one you have now " +
+                            "goes to the recycle bin. Choose No to keep both.", parsed.Name),
                         "Tempo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
 
                     if (answer == DialogResult.Cancel) { return; }
@@ -847,6 +1313,9 @@ namespace AutoClicker.UI
 
                 var stored = _profiles.Import(parsed, conflict);
                 if (stored == null) { return; }
+
+                // Edits kept for the setup that was just replaced belong to it, not to this one.
+                if (conflict == ProfileManager.ImportConflict.Overwrite) { _profileDrafts.Remove(stored.Name); }
 
                 _profiles.Save();
                 RefreshProfileCombo();
@@ -868,6 +1337,10 @@ namespace AutoClicker.UI
         {
             if (_profiles == null) { return; }
 
+            // Each row stands for one binned profile OBJECT. The rows were keyed by name, and the
+            // bin can hold several with one name (delete "Fishing", make another, delete that, or
+            // replace one by importing) — restoring the older one brought back the newer.
+            var rowProfiles = new Dictionary<string, ClickProfile>(StringComparer.Ordinal);
             bool changed = RecycleBinForm.Show(this, _theme,
                 Localization.T("Recently deleted profiles"),
                 Localization.T("Deleting a profile keeps a copy here so it can be brought back. " +
@@ -876,12 +1349,15 @@ namespace AutoClicker.UI
                 new[] { 210, 110, 160 },
                 Localization.T("The bin is empty."),
                 "Permanently delete {0} profile(s)? This cannot be undone.",
-                BuildProfileBinRows,
-                name =>
+                () => BuildProfileBinRows(rowProfiles),
+                id =>
                 {
-                    bool ok = _profiles.RestoreFromRecycleBin(name) != null;
-                    if (ok) { _profiles.Save(); Logger.Info("[profiles] restored '" + name + "' from the recycle bin."); }
-                    return ok;
+                    if (!rowProfiles.TryGetValue(id, out ClickProfile binned)) { return false; }
+                    var restored = _profiles.RestoreFromRecycleBin(binned);
+                    if (restored == null) { return false; }
+                    _profiles.Save();
+                    Logger.Info("[profiles] restored '" + restored.Name + "' from the recycle bin.");
+                    return true;
                 },
                 () =>
                 {
@@ -901,10 +1377,14 @@ namespace AutoClicker.UI
             }
         }
 
-        /// <summary>Rows for the shared recycle-bin window, newest deletion first.</summary>
-        private List<RecycleBinForm.Entry> BuildProfileBinRows()
+        /// <summary>
+        /// Rows for the shared recycle-bin window, newest deletion first. <paramref name="byId"/>
+        /// is refilled with the profile each row's id stands for.
+        /// </summary>
+        private List<RecycleBinForm.Entry> BuildProfileBinRows(Dictionary<string, ClickProfile> byId)
         {
             var rows = new List<RecycleBinForm.Entry>();
+            byId?.Clear();
             if (_profiles?.RecycleBin == null) { return rows; }
 
             // The bin appends, so walk it backwards.
@@ -912,9 +1392,11 @@ namespace AutoClicker.UI
             {
                 var p = _profiles.RecycleBin[i];
                 if (p == null) { continue; }
+                string id = "bin" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (byId != null) { byId[id] = p; }
                 rows.Add(new RecycleBinForm.Entry
                 {
-                    Id = p.Name,
+                    Id = id,
                     Cells = new[]
                     {
                         p.Name,

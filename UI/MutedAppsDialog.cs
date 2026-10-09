@@ -32,8 +32,7 @@ namespace AutoClicker.UI
             _unmute = unmute;
             theme = theme ?? Theme.ForKind(ThemeKind.Dark);
 
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             Text = Localization.T("Muted apps");
             FormBorderStyle = FormBorderStyle.FixedSingle;
             StartPosition = FormStartPosition.CenterParent;
@@ -87,11 +86,12 @@ namespace AutoClicker.UI
             };
             Controls.Add(_empty);
             _empty.BringToFront();
+            LayoutFitter.DeclareOverlay(_empty, "drawn on top of the muted list while it is empty");
 
             // Sized from its own word: German's "Stummschaltung aufheben" needs 151px, and a
             // button that clips its verb is a button nobody can act on.
             var unmuteBtn = UiFactory.Button(Localization.T("Unmute"), lx, 236, 110, 28);
-            unmuteBtn.Width = Math.Max(110, TextRenderer.MeasureText(unmuteBtn.Text, unmuteBtn.Font).Width + 24);
+            UiFactory.FitToText96(unmuteBtn, 110, 24);   // in 100% units: the window is scaled after it is built
             unmuteBtn.Click += (s, e) => UnmuteSelected();
             Controls.Add(unmuteBtn);
 
@@ -101,7 +101,7 @@ namespace AutoClicker.UI
             Controls.Add(_seen);
 
             _muteBtn = UiFactory.Button(Localization.T("Mute"), lx + 258, 303, 90, 28);
-            _muteBtn.Width = Math.Max(90, TextRenderer.MeasureText(_muteBtn.Text, _muteBtn.Font).Width + 24);
+            UiFactory.FitToText96(_muteBtn, 90, 24);
             _muteBtn.Click += (s, e) => MuteChosen();
             Controls.Add(_muteBtn);
 
@@ -119,6 +119,7 @@ namespace AutoClicker.UI
 
             ReloadMuted();
             ReloadSeen();
+            UiFactory.ScaleToScreen(this);
         }
 
         private void ReloadMuted()
