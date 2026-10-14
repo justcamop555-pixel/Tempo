@@ -1186,6 +1186,9 @@ namespace AutoClicker.UI
                 ["Devices"] = LineKind.Input,
                 ["Hotkeys"] = LineKind.Input,
                 ["Hooks"] = LineKind.Input,
+                // [Guard] is the shortcut guard (Native/ShortcutGuard): Windows' own shortcuts held back
+                // while a run lasts, and the hook it does that with.
+                ["Guard"] = LineKind.Input,
                 // [RawInput] is the one shared raw-mouse registration (Native/RawMouseHub) the second mouse,
                 // the macro recorder and the raw mouse readout listen through: registered, released, refused.
                 ["RawInput"] = LineKind.Input,
@@ -1231,6 +1234,9 @@ namespace AutoClicker.UI
                 ["Notify"] = LineKind.System,
                 ["Tray"] = LineKind.System,
                 ["Update"] = LineKind.System,
+                // [GitHub] is every request to GitHub's API (the update check, the release check behind
+                // the Official ID): the answer, the requests left this hour, a rate-limit pause.
+                ["GitHub"] = LineKind.System,
                 ["Uninstall"] = LineKind.System,
 
                 // Trust and storage. Both were falling through to the uncategorised
@@ -1247,6 +1253,9 @@ namespace AutoClicker.UI
                 ["Settings"] = LineKind.System,
                 ["Profiles"] = LineKind.System,
                 ["UI"] = LineKind.System,
+                // [Overlays] is the running badges (clicking, playing, recording): moved, faded, put back.
+                // Not [Overlay], which is the caption bar.
+                ["Overlays"] = LineKind.System,
                 // [Display] is the HDR colour correction switching on or off, as the window
                 // moves between an HDR and an SDR screen or HDR is toggled in Windows.
                 ["Display"] = LineKind.System,

@@ -25,6 +25,32 @@ namespace AutoClicker.UI
             HideSelection = false;
         }
 
+        /// <summary>
+        /// Makes row <c>index</c>. Setting it makes the list VIRTUAL — rows made as they are drawn,
+        /// so the Live Monitor lists a macro of any length in full (a ListViewItem per step capped it
+        /// at 2,000 rows). Opt-in: the step editor uses this class too and fills its Items, which a
+        /// virtual list refuses ("cannot add items") — making every instance virtual broke it.
+        /// </summary>
+        public Func<int, ListViewItem> RowSource
+        {
+            get { return _rowSource; }
+            set
+            {
+                _rowSource = value;
+                VirtualMode = value != null;
+                ShowItemToolTips = value != null;   // a grouped row names the steps it covers
+            }
+        }
+        private Func<int, ListViewItem> _rowSource;
+
+        protected override void OnRetrieveVirtualItem(RetrieveVirtualItemEventArgs e)
+        {
+            ListViewItem item = null;
+            try { item = RowSource?.Invoke(e.ItemIndex); } catch { }
+            // Never null, and always four cells: the owner-drawn columns read every one.
+            e.Item = item ?? new ListViewItem(new[] { "", "", "", "" });
+        }
+
         /// <summary>The "Action" column carries the chip and the colour.</summary>
         protected override int ChipColumn => 2;
 

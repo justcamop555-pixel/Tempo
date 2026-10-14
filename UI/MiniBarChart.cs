@@ -19,6 +19,19 @@ namespace AutoClicker.UI
         private readonly ToolTip _tip = new ToolTip();
 
         public string Title { get; set; } = "";
+
+        /// <summary>What a bar's hover tip says about its value, translated with F: "{0} clicks", "{0} presses".</summary>
+        public string ValueFormat { get; set; } = "{0} clicks";
+
+        /// <summary>
+        /// A dashed line across the bars at this value (an average, say), labelled with
+        /// <see cref="ReferenceLabel"/>. NaN, the default, draws none.
+        /// </summary>
+        public double ReferenceValue { get; set; } = double.NaN;
+
+        /// <summary>The words beside the dashed line, already translated.</summary>
+        public string ReferenceLabel { get; set; } = "";
+
         public Color CardColor { get; set; } = Color.FromArgb(24, 27, 39);
         public Color BarColor { get; set; } = Color.FromArgb(124, 92, 255);
         public Color TextColor { get; set; } = Color.FromArgb(232, 236, 246);
@@ -94,7 +107,7 @@ namespace AutoClicker.UI
                     // Interpolated straight into the tooltip, so "clicks" was English in
                     // every language — on the one piece of text that exists to explain
                     // what a bar means.
-                    _tip.Show(lab + Utils.Localization.F("{0} clicks", _values[idx].ToString("N0")),
+                    _tip.Show(lab + Utils.Localization.F(ValueFormat, _values[idx].ToString("N0")),
                               this, e.X + 12, e.Y + 8, 1200);
                 }
                 Invalidate();
@@ -153,6 +166,8 @@ namespace AutoClicker.UI
             {
                 if (v > max) max = v;
             }
+            bool hasReference = !double.IsNaN(ReferenceValue) && ReferenceValue > 0;
+            if (hasReference && ReferenceValue > max) { max = (long)Math.Ceiling(ReferenceValue); }
 
             // Max scale label on the right.
             using (var scaleBrush = new SolidBrush(MutedColor))
@@ -214,6 +229,30 @@ namespace AutoClicker.UI
             using (var pen = new Pen(Color.FromArgb(120, MutedColor)))
             {
                 g.DrawLine(pen, plot.Left, plot.Bottom, plot.Right, plot.Bottom);
+            }
+
+            // The reference (an average): a dashed line over the bars, its label just above it at the
+            // right — over the bars, so it reads whatever is under it.
+            if (hasReference)
+            {
+                float y = plot.Bottom - (float)(ReferenceValue / max) * plot.Height;
+                using (var pen = new Pen(TextColor, 1.2f) { DashStyle = DashStyle.Dash })
+                {
+                    g.DrawLine(pen, plot.Left, y, plot.Right, y);
+                }
+                if (!string.IsNullOrEmpty(ReferenceLabel))
+                {
+                    using (var refFont = new Font("Segoe UI", 8.5f, FontStyle.Bold))
+                    using (var refBrush = new SolidBrush(TextColor))
+                    using (var back = new SolidBrush(Color.FromArgb(200, CardColor)))
+                    {
+                        SizeF rs = g.MeasureString(ReferenceLabel, refFont);
+                        float rx = plot.Right - rs.Width;
+                        float ry = Math.Max(plot.Top - 2, y - rs.Height);
+                        g.FillRectangle(back, rx, ry, rs.Width, rs.Height - 1);
+                        g.DrawString(ReferenceLabel, refFont, refBrush, rx, ry);
+                    }
+                }
             }
         }
 

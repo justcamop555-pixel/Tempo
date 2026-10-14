@@ -110,10 +110,113 @@ namespace AutoClicker.UI
             Invalidate();
         }
 
+        // ── Where the user put it (Overlays ▸ Move overlays in the tray) ─────────────────────────
+
+        /// <summary>
+        /// The badge's top-left as the user dragged it, or null to sit in its corner. Saved by the
+        /// owner (<see cref="Moved"/>) and handed back on the next show.
+        /// </summary>
+        public Point? FreePosition
+        {
+            get => _free;
+            set { _free = value; RepositionForCorner(); }
+        }
+        private Point? _free;
+
+        /// <summary>A drag ended; the badge's new top-left.</summary>
+        public event Action<Point> Moved;
+
+        /// <summary>Double-clicked while movable: "I'm done moving".</summary>
+        public event Action MoveDone;
+
+        /// <summary>True while the badge can be dragged (it is click-through otherwise).</summary>
+        public bool Movable => _movable;
+        private bool _movable;
+        private string _hintAtRest;
+
+        /// <summary>
+        /// Lets the badge be dragged (and double-clicked to finish), or makes it click-through again.
+        /// While movable it says how, in place of its usual hint, and its outline is dashed.
+        /// </summary>
+        public void SetMovable(bool on)
+        {
+            if (_movable == on) { return; }
+            if (on) { _hintAtRest = _hint; }
+            _movable = on;
+            SetClickThrough(!on);
+            ApplyHint(on ? Utils.Localization.T("Drag to move · double-click when done") : _hintAtRest);
+            Invalidate();
+        }
+
+        /// <summary>The badge's opacity, 40–100 % (the tray's Overlays ▸ Opacity).</summary>
+        public void SetOpacity(int opacityPct)
+        {
+            _alpha = (byte)Math.Round(Math.Max(40, Math.Min(100, opacityPct)) * 255.0 / 100.0);
+            if (IsHandleCreated)
+            {
+                try { SetLayeredWindowAttributes(Handle, 0, _alpha, LWA_ALPHA); } catch { }
+            }
+        }
+
+        private void SetClickThrough(bool through)
+        {
+            if (!IsHandleCreated) { return; }   // CreateParams reads _movable when the handle is made
+            try
+            {
+                int ex = GetWindowLong(Handle, GWL_EXSTYLE);
+                int want = through ? ex | WS_EX_TRANSPARENT : ex & ~WS_EX_TRANSPARENT;
+                if (want != ex) { SetWindowLong(Handle, GWL_EXSTYLE, want); }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// The working area of the screen the badge first came up on (the one the pointer was on then).
+        /// It was looked up afresh at every re-place — and the badge re-places itself whenever its line
+        /// changes width ("999 clicks" → "1,000 clicks") — so it hopped to whichever monitor the pointer
+        /// had moved to, mid-run.
+        /// </summary>
+        private Rectangle HomeArea()
+        {
+            if (!_home.HasValue)
+            {
+                _home = (Screen.FromPoint(Cursor.Position) ?? Screen.PrimaryScreen).WorkingArea;
+            }
+            return _home.Value;
+        }
+        private Rectangle? _home;
+
+        /// <summary>
+        /// The free position if it is still on a screen (a monitor can be unplugged since), kept wholly
+        /// inside that screen's working area as the badge grows; otherwise null.
+        /// </summary>
+        private Point? FreePlace()
+        {
+            if (!_free.HasValue) { return null; }
+            Point p = _free.Value;
+            foreach (Screen s in Screen.AllScreens)
+            {
+                Rectangle wa = s.WorkingArea;
+                if (!wa.Contains(p.X + D(8), p.Y + D(8))) { continue; }
+                int x = Math.Max(wa.Left, Math.Min(p.X, wa.Right - Width));
+                int y = Math.Max(wa.Top, Math.Min(p.Y, wa.Bottom - Height));
+                return new Point(x, y);
+            }
+            return null;
+        }
+
         private void RepositionForCorner()
         {
-            Screen scr = Screen.FromPoint(Cursor.Position) ?? Screen.PrimaryScreen;
-            var wa = scr.WorkingArea;
+            // Dragged somewhere: it stays there — the corner, and stepping out of the caption bar's
+            // way, are for a badge nobody has placed.
+            Point? free = FreePlace();
+            if (free.HasValue)
+            {
+                Location = free.Value;
+                return;
+            }
+
+            var wa = HomeArea();
             int m = D(12);                           // margin from the screen edge
             int x, y;
             switch (_corner)
@@ -228,8 +331,9 @@ namespace AutoClicker.UI
                 int max = D(MinBadgeWidth);
                 try
                 {
-                    Screen scr = Screen.FromPoint(Cursor.Position) ?? Screen.PrimaryScreen;
-                    max = Math.Max(D(MinBadgeWidth), scr.WorkingArea.Width - D(24));
+                    // The screen it is on (see HomeArea), not the one the pointer happens to be on now.
+                    Rectangle area = FreePlace().HasValue ? Screen.FromPoint(Location).WorkingArea : HomeArea();
+                    max = Math.Max(D(MinBadgeWidth), area.Width - D(24));
                 }
                 catch { }
                 int target = Math.Min(Math.Max(needed, D(MinBadgeWidth)), max);
@@ -313,6 +417,14 @@ namespace AutoClicker.UI
         /// </summary>
         public void SetHint(string hint)
         {
+            // While it is being moved the line says how; the hint given meanwhile (a rebind, the badge
+            // being set up) is kept for when moving ends rather than written over the move hint.
+            if (_movable) { _hintAtRest = hint ?? ""; return; }
+            ApplyHint(hint);
+        }
+
+        private void ApplyHint(string hint)
+        {
             _hint = hint ?? "";
             int targetH = D(string.IsNullOrEmpty(_hint) ? 46 : 62);
             if (Height != targetH)
@@ -328,18 +440,57 @@ namespace AutoClicker.UI
             Invalidate();
         }
 
+        private const int WS_EX_TRANSPARENT = 0x00000020; // mouse events pass through
+        private const int GWL_EXSTYLE = -20;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
         protected override CreateParams CreateParams
         {
             get
             {
                 const int WS_EX_LAYERED = 0x00080000;
-                const int WS_EX_TRANSPARENT = 0x00000020; // mouse events pass through
                 const int WS_EX_NOACTIVATE = 0x08000000;
                 const int WS_EX_TOOLWINDOW = 0x00000080;  // keep out of Alt-Tab
                 CreateParams cp = base.CreateParams;
-                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+                cp.ExStyle |= WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+                // Click-through, except while it is being moved.
+                if (!_movable) { cp.ExStyle |= WS_EX_TRANSPARENT; }
                 return cp;
             }
+        }
+
+        private const int WM_NCHITTEST = 0x0084;
+        private const int WM_NCLBUTTONDBLCLK = 0x00A3;
+        private const int WM_EXITSIZEMOVE = 0x0232;
+        private const int HTCAPTION = 2;
+
+        protected override void WndProc(ref Message m)
+        {
+            if (_movable)
+            {
+                switch (m.Msg)
+                {
+                    case WM_NCHITTEST:
+                        // The whole badge is the handle to drag it by.
+                        m.Result = (IntPtr)HTCAPTION;
+                        return;
+                    case WM_NCLBUTTONDBLCLK:
+                        // Never to Windows: a double-click on a "caption" maximises the window.
+                        MoveDone?.Invoke();
+                        return;
+                    case WM_EXITSIZEMOVE:
+                        base.WndProc(ref m);
+                        _free = Location;
+                        Moved?.Invoke(Location);
+                        return;
+                }
+            }
+            base.WndProc(ref m);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -357,6 +508,8 @@ namespace AutoClicker.UI
                 }
                 using (var pen = new Pen(_dotColor.A == 0 ? _theme.Success : _dotColor, 2f * DeviceDpi / 96f))
                 {
+                    // Dashed while it can be dragged, like the caption windows in move mode.
+                    if (_movable) { pen.DashStyle = DashStyle.Dash; }
                     g.DrawPath(pen, path);
                 }
             }

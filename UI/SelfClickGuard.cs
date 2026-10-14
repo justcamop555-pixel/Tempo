@@ -39,6 +39,41 @@ namespace AutoClicker.UI
         private readonly Func<bool> _isRunning;
         private long _blocked;
 
+        // ── Windows that take Tempo's own input on purpose ────────────────────────────────────
+        // The CPS test's pad exists to be clicked, and measuring Tempo's own clicker is one of the
+        // things it is for: start the clicker with the pointer on the pad and see the real rate. This
+        // guard dropped every one of those clicks — the test counted nothing and looked broken.
+        // Only the pad takes them (not the window's other buttons, nor its title bar or close box),
+        // and only plain key presses reach the rest of that window (its spacebar mode); a system
+        // key (Alt+F4) never does. UI thread only, like the filter itself. Kept as objects, not
+        // handles, so a re-created handle still matches.
+        private static Control _welcomeClicksOn;
+        private static Form _welcomeKeysIn;
+        private static long _welcomed;
+
+        /// <summary>
+        /// While <paramref name="keysIn"/> is open, let Tempo's own clicks reach <paramref name="clicksOn"/>
+        /// and its own (non-system) key presses reach any control of <paramref name="keysIn"/>.
+        /// </summary>
+        internal static void WelcomeOwnInput(Control clicksOn, Form keysIn)
+        {
+            _welcomeClicksOn = clicksOn;
+            _welcomeKeysIn = keysIn;
+        }
+
+        /// <summary>Ends <see cref="WelcomeOwnInput"/> for that window.</summary>
+        internal static void ForgetOwnInput(Form keysIn)
+        {
+            if (ReferenceEquals(_welcomeKeysIn, keysIn))
+            {
+                _welcomeKeysIn = null;
+                _welcomeClicksOn = null;
+            }
+        }
+
+        /// <summary>How many of Tempo's own input messages were let through to a welcoming window (Live debug).</summary>
+        public static long WelcomedCount => System.Threading.Interlocked.Read(ref _welcomed);
+
         /// <summary>How many self-inflicted input messages have been dropped this session.</summary>
         public long BlockedCount => System.Threading.Interlocked.Read(ref _blocked);
 
@@ -139,9 +174,44 @@ namespace AutoClicker.UI
             }
             catch { return false; }
 
+            if (Welcomes(ref m))
+            {
+                System.Threading.Interlocked.Increment(ref _welcomed);
+                return false;           // the CPS test's pad, measuring Tempo's own clicker
+            }
+
             System.Threading.Interlocked.Increment(ref _blocked);
             LastBlockedUtc = DateTime.UtcNow;
             return true;                // swallow: Tempo must not click itself
+        }
+
+        /// <summary>True when this message of Tempo's own goes to a window that asked for it (<see cref="WelcomeOwnInput"/>).</summary>
+        private static bool Welcomes(ref Message m)
+        {
+            Control clicksOn = _welcomeClicksOn;
+            Form keysIn = _welcomeKeysIn;
+            if (keysIn == null || keysIn.IsDisposed) { return false; }
+            Control target;
+            try { target = Control.FromHandle(m.HWnd); }
+            catch { return false; }
+            if (target == null) { return false; }
+            switch (m.Msg)
+            {
+                case WM_KEYDOWN:
+                case WM_KEYUP:
+                case WM_CHAR:
+                case WM_DEADCHAR:
+                    return ReferenceEquals(target.FindForm(), keysIn);
+                case WM_SYSKEYDOWN:
+                case WM_SYSKEYUP:
+                case WM_SYSCHAR:
+                case WM_SYSDEADCHAR:
+                    return false;       // Alt+F4 and the menu keys stay blocked
+                default:
+                    // A mouse message: the pad itself only. The title bar's messages go to the window
+                    // (WM_NC…), never to the pad, so the close box stays out of reach.
+                    return clicksOn != null && ReferenceEquals(target, clicksOn);
+            }
         }
     }
 }

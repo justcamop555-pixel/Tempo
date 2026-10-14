@@ -1,54 +1,120 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace AutoClicker.UI
 {
     /// <summary>
     /// A small clicks-per-second tester. The user clicks the big button as fast
-    /// as they can within a fixed window; the form reports total clicks and CPS.
+    /// as they can within a fixed window; the form reports total clicks and CPS,
+    /// and beside it the details of the run: clicks in each second, the best
+    /// second, the rhythm, the gaps, whether the speed held, and this session's tries.
     /// </summary>
     public sealed class CpsTestForm : Form
     {
+        // The test on the left, in the 364 px it always had; the details pane beside it.
+        private const int LeftWidth = 364;
+        private const int PaneLeft = 376;
+        private const int PaneWidth = 300;
+
+        /// <summary>
+        /// After the time runs out, clicks are ignored this long. Someone clicking flat out is
+        /// still clicking when it ends, and the next click started a NEW test at once — wiping
+        /// the result they had just earned before they could read it.
+        /// </summary>
+        internal const int CooldownMs = 1000;
+
         private readonly Theme _theme;
         private readonly Button _clickArea;
         private readonly Label _cpsLabel;
         private readonly Label _countLabel;
         private readonly Label _timeLabel;
         private readonly Label _bestLabel;
-        private Label _peakLabel;
-        private Label _attemptsLabel;
-        private Label _detailLabel;
-        private readonly System.Collections.Generic.List<double> _attempts = new System.Collections.Generic.List<double>();
         private ThemedProgressBar _timeBar;
         private Button[] _durationButtons;
         private MouseButtons _testButton = MouseButtons.Left;
         private Button[] _mbButtons;
         private Label _titleLabel;
         private readonly System.Windows.Forms.Timer _timer;
-        private readonly List<DateTime> _clicks = new List<DateTime>();
+        private readonly System.Windows.Forms.Timer _cooldownTimer;
+
+        // The details pane.
+        private readonly MiniBarChart _chart;
+        private readonly Label[] _statNames = new Label[7];
+        private readonly Label[] _statValues = new Label[7];
+        private readonly Label _historyTitle;
+        private readonly Label _historyLabel;
+        private readonly ToolTip _tips = new ToolTip();
+
+        // Every counted hit, in ms from the first one. A Stopwatch, not the wall clock: the
+        // gaps are tens of milliseconds, and a clock adjusted mid-test moved them all.
+        private readonly Stopwatch _clock = new Stopwatch();
+        private readonly List<double> _hits = new List<double>();
 
         private bool _running;
-        private DateTime _startUtc;
+        private bool _cooldown;
         private int _count;
-        private double _best;
-        private double _peak;
         private int _testSeconds = 10;
         private bool _keyboardMode;   // test spacebar presses instead of mouse clicks
         private bool _keyHeld;        // ignore OS auto-repeat while a key is held
+        private Stats _lastStats;
+
+        private readonly Dictionary<string, double> _bests = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<Attempt> _attempts = new List<Attempt>();
+
+        // Tempo's own clicker on the pad: how many of this run's hits it made (they carry its tag),
+        // and the rate it was set to, read from the running engine.
+        private readonly Func<double> _clickerRate;
+        private int _tempoHits;
+        private double _clickerSetCps;
+
+        private sealed class Attempt
+        {
+            public double Cps;
+            public int Seconds;
+            public string Input;
+            public bool NewBest;
+            public bool ByClicker;
+        }
 
         /// <summary>All-time best average CPS (persisted by the caller across sessions).</summary>
         public double AllTimeBest { get; private set; }
 
-        public CpsTestForm(Theme theme, double allTimeBest)
+        /// <summary>The best for each input and length (<see cref="SetupKey"/>), with this session's records in it.</summary>
+        public IReadOnlyDictionary<string, double> Bests => _bests;
+
+        /// <summary>True when a test set a new best for its input and length.</summary>
+        public bool BestsChanged { get; private set; }
+
+        public CpsTestForm(Theme theme, double allTimeBest) : this(theme, allTimeBest, null)
+        {
+        }
+
+        public CpsTestForm(Theme theme, double allTimeBest, IDictionary<string, double> bests) : this(theme, allTimeBest, bests, null)
+        {
+        }
+
+        /// <param name="clickerRate">The clicks a second Tempo's clicker is set to while it runs (0 when it doesn't),
+        /// so a run it makes on the pad can be shown against what it was asked for.</param>
+        public CpsTestForm(Theme theme, double allTimeBest, IDictionary<string, double> bests, Func<double> clickerRate)
         {
             AllTimeBest = allTimeBest;
+            _clickerRate = clickerRate;
+            if (bests != null)
+            {
+                foreach (var kv in bests)
+                {
+                    if (!string.IsNullOrEmpty(kv.Key) && kv.Value > 0) { _bests[kv.Key] = kv.Value; }
+                }
+            }
             // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             _theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
 
             Text = Utils.Localization.T("CPS Test");
-            ClientSize = new Size(364, 488);
+            ClientSize = new Size(PaneLeft + PaneWidth + 16, 456);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -58,7 +124,7 @@ namespace AutoClicker.UI
             ThemeManager.ApplyWindowChrome(this, _theme);
             ForeColor = _theme.Text;
             Font = UiFactory.BodyFont;
-            KeyPreview = true; // so the form sees Space presses for keyboard-mode testing
+            KeyPreview = true; // Space presses for keyboard-mode testing, Esc to cancel
 
             var title = UiFactory.Label("Click as fast as you can!", 0, 16, FontStyle.Bold, 13f);
             title.Width = 360;
@@ -67,18 +133,25 @@ namespace AutoClicker.UI
             title.Height = 26;
             _titleLabel = title;
 
-            _timeLabel = UiFactory.Label($"Time: {_testSeconds}.0 s", 0, 50, FontStyle.Regular, 10f);
+            _timeLabel = UiFactory.Label("", 0, 50, FontStyle.Regular, 10f);
+            _timeLabel.Text = Utils.Localization.F("Time: {0:0.0} s", (double)_testSeconds);
             _timeLabel.Width = 360;
             _timeLabel.AutoSize = false;
             _timeLabel.TextAlign = ContentAlignment.MiddleCenter;
 
             _clickArea = UiFactory.PrimaryButton("CLICK!", 60, 90, 260, 120, _theme);
-            // "Press SPACE!" in keyboard mode: measured both ways.
-            LayoutFitter.DeclareCaptions(_clickArea, Utils.Localization.T("CLICK!"), Utils.Localization.T("Press SPACE!"));
-            // The biggest of three sizes at which BOTH captions fit: French "Appuyez sur ESPACE !" needed
+            // Every caption the pad can show is measured: "Press SPACE!" in keyboard mode, the retry
+            // line, "Time's up!" while clicks are ignored after the end. The pad draws ONE line and ends
+            // a longer one with "…", and two retry captions did that unseen, because only the first two
+            // captions were ever measured: "Press SPACE to retry" (up to 364 px of the pad's 260) and
+            // "New best — retry" (up to 304). Keyboard mode's retry is "Press SPACE!" again, and a new best
+            // is announced by the ★ line under the result, so neither is shown any more.
+            LayoutFitter.DeclareCaptions(_clickArea, Utils.Localization.T("CLICK!"), Utils.Localization.T("Press SPACE!"),
+                Utils.Localization.T("Time's up!"), Utils.Localization.T("Click to retry"));
+            // The biggest size at which every caption fits: French "Appuyez sur ESPACE !" needed
             // 272 px at 18 pt in the 260 px the pad has, and lost its "!" every time keyboard mode was on.
-            float clickSize = 14f;
-            foreach (float size in new[] { 18f, 16f, 14f })
+            float clickSize = 12f;
+            foreach (float size in new[] { 18f, 16f, 14f, 13f, 12f })
             {
                 using (var trial = new Font("Segoe UI", size, FontStyle.Bold))
                 {
@@ -106,64 +179,42 @@ namespace AutoClicker.UI
             _timeBar.ApplyTheme(_theme);
             Controls.Add(_timeBar);
 
-            // These four read-outs are built from the SAME format strings the live
-            // updates use, rather than an English twin of each. Hard-coding "Clicks: 0"
-            // here left the dialog opening with four English labels among translated
-            // ones, which then switched language on the first click — and because the
-            // literal sat at a UiFactory call site rather than inside a T(), no
-            // translation audit could see it.
-            _countLabel = UiFactory.Label(Utils.Localization.F("Clicks: {0}", 0), 0, 224, FontStyle.Bold, 12f);
+            // These read-outs are built from the SAME format strings the live updates use, rather
+            // than an English twin of each. Hard-coding "Clicks: 0" here left the dialog opening
+            // with English labels among translated ones, which then switched language on the first
+            // click — and because the literal sat at a UiFactory call site rather than inside a T(),
+            // no translation audit could see it.
+            _countLabel = UiFactory.Label("", 0, 224, FontStyle.Bold, 12f);
+            _countLabel.Text = Utils.Localization.F("Clicks: {0}", 0);
             _countLabel.Width = 360;
             _countLabel.AutoSize = false;
             _countLabel.TextAlign = ContentAlignment.MiddleCenter;
 
-            _cpsLabel = UiFactory.Label(Utils.Localization.F("CPS: {0:0.0}", 0.0), 0, 252, FontStyle.Bold, 16f);
+            _cpsLabel = UiFactory.Label("", 0, 252, FontStyle.Bold, 16f);
+            _cpsLabel.Text = Utils.Localization.F("CPS: {0:0.0}", 0.0);
             _cpsLabel.Width = 360;
             _cpsLabel.AutoSize = false;
             // A whole 16 pt line (30 px): switching AutoSize off left it the default 23, which
             // clipped the line top and bottom — a French "0,0" lost the tail of its comma.
-            // Still clear of the Best line at 288.
             // (In 100% units: the window is scaled after it is built — UiFactory.Measure96.)
             _cpsLabel.Height = UiFactory.Measure96("Ag", _cpsLabel.Font, 0, TextFormatFlags.Default).Height;
             _cpsLabel.TextAlign = ContentAlignment.MiddleCenter;
             _cpsLabel.ForeColor = _theme.AccentText;
 
-            _bestLabel = UiFactory.Label(Utils.Localization.F("Best CPS: {0:0.0}", 0.0), 0, 288, FontStyle.Regular, 9.5f);
-            _bestLabel.Width = 360;
+            // The best for THIS input and length, and the all-time best beside it. Two lines of room:
+            // "Meilleur pour Gauche, 10 s : 9,8  ·  Record absolu : 11,2" is most of the column.
+            _bestLabel = UiFactory.Label("", 12, 290, FontStyle.Regular, 9.5f);
+            _bestLabel.Width = 340;
+            _bestLabel.Height = 38;
             _bestLabel.AutoSize = false;
-            _bestLabel.TextAlign = ContentAlignment.MiddleCenter;
+            _bestLabel.TextAlign = ContentAlignment.TopCenter;
             _bestLabel.ForeColor = _theme.TextMuted;
-            if (AllTimeBest > 0) _bestLabel.Text = Utils.Localization.F("All-time best: {0:0.0}", AllTimeBest);
 
-            _peakLabel = UiFactory.Label(Utils.Localization.F("Peak (1s): {0}", 0), 0, 310, FontStyle.Regular, 9.5f);
-            _peakLabel.Width = 360;
-            _peakLabel.AutoSize = false;
-            _peakLabel.TextAlign = ContentAlignment.MiddleCenter;
-            _peakLabel.ForeColor = _theme.TextMuted;
+            Controls.AddRange(new Control[] { title, _timeLabel, _clickArea, _countLabel, _cpsLabel, _bestLabel });
 
-            _attemptsLabel = UiFactory.Label("", 0, 452, FontStyle.Regular, 9f);
-            _attemptsLabel.Width = 360;
-            _attemptsLabel.AutoSize = false;
-            _attemptsLabel.TextAlign = ContentAlignment.MiddleCenter;
-            _attemptsLabel.ForeColor = _theme.TextMuted;
-
-            // Extra detail shown after a run: how steady the clicking was and the
-            // single fastest gap between two clicks.
-            _detailLabel = UiFactory.Label("", 0, 334, FontStyle.Regular, 9.5f);
-            _detailLabel.Width = 360;
-            _detailLabel.AutoSize = false;
-            _detailLabel.TextAlign = ContentAlignment.MiddleCenter;
-            _detailLabel.ForeColor = _theme.TextMuted;
-
-            Controls.AddRange(new Control[]
-            {
-                title, _timeLabel, _clickArea, _countLabel, _cpsLabel, _bestLabel, _peakLabel, _detailLabel, _attemptsLabel
-            });
-
-            // Test-duration selector (disabled while a test is running). Sits well below
-            // the results detail line so the two never overlap, with the label vertically
+            // Test-duration selector (disabled while a test is running), with the label vertically
             // centred against its button row.
-            var durLabel = UiFactory.Label("Test length:", 60, 374, FontStyle.Regular, 9f);
+            var durLabel = UiFactory.Label("Test length:", 60, 346, FontStyle.Regular, 9f);
             durLabel.AutoSize = true;
             Controls.Add(durLabel);
 
@@ -173,7 +224,7 @@ namespace AutoClicker.UI
             for (int i = 0; i < options.Length; i++)
             {
                 int secs = options[i];
-                var b = UiFactory.Button(secs + "s", bx, 368, 44, 28);
+                var b = UiFactory.Button(secs + "s", bx, 340, 44, 28);
                 b.Tag = secs;
                 b.Click += OnDurationClicked;
                 _durationButtons[i] = b;
@@ -183,7 +234,7 @@ namespace AutoClicker.UI
             HighlightDurationButtons();
 
             // Input selector: test Left/Middle/Right mouse clicks, or spacebar presses.
-            var mbLabel = UiFactory.Label("Input:", 60, 414, FontStyle.Regular, 9f);
+            var mbLabel = UiFactory.Label("Input:", 60, 386, FontStyle.Regular, 9f);
             mbLabel.AutoSize = true;
             Controls.Add(mbLabel);
 
@@ -195,7 +246,7 @@ namespace AutoClicker.UI
             int mx = 104;
             for (int i = 0; i < mbNames.Length; i++)
             {
-                var b = UiFactory.Button(mbNames[i], mx, 408, 58, 28);
+                var b = UiFactory.Button(mbNames[i], mx, 380, 58, 28);
                 b.Tag = mbTags[i];
                 b.Click += OnMouseButtonClicked;
                 _mbButtons[i] = b;
@@ -209,27 +260,93 @@ namespace AutoClicker.UI
             // "Duración de la prueba:" ran 36 px into the "5s" button, "Entrada:" / "Eingang:" /
             // "Ingresso:" under the first input button, and 58 px buttons cut "Izquierdo",
             // "Esquerdo" — and "⌨ Space" even in English. Each row is now sized from its own
-            // words and centred as a group, which is also how the rest of this window sits.
+            // words and centred as a group, which is also how the rest of this column sits.
             LayOutRow(durLabel, _durationButtons, 40, 6);
             LayOutRow(mbLabel, _mbButtons, 52, 4);
 
+            // ── The details pane ─────────────────────────────────────────────────────────────
+            _chart = new MiniBarChart
+            {
+                Left = PaneLeft,
+                Top = 16,
+                Width = PaneWidth,
+                Height = 150,
+                CardColor = _theme.Surface,
+                BarColor = _theme.Accent,
+                TextColor = _theme.Text,
+                MutedColor = _theme.TextMuted
+            };
+            Controls.Add(_chart);
+
+            // One row per figure: its name on the left, the value right-aligned. The names column is
+            // as wide as its longest translation, so no language's name runs into its value.
+            string[] names = { "Speed", "Best second", "Consistency", "Fastest gap", "Average gap", "Slowest gap", "Speed held" };
+            Font nameFont = UiFactory.FontFor(9f, FontStyle.Regular);
+            Font valueFont = UiFactory.FontFor(9.5f, FontStyle.Bold);
+            int nameWidth = 0;
+            foreach (string n in names)
+            {
+                nameWidth = Math.Max(nameWidth, UiFactory.Measure96(Utils.Localization.T(n), nameFont, 0, TextFormatFlags.Default).Width + 10);
+            }
+            nameWidth = Math.Min(nameWidth, PaneWidth - 120);
+            for (int i = 0; i < names.Length; i++)
+            {
+                int y = 178 + i * 22;
+                var name = UiFactory.Label(names[i], PaneLeft + 6, y, FontStyle.Regular, 9f);
+                name.AutoSize = false;
+                name.Width = nameWidth;
+                name.Height = 20;
+                name.ForeColor = _theme.TextMuted;
+                var value = UiFactory.Label("", PaneLeft + 6 + nameWidth, y - 1, FontStyle.Bold, 9.5f);
+                value.Font = valueFont;
+                value.AutoSize = false;
+                value.Width = PaneWidth - 12 - nameWidth;
+                value.Height = 20;
+                value.TextAlign = ContentAlignment.TopRight;
+                value.ForeColor = _theme.Text;
+                value.Text = "–";
+                _statNames[i] = name;
+                _statValues[i] = value;
+                Controls.Add(name);
+                Controls.Add(value);
+            }
+            // What the less obvious figures mean.
+            TipStyle.Set(_tips, _statNames[1], Utils.Localization.T("The most clicks in any one second of the test, wherever that second started."));
+            TipStyle.Set(_tips, _statNames[2], Utils.Localization.T("How even the gaps between your clicks were. 100% is a metronome; the lower it is, the more your rhythm wandered."));
+            TipStyle.Set(_tips, _statNames[6], Utils.Localization.T("Your speed in the second half of the test against the first half. Under 100% you slowed down; over 100% you sped up."));
+
+            _historyTitle = UiFactory.Label("This session", PaneLeft + 6, 340, FontStyle.Bold, 9f);
+            Controls.Add(_historyTitle);
+            _historyLabel = UiFactory.Label("", PaneLeft + 6, 360, FontStyle.Regular, 9f);
+            _historyLabel.AutoSize = false;
+            _historyLabel.Width = PaneWidth - 12;
+            _historyLabel.Height = 88;
+            _historyLabel.ForeColor = _theme.TextMuted;
+            Controls.Add(_historyLabel);
+
+            ShowDetails(null);
+            RefreshHistory();
+            RefreshBestLine();
+
             _timer = new System.Windows.Forms.Timer { Interval = 100 };
             _timer.Tick += OnTick;
+            _cooldownTimer = new System.Windows.Forms.Timer { Interval = CooldownMs };
+            _cooldownTimer.Tick += (s, e) => EndCooldown();
             UiFactory.ScaleToScreen(this);
         }
 
         /// <summary>
         /// Lays out "label  [b1] [b2] …" as one row: every button as wide as its own caption
         /// needs (never below <paramref name="minWidth"/>), the whole group centred in the
-        /// window. If it still does not fit, the buttons drop to a smaller font first — the
+        /// test's column. If it still does not fit, the buttons drop to a smaller font first — the
         /// same last resort the main window's layout pass uses — rather than overlapping.
         /// </summary>
         private void LayOutRow(Label label, Button[] buttons, int minWidth, int gap)
         {
             if (label == null || buttons == null || buttons.Length == 0) { return; }
-            int avail = ClientSize.Width - 16;
+            int avail = LeftWidth - 16;
 
-            // In 100% units, like ClientSize here: this runs in the constructor, before the window is
+            // In 100% units, like the layout here: this runs in the constructor, before the window is
             // scaled, and measured in screen pixels a row was 1.5× too wide on a 150% laptop — its
             // buttons dropped to the small font for nothing and the row ran off the window once scaled.
             int Measure()
@@ -250,7 +367,7 @@ namespace AutoClicker.UI
                 total = Measure();
             }
 
-            int x = Math.Max(8, (ClientSize.Width - total) / 2);
+            int x = Math.Max(8, (LeftWidth - total) / 2);
             label.Left = x;
             // Past the label's 100% width, not its Right: an AutoSize label is already as wide as its
             // screen-pixel text, and scaling the buttons' x with the window then counted that twice.
@@ -267,6 +384,29 @@ namespace AutoClicker.UI
             base.OnHandleCreated(e);
             // Match the main window: dark title bar on dark themes.
             NativeChrome.SetTitleBarDark(Handle, _theme.Background.GetBrightness() < 0.5f);
+            // Tempo's clicker may click the pad (and its key-presser press Space here) while this is open:
+            // the guard that keeps a run off Tempo's own windows dropped all of it, and the test counted
+            // nothing. The rest of Tempo — this window's other buttons included — stays guarded.
+            SelfClickGuard.WelcomeOwnInput(_clickArea, this);
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            SelfClickGuard.ForgetOwnInput(this);
+            base.OnHandleDestroyed(e);
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr GetMessageExtraInfo();
+
+        /// <summary>
+        /// The input being handled right now was sent by Tempo itself (its clicker or key-presser): it
+        /// carries Tempo's tag. A second mouse's relayed press carries another tag and counts as yours.
+        /// </summary>
+        private static bool IsTempoInput()
+        {
+            try { return GetMessageExtraInfo() == Engine.InputSimulator.ExtraInfo; }
+            catch { return false; }
         }
 
         private void OnDurationClicked(object sender, EventArgs e)
@@ -281,6 +421,7 @@ namespace AutoClicker.UI
                 _testSeconds = secs;
                 _timeLabel.Text = Utils.Localization.F("Time: {0:0.0} s", (double)_testSeconds);
                 HighlightDurationButtons();
+                RefreshBestLine();
             }
         }
 
@@ -321,82 +462,91 @@ namespace AutoClicker.UI
             return Color.Gold;
         }
 
+        // ── The figures ──────────────────────────────────────────────────────────────────────
+
+        /// <summary>Everything worked out from one run's hits.</summary>
+        internal sealed class Stats
+        {
+            public int Seconds;
+            public int Hits;
+            public double Cps;
+            /// <summary>Hits in each second of the test, the first second first.</summary>
+            public int[] PerSecond = new int[0];
+            /// <summary>The most hits in any one-second stretch [t, t + 1 s).</summary>
+            public int BestSecond;
+            public bool HasGaps;
+            public double AverageGapMs, FastestGapMs, SlowestGapMs;
+            public bool HasConsistency;
+            /// <summary>0–100: how even the gaps were (100 = perfectly even). From their coefficient of variation.</summary>
+            public double ConsistencyPct;
+            public bool HasHeld;
+            /// <summary>Hits in the second half against the first half, in percent: under 100 slowed down.</summary>
+            public double HeldPct;
+            /// <summary>The run counted spacebar presses (set by the window, not by <see cref="Compute"/>).</summary>
+            public bool KeyboardRun;
+            /// <summary>Tempo's own clicker made most of the hits (set by the window): not anyone's personal best.</summary>
+            public bool ByClicker;
+        }
+
         /// <summary>
-        /// Computes the single fastest gap between two clicks (ms) and a 0-100
-        /// "consistency" score - how even the gaps were (100 = perfectly metronomic).
-        /// Consistency is derived from the spread of the inter-click gaps relative to
-        /// their average, so steadier clicking scores higher regardless of speed.
+        /// Works out a run's figures from its hits (ms from the first hit) over a test of
+        /// <paramref name="seconds"/>. Hits at or past the end are not part of it. Pure: the tests
+        /// feed it timelines.
         /// </summary>
-        private void ComputeRhythm(out double minGapMs, out double consistencyPct)
+        internal static Stats Compute(IList<double> hitMs, int seconds)
         {
-            minGapMs = 0;
-            consistencyPct = 0;
-            if (_clicks.Count < 3)
+            var s = new Stats { Seconds = Math.Max(1, seconds) };
+            double endMs = s.Seconds * 1000.0;
+            List<double> hits = (hitMs ?? new double[0]).Where(t => t >= 0 && t < endMs).OrderBy(t => t).ToList();
+            s.Hits = hits.Count;
+            s.Cps = hits.Count / (double)s.Seconds;
+
+            s.PerSecond = new int[s.Seconds];
+            foreach (double t in hits)
             {
-                return;
+                int i = (int)(t / 1000.0);
+                if (i >= 0 && i < s.PerSecond.Length) { s.PerSecond[i]++; }
             }
 
-            var gaps = new List<double>(_clicks.Count - 1);
-            for (int i = 1; i < _clicks.Count; i++)
-            {
-                double ms = (_clicks[i] - _clicks[i - 1]).TotalMilliseconds;
-                if (ms < 0) ms = 0;
-                gaps.Add(ms);
-            }
-
-            double sum = 0, min = double.MaxValue;
-            foreach (double g in gaps)
-            {
-                sum += g;
-                if (g < min) min = g;
-            }
-            double mean = sum / gaps.Count;
-            minGapMs = (min == double.MaxValue) ? 0 : min;
-
-            if (mean <= 0.0001)
-            {
-                consistencyPct = 0;
-                return;
-            }
-
-            double varSum = 0;
-            foreach (double g in gaps)
-            {
-                double d = g - mean;
-                varSum += d * d;
-            }
-            double stdDev = Math.Sqrt(varSum / gaps.Count);
-
-            // Coefficient of variation -> consistency. CV of 0 is perfectly even
-            // (100%); a CV of 1 or more reads as 0%.
-            double cv = stdDev / mean;
-            consistencyPct = Math.Max(0, Math.Min(100, (1.0 - cv) * 100.0));
-        }
-
-        /// <summary>Highest number of clicks in any one-second window (peak burst rate).</summary>
-        private int ComputePeakCps()
-        {
-            if (_clicks.Count <= 1)
-            {
-                return _clicks.Count;
-            }
-
-            int peak = 0;
+            // The best one-second stretch, wherever it starts: a window sliding over the hits.
             int start = 0;
-            for (int end = 0; end < _clicks.Count; end++)
+            for (int end = 0; end < hits.Count; end++)
             {
-                while ((_clicks[end] - _clicks[start]).TotalSeconds > 1.0)
+                while (hits[end] - hits[start] >= 1000.0) { start++; }
+                s.BestSecond = Math.Max(s.BestSecond, end - start + 1);
+            }
+
+            if (hits.Count >= 2)
+            {
+                var gaps = new List<double>(hits.Count - 1);
+                for (int i = 1; i < hits.Count; i++) { gaps.Add(hits[i] - hits[i - 1]); }
+                s.HasGaps = true;
+                s.AverageGapMs = gaps.Average();
+                s.FastestGapMs = gaps.Min();
+                s.SlowestGapMs = gaps.Max();
+                if (gaps.Count >= 2 && s.AverageGapMs > 0.0001)
                 {
-                    start++;
-                }
-                int window = end - start + 1;
-                if (window > peak)
-                {
-                    peak = window;
+                    double mean = s.AverageGapMs;
+                    double sd = Math.Sqrt(gaps.Sum(g => (g - mean) * (g - mean)) / gaps.Count);
+                    // Coefficient of variation -> consistency. A CV of 0 is perfectly even
+                    // (100%); a CV of 1 or more reads as 0%.
+                    s.HasConsistency = true;
+                    s.ConsistencyPct = Math.Max(0, Math.Min(100, (1.0 - sd / mean) * 100.0));
                 }
             }
-            return peak;
+
+            double half = endMs / 2;
+            int first = hits.Count(t => t < half);
+            int second = hits.Count - first;
+            if (first > 0)
+            {
+                s.HasHeld = true;
+                s.HeldPct = second * 100.0 / first;
+            }
+            return s;
         }
+
+        // ── Input ───────────────────────────────────────────────────────────────────────────
 
         private void OnClickAreaMouseDown(object sender, MouseEventArgs e)
         {
@@ -409,19 +559,37 @@ namespace AutoClicker.UI
             {
                 return;
             }
-            RegisterHit();
+            RegisterHit(IsTempoInput());
         }
 
         /// <summary>Registers one counted input (a click or a key press), starting the
-        /// test on the first one.</summary>
-        private void RegisterHit()
+        /// test on the first one. <paramref name="byTempo"/>: Tempo's own clicker made it.</summary>
+        internal void RegisterHit(bool byTempo = false)
         {
+            if (_cooldown)
+            {
+                return;   // the test just ended: this is the hand still going, not a new test
+            }
             if (!_running)
             {
                 StartTest();
             }
+            else if (_clock.Elapsed.TotalMilliseconds >= _testSeconds * 1000.0)
+            {
+                // Time is up but the 100 ms tick has not noticed yet. This click came too late to
+                // count: it used to, adding up to a click per tenth of a second to the result.
+                FinishTest();
+                return;
+            }
             _count++;
-            _clicks.Add(DateTime.UtcNow);
+            _hits.Add(_clock.Elapsed.TotalMilliseconds);
+            if (byTempo)
+            {
+                _tempoHits++;
+                double set = 0;
+                try { set = _clickerRate?.Invoke() ?? 0; } catch { }
+                if (set > 0) { _clickerSetCps = set; }
+            }
             // Two whole sentences rather than a spliced noun: languages that inflect the
             // count word cannot be served by swapping one token inside a fixed frame.
             _countLabel.Text = _keyboardMode
@@ -432,6 +600,15 @@ namespace AutoClicker.UI
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Escape)
+            {
+                // Esc stops a test that's going wrong without a result; with none going, it closes.
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                if (_running) { CancelTest(); }
+                else { Close(); }
+                return;
+            }
             if (_keyboardMode && e.KeyCode == Keys.Space)
             {
                 // Don't let Space also "click" the focused button; count one press per
@@ -441,7 +618,7 @@ namespace AutoClicker.UI
                 if (!_keyHeld)
                 {
                     _keyHeld = true;
-                    RegisterHit();
+                    RegisterHit(IsTempoInput());
                 }
             }
         }
@@ -474,7 +651,8 @@ namespace AutoClicker.UI
                 }
                 HighlightMouseButtons();
                 UpdateTitleForButton(_titleLabel);
-                if (_clickArea != null) _clickArea.Text = Utils.Localization.T(_keyboardMode ? "Press SPACE!" : "CLICK!");
+                if (_clickArea != null && !_cooldown) _clickArea.Text = Utils.Localization.T(_keyboardMode ? "Press SPACE!" : "CLICK!");
+                RefreshBestLine();
             }
         }
 
@@ -555,23 +733,45 @@ namespace AutoClicker.UI
             title.Font = font;
         }
 
+        // ── The run ─────────────────────────────────────────────────────────────────────────
+
+        /// <summary>"left-10", "space-5": which best a result counts towards.</summary>
+        internal string SetupKey => InputKey + "-" + _testSeconds;
+
+        private string InputKey => _keyboardMode ? "space"
+            : _testButton == MouseButtons.Right ? "right"
+            : _testButton == MouseButtons.Middle ? "middle" : "left";
+
+        /// <summary>The input's name as its button shows it, translated.</summary>
+        private string InputName => Utils.Localization.T(_keyboardMode ? "⌨ Space"
+            : _testButton == MouseButtons.Right ? "Right"
+            : _testButton == MouseButtons.Middle ? "Middle" : "Left");
+
         private void StartTest()
         {
             _running = true;
             _count = 0;
-            _peak = 0;
-            _clicks.Clear();
-            _keyHeld = false;
-            _startUtc = DateTime.UtcNow;
+            _hits.Clear();
+            _tempoHits = 0;
+            _clickerSetCps = 0;
+            // _keyHeld is NOT cleared here: the press that starts a test is the one holding it, and
+            // clearing it let that same key's auto-repeat count as a second press. Key up clears it.
+            _clock.Restart();
             _clickArea.Text = Utils.Localization.T(_keyboardMode ? "Press SPACE!" : "CLICK!");
-            if (_bestLabel != null) _bestLabel.ForeColor = _theme.TextMuted;
             if (_cpsLabel != null)
             {
                 _cpsLabel.ForeColor = _theme.AccentText;
+                _cpsLabel.Font = UiFactory.FontFor(16f, FontStyle.Bold);   // FitCpsLabel may have shrunk it
                 _cpsLabel.Text = Utils.Localization.F("CPS: {0:0.0}", 0.0);
             }
             if (_timeBar != null) _timeBar.Value = 0;
-            if (_detailLabel != null) _detailLabel.Text = "";
+            RefreshBestLine();
+            // The chart fills in second by second as the test runs.
+            _chart.Title = Utils.Localization.T(_keyboardMode ? "Presses each second" : "Clicks each second");
+            _chart.ValueFormat = _keyboardMode ? "{0} presses" : "{0} clicks";
+            _chart.ReferenceValue = double.NaN;
+            _chart.SetValues(new long[_testSeconds], SecondLabels(_testSeconds));
+            foreach (Label v in _statValues) { v.Text = "–"; v.ForeColor = _theme.Text; }
             if (_durationButtons != null)
             {
                 foreach (Button b in _durationButtons) b.Enabled = false;
@@ -585,45 +785,56 @@ namespace AutoClicker.UI
 
         private void OnTick(object sender, EventArgs e)
         {
-            double elapsed = (DateTime.UtcNow - _startUtc).TotalSeconds;
+            if (!_running) { return; }
+            double elapsed = _clock.Elapsed.TotalSeconds;
             double remaining = _testSeconds - elapsed;
 
             if (remaining <= 0)
             {
-                remaining = 0;
                 FinishTest();
+                return;
             }
 
             _timeLabel.Text = Utils.Localization.F("Time: {0:0.0} s", remaining);
             if (_timeBar != null)
             {
-                int prog = _testSeconds > 0
-                    ? (int)Math.Round(Math.Min(elapsed, _testSeconds) / _testSeconds * 100)
-                    : 0;
-                if (prog < 0) prog = 0;
-                if (prog > 100) prog = 100;
+                int prog = _testSeconds > 0 ? (int)Math.Round(elapsed / _testSeconds * 100) : 0;
+                prog = Math.Max(0, Math.Min(100, prog));
                 if (_timeBar.Value != prog) _timeBar.Value = prog;
             }
 
-            if (elapsed > 0.0001)
-            {
-                double cps = _count / Math.Min(elapsed, _testSeconds);
-                _cpsLabel.Text = Utils.Localization.F("CPS: {0:0.0}", cps);
-            }
+            // Over at least half a second: one click 50 ms in read as 20 CPS.
+            _cpsLabel.Text = Utils.Localization.F("CPS: {0:0.0}", _count / Math.Max(0.5, elapsed));
 
-            int peak = ComputePeakCps();
-            if (peak > _peak)
+            var buckets = new long[_testSeconds];
+            foreach (double t in _hits)
             {
-                _peak = peak;
-                _peakLabel.Text = Utils.Localization.F("Peak (1s): {0}", peak);
+                int i = (int)(t / 1000.0);
+                if (i >= 0 && i < buckets.Length) { buckets[i]++; }
             }
+            _chart.SetValues(buckets, SecondLabels(_testSeconds));
+        }
+
+        /// <summary>The seconds under the chart: each one for a short test, every fifth for a long one.</summary>
+        private static string[] SecondLabels(int seconds)
+        {
+            var labels = new string[seconds];
+            int step = seconds <= 10 ? 1 : 5;
+            for (int i = 0; i < seconds; i++)
+            {
+                labels[i] = (i + 1) % step == 0 || i == 0 ? (i + 1).ToString() : "";
+            }
+            return labels;
         }
 
         private void FinishTest()
         {
+            if (!_running) { return; }
             _timer.Stop();
+            _clock.Stop();
             _running = false;
             if (_timeBar != null) _timeBar.Value = 100;
+            _timeLabel.Text = Utils.Localization.F("Time: {0:0.0} s", 0.0);
             if (_durationButtons != null)
             {
                 foreach (Button b in _durationButtons) b.Enabled = true;
@@ -633,72 +844,205 @@ namespace AutoClicker.UI
                 foreach (Button b in _mbButtons) b.Enabled = true;
             }
 
-            double finalCps = _count / (double)_testSeconds;
-            _cpsLabel.Text = Utils.Localization.F("{0:0.0} CPS  \u00b7  {1}",
-                finalCps, Utils.Localization.T(RankFor(finalCps)));
-            _cpsLabel.ForeColor = RankColor(finalCps);
-            _clickArea.Text = Utils.Localization.T(
-                _keyboardMode ? "Press SPACE to retry" : "Click to retry");
+            Stats stats = Compute(_hits, _testSeconds);
+            stats.KeyboardRun = _keyboardMode;
+            // Tempo's own clicker made most of these hits: a measurement of the clicker, not a score.
+            stats.ByClicker = stats.Hits > 0 && _tempoHits * 2 > stats.Hits;
+            _lastStats = stats;
+            double finalCps = stats.Cps;
+            _countLabel.Text = _keyboardMode
+                ? Utils.Localization.F("Presses: {0}", stats.Hits)
+                : Utils.Localization.F("Clicks: {0}", stats.Hits);
+            _cpsLabel.Text = Utils.Localization.F("{0:0.0} CPS  ·  {1}",
+                finalCps, Utils.Localization.T(stats.ByClicker ? "Tempo's clicker" : RankFor(finalCps)));
+            _cpsLabel.ForeColor = stats.ByClicker ? _theme.AccentText : RankColor(finalCps);
+            FitCpsLabel();
 
-            // Track this session's attempts so the user can see how recent tries
-            // compare without losing them to the next round.
+            if (stats.ByClicker)
+            {
+                // Never anyone's best: a clicker at 100 CPS would bury every real result. Shown
+                // against the rate it was set to, which is what someone measuring it wants to know.
+                _attempts.Add(new Attempt { Cps = finalCps, Seconds = _testSeconds, Input = InputName, ByClicker = true });
+                _bestLabel.ForeColor = _theme.AccentText;
+                _bestLabel.Text = _clickerSetCps > 0
+                    ? Utils.Localization.F("Tempo's clicker: {0:0.0} CPS, set to {1:0.0}", finalCps, _clickerSetCps)
+                    : Utils.Localization.F("Tempo's clicker: {0:0.0} CPS", finalCps);
+                ShowDetails(stats);
+                RefreshHistory();
+                StartCooldown();
+                return;
+            }
+
+            // The best for this input and length, and the best of all.
+            bool newBest = false, newAllTime = false;
             if (finalCps > 0)
             {
-                _attempts.Add(finalCps);
-                double sum = 0, max = 0;
-                foreach (double a in _attempts)
+                _bests.TryGetValue(SetupKey, out double had);
+                if (finalCps > had)
                 {
-                    sum += a;
-                    if (a > max) max = a;
+                    _bests[SetupKey] = finalCps;
+                    BestsChanged = true;
+                    newBest = true;
                 }
-                double avg = sum / _attempts.Count;
-                _attemptsLabel.Text = Utils.Localization.F(
-                    "This session: {0} tries  ·  avg {1:0.0}  ·  best {2:0.0}", _attempts.Count, avg, max);
+                if (finalCps > AllTimeBest)
+                {
+                    AllTimeBest = finalCps;
+                    newAllTime = true;
+                }
+                _attempts.Add(new Attempt { Cps = finalCps, Seconds = _testSeconds, Input = InputName, NewBest = newBest });
             }
-
-            int peak = ComputePeakCps();
-            if (peak > _peak)
-            {
-                _peak = peak;
-            }
-            _peakLabel.Text = Utils.Localization.F("Peak (1s): {0}", (int)_peak);
-
-            // Detail metrics: consistency (how even the gaps between clicks were) and
-            // the single fastest gap. Needs at least a few clicks to be meaningful.
-            if (_clicks.Count >= 3)
-            {
-                double minGapMs, consistencyPct;
-                ComputeRhythm(out minGapMs, out consistencyPct);
-                _detailLabel.Text = Utils.Localization.F(
-                    "Consistency: {0:0}%  \u00b7  fastest gap: {1:0} ms", consistencyPct, minGapMs);
-            }
-            else
-            {
-                _detailLabel.Text = "";
-            }
-
-            bool newAllTimeBest = finalCps > AllTimeBest && finalCps > 0;
-            if (finalCps > _best)
-            {
-                _best = finalCps;
-            }
-            if (newAllTimeBest)
-            {
-                AllTimeBest = finalCps;
-            }
-
-            if (newAllTimeBest)
+            if (newAllTime)
             {
                 _bestLabel.ForeColor = _theme.AccentText;
-                _bestLabel.Text = Utils.Localization.F("\u2605 New best!  {0:0.0} CPS", AllTimeBest);
-                _clickArea.Text = Utils.Localization.T("New best \u2014 retry");
+                _bestLabel.Text = Utils.Localization.F("★ New best!  {0:0.0} CPS", AllTimeBest);
+            }
+            else if (newBest)
+            {
+                _bestLabel.ForeColor = _theme.AccentText;
+                _bestLabel.Text = Utils.Localization.F("★ New best for {0}, {1} s: {2:0.0} CPS", InputName, _testSeconds, finalCps);
             }
             else
             {
-                _bestLabel.ForeColor = _theme.TextMuted;
-                _bestLabel.Text = AllTimeBest > 0
-                    ? Utils.Localization.F("Best: {0:0.0}   \u00b7   All-time: {1:0.0}", _best, AllTimeBest)
-                    : Utils.Localization.F("Best CPS: {0:0.0}", _best);
+                RefreshBestLine();
+            }
+
+            ShowDetails(stats);
+            RefreshHistory();
+            StartCooldown();
+        }
+
+        /// <summary>
+        /// The result line at the biggest size, 16 pt down to 11, that keeps it on its one line: "84.3 CPS ·
+        /// Clic automático de Tempo" is wider than the column at 16 pt. (Screen pixels on both sides: this runs
+        /// after the window is scaled.)
+        /// </summary>
+        private void FitCpsLabel()
+        {
+            foreach (float size in new[] { 16f, 14f, 12f, 11f })
+            {
+                Font f = UiFactory.FontFor(size, FontStyle.Bold);
+                if (size <= 11f || TextRenderer.MeasureText(_cpsLabel.Text, f).Width <= _cpsLabel.Width - 4)
+                {
+                    _cpsLabel.Font = f;
+                    return;
+                }
+            }
+        }
+
+        /// <summary>A moment in which clicks are ignored, so the hand (or clicker) still going doesn't start another test.</summary>
+        private void StartCooldown()
+        {
+            _cooldown = true;
+            _clickArea.Text = Utils.Localization.T("Time's up!");
+            _cooldownTimer.Stop();
+            _cooldownTimer.Start();
+        }
+
+        private void EndCooldown()
+        {
+            _cooldownTimer.Stop();
+            _cooldown = false;
+            _clickArea.Text = Utils.Localization.T(_keyboardMode ? "Press SPACE!" : "Click to retry");
+        }
+
+        /// <summary>Esc during a test: stops it with no result, and puts the last finished test's details back.</summary>
+        private void CancelTest()
+        {
+            _timer.Stop();
+            _clock.Stop();
+            _running = false;
+            _count = 0;
+            _hits.Clear();
+            if (_timeBar != null) _timeBar.Value = 0;
+            _timeLabel.Text = Utils.Localization.F("Time: {0:0.0} s", (double)_testSeconds);
+            _countLabel.Text = _keyboardMode ? Utils.Localization.F("Presses: {0}", 0) : Utils.Localization.F("Clicks: {0}", 0);
+            _cpsLabel.ForeColor = _theme.AccentText;
+            _cpsLabel.Font = UiFactory.FontFor(16f, FontStyle.Bold);
+            _cpsLabel.Text = Utils.Localization.F("CPS: {0:0.0}", 0.0);
+            _clickArea.Text = Utils.Localization.T(_keyboardMode ? "Press SPACE!" : "CLICK!");
+            if (_durationButtons != null) { foreach (Button b in _durationButtons) b.Enabled = true; }
+            if (_mbButtons != null) { foreach (Button b in _mbButtons) b.Enabled = true; }
+            ShowDetails(_lastStats);
+            RefreshBestLine();
+        }
+
+        /// <summary>The details pane for a finished run; null shows it empty.</summary>
+        private void ShowDetails(Stats s)
+        {
+            // Worded for the run shown, even after the input has been switched for the next one.
+            bool keys = s != null ? s.KeyboardRun : _keyboardMode;
+            _chart.Title = Utils.Localization.T(keys ? "Presses each second" : "Clicks each second");
+            _chart.ValueFormat = keys ? "{0} presses" : "{0} clicks";
+            if (s == null)
+            {
+                _chart.ReferenceValue = double.NaN;
+                _chart.SetValues(null);
+                foreach (Label v in _statValues) { if (v != null) { v.Text = "–"; } }
+                return;
+            }
+            _chart.ReferenceValue = s.Cps;
+            _chart.ReferenceLabel = Utils.Localization.F("avg {0:0.0}", s.Cps);
+            _chart.SetValues(s.PerSecond.Select(v => (long)v).ToList(), SecondLabels(s.Seconds));
+
+            const string none = "–";
+            _statValues[0].Text = s.Cps.ToString("0.0") + " CPS";
+            _statValues[1].Text = s.Hits > 0
+                ? Utils.Localization.F(keys ? "{0} presses" : "{0} clicks", s.BestSecond)
+                : none;
+            // Through F: French and German put a space before the % sign.
+            _statValues[2].Text = s.HasConsistency ? Utils.Localization.F("{0:0}%", s.ConsistencyPct) : none;
+            _statValues[3].Text = s.HasGaps ? s.FastestGapMs.ToString("0") + " ms" : none;
+            _statValues[4].Text = s.HasGaps ? s.AverageGapMs.ToString("0") + " ms" : none;
+            _statValues[5].Text = s.HasGaps ? s.SlowestGapMs.ToString("0") + " ms" : none;
+            _statValues[6].Text = s.HasHeld ? Utils.Localization.F("{0:0}%", s.HeldPct) : none;
+            _statValues[6].ForeColor = !s.HasHeld ? _theme.Text
+                : s.HeldPct >= 95 ? _theme.SuccessText
+                : s.HeldPct >= 80 ? _theme.Text
+                : _theme.WarningText;
+        }
+
+        /// <summary>This session's tries, newest first; a star marks a new best, and the clicker's runs say so.</summary>
+        private void RefreshHistory()
+        {
+            if (_attempts.Count == 0)
+            {
+                // Says how to measure Tempo's own clicker, too: nothing else in the window does.
+                _historyLabel.Text = Utils.Localization.T("Your tries this session will be listed here. To measure Tempo's clicker, start it with the pointer on the pad.");
+                return;
+            }
+            var lines = new List<string>();
+            for (int i = _attempts.Count - 1; i >= 0 && lines.Count < 5; i--)
+            {
+                Attempt a = _attempts[i];
+                lines.Add(a.ByClicker
+                    ? Utils.Localization.F("{0:0.0} CPS  ·  {1} s  ·  Tempo's clicker", a.Cps, a.Seconds)
+                    : Utils.Localization.F("{0:0.0} CPS  ·  {1} s  ·  {2}", a.Cps, a.Seconds, a.Input) + (a.NewBest ? "  ★" : ""));
+            }
+            _historyLabel.Text = string.Join("\n", lines);
+        }
+
+        /// <summary>The best for the chosen input and length, and the all-time best beside it.</summary>
+        private void RefreshBestLine()
+        {
+            if (_bestLabel == null) { return; }
+            _bestLabel.ForeColor = _theme.TextMuted;
+            _bests.TryGetValue(SetupKey, out double best);
+            string name = InputName;
+            if (best > 0 && AllTimeBest > best + 0.05)
+            {
+                _bestLabel.Text = Utils.Localization.F("Best for {0}, {1} s: {2:0.0}  ·  All-time: {3:0.0}", name, _testSeconds, best, AllTimeBest);
+            }
+            else if (best > 0)
+            {
+                _bestLabel.Text = Utils.Localization.F("Best for {0}, {1} s: {2:0.0}", name, _testSeconds, best);
+            }
+            else if (AllTimeBest > 0)
+            {
+                _bestLabel.Text = Utils.Localization.F("No best for {0}, {1} s yet  ·  All-time: {2:0.0}", name, _testSeconds, AllTimeBest);
+            }
+            else
+            {
+                _bestLabel.Text = Utils.Localization.F("No best for {0}, {1} s yet", name, _testSeconds);
             }
         }
 
@@ -706,6 +1050,9 @@ namespace AutoClicker.UI
         {
             _timer.Stop();
             _timer.Dispose();
+            _cooldownTimer.Stop();
+            _cooldownTimer.Dispose();
+            _tips.Dispose();
             base.OnFormClosed(e);
         }
     }

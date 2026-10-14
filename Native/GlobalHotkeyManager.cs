@@ -199,7 +199,9 @@ namespace AutoClicker.Native
             }
             else
             {
-                Logger.Info($"[Hotkeys] registered '{name}' (mods={modifiers}, vk={virtualKey}).");
+                // Debug: the conflict check's one line names every bound key; this said it again,
+                // key by key, on every re-apply (225 times each in ten days of one log).
+                Logger.Debug($"[Hotkeys] registered '{name}' (mods={modifiers}, vk={virtualKey}).");
             }
 
             return ok;
@@ -336,7 +338,7 @@ namespace AutoClicker.Native
             }
             if (took > 0)
             {
-                Logger.Info($"[Hotkeys] '{name}' also fires with Shift/Ctrl held ({took} more combination(s) reserved).");
+                Logger.Debug($"[Hotkeys] '{name}' also fires with Shift/Ctrl held ({took} more combination(s) reserved).");
             }
             return took;
         }
@@ -364,6 +366,28 @@ namespace AutoClicker.Native
                 return false;
             }
             return ExactlyBound(CurrentModifiers(), trigger.GetVirtualKey());
+        }
+
+        /// <summary>
+        /// True when pressing <paramref name="virtualKey"/> with the modifiers held now runs one of Tempo's
+        /// keyboard hotkeys — reserved, a reserved Shift/Ctrl version, or caught by the keyboard hook (with
+        /// its loose Shift/Ctrl rule). The macro recorder asks, to leave such a press out of a take: it
+        /// was an instruction to Tempo, a reserved one never reached the app at all, and played back it
+        /// would run the hotkey again — Windows cannot tell Tempo's keystroke from the user's.
+        /// </summary>
+        public bool FiresHotkeyNow(int virtualKey)
+        {
+            if (_disposed || _paused || virtualKey <= 0) { return false; }
+            uint mods = CurrentModifiers();
+            foreach (Registration r in _registrations.Values)
+            {
+                if (r.Active && r.Modifiers == mods && r.VirtualKey == (uint)virtualKey) { return true; }
+            }
+            foreach (Registration r in _variants.Values)
+            {
+                if (r.Modifiers == mods && r.VirtualKey == (uint)virtualKey) { return true; }
+            }
+            return _keyboardFallbacks.Count > 0 && BestKeyMatch(_keyboardFallbacks, virtualKey) != null;
         }
 
         /// <summary>Names left unbound because another Tempo action already holds the combo.</summary>
@@ -409,7 +433,13 @@ namespace AutoClicker.Native
             // nothing. (Showing Tempo with its hotkey can land focus straight in a capture field.)
             if (DeliveryPaused || !e.IsKeyDown)
             {
-                if (!e.IsKeyDown) { ForgetHeld(e.VirtualKey); }
+                if (!e.IsKeyDown)
+                {
+                    ForgetHeld(e.VirtualKey);
+                    // The release of a press Tempo took is taken with it, or the other program would
+                    // get a release of a key it never saw go down.
+                    if (_takenKeys.Remove(e.VirtualKey)) { e.Suppress = true; }
+                }
                 return;
             }
 
@@ -422,12 +452,50 @@ namespace AutoClicker.Native
             }
 
             // Hooked bindings: once per press — auto-repeat finds the name still held.
+            //
+            // And TAKEN: the press does Tempo's action and nothing else. These are the combinations
+            // Windows would not reserve because another program owns them, and the hook used to let the
+            // key through as well — one press ran Tempo's action AND the other program's (a screen
+            // recorder's F9, the shell's Win+D). A key Windows did reserve has always been Tempo's
+            // alone; now a hooked one is too, for as long as Tempo is open.
             string bound = BestKeyMatch(_keyboardFallbacks, e.VirtualKey);
-            if (bound != null && _comboHeld.Add(bound))
+            if (bound != null)
             {
-                HotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(-1, bound));
+                e.Suppress = true;
+                if (_takenKeys.Add(e.VirtualKey) && (IsKeyDown(0x5B) || IsKeyDown(0x5C) || IsKeyDown(0x12)))
+                {
+                    // Taken while the Windows key or Alt is down: release that key now with nothing in
+                    // between, as Windows sees it, and Start opens (Windows key) or the window's menu
+                    // bar wakes up (Alt). A key no keyboard sends, in between, prevents both.
+                    SendMaskKey();
+                }
+                if (_comboHeld.Add(bound))
+                {
+                    HotkeyPressed?.Invoke(this, new HotkeyPressedEventArgs(-1, bound));
+                }
             }
         }
+
+        /// <summary>Keys whose press a hooked binding took; their repeats and release are taken too.</summary>
+        private readonly HashSet<int> _takenKeys = new HashSet<int>();
+
+        /// <summary>For the tests: replaces sending the mask key.</summary>
+        internal Action MaskKeyForTest;
+
+        private void SendMaskKey()
+        {
+            if (MaskKeyForTest != null) { MaskKeyForTest(); return; }
+            try
+            {
+                const uint KEYEVENTF_KEYUP = 0x0002;
+                keybd_event((byte)ShortcutGuard.VK_MASK, 0, 0, UIntPtr.Zero);
+                keybd_event((byte)ShortcutGuard.VK_MASK, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            }
+            catch (Exception ex) { Logger.Swallow("SendMaskKey", ex); }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
         /// <summary>
         /// Which of <paramref name="set"/> a press of <paramref name="virtualKey"/> fires now, or null.
@@ -711,8 +779,12 @@ namespace AutoClicker.Native
 
         private static bool IsKeyDown(int vk)
         {
+            if (KeyStateForTest != null) { return KeyStateForTest(vk); }
             return (NativeMethods.GetAsyncKeyState(vk) & 0x8000) != 0;
         }
+
+        /// <summary>For the tests: which keys count as held, instead of the real keyboard.</summary>
+        internal static Func<int, bool> KeyStateForTest;
 
         /// <summary>
         /// Removes a previously registered hotkey by name. Safe to call when no
@@ -774,10 +846,10 @@ namespace AutoClicker.Native
             /// <summary>
             /// Windows REFUSED it — almost always because another program already owns
             /// the combination — so Tempo is watching for it with a keyboard hook
-            /// instead. The action still fires, but the key is NOT reserved: it also
-            /// keeps doing whatever it does in the app you're using. That difference is
-            /// invisible today, and it's exactly the thing people mean when they say a
-            /// hotkey "half works".
+            /// instead. The action fires and the hook keeps the key from the other program
+            /// (press, repeats and release), as a reserved key would be. It used to let the
+            /// key through as well, so it ALSO did its job in the other program — the hotkey
+            /// people said "half worked".
             /// </summary>
             HookFallback = 2,
             /// <summary>A mouse-button binding (always hook-driven; that is normal).</summary>
@@ -786,9 +858,8 @@ namespace AutoClicker.Native
 
         /// <summary>
         /// One-line tally of how the bound hotkeys are being delivered, for Live debug.
-        /// Names the hook-fallback ones explicitly: those are the "my hotkey half works"
-        /// cases — the action fires, but the key is not reserved, so it ALSO keeps doing
-        /// its normal job in whatever app is in front.
+        /// Names the hook-fallback ones explicitly: Windows would not reserve them because
+        /// another program owns the combination, and the hook takes them from it instead.
         /// </summary>
         public string DebugSummary()
         {
@@ -816,7 +887,7 @@ namespace AutoClicker.Native
                 {
                     sb.Append(", ").Append(hooked).Append(" via keyboard hook (")
                       .Append(string.Join(", ", hookedNames))
-                      .Append(" — key not reserved, another app owns it)");
+                      .Append(" — another app owns it; the hook takes the key from it)");
                 }
                 if (mouse > 0) { sb.Append(", ").Append(mouse).Append(" mouse-button"); }
                 if (_variants.Count > 0) { sb.Append(", ").Append(_variants.Count).Append(" Shift/Ctrl version(s) reserved"); }
@@ -876,6 +947,10 @@ namespace AutoClicker.Native
             // Same for keyboard fallbacks and their hook.
             _keyboardFallbacks.Clear();
             _comboHeld.Clear();
+            // With the hook stopped a taken key's release goes unseen, and a stale entry would take the
+            // release of some later press that was NOT taken — a key left down in another program. A
+            // release that gets through on its own is the lesser harm.
+            _takenKeys.Clear();
             _keyHook?.Stop();
 
             // And the watched ones — the hooks above are down, so nothing can notice them any more.

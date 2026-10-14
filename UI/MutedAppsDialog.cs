@@ -151,12 +151,16 @@ namespace AutoClicker.UI
                 var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (NotificationHistory.Entry e in NotificationHistory.Recent())
                 {
-                    string app = (e.Source ?? "").Trim();
-                    if (app.Length == 0) { continue; }
-                    if (string.Equals(app, "Tempo", StringComparison.OrdinalIgnoreCase)) { continue; }
-                    if (IsMuted(app)) { continue; }
-                    if (!added.Add(app)) { continue; }
-                    _seen.Items.Add(app);
+                    // The sender first — a web site Edge passed on can be muted on its own — then its app.
+                    foreach (string name in new[] { e.Sender, e.Source })
+                    {
+                        string app = (name ?? "").Trim();
+                        if (app.Length == 0) { continue; }
+                        if (string.Equals(app, "Tempo", StringComparison.OrdinalIgnoreCase)) { continue; }
+                        if (IsMuted(app)) { continue; }
+                        if (!added.Add(app)) { continue; }
+                        _seen.Items.Add(app);
+                    }
                     if (_seen.Items.Count >= 40) { break; }
                 }
             }

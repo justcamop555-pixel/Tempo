@@ -73,8 +73,10 @@ namespace AutoClicker.UI
             status.Controls.Add(_capStatePill);
 
             _capEngineLine = UiFactory.Caption("", 16, 60);
+            CapStatusLine(_capEngineLine);
             status.Controls.Add(_capEngineLine);
             _capSourceLine = UiFactory.Caption("", 16, 80);
+            CapStatusLine(_capSourceLine);
             status.Controls.Add(_capSourceLine);
 
             // The delay line. "The video says something, then the caption catches up
@@ -255,13 +257,7 @@ namespace AutoClicker.UI
             live.Controls.Add(srtBtn);
 
             var clearBtn = UiFactory.Button("Clear", 630, 26, 46, 28);
-            clearBtn.Click += (s, e) =>
-            {
-                _transcript.Clear();
-                try { _captionHistoryForm?.SetHistory(_transcript); } catch { }
-                _capRenderedText = null;
-                RefreshCaptionTranscript();
-            };
+            clearBtn.Click += (s, e) => ClearCaptionTranscript();
             live.Controls.Add(clearBtn);
 
             // The row, packed from the right edge: each button as wide as its own caption
@@ -410,6 +406,20 @@ namespace AutoClicker.UI
             page.Controls.Add(live);
             page.Controls.Add(actions);
             _tabs.TabPages.Add(page);
+        }
+
+        /// <summary>
+        /// One status line that stops short of the button column (x=520). The engine and source lines
+        /// grew with their contents — the model, the language read-out, "running behind…", the face
+        /// analysis note — and in French the source line ran under "All caption settings…". Past its
+        /// width a line ends in "…", and the whole of it is on hover.
+        /// </summary>
+        private static void CapStatusLine(Label line)
+        {
+            line.AutoSize = false;
+            line.Size = new Size(492, 16);
+            line.AutoEllipsis = true;
+            TipStyle.FollowText(line);
         }
 
         /// <summary>
@@ -616,23 +626,32 @@ namespace AutoClicker.UI
                         // in, and which used to be invisible from here.
                         string language;
                         string pinned = _settings.CaptionLanguage;
+                        string state = _captionsActive && _captionTranscriber != null &&
+                                       (_captionTranscriber.IsRunning || _captionTranscriber.IsStarting)
+                            ? _captionTranscriber.LanguageState : null;
                         if (!string.IsNullOrEmpty(pinned) &&
                             !pinned.Equals("auto", StringComparison.OrdinalIgnoreCase))
                         {
-                            language = CaptionLanguageLabel(pinned);
-                            if (_captionsActive && _captionTranscriber != null &&
-                                !string.IsNullOrEmpty(_captionTranscriber.LanguageState) &&
-                                _captionTranscriber.LanguageState.IndexOf(pinned,
-                                    StringComparison.OrdinalIgnoreCase) < 0)
+                            // Translated, like the pickers' own list: it said "Spanish" on a German screen.
+                            language = CaptionLanguageName(pinned);
+                            // Compared code to code. Finding the pinned code ANYWHERE in the engine's state
+                            // text matched "de" inside "detecting", so pinning German mid-run never said it
+                            // needed a restart; and an English-only model was told to restart for a
+                            // language it can never write.
+                            if (state == "English model" && !pinned.Equals("en", StringComparison.OrdinalIgnoreCase))
+                            {
+                                language += " " + Localization.T("(this model is English-only)");
+                            }
+                            else if (state != null &&
+                                     !string.Equals(ActiveCaptionLanguageCode(state), pinned, StringComparison.OrdinalIgnoreCase))
                             {
                                 language += " " + Localization.T("(restart captions to apply)");
                             }
                         }
                         else
                         {
-                            language = _captionsActive && _captionTranscriber != null &&
-                                       !string.IsNullOrEmpty(_captionTranscriber.LanguageState)
-                                ? _captionTranscriber.LanguageState
+                            language = !string.IsNullOrEmpty(state)
+                                ? CaptionLanguageStateText(state)
                                 : Localization.T("auto-detect");
                         }
                         sb.Append("   ·   ").Append(Localization.F("Language: {0}", language));
@@ -675,7 +694,20 @@ namespace AutoClicker.UI
                     }
                     else
                     {
-                        line = Localization.F("Will use: {0} engine", _settings.CaptionSource);
+                        // A whole sentence per choice. "Will use: {0} engine" was handed the setting's
+                        // raw value — "Auto", in English, in every language.
+                        switch (_settings.CaptionSource)
+                        {
+                            case Models.CaptionSource.Windows:
+                                line = Localization.T("Will use: Windows Live Captions");
+                                break;
+                            case Models.CaptionSource.Tempo:
+                                line = Localization.T("Will use: Tempo's offline engine");
+                                break;
+                            default:
+                                line = Localization.T("Will use: Tempo's engine, Windows if needed");
+                                break;
+                        }
                     }
                     _capSourceLine.Text = line
                         + (_settings.CaptionFaceAnalysis
@@ -1143,10 +1175,16 @@ namespace AutoClicker.UI
                 ? "[Captions] speech model set to " + path
                 : "[Captions] speech model back to Tempo's own downloads.");
 
-            if (_captionsActive)
+            // An explicit model choice beats the session's too-slow override, as one made in Settings does.
+            _captionModelOverrideKey = null;
+            _modelRecoveryBlocked = false;
+
+            // In place, and only when Tempo's engine is the source. This called StartTempoCaptions
+            // whatever the source was, so with "Windows 11 Live Captions" chosen it started Tempo's
+            // engine BESIDE the Windows captions being mirrored — two engines writing to one bar.
+            if (_captionsActive && _settings.CaptionSource != Models.CaptionSource.Windows)
             {
-                try { StopTempoCaptions(); StartTempoCaptions(); }
-                catch (Exception ex) { Logger.Warn("[Captions] restart after model change: " + ex.Message); }
+                RestartCaptionEngine(path.Length > 0 ? "a model file was chosen" : "back to Tempo's own models");
             }
             RefreshCaptionsTab();
         }
@@ -1176,9 +1214,11 @@ namespace AutoClicker.UI
             // Set alongside the text so the colour below is decided once, not re-derived.
             bool warn = tr.InputClipping;
 
+            // Every piece through the translator: this line was assembled from English and shown as it
+            // was, so it read in English on the tab's otherwise translated status card.
             if (tr.InputClipping)
             {
-                sb.Append("⚠ Audio is clipping — turn the app or system volume down; a smaller model will not help.");
+                sb.Append(Localization.T("⚠ Audio is clipping — turn the app or system volume down; a smaller model will not help."));
             }
             // Two videos at once is the most confusing failure this feature has, because it
             // does not LOOK like a failure: the text keeps flowing, it stays grammatical,
@@ -1189,25 +1229,27 @@ namespace AutoClicker.UI
             else if (AudioSourcesAreMixed(out int mixedApps, out int _))
             {
                 warn = true;
-                sb.Append("⚠ ").Append(mixedApps)
-                  .Append(" apps are playing sound at once — captions are a blend of all of them, so ")
-                  .Append("sentences may combine things different sources said. Mute the ones you don't ")
-                  .Append("need captioned.");
+                sb.Append(Localization.F("⚠ {0} apps are playing sound at once — captions are a blend of all of them, "
+                    + "so sentences may combine things different sources said. Mute the ones you don't need captioned.",
+                    mixedApps));
             }
             else
             {
                 double conf = tr.LastConfidence;
                 if (conf >= 0)
                 {
-                    sb.Append("Confidence ").Append(Math.Round(conf * 100)).Append('%');
-                    if (conf < 0.45) { sb.Append(" — low; the audio may be quiet, noisy or not speech"); }
+                    int percent = (int)Math.Round(conf * 100);
+                    sb.Append(conf < 0.45
+                        ? Localization.F("Confidence {0}% — low; the audio may be quiet, noisy or not speech", percent)
+                        : Localization.F("Confidence {0}%", percent));
                 }
 
-                string lang = tr.LanguageState;
+                // In words, not the engine's log text ("detecting: en (2/4)").
+                string lang = CaptionLanguageStateText(tr.LanguageState);
                 if (!string.IsNullOrEmpty(lang))
                 {
                     if (sb.Length > 0) { sb.Append("   ·   "); }
-                    sb.Append("Language ").Append(lang);
+                    sb.Append(Localization.F("Language: {0}", lang));
                 }
 
                 // A caption engine that has gone quiet is indistinguishable from a quiet
@@ -1217,7 +1259,7 @@ namespace AutoClicker.UI
                 if (quiet >= 20)
                 {
                     if (sb.Length > 0) { sb.Append("   ·   "); }
-                    sb.Append("⚠ nothing transcribed for ").Append((int)quiet).Append(" s");
+                    sb.Append(Localization.F("⚠ nothing transcribed for {0} s", (int)quiet));
                 }
             }
 
@@ -1243,21 +1285,22 @@ namespace AutoClicker.UI
             // counted the same wait twice and read ~4.3 s while captions were ~2 s behind.
             double engineDelay = t.MeasuredDelaySeconds;
             double delay = engineDelay >= 0 ? engineDelay + CaptionBarLagSeconds() : t.EstimatedDelaySeconds;
+            // Translated piece by piece, like the engine line (it was English in every language).
             var sb = new StringBuilder();
-            sb.Append("Delay ~").Append(delay.ToString("0.0")).Append(" s behind");
+            sb.Append(Localization.F("Delay ~{0} s behind", delay.ToString("0.0")));
             if (t.CurrentDecodeSeconds >= 4)
             {
-                sb.Append("  ·  frozen ").Append((int)t.CurrentDecodeSeconds).Append(" s in one decode");
+                sb.Append("  ·  ").Append(Localization.F("frozen {0} s in one decode", (int)t.CurrentDecodeSeconds));
             }
             if (rtf > 0)
             {
                 // Two decimals: at one, 0.96 printed as "1.0× real time" in the calm colour while
                 // 1.00 printed the same "1.0×" in the warning colour.
-                sb.Append("  ·  ").Append(rtf.ToString("0.00")).Append("× real time");
+                sb.Append("  ·  ").Append(Localization.F("{0}× real time", rtf.ToString("0.00")));
             }
             if (t.BacklogDroppedSeconds > 0.5)
             {
-                sb.Append("  ·  ").Append(t.BacklogDroppedSeconds.ToString("0")).Append(" s skipped");
+                sb.Append("  ·  ").Append(Localization.F("{0} s skipped", t.BacklogDroppedSeconds.ToString("0")));
             }
             _capDelayLine.Text = sb.ToString();
 
@@ -1416,15 +1459,39 @@ namespace AutoClicker.UI
             if (_settings == null) { return; }
             try
             {
-                string current = _captionModelActiveKey ?? _settings.CaptionModelKey ?? "base";
-                string next = NextFasterModelKey(current);
-                if (next == null)
+                // A model file the user chose outranks the built-in models (StartTempoCaptions), so
+                // stepping the built-in choice down changed nothing that ran — while the notice below
+                // said the captions had switched.
+                if (!string.IsNullOrEmpty(_settings.CaptionCustomModelPath))
                 {
-                    TempoNotify(4000, "Tempo",
-                        Localization.T("Already on the fastest model. Turning on the GPU engine in Settings is the next step."),
-                        ToolTipIcon.Info);
+                    TempoNotify(5000, "Tempo",
+                        Localization.T("Captions use a model file you chose, which Tempo can't size down. Pick a smaller one with Models… on the Captions tab."),
+                        ToolTipIcon.Info, always: true);
                     return;
                 }
+
+                string current = !string.IsNullOrEmpty(_captionModelActiveKey)
+                    ? _captionModelActiveKey : (_settings.CaptionModelKey ?? "base");
+                // The next smaller model that is DOWNLOADED. The next rung of the ladder may not be, and
+                // the engine then loaded whatever was installed instead — often the same slow model.
+                // (Not NextFasterInstalled for a key it doesn't know: it would start from the heaviest.)
+                string next = Utils.WhisperModelManager.IndexInSpeedOrder(current) >= 0
+                    ? Utils.WhisperModelManager.NextFasterInstalled(current)
+                    : InstalledModelKeyOrNull(NextFasterModelKey(current));
+                if (next == null)
+                {
+                    // An answer to a button press: always shown.
+                    TempoNotify(5000, "Tempo", NextFasterModelKey(current) == null
+                        ? Localization.T("Already on the fastest model. Turning on the GPU engine in Settings is the next step.")
+                        : Localization.T("No faster model is installed. Download a smaller one with Models… on the Captions tab, or turn on the GPU engine in Settings."),
+                        ToolTipIcon.Info, always: true);
+                    return;
+                }
+
+                // An explicit pick beats the session's too-slow override, as a model chosen in Settings
+                // does (OnSaveSettings). Left in place, the restart loaded the overridden model again.
+                _captionModelOverrideKey = null;
+                _modelRecoveryBlocked = false;
 
                 // Through the funnel: it persists and repaints BOTH surfaces, so the
                 // Settings combo cannot be left showing the old model (Save Settings
@@ -1432,9 +1499,9 @@ namespace AutoClicker.UI
                 ChangeCaptionSetting(() => _settings.CaptionModelKey = next,
                     "model switched to '" + next + "' to keep pace");
 
-                bool wasOn = _captionsActive;
-                if (wasOn) { SetCaptionsActive(false); }
-                if (wasOn) { _captionsActive = true; SetCaptionsActive(true); }
+                // In place: switching captions off and on to do this started a new session, which
+                // cleared the transcript this tab is showing.
+                RestartCaptionEngine("model switched to '" + next + "' to keep pace");
 
                 Logger.Info("[Captions] switched to the '" + next + "' model to keep pace (was '" + current + "').");
                 TempoNotify(4000, "Tempo",
@@ -1516,6 +1583,68 @@ namespace AutoClicker.UI
         internal static string CaptionLanguageLabel(string code)
         {
             return CaptionLanguageChoices[CaptionLanguageIndexFromCode(code)][1];
+        }
+
+        /// <summary>
+        /// A language code's name in the reader's language when the pickers list it, otherwise the code
+        /// itself: detection can settle on any of Whisper's ~100 languages, and the list names fifteen —
+        /// <see cref="CaptionLanguageLabel"/> would call an unlisted one "Auto-detect".
+        /// </summary>
+        internal static string CaptionLanguageName(string code)
+        {
+            string want = (code ?? "").Trim();
+            for (int i = 1; i < CaptionLanguageChoices.Length; i++)
+            {
+                if (string.Equals(CaptionLanguageChoices[i][0], want, StringComparison.OrdinalIgnoreCase))
+                {
+                    return Localization.T(CaptionLanguageChoices[i][1]);
+                }
+            }
+            return want;
+        }
+
+        /// <summary>
+        /// The engine's language state in the reader's words. The engine keeps it as log text —
+        /// "auto-detect", "detecting: en (2/4)", "locked: en", "pinned: en", "English model" — and the
+        /// Captions tab showed it as it was, in English and with bare codes, in every language.
+        /// </summary>
+        internal static string CaptionLanguageStateText(string state)
+        {
+            if (string.IsNullOrEmpty(state)) { return ""; }
+            if (state == "auto-detect") { return Localization.T("auto-detect"); }
+            if (state == "English model") { return Localization.T("English-only model"); }
+            if (state.StartsWith("pinned: ", StringComparison.Ordinal))
+            {
+                return CaptionLanguageName(state.Substring(8));
+            }
+            if (state.StartsWith("locked: ", StringComparison.Ordinal))
+            {
+                return Localization.F("{0} (detected)", CaptionLanguageName(state.Substring(8)));
+            }
+            if (state.StartsWith("detecting: ", StringComparison.Ordinal))
+            {
+                // "detecting: en (2/4)" — the language detection leans towards, and how sure it is.
+                string rest = state.Substring(11);
+                int open = rest.IndexOf(" (", StringComparison.Ordinal);
+                string code = open > 0 ? rest.Substring(0, open) : rest;
+                string score = open > 0 ? rest.Substring(open + 2).TrimEnd(')') : "";
+                return score.Length > 0
+                    ? Localization.F("detecting… {0} ({1})", CaptionLanguageName(code), score)
+                    : Localization.F("detecting… {0}", CaptionLanguageName(code));
+            }
+            return state;
+        }
+
+        /// <summary>The code the running engine decodes as, from its state; null while it is still detecting.</summary>
+        internal static string ActiveCaptionLanguageCode(string state)
+        {
+            if (string.IsNullOrEmpty(state)) { return null; }
+            if (state == "English model") { return "en"; }
+            foreach (string prefix in new[] { "pinned: ", "locked: " })
+            {
+                if (state.StartsWith(prefix, StringComparison.Ordinal)) { return state.Substring(prefix.Length).Trim(); }
+            }
+            return null;
         }
 
         /// <summary>
@@ -1817,6 +1946,14 @@ namespace AutoClicker.UI
             catch { }
         }
 
+        /// <summary><paramref name="key"/> when that model is downloaded, otherwise null.</summary>
+        private static string InstalledModelKeyOrNull(string key)
+        {
+            if (string.IsNullOrEmpty(key)) { return null; }
+            var m = Utils.WhisperModelManager.FindByKey(key);
+            return m != null && Utils.WhisperModelManager.IsInstalled(m) ? key : null;
+        }
+
         /// <summary>The next model down in speed order, or null at the bottom.</summary>
         private static string NextFasterModelKey(string current)
         {
@@ -1968,6 +2105,39 @@ namespace AutoClicker.UI
 
         /// <summary>The count line without the "N new below" suffix, so the two never compound.</summary>
         private string _capCountBaseText;
+
+        /// <summary>
+        /// The transcript card's Clear. It is one small button beside Subtitles…, and what it threw
+        /// away — for someone who can't hear the audio, the only record of what was said — could not be
+        /// brought back, with no question asked. Now: with "Save transcripts to disk" on, the lines are
+        /// written to a transcript file first (as the end of a session would) and nothing needs asking;
+        /// otherwise it asks. It also left "N new below" standing under the empty box.
+        /// </summary>
+        private void ClearCaptionTranscript()
+        {
+            try
+            {
+                if (_captionHistory.Count > 0)
+                {
+                    if (_settings != null && _settings.CaptionSaveTranscripts)
+                    {
+                        SaveTranscriptIfWanted();
+                    }
+                    else if (MessageBox.Show(this,
+                                 Localization.T("Clear the transcript? It isn't saved anywhere, so it can't be brought back."),
+                                 "Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                    {
+                        return;
+                    }
+                    _transcript.Clear();
+                    try { _captionHistoryForm?.SetHistory(_transcript); } catch { }
+                }
+                _capNewBelow = 0;
+                _capRenderedText = null;
+                RefreshCaptionTranscript();
+            }
+            catch (Exception ex) { Logger.Warn("[Captions tab] clear failed: " + ex.Message); }
+        }
 
         /// <summary>Jumps the transcript to the newest line and clears the "new below" note.</summary>
         private void JumpTranscriptToNewest()

@@ -150,6 +150,36 @@ namespace AutoClicker.Engine
         /// </summary>
         public List<HotkeyDefinition> ExcludedMouseHotkeys { get; } = new List<HotkeyDefinition>();
 
+        /// <summary>
+        /// "Hotkeys also work while you hold Shift or Ctrl": a mouse hotkey that tolerates it is swallowed
+        /// with Shift/Ctrl held on top too (GlobalHotkeyManager.BestMouseMatch), so it is left out of the
+        /// take with them as well.
+        /// </summary>
+        public bool ExtraShiftCtrl { get; set; }
+
+        /// <summary>
+        /// Whether a key press, with the modifiers held right now, runs one of Tempo's own hotkeys
+        /// (GlobalHotkeyManager.FiresHotkeyNow). Such a press is left out of the take, with its repeats
+        /// and its release. Null: none is.
+        /// </summary>
+        public Func<int, bool> FiresHotkey { get; set; }
+
+        // Keys whose press ran a Tempo hotkey and was left out (see FiresHotkey).
+        private readonly HashSet<int> _hotkeyKeysDown = new HashSet<int>();
+
+        /// <summary>
+        /// Settings ▸ "Hold back Windows shortcuts…" (MainForm's ShortcutGuard): Windows' own shortcuts are
+        /// no part of a take — the Windows key and whatever is pressed with it, Alt+Tab and Alt+Esc
+        /// (switching windows), Ctrl+Esc and Ctrl+Shift+Esc (Task Manager). While recording they are held
+        /// back or switch away from the game; played back, they opened Start, switched windows or brought
+        /// up Task Manager in the middle of the macro.
+        /// </summary>
+        public bool LeaveOutWindowsShortcuts { get; set; }
+
+        // Keys of a Windows shortcut left out of this take; their repeats and releases go too.
+        private readonly HashSet<int> _shortcutKeysDown = new HashSet<int>();
+        private bool _winHeld;
+
         public bool IsRecording => _recording;
 
         public event EventHandler<MacroAction> ActionRecorded;
@@ -184,6 +214,9 @@ namespace AutoClicker.Engine
             _lastRealStep = null;
             _ownClickMs = -1;
             _keysDown.Clear();
+            _hotkeyKeysDown.Clear();
+            _shortcutKeysDown.Clear();
+            _winHeld = false;
             _buttonsDown.Clear();
             _firstEventCaptured = false;
             NoteModifiersHeldAtStart();
@@ -323,6 +356,9 @@ namespace AutoClicker.Engine
                 _buttonsDown.Clear();
                 _heldAtStart.Clear();
             }
+            _hotkeyKeysDown.Clear();
+            _shortcutKeysDown.Clear();
+            _winHeld = false;
 
             if (_camera)
             {
@@ -350,12 +386,38 @@ namespace AutoClicker.Engine
             // auto-clicker running during a recording would be captured back into it.
             if (e.Injected)
             {
+                // Except to learn that the Windows key is up. The shortcut guard holds back the real
+                // release of a Windows key pressed on its own and sends one of its own instead; never
+                // seeing the key go up, the take counted every key after it as pressed WITH it, and
+                // left them all out.
+                if (!e.IsKeyDown && (e.VirtualKey == 0x5B || e.VirtualKey == 0x5C))
+                {
+                    lock (_appendLock) { _winHeld = false; }
+                }
                 return;
             }
 
             // Skip keys reserved for control (e.g. the toggle-record and
             // emergency-stop hotkeys, plus their modifiers).
             if (ExcludedVirtualKeys.Contains(e.VirtualKey))
+            {
+                return;
+            }
+
+            // A press that runs any other Tempo hotkey — F7 to pick a position, F9 to pause, a profile
+            // key — is an instruction to Tempo, not part of the take. Only the macro keys above used to
+            // be left out, so the rest were recorded: a reserved one had never reached the app, and
+            // played back it ran its hotkey again in the middle of the macro. Its auto-repeats and its
+            // release go with it.
+            if (e.IsKeyDown)
+            {
+                if (_hotkeyKeysDown.Contains(e.VirtualKey) || IsHotkeyPress(e.VirtualKey))
+                {
+                    _hotkeyKeysDown.Add(e.VirtualKey);
+                    return;
+                }
+            }
+            else if (_hotkeyKeysDown.Remove(e.VirtualKey))
             {
                 return;
             }
@@ -378,6 +440,11 @@ namespace AutoClicker.Engine
                     {
                         _heldAtStart.Remove(e.VirtualKey);
                     }
+                    return;
+                }
+
+                if (LeaveOutWindowsShortcut(e))
+                {
                     return;
                 }
 
@@ -768,6 +835,83 @@ namespace AutoClicker.Engine
             }
         }
 
+        /// <summary>
+        /// True when this event belongs to a Windows shortcut and stays out of the take
+        /// (<see cref="LeaveOutWindowsShortcuts"/>). Under the lock.
+        /// </summary>
+        private bool LeaveOutWindowsShortcut(KeyboardHookEventArgs e)
+        {
+            if (!LeaveOutWindowsShortcuts) { return false; }
+            int vk = e.VirtualKey;
+            if (vk == 0x5B || vk == 0x5C)
+            {
+                _winHeld = e.IsKeyDown;
+                return true;   // the Windows key itself, pressed and released
+            }
+            if (!e.IsKeyDown)
+            {
+                return _shortcutKeysDown.Remove(vk);
+            }
+            if (_shortcutKeysDown.Contains(vk))
+            {
+                return true;   // auto-repeat of a key already left out
+            }
+
+            bool alt = Held(0x12, 0xA4, 0xA5), ctrl = Held(0x11, 0xA2, 0xA3);
+            bool shortcut = _winHeld
+                         || (alt && !ctrl && (vk == 0x09 || vk == 0x1B))       // Alt+Tab, Alt+Esc: switching windows
+                         || (ctrl && !alt && vk == 0x1B);                      // Ctrl+Esc: Start; with Shift, Task Manager
+            if (!shortcut)
+            {
+                return false;
+            }
+            _shortcutKeysDown.Add(vk);
+            if (alt && !_winHeld)
+            {
+                // The Alt pressed for Alt+Tab is no part of the take either: played back on its own it
+                // wakes a window's menu bar. Taken back out while nothing has been recorded since it.
+                foreach (int altVk in new[] { 0x12, 0xA4, 0xA5 })
+                {
+                    if (!_keysDown.TryGetValue(altVk, out MacroAction press)) { continue; }
+                    int at = LastIndexOfStep(press);
+                    int lastReal = _lastRealStep == null ? -1 : LastIndexOfStep(_lastRealStep);
+                    if (at > lastReal)
+                    {
+                        _macro.Actions.RemoveAt(at);
+                        _keysDown.Remove(altVk);    // its release is then dropped as one with no press
+                    }
+                }
+            }
+            return true;
+        }
+
+        /// <summary>One of these keys is held now, as this take saw it (pressed in it, or held at its start).</summary>
+        private bool Held(params int[] vks)
+        {
+            foreach (int vk in vks)
+            {
+                if (_keysDown.ContainsKey(vk) || _heldAtStart.Contains(vk)) { return true; }
+            }
+            return false;
+        }
+
+        /// <summary>True when this key press runs one of Tempo's hotkeys (see <see cref="FiresHotkey"/>).</summary>
+        private bool IsHotkeyPress(int vk)
+        {
+            if (FiresHotkey == null || IsModifier(vk))
+            {
+                return false;   // a modifier on its own is never a hotkey
+            }
+            try
+            {
+                return FiresHotkey(vk);
+            }
+            catch
+            {
+                return false;   // unknown: record it, as before
+            }
+        }
+
         /// <summary>True when a press of this button is one of <see cref="ExcludedMouseHotkeys"/>.</summary>
         private bool IsExcludedMouseHotkey(MacroActionType press)
         {
@@ -786,8 +930,11 @@ namespace AutoClicker.Engine
             {
                 foreach (HotkeyDefinition hk in ExcludedMouseHotkeys)
                 {
+                    // With Shift/Ctrl on top as well, when the hotkey takes those (the hook swallows
+                    // that press too): Shift + X1 for sprinting fired X1's hotkey and stayed in the take,
+                    // so playback sent the app a Back it had never been given.
                     if (hk != null && hk.MouseButton == button &&
-                        hk.ModifiersMatch(vk => (NativeMethods.GetAsyncKeyState(vk) & 0x8000) != 0))
+                        hk.ModifiersMatch(vk => (NativeMethods.GetAsyncKeyState(vk) & 0x8000) != 0, ExtraShiftCtrl))
                     {
                         return true;
                     }

@@ -240,8 +240,14 @@ namespace AutoClicker.Utils
                 " (process " + RuntimeInformation.ProcessArchitecture + ")"));
             d.AppendLine("- .NET runtime: " + Safe(() => RuntimeInformation.FrameworkDescription));
             d.AppendLine("- Processors: " + Safe(() => Environment.ProcessorCount.ToString()));
+            // Task Manager's figure first (the private working set), then the working set with the
+            // shared libraries — a report quoting only the latter read three times what the user saw.
             d.AppendLine("- Memory in use: " + Safe(() =>
-                (Environment.WorkingSet / (1024 * 1024)) + " MB"));
+            {
+                ProcessMemory.Reading m = ProcessMemory.Read();
+                return ProcessMemory.Megabytes(m.PrivateWorkingSet) + " MB (Task Manager)" + (m.Exact ? "" : " ~") +
+                       ", working set " + ProcessMemory.Megabytes(m.WorkingSet) + " MB";
+            }));
             d.AppendLine("- Displays: " + Safe(DescribeScreens));
             d.AppendLine("- Display refresh: " + Safe(() =>
             {
@@ -399,7 +405,17 @@ namespace AutoClicker.Utils
                 {
                     return null;
                 }
-                string[] lines = System.IO.File.ReadAllLines(path);
+                // Shared for reading AND writing: the logger keeps the file open while lines arrive,
+                // and File.ReadAllLines (which shares for reading only) is refused while it does.
+                var all = new System.Collections.Generic.List<string>();
+                using (var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+                                                         System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete))
+                using (var reader = new System.IO.StreamReader(fs, Encoding.UTF8, true))
+                {
+                    string l;
+                    while ((l = reader.ReadLine()) != null) { all.Add(l); }
+                }
+                string[] lines = all.ToArray();
                 if (lines.Length == 0)
                 {
                     return null;

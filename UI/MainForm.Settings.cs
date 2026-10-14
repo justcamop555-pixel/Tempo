@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
@@ -19,6 +20,7 @@ namespace AutoClicker.UI
         private CheckBox _showIndicatorCheck;
         private CheckBox _minimizeRecordingCheck;
         private CheckBox _ignoreOwnWindowCheck;
+        private CheckBox _guardShortcutsCheck;
         private CheckBox _recordHistoryCheck;
         private CheckBox _rememberWindowCheck;
         private CheckBox _rememberTabCheck;
@@ -413,8 +415,8 @@ namespace AutoClicker.UI
 
             // ── Behaviour ──────────────────────────────────────────────────────
             // 256, not 228: one more row for the cursor trail, moved here from the
-            // Macros tab where it never belonged.
-            var behaviour = UiFactory.Group(Localization.T("Behaviour"), 12, 316, 696, 256, CardIcon.Gear);
+            // Macros tab where it never belonged. 284: and one for holding back Windows' shortcuts.
+            var behaviour = UiFactory.Group(Localization.T("Behaviour"), 12, 316, 696, 284, CardIcon.Gear);
 
             _minimizeToTrayCheck = UiFactory.Check("Minimise to tray instead of closing", 16, 30);
             _startMinimizedCheck = UiFactory.Check("Start minimised to tray", 16, 58);
@@ -477,6 +479,9 @@ namespace AutoClicker.UI
             behaviour.Controls.Add(_updateFreqCombo);
 
             _writeLogCheck = UiFactory.Check("Write a log file to disk", 360, 118);
+            // Applies the moment it is ticked, like the other privacy switches: "turn off for extra
+            // privacy" used to keep writing until Save, and left the log already written behind.
+            _writeLogCheck.CheckedChanged += OnWriteLogChanged;
             behaviour.Controls.Add(_writeLogCheck);
 
             _recordHistoryCheck = UiFactory.Check("Record session history and statistics", 16, 142);
@@ -484,6 +489,9 @@ namespace AutoClicker.UI
 
             _showIndicatorCheck = UiFactory.Check("Show on-screen overlay while running", 360, 146);
             _showIndicatorCheck.AutoSize = true;
+            // Applies at once — the badge of a run in progress appears or goes — as tray ▸ Overlays' copy
+            // of this switch always did; here it waited for Save.
+            _showIndicatorCheck.CheckedChanged += OnShowOverlayChanged;
             behaviour.Controls.Add(_showIndicatorCheck);
             // Under the checkbox, not beside it. Beside it left the caption 218 px, and it needs
             // more than that in every language — English included, where it always read "Show
@@ -518,6 +526,19 @@ namespace AutoClicker.UI
             _cursorTrailCheck.CheckedChanged += OnCursorTrailChanged;
             behaviour.Controls.Add(_cursorTrailCheck);
 
+            // While a run lasts only Tempo's keybinds act: the Windows key, Win+…, Ctrl+Esc and the
+            // Sticky Keys question are held back (Native.ShortcutGuard). A row of its own — the caption
+            // needs the card's width. Applies the moment it is ticked, mid-run included, like the
+            // safety option above it.
+            _guardShortcutsCheck = UiFactory.Check("Hold back Windows shortcuts while clicking or running a macro", 16, 254);
+            // The same switch is on the Clicker and Macros tabs and in the tray (SetGuardWindowsShortcuts).
+            _guardShortcutsCheck.CheckedChanged += (s, e) =>
+            {
+                if (_suppressSettingsEvents || _settings == null) { return; }
+                SetGuardWindowsShortcuts(_guardShortcutsCheck.Checked, "Settings page");
+            };
+            behaviour.Controls.Add(_guardShortcutsCheck);
+
             // (Live Captions controls moved to their own dedicated group below.)
 
             // ── Notifications ──────────────────────────────────────────────────
@@ -533,6 +554,7 @@ namespace AutoClicker.UI
                 _settings.CustomNotifications = _customNotifyCheck.Checked;
                 UpdateNotifyControlsEnabled();
                 ApplyNotificationSettings();
+                RefreshNotifyStatus();           // the mirror pauses / resumes with these
                 PersistNotificationSettings();   // remember the on/off immediately
             };
             notify.Controls.Add(_customNotifyCheck);
@@ -696,7 +718,12 @@ namespace AutoClicker.UI
             _notifyStatusLabel = UiFactory.Caption("", 388, 118);
             _notifyStatusLabel.AutoSize = false;
             _notifyStatusLabel.Width = 292;
-            _notifyStatusLabel.Height = 20;
+            // Two lines, not one: the running status — "● On — turn on Do Not Disturb to hide
+            // Windows' own pop-ups", the one sentence that says how to stop Windows' copies — is
+            // 338 px in English and up to 463 px translated, so a 20 px line cut it in EVERY
+            // language. 30 px still ends above the next row (y 150).
+            _notifyStatusLabel.Height = 30;
+            _notifyStatusLabel.AutoEllipsis = true;
             notify.Controls.Add(_notifyStatusLabel);
 
             // ── Live Captions ─────────────────────────────────────────────────
@@ -794,10 +821,16 @@ namespace AutoClicker.UI
             _captionTranscriptCheck.AutoSize = true;
             captions.Controls.Add(_captionTranscriptCheck);
 
-            // Appearance of the caption text (applies to both sources).
+            // Appearance of the caption text (applies to both sources). Every change shows on the caption
+            // bar and the transcript at once and is kept — it used to wait for Save, so picking a font
+            // seemed to do nothing. The list draws each font in itself, and offers every installed text
+            // font after the recommended ones (added the first time it opens, to keep the page quick).
             captions.Controls.Add(UiFactory.Label("Font:", 16, 188));
             _captionFontCombo = UiFactory.Combo(150, 185, 200,
                 CaptionFontChoices());
+            if (_captionFontCombo is FlatComboBox fontBox) { fontBox.ItemFont = CaptionFontPreview; }
+            _captionFontCombo.DropDown += (sF, eF) => AddAllCaptionFonts();
+            _captionFontCombo.SelectedIndexChanged += (sF, eF) => OnCaptionLookChanged();
             captions.Controls.Add(_captionFontCombo);
 
             captions.Controls.Add(UiFactory.Label("Colour:", 380, 188));
@@ -807,10 +840,12 @@ namespace AutoClicker.UI
 
             captions.Controls.Add(UiFactory.Label("Text size:", 16, 220));
             _captionFontNum = UiFactory.Numeric(150, 216, 70, 10, 72, 20);
+            _captionFontNum.ValueChanged += (sF, eF) => OnCaptionLookChanged();
             captions.Controls.Add(_captionFontNum);
 
             captions.Controls.Add(UiFactory.Label("Opacity (%):", 380, 220));
             _captionOpacityNum = UiFactory.Numeric(470, 216, 70, 10, 100, 50);
+            _captionOpacityNum.ValueChanged += (sF, eF) => OnCaptionLookChanged();
             captions.Controls.Add(_captionOpacityNum);
 
             // How much of what was said stays readable. The bar kept three lines and
@@ -840,6 +875,7 @@ namespace AutoClicker.UI
             captions.Controls.Add(linesHint);
 
             _captionBackgroundCheck = UiFactory.Check("Show background panel", 16, 248);
+            _captionBackgroundCheck.CheckedChanged += (sF, eF) => OnCaptionLookChanged();
             captions.Controls.Add(_captionBackgroundCheck);
 
             // Own-voice filter: skip captioning the USER's voice when it comes back
@@ -871,7 +907,8 @@ namespace AutoClicker.UI
 
             // Opt-in GPU speech engine (Vulkan): the only GPU path for AMD/Intel
             // cards, and worth a try on NVIDIA. Proven CPU engine stays the default;
-            // if the GPU can't keep pace, Tempo switches this back off by itself.
+            // if the GPU can't keep pace, that SESSION uses Windows Live Captions and
+            // this stays on (see OnTempoModelTooSlow — a busy GPU is not a broken one).
             _captionGpuCheck = UiFactory.Check("Try GPU engine (experimental · needs restart)", 420, 280);
             _captionGpuCheck.AutoSize = true;
             _captionGpuCheck.CheckedChanged += (sGpu, eGpu) =>
@@ -960,118 +997,12 @@ namespace AutoClicker.UI
             _captionDownloadModelBtn.Click += OnDownloadCaptionModel;
             captions.Controls.Add(_captionDownloadModelBtn);
 
-            // Troubleshooting: shows how every window on screen identifies itself, so the
-            // (stubborn) Windows 11 Live Captions window can finally be matched. Screenshot
-            // or copy the result. Placed between the background-panel check and the model
-            // buttons, on the same row.
+            // Troubleshooting: does Windows 11's own Live Captions bar work with Tempo here, and
+            // if not, the button that fixes it (CaptionDiagnosticForm). Placed between the
+            // background-panel check and the model buttons, on the same row.
             var captionDiagBtn = UiFactory.Button("Diagnose Windows bar", 178, 244, 172, 28);
-            captionDiagBtn.Click += (sD, eD) =>
-            {
-                try
-                {
-                    Utils.LiveCaptionReader reader = _captionReader ?? new Utils.LiveCaptionReader();
-                    string dump = reader.DescribeCandidateWindows();
-                    if (string.IsNullOrWhiteSpace(dump))
-                    {
-                        dump = "(no windows reported)";
-                    }
-
-                    // Self-test so a single screenshot tells me what actually works on this
-                    // PC: did detection find the window, and can the caption text be read?
-                    string selfTest;
-                    try
-                    {
-                        bool det = reader.Locate();
-                        string readResult;
-                        try
-                        {
-                            string t = reader.ReadText();
-                            readResult = string.IsNullOrWhiteSpace(t)
-                                ? "(empty - no caption text read)"
-                                : ("OK: " + (t.Length > 60 ? t.Substring(0, 60) + "..." : t));
-                        }
-                        catch (Exception rex) { readResult = "ERROR: " + rex.Message; }
-                        selfTest = "DETECTION: " + (det ? "FOUND the window" : "NOT found")
-                                 + "\r\nREADING TEST: " + readResult + "\r\n\r\n";
-                    }
-                    catch (Exception sex) { selfTest = "self-test failed: " + sex.Message + "\r\n\r\n"; }
-
-                    // Lead with a VERDICT and the next step, not a window dump.
-                    //
-                    // This used to open with "Send me everything below" and then several
-                    // screens of raw window information. That is the right thing to
-                    // collect, but it answers a question the person in front of it isn't
-                    // asking: they want to know whether the Windows bar works here and
-                    // what to do about it. The dump is still all there, underneath.
-                    string report = BuildWindowsCaptionReport(reader, selfTest, dump);
-
-                    using (var dlg = new Form())
-                    {
-                        dlg.Text = Localization.T("Windows Live Captions — diagnostic");
-                        dlg.StartPosition = FormStartPosition.CenterParent;
-                        dlg.Size = new Size(780, 560);
-                        dlg.MinimizeBox = false;
-                        dlg.MaximizeBox = false;
-                        // Themed, like every other Tempo window. A stark white system
-                        // dialog in the middle of a dark app looked like another program.
-                        dlg.BackColor = _theme.Background;
-                        dlg.ForeColor = _theme.Text;
-                        try { int dark = _theme.Background.GetBrightness() < 0.5f ? 1 : 0;
-                              if (DwmSetWindowAttribute(dlg.Handle, 20, ref dark, sizeof(int)) != 0)
-                              { DwmSetWindowAttribute(dlg.Handle, 19, ref dark, sizeof(int)); } } catch { }
-
-                        var box = new TextBox
-                        {
-                            Multiline = true,
-                            ReadOnly = true,
-                            ScrollBars = ScrollBars.Both,
-                            WordWrap = false,
-                            Dock = DockStyle.Fill,
-                            Font = new Font("Consolas", 9f),
-                            BackColor = _theme.InputBackground,
-                            ForeColor = _theme.Text,
-                            BorderStyle = BorderStyle.None,
-                            Text = report
-                        };
-                        var bar = new Panel { Dock = DockStyle.Bottom, Height = 46, BackColor = _theme.Background };
-                        var copyBtn = new Button { Text = Localization.T("Copy all"), Width = 110, Height = 30, Top = 8 };
-                        LayoutFitter.DeclareCaptions(copyBtn, Localization.T("Copy all"), Localization.T("Copied"), Localization.T("Copy failed"));
-                        copyBtn.Left = dlg.ClientSize.Width - 242;
-                        copyBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-                        // Copy the WHOLE report. This used to copy only the window dump,
-                        // silently dropping the verdict and the self-test — the two most
-                        // useful parts — from every diagnostic anyone ever sent in.
-                        copyBtn.Click += (sC, eC) =>
-                        {
-                            try
-                            {
-                                Clipboard.SetText(report);
-                                copyBtn.Text = Localization.T("Copied");
-                            }
-                            catch { copyBtn.Text = Localization.T("Copy failed"); }
-                        };
-                        var closeBtn = new Button { Text = Localization.T("Close"), Width = 100, Height = 30, Top = 8, DialogResult = DialogResult.OK };
-                        closeBtn.Left = dlg.ClientSize.Width - 122;
-                        closeBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-                        foreach (var b in new[] { copyBtn, closeBtn })
-                        {
-                            b.FlatStyle = FlatStyle.Flat;
-                            b.BackColor = _theme.Surface2;
-                            b.ForeColor = _theme.Text;
-                            b.FlatAppearance.BorderColor = _theme.Border;
-                        }
-                        bar.Controls.Add(copyBtn);
-                        bar.Controls.Add(closeBtn);
-                        dlg.Controls.Add(box);
-                        dlg.Controls.Add(bar);
-                        dlg.AcceptButton = closeBtn;
-                        dlg.ShowDialog(this);
-                    }
-                }
-                catch (Exception exD) { Utils.Logger.Warn("Caption diagnostic failed: " + exD.Message); }
-            };
+            captionDiagBtn.Click += (sD, eD) => ShowCaptionDiagnostic();
             captions.Controls.Add(captionDiagBtn);
-            // (report builder lives in BuildWindowsCaptionReport below)
 
             // ── Data ───────────────────────────────────────────────────────────
             // 232, not 164: the tamper check adds a row of actions and a status line.
@@ -1710,8 +1641,22 @@ namespace AutoClicker.UI
                 _movementHzNum.Value = ClampDec(_settings.MovementUpdateHz, _movementHzNum);
                 _movementDeadzoneNum.Value = ClampDec((decimal)_settings.MovementStickDeadzone, _movementDeadzoneNum);
                 _movementPadYawNum.Value = ClampDec((decimal)_settings.MovementGamepadYawDps, _movementPadYawNum);
+                _movementTurnsCombo.SelectedIndex = Math.Max(0, Math.Min(1, _settings.MovementTurnDetection));
+                _movementFineCheck.Checked = _settings.MovementFineSteering;
+                RefreshMovementHints();
 
                 int cfi = _captionFontCombo.FindStringExact(_settings.CaptionFontFamily);
+                if (cfi < 0 && !string.IsNullOrWhiteSpace(_settings.CaptionFontFamily))
+                {
+                    // A font picked from the full list (not one of the recommended ones): put it back in
+                    // the list, or the box would show — and the next save write — the first font instead.
+                    try
+                    {
+                        using (var installed = new FontFamily(_settings.CaptionFontFamily)) { }
+                        cfi = _captionFontCombo.Items.Add(_settings.CaptionFontFamily);
+                    }
+                    catch { /* no longer installed: the first font stands in */ }
+                }
                 _captionFontCombo.SelectedIndex = cfi >= 0 ? cfi : 0;
                 _trayNotifyCheck.Checked = _settings.ShowTrayNotifications;
                 _customNotifyCheck.Checked = _settings.CustomNotifications;
@@ -1749,6 +1694,12 @@ namespace AutoClicker.UI
                 {
                     _ignoreOwnWindowCheck.Checked = _settings.IgnoreOwnWindowWhileRunning;
                 }
+                if (_guardShortcutsCheck != null)
+                {
+                    _guardShortcutsCheck.Checked = _settings.GuardWindowsShortcuts;
+                }
+                // Its copies on the Clicker and Macros tabs and in the tray.
+                SyncGuardShortcutControls();
                 _rememberWindowCheck.Checked = _settings.RememberWindowPosition;
                 _rememberTabCheck.Checked = _settings.RememberLastTab;
                 SyncAccountsPlacementCombo();
@@ -2662,11 +2613,10 @@ namespace AutoClicker.UI
                 }
                 _settings.CaptionColorArgb = dlg.Color.ToArgb();
                 _settings.CaptionUseCustomColor = true;
-                // Live-apply if the overlay is currently showing.
-                if (_captionOverlay != null && !_captionOverlay.IsDisposed)
-                {
-                    _captionOverlay.SetTextColor(dlg.Color, true);
-                }
+                // Shown at once on the caption bar AND the transcript (only the bar got it), and kept
+                // without waiting for Save — like the other caption looks.
+                ApplyCaptionSettingsToOverlays();
+                PersistCaptionLookSoon();
             }
         }
 
@@ -2748,7 +2698,17 @@ namespace AutoClicker.UI
             if (_notifyStatusLabel == null) { return; }
             try
             {
-                if (_settings == null || !_settings.MirrorWindowsNotifications || !_settings.CustomNotifications)
+                if (_settings != null && _settings.MirrorWindowsNotifications && !_settings.CustomNotifications)
+                {
+                    // Ticked but greyed, with nothing said: mirroring looked on while nothing was
+                    // mirrored, and only Windows' own pop-ups appeared. It draws Tempo's cards, so it
+                    // waits for them — say so where the switch is.
+                    _notifyStatusLabel.Text = Localization.T("▲ Paused: needs Tempo's pop-ups (above)");
+                    _notifyStatusLabel.ForeColor = _theme.WarningText;
+                    if (_notifyPermissionBtn != null) { _notifyPermissionBtn.Visible = false; }
+                    return;
+                }
+                if (_settings == null || !_settings.MirrorWindowsNotifications)
                 {
                     _notifyStatusLabel.Text = "";
                     return;
@@ -2849,10 +2809,12 @@ namespace AutoClicker.UI
         /// </summary>
         private static string DescribeDisplay()
         {
+            // Translated piece by piece: built from English words, this line read "100% scaling · 2
+            // monitors (usable … after the taskbar)" in every language (found by the scanner's English check).
             try
             {
                 Screen s = Screen.PrimaryScreen;
-                if (s == null) { return "Display information isn't available."; }
+                if (s == null) { return Localization.T("Display information isn't available."); }
 
                 var sb = new System.Text.StringBuilder();
                 sb.Append(s.Bounds.Width).Append('×').Append(s.Bounds.Height);
@@ -2861,12 +2823,12 @@ namespace AutoClicker.UI
                 if (hz > 0) { sb.Append("  ·  ").Append(hz).Append(" Hz"); }
 
                 string scale = Utils.EnvironmentInfo.GetDisplayScaleText();
-                if (!string.IsNullOrEmpty(scale)) { sb.Append("  ·  ").Append(scale).Append(" scaling"); }
+                if (!string.IsNullOrEmpty(scale)) { sb.Append("  ·  ").Append(Localization.F("{0} scaling", scale)); }
 
                 int count = Screen.AllScreens != null ? Screen.AllScreens.Length : 1;
                 if (count > 1)
                 {
-                    sb.Append("  ·  ").Append(count).Append(" monitors");
+                    sb.Append("  ·  ").Append(Localization.F("{0} monitors", count));
                 }
                 // Work area, not just bounds: it is what actually constrains the window,
                 // and the difference is the taskbar — the usual reason a "screen-sized"
@@ -2874,12 +2836,11 @@ namespace AutoClicker.UI
                 var wa = s.WorkingArea;
                 if (wa.Height != s.Bounds.Height || wa.Width != s.Bounds.Width)
                 {
-                    sb.Append("   (usable ").Append(wa.Width).Append('×').Append(wa.Height)
-                      .Append(" after the taskbar)");
+                    sb.Append("   ").Append(Localization.F("(usable {0}×{1} after the taskbar)", wa.Width, wa.Height));
                 }
                 return sb.ToString();
             }
-            catch { return "Display information isn't available."; }
+            catch { return Localization.T("Display information isn't available."); }
         }
 
         private GroupBox BuildMovementGroup()
@@ -2934,58 +2895,78 @@ namespace AutoClicker.UI
                 "descriptive choices in a full row; the open list and the hover show them whole");
             g.Controls.Add(_movementFrameCombo);
 
+            // Which mouse movement is a camera turn. Roblox's camera script turns the camera only while
+            // it holds the pointer (the right button held, shift lock, first person); the rest of the time
+            // the mouse moves a pointer, and counting that as turning bent the heading for a camera that
+            // never moved. See Engine.PointerHoldDetector.
+            g.Controls.Add(UiFactory.Label("Camera turns:", 16, 132 + dy));
+            _movementTurnsCombo = UiFactory.Combo(150, 129 + dy, 330,
+                Localization.T("While the game holds the pointer (recommended)"),
+                Localization.T("With every mouse movement"));
+            LayoutFitter.DeclareShortenedChoices(_movementTurnsCombo,
+                "descriptive choices in a full row; the open list and the hover show them whole");
+            g.Controls.Add(_movementTurnsCombo);
+
             // Sensitivity + the calibrate button that fills it in.
-            var sensLabel = UiFactory.Label("Camera sensitivity:", 16, 130 + dy);
+            var sensLabel = UiFactory.Label("Camera sensitivity:", 16, 168 + dy);
             g.Controls.Add(sensLabel);
             // The row starts after its label, however wide that is, and the hint at its end gives back
             // the room. Text grows by more than the window does on a 150% screen (glyphs round to whole
             // pixels): "Sensibilidade da câmara:" came out 207 px and ran 6 into the box at 150.
             int sdx = Math.Max(0, LayoutRight(sensLabel) + 4 - 150);
-            _movementDegPerCountNum = UiFactory.Numeric(150 + sdx, 126 + dy, 90, 0.0005m, 2m, 0.06m);
+            _movementDegPerCountNum = UiFactory.Numeric(150 + sdx, 164 + dy, 90, 0.0005m, 2m, 0.06m);
             _movementDegPerCountNum.DecimalPlaces = 4;
             _movementDegPerCountNum.Increment = 0.005m;
             g.Controls.Add(_movementDegPerCountNum);
-            g.Controls.Add(UiFactory.Caption("°/count", 246 + sdx, 130 + dy));
+            g.Controls.Add(UiFactory.Caption("°/count", 246 + sdx, 168 + dy));
 
-            var calBtn = UiFactory.Button("Calibrate…", 310 + sdx, 124 + dy, 120, 28);
-            calBtn.Click += OnCalibrateCameraSensitivity;
-            g.Controls.Add(calBtn);
+            _movementCalibrateBtn = UiFactory.Button("Calibrate…", 310 + sdx, 162 + dy, 120, 28);
+            _movementCalibrateBtn.Click += OnCalibrateCameraSensitivity;
+            g.Controls.Add(_movementCalibrateBtn);
 
-            var calHint = UiFactory.Caption("Measures it from one 360° turn in your game — far better than guessing.",
-                440 + sdx, 130 + dy);
-            calHint.ForeColor = _theme.TextMuted;
-            calHint.AutoSize = false;
-            calHint.Width = 244 - sdx;
-            calHint.Height = 28;
-            g.Controls.Add(calHint);
+            // The value in a unit you can check against the game: how much mouse movement one full turn
+            // takes. "0.0600 °/count" alone says nothing to anyone (RefreshMovementHints).
+            _movementTurnHint = UiFactory.Caption("", 440 + sdx, 168 + dy);
+            _movementTurnHint.ForeColor = _theme.TextMuted;
+            _movementTurnHint.AutoSize = false;
+            _movementTurnHint.Width = 244 - sdx;
+            _movementTurnHint.Height = 28;
+            g.Controls.Add(_movementTurnHint);
 
             // Feel / jitter.
-            g.Controls.Add(UiFactory.Label("Smoothing (s):", 16, 166 + dy));
-            _movementSmoothingNum = UiFactory.Numeric(150, 162 + dy, 70, 0m, 1m, 0m);
+            g.Controls.Add(UiFactory.Label("Smoothing (s):", 16, 204 + dy));
+            _movementSmoothingNum = UiFactory.Numeric(150, 200 + dy, 70, 0m, 1m, 0m);
             _movementSmoothingNum.DecimalPlaces = 2;
             _movementSmoothingNum.Increment = 0.02m;
             g.Controls.Add(_movementSmoothingNum);
-            var smoothHint = UiFactory.Caption("0 = instant", 226, 166 + dy);
+            var smoothHint = UiFactory.Caption("0 = instant", 226, 204 + dy);
             smoothHint.ForeColor = _theme.TextMuted;
             g.Controls.Add(smoothHint);
 
-            g.Controls.Add(UiFactory.Label("Anti-jitter (°):", 310, 166 + dy));
-            _movementHysteresisNum = UiFactory.Numeric(410, 162 + dy, 70, 0m, 22m, 8m);
+            g.Controls.Add(UiFactory.Label("Anti-jitter (°):", 310, 204 + dy));
+            _movementHysteresisNum = UiFactory.Numeric(410, 200 + dy, 70, 0m, 22m, 8m);
             _movementHysteresisNum.DecimalPlaces = 1;
             g.Controls.Add(_movementHysteresisNum);
 
-            g.Controls.Add(UiFactory.Label("Rate (Hz):", 500, 166 + dy));
-            _movementHzNum = UiFactory.Numeric(580, 162 + dy, 70, 30m, 500m, 120m);
+            g.Controls.Add(UiFactory.Label("Rate (Hz):", 500, 204 + dy));
+            _movementHzNum = UiFactory.Numeric(580, 200 + dy, 70, 30m, 500m, 120m);
             g.Controls.Add(_movementHzNum);
 
-            g.Controls.Add(UiFactory.Label("Stick deadzone:", 16, 202 + dy));
-            _movementDeadzoneNum = UiFactory.Numeric(150, 198 + dy, 70, 0m, 0.9m, 0.20m);
+            // Pulsing between the two nearest of the 8 directions (Steam Input's "analog emulation via
+            // output pulsing"). Beside anti-jitter on purpose: pulsing switches keys deliberately, so
+            // that setting does nothing while this is on (RefreshMovementHints greys it).
+            _movementFineCheck = UiFactory.Check("Fine steering: pulse the keys to aim between the 8 directions", 16, 236 + dy);
+            _movementFineCheck.AutoSize = true;
+            g.Controls.Add(_movementFineCheck);
+
+            g.Controls.Add(UiFactory.Label("Stick deadzone:", 16, 270 + dy));
+            _movementDeadzoneNum = UiFactory.Numeric(150, 266 + dy, 70, 0m, 0.9m, 0.20m);
             _movementDeadzoneNum.DecimalPlaces = 2;
             _movementDeadzoneNum.Increment = 0.05m;
             g.Controls.Add(_movementDeadzoneNum);
 
-            g.Controls.Add(UiFactory.Label("Pad look (°/s):", 310, 202 + dy));
-            _movementPadYawNum = UiFactory.Numeric(410, 198 + dy, 70, 20m, 1000m, 220m);
+            g.Controls.Add(UiFactory.Label("Pad look (°/s):", 310, 270 + dy));
+            _movementPadYawNum = UiFactory.Numeric(410, 266 + dy, 70, 20m, 1000m, 220m);
             g.Controls.Add(_movementPadYawNum);
 
             // A row of its own, the card's full width. It was squeezed into the 184 px left
@@ -2993,15 +2974,70 @@ namespace AutoClicker.UI
             // in English (and four in French) — the end of the sentence was simply not drawn,
             // and the ARMED/Off messages that replace it are longer still.
             _movementStatus = UiFactory.Caption("Bind a key in Keybinds → “Camera-relative movement” to arm it in-game.",
-                16, 236 + dy);
+                16, 304 + dy);
             _movementStatus.ForeColor = _theme.TextMuted;
             _movementStatus.AutoSize = false;
             _movementStatus.Width = 664;
             _movementStatus.Height = 30;
             g.Controls.Add(_movementStatus);
 
+            // Every value applies the moment it changes, to a running engine too — no Save Settings.
+            // You tune this while playing: the arrows on "Anti-jitter" did nothing until a trip to the
+            // Save button, and the engine they were meant for was armed the whole time.
+            EventHandler changed = OnMovementControlChanged;
+            _movementFrameCombo.SelectedIndexChanged += changed;
+            _movementTurnsCombo.SelectedIndexChanged += changed;
+            _movementDegPerCountNum.ValueChanged += changed;
+            _movementSmoothingNum.ValueChanged += changed;
+            _movementHysteresisNum.ValueChanged += changed;
+            _movementHzNum.ValueChanged += changed;
+            _movementFineCheck.CheckedChanged += changed;
+            _movementDeadzoneNum.ValueChanged += changed;
+            _movementPadYawNum.ValueChanged += changed;
+            RefreshMovementHints();
+
             g.Height = _movementStatus.Bottom + 10;
             return g;
+        }
+
+        /// <summary>A movement control changed: into the settings, into the running engine, saved shortly.</summary>
+        private void OnMovementControlChanged(object sender, EventArgs e)
+        {
+            if (_suppressSettingsEvents || _settings == null) { return; }
+            ReadMovementControls();
+            ApplyMovementTuning();
+            RefreshMovementHints();
+            PersistSettingsSoon();
+        }
+
+        /// <summary>Every movement control into the settings (shared by the live handler, Save and Export).</summary>
+        private void ReadMovementControls()
+        {
+            _settings.MovementEnabled = _movementEnableCheck.Checked;
+            _settings.MovementFrame = Math.Max(0, _movementFrameCombo.SelectedIndex);
+            _settings.MovementTurnDetection = Math.Max(0, _movementTurnsCombo.SelectedIndex);
+            _settings.MovementDegreesPerCount = (double)_movementDegPerCountNum.Value;
+            _settings.MovementFineSteering = _movementFineCheck.Checked;
+            _settings.MovementTurnSmoothing = (double)_movementSmoothingNum.Value;
+            _settings.MovementHysteresisDegrees = (double)_movementHysteresisNum.Value;
+            _settings.MovementUpdateHz = (int)_movementHzNum.Value;
+            _settings.MovementStickDeadzone = (double)_movementDeadzoneNum.Value;
+            _settings.MovementGamepadYawDps = (double)_movementPadYawNum.Value;
+        }
+
+        /// <summary>The counts-per-turn readout, and anti-jitter greyed while fine steering (which ignores it) is on.</summary>
+        private void RefreshMovementHints()
+        {
+            if (_movementTurnHint != null && _movementDegPerCountNum != null)
+            {
+                double v = (double)_movementDegPerCountNum.Value;
+                long counts = v > 0 ? (long)Math.Round(360.0 / v) : 0;
+                _movementTurnHint.Text = Localization.F("A full turn takes {0:N0} counts.", counts);
+            }
+            if (_movementHysteresisNum != null && _movementFineCheck != null)
+            {
+                _movementHysteresisNum.Enabled = !_movementFineCheck.Checked;
+            }
         }
 
         /// <summary>
@@ -3020,6 +3056,10 @@ namespace AutoClicker.UI
             // engine is misbehaving, so it is armed nearly every time. Stand it down for
             // the measurement and put it back the way it was.
             bool wasArmed = _movement != null && _movement.IsRunning;
+            // The game it was armed on. Re-armed with nothing to go on, it took the window in front
+            // once the dialog closed — Tempo's, which means "act in every window": calibrating while
+            // armed for a game left W/A/S/D captured everywhere.
+            IntPtr armedOn = wasArmed ? _movement.TargetWindow : IntPtr.Zero;
             if (wasArmed)
             {
                 StopMovement();
@@ -3037,7 +3077,7 @@ namespace AutoClicker.UI
                     decimal v = (decimal)dlg.DegreesPerCount;
                     if (v < _movementDegPerCountNum.Minimum) { v = _movementDegPerCountNum.Minimum; }
                     if (v > _movementDegPerCountNum.Maximum) { v = _movementDegPerCountNum.Maximum; }
-                    _movementDegPerCountNum.Value = v;
+                    _movementDegPerCountNum.Value = v;   // OnMovementControlChanged takes it from here too
                     _settings.MovementDegreesPerCount = (double)v;
                     try { Persistence.SettingsManager.Save(_settings); } catch { }
                     ApplyMovementTuning();
@@ -3059,10 +3099,220 @@ namespace AutoClicker.UI
                 // measured, since StartMovement rebuilds the tuning from settings.
                 if (wasArmed)
                 {
-                    StartMovement();
+                    StartMovement(armedOn);
                     Utils.Logger.Info("[Movement] re-armed after calibration.");
                 }
             }
+        }
+
+        // ── switches that apply the moment they are ticked ──────────────────────────────────
+
+        /// <summary>"Write a log file to disk": on or off at once, and — turned off — the log already written offered for deletion.</summary>
+        private void OnWriteLogChanged(object sender, EventArgs e)
+        {
+            if (_suppressSettingsEvents || _settings == null || _writeLogCheck == null) { return; }
+            bool on = _writeLogCheck.Checked;
+            _settings.WriteLogFile = on;
+            Logger.Enabled = on;
+            PersistNotificationSettings();   // the shared "save settings now" helper
+            if (on) { Logger.Info("[Log] writing the log file again (turned on in Settings)."); }
+            else { OfferToDeleteLog(); }
+            RefreshLogTip();
+        }
+
+        /// <summary>The activity log's files on disk: autoclicker.log and its rotated copies (crash reports are separate).</summary>
+        private static List<string> LogFilesOnDisk()
+        {
+            var files = new List<string>();
+            try
+            {
+                string path = Logger.GetLogPath();
+                if (string.IsNullOrEmpty(path)) { return files; }
+                foreach (string f in new[] { path, path + ".1", path + ".2", path + ".3" })
+                {
+                    if (File.Exists(f)) { files.Add(f); }
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("LogFilesOnDisk", ex); }
+            return files;
+        }
+
+        private static long BytesOf(List<string> files)
+        {
+            long n = 0;
+            foreach (string f in files) { try { n += new FileInfo(f).Length; } catch { } }
+            return n;
+        }
+
+        /// <summary>"2.4 MB", "310 KB": a file size, the way Explorer says it.</summary>
+        private static string SizeText(long bytes)
+        {
+            if (bytes >= 1024 * 1024) { return (bytes / 1048576.0).ToString("0.0") + " MB"; }
+            return Math.Max(1, (bytes + 1023) / 1024) + " KB";
+        }
+
+        /// <summary>
+        /// Turning the log off "for extra privacy" stopped new lines and left up to 4 MB of the old ones on
+        /// disk. Asked, not done: the log is also what a bug report sends.
+        /// </summary>
+        private void OfferToDeleteLog()
+        {
+            List<string> files = LogFilesOnDisk();
+            if (files.Count == 0) { return; }
+            if (MessageBox.Show(this,
+                    Localization.F("Delete the log Tempo has already written ({0})?", SizeText(BytesOf(files))),
+                    "Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            {
+                return;
+            }
+            Logger.Close();
+            string why = null;
+            foreach (string f in files)
+            {
+                try { File.Delete(f); }
+                catch (Exception ex) { why = ex.Message; }
+            }
+            if (why != null) { ShowWarning(Localization.F("Some of the log could not be deleted ({0}).", why)); }
+        }
+
+        /// <summary>The log switch's tip: where the log is and how big it is now.</summary>
+        private void RefreshLogTip()
+        {
+            if (_writeLogCheck == null || _tips == null) { return; }
+            try
+            {
+                string path = Logger.GetLogPath();
+                string folder = string.IsNullOrEmpty(path) ? "?" : Path.GetDirectoryName(path);
+                string tip = Localization.F(
+                    "Keeps a record of what Tempo does in {0} (now {1}, never more than about 4 MB). A bug report sends it. "
+                    + "Turn off for extra privacy; Live debug works either way.",
+                    folder, SizeText(BytesOf(LogFilesOnDisk())));
+                TipStyle.Set(_tips, _writeLogCheck, tip);
+                _writeLogCheck.AccessibleDescription = tip;
+            }
+            catch (Exception ex) { Logger.Swallow("RefreshLogTip", ex); }
+        }
+
+        /// <summary>"Show on-screen overlay while running": the badge of a run in progress appears or goes now, and tray ▸ Overlays agrees.</summary>
+        private void OnShowOverlayChanged(object sender, EventArgs e)
+        {
+            if (_suppressSettingsEvents || _settings == null || _showIndicatorCheck == null) { return; }
+            if (_settings.ShowClickingIndicator == _showIndicatorCheck.Checked) { return; }   // the tray's own copy, echoed back
+            _settings.ShowClickingIndicator = _showIndicatorCheck.Checked;
+            PersistNotificationSettings();
+            ShowClickingIndicator(_engine != null && _engine.IsRunning);
+            if (!_settings.ShowClickingIndicator) { HideMacroIndicator(); }
+            if (_trayOverlayShowItem != null) { _trayOverlayShowItem.Checked = _settings.ShowClickingIndicator; }
+        }
+
+        /// <summary>
+        /// A caption look control changed (font, size, opacity, background): the caption bar and the transcript
+        /// show it now, and it is kept. It used to wait for Save, so a new font looked like it did nothing.
+        /// </summary>
+        private void OnCaptionLookChanged()
+        {
+            if (_suppressSettingsEvents || _settings == null) { return; }
+            if (_captionFontNum != null) { _settings.CaptionFontSize = (int)_captionFontNum.Value; }
+            if (_captionOpacityNum != null) { _settings.CaptionOpacity = (int)_captionOpacityNum.Value; }
+            if (_captionBackgroundCheck != null) { _settings.CaptionShowBackground = _captionBackgroundCheck.Checked; }
+            if (_captionFontCombo?.SelectedItem != null) { _settings.CaptionFontFamily = _captionFontCombo.SelectedItem.ToString(); }
+            ApplyCaptionSettingsToOverlays();
+            PersistCaptionLookSoon();
+        }
+
+        private System.Windows.Forms.Timer _captionLookSaveTimer;
+
+        /// <summary>Saves the caption look shortly after the last change: holding a size arrow down is many changes.</summary>
+        private void PersistCaptionLookSoon() => PersistSettingsSoon();
+
+        /// <summary>
+        /// Saves the settings 700 ms after the last call: a value changing as it is dragged or its arrows
+        /// held is written once when it settles, not once per step.
+        /// </summary>
+        private void PersistSettingsSoon()
+        {
+            if (_captionLookSaveTimer == null)
+            {
+                _captionLookSaveTimer = new System.Windows.Forms.Timer { Interval = 700 };
+                _captionLookSaveTimer.Tick += (s, e) =>
+                {
+                    _captionLookSaveTimer.Stop();
+                    PersistNotificationSettings();
+                };
+            }
+            _captionLookSaveTimer.Stop();
+            _captionLookSaveTimer.Start();
+        }
+
+        /// <summary>Each font in the caption font list, drawn in itself (FlatComboBox.ItemFont). Built once per font.</summary>
+        private readonly Dictionary<string, Font> _captionFontPreviews = new Dictionary<string, Font>(StringComparer.OrdinalIgnoreCase);
+
+        private Font CaptionFontPreview(int index)
+        {
+            if (_captionFontCombo == null || index < 0 || index >= _captionFontCombo.Items.Count) { return null; }
+            string name = _captionFontCombo.Items[index]?.ToString();
+            if (string.IsNullOrEmpty(name)) { return null; }
+            if (_captionFontPreviews.TryGetValue(name, out Font cached)) { return cached; }
+            Font f = null;
+            try
+            {
+                FontStyle style;
+                using (var fam = new FontFamily(name))
+                {
+                    style = fam.IsStyleAvailable(FontStyle.Regular) ? FontStyle.Regular
+                          : fam.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Italic;
+                }
+                Font ui = _captionFontCombo.Font;
+                f = new Font(name, ui.Size, style, ui.Unit);
+            }
+            catch { f = null; }   // the list's own font draws it instead
+            _captionFontPreviews[name] = f;
+            return f;
+        }
+
+        private bool _allCaptionFontsAdded;
+
+        /// <summary>
+        /// Every installed text font, after the recommended ones — the first time the list opens. Asking for
+        /// the whole font collection costs ~24 ms cold, which the Settings page no longer pays to open.
+        /// </summary>
+        private void AddAllCaptionFonts()
+        {
+            if (_allCaptionFontsAdded || _captionFontCombo == null) { return; }
+            _allCaptionFontsAdded = true;
+            try
+            {
+                var have = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (object o in _captionFontCombo.Items) { have.Add(o.ToString()); }
+                var more = new List<string>();
+                using (var installed = new System.Drawing.Text.InstalledFontCollection())
+                {
+                    foreach (FontFamily fam in installed.Families)
+                    {
+                        string name = fam.Name;
+                        if (have.Contains(name) || !IsTextFont(name)) { continue; }
+                        // A family with neither a regular nor a bold face cannot be drawn by the caption bar.
+                        if (!fam.IsStyleAvailable(FontStyle.Regular) && !fam.IsStyleAvailable(FontStyle.Bold)) { continue; }
+                        more.Add(name);
+                    }
+                }
+                more.Sort(StringComparer.CurrentCultureIgnoreCase);
+                _captionFontCombo.BeginUpdate();
+                foreach (string name in more) { _captionFontCombo.Items.Add(name); }
+                _captionFontCombo.EndUpdate();
+            }
+            catch (Exception ex) { Logger.Swallow("AddAllCaptionFonts", ex); }
+        }
+
+        /// <summary>Not an icon or symbol font (their "letters" are pictures), and not a vertical CJK variant (@…).</summary>
+        private static bool IsTextFont(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) || name.StartsWith("@", StringComparison.Ordinal)) { return false; }
+            foreach (string s in new[] { "MDL2", "Fluent Icons", "Wingdings", "Webdings", "Marlett", "Symbol", "Emoji", "Dings", "MT Extra", "HoloLens", "Bookshelf" })
+            {
+                if (name.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0) { return false; }
+            }
+            return true;
         }
 
         /// <summary>
@@ -3079,18 +3329,27 @@ namespace AutoClicker.UI
                     _settings.OverlayShowClicks, _settings.OverlayShowCps, _settings.OverlayShowElapsed))
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK) { return; }
+                    // A corner picked here is where the badges should go: one dragged elsewhere (tray ▸
+                    // Overlays ▸ Move overlays) would otherwise ignore the choice and stay put.
+                    bool cornerChanged = dlg.Corner != _settings.OverlayCorner;
                     _settings.OverlayCorner = dlg.Corner;
                     _settings.OverlayOpacity = dlg.Opacity;
                     _settings.OverlayShowClicks = dlg.ShowClicks;
                     _settings.OverlayShowCps = dlg.ShowCps;
                     _settings.OverlayShowElapsed = dlg.ShowElapsed;
+                    if (cornerChanged)
+                    {
+                        _settings.ClickingOverlayX = _settings.ClickingOverlayY = AppSettings.OverlayUnplaced;
+                        _settings.MacroOverlayX = _settings.MacroOverlayY = AppSettings.OverlayUnplaced;
+                        foreach (ClickingIndicatorForm b in new[] { _clickingIndicator, _macroIndicator, _clickingPreview, _macroPreview })
+                        {
+                            if (b != null && !b.IsDisposed) { b.FreePosition = null; }
+                        }
+                    }
                     try { Persistence.SettingsManager.Save(_settings); } catch { }
 
-                    // Reflect it live if the badge is currently on screen.
-                    if (_clickingIndicator != null && !_clickingIndicator.IsDisposed)
-                    {
-                        ApplyOverlayConfig(_clickingIndicator);
-                    }
+                    // Reflect it live on every badge on screen (the macro and recording ones too).
+                    ApplyOverlayLookToAll();
                 }
             }
             catch (Exception ex)
@@ -3152,14 +3411,7 @@ namespace AutoClicker.UI
                 _settings.CaptionMaxLines = (int)_captionLinesNum.Value;
             }
 
-            _settings.MovementEnabled = _movementEnableCheck.Checked;
-            _settings.MovementFrame = Math.Max(0, _movementFrameCombo.SelectedIndex);
-            _settings.MovementDegreesPerCount = (double)_movementDegPerCountNum.Value;
-            _settings.MovementTurnSmoothing = (double)_movementSmoothingNum.Value;
-            _settings.MovementHysteresisDegrees = (double)_movementHysteresisNum.Value;
-            _settings.MovementUpdateHz = (int)_movementHzNum.Value;
-            _settings.MovementStickDeadzone = (double)_movementDeadzoneNum.Value;
-            _settings.MovementGamepadYawDps = (double)_movementPadYawNum.Value;
+            ReadMovementControls();
 
             _settings.CaptionShowBackground = _captionBackgroundCheck.Checked;
             if (_captionFontCombo.SelectedItem != null)
@@ -3189,6 +3441,10 @@ namespace AutoClicker.UI
             if (_ignoreOwnWindowCheck != null)
             {
                 _settings.IgnoreOwnWindowWhileRunning = _ignoreOwnWindowCheck.Checked;
+            }
+            if (_guardShortcutsCheck != null)
+            {
+                _settings.GuardWindowsShortcuts = _guardShortcutsCheck.Checked;
             }
             _settings.RememberWindowPosition = _rememberWindowCheck.Checked;
             _settings.RememberLastTab = _rememberTabCheck.Checked;
@@ -3241,16 +3497,16 @@ namespace AutoClicker.UI
             }
             // Source / model / capture change on a running session: none of these apply
             // live on their own (Start no-ops while running; capture mode is read only at
-            // capture-open), so cycle the session off→on. The off pass saves the
-            // in-progress transcript rather than silently dropping it.
+            // capture-open), so the engine is restarted — in place. Switching captions off
+            // and on for it started a new session, which cleared the transcript on the
+            // Captions tab and in the history window and reset the speakers' names.
             bool captionEngineChanged =
                 prevCaptionSource != _settings.CaptionSource ||
                 !string.Equals(prevCaptionModel, _settings.CaptionModelKey, StringComparison.OrdinalIgnoreCase) ||
                 prevCaptionCapture != _settings.CaptionCaptureMode;
             if (captionEngineChanged && _captionsActive)
             {
-                SetCaptionsActive(false);
-                SetCaptionsActive(true);
+                RestartCaptionEngine("caption source, model or capture changed in Settings");
             }
 
             // Re-apply everything that depends on settings.
@@ -3566,10 +3822,9 @@ namespace AutoClicker.UI
                 || !string.Equals(before.CaptionMicDeviceId ?? "", _settings.CaptionMicDeviceId ?? "", StringComparison.OrdinalIgnoreCase);
             if (engineChanged && _captionsActive)
             {
-                // None of these reach a running session on their own; cycle it, which also
-                // saves the in-progress transcript instead of dropping it.
-                SetCaptionsActive(false);
-                SetCaptionsActive(true);
+                // None of these reach a running session on their own; the engine restarts in
+                // place, keeping the session's transcript (an off/on cycle started a new one).
+                RestartCaptionEngine("caption settings replaced");
             }
 
             if (!_settings.CaptionOverlayEnabled && _captionOverlay != null && !_captionOverlay.IsDisposed)
@@ -3703,73 +3958,140 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
-        /// Turns the raw window dump into something a person can act on: a one-line
-        /// verdict, what this PC actually supports, then the technical detail.
+        /// "Diagnose Windows bar" (CaptionDiagnosticForm). The checks run in the background: its UI
+        /// Automation walks are cross-process calls that wait on Live Captions itself, and run on the UI
+        /// thread they froze Tempo for as long as Windows took to answer.
         /// </summary>
-        private string BuildWindowsCaptionReport(Utils.LiveCaptionReader reader,
-                                                 string selfTest, string dump)
+        private void ShowCaptionDiagnostic()
+        {
+            try
+            {
+                // Tempo's own state, read here on the UI thread before the background check starts.
+                string source = _settings != null ? _settings.CaptionSource.ToString() : "?";
+                bool engineRunning = _captionTranscriber != null && _captionTranscriber.IsRunning;
+                bool movedByTempo = _captionReader != null && _captionReader.WindowsBarMovedOffscreen;
+                string version = VersionStamp() + "  ·  " + Utils.BuildInfo.Short;
+                string officialId = Utils.IntegrityCheck.OfficialIdReportLine();
+                using (var dlg = new CaptionDiagnosticForm(_theme,
+                           () => DiagnoseWindowsCaptions(source, engineRunning, movedByTempo, version, officialId),
+                           () => Utils.LiveCaptionReader.LaunchWindowsCaptions(),
+                           () => _settings != null && _settings.CaptionSource == CaptionSource.Windows,
+                           UseTempoCaptionsFromDiagnostic))
+                {
+                    dlg.ShowDialog(this);
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Warn("Caption diagnostic failed: " + ex.Message); }
+        }
+
+        /// <summary>"Use Tempo's own captions" in the diagnostic: the caption source switched, saved, and a running engine moved over in place.</summary>
+        private void UseTempoCaptionsFromDiagnostic()
+        {
+            if (_settings == null) { return; }
+            CaptionSource before = _settings.CaptionSource;
+            _settings.CaptionSource = CaptionSource.Tempo;
+            bool was = _suppressSettingsEvents;
+            _suppressSettingsEvents = true;
+            try
+            {
+                if (_captionSourceCombo != null && _captionSourceCombo.Items.Count > (int)CaptionSource.Tempo)
+                {
+                    _captionSourceCombo.SelectedIndex = (int)CaptionSource.Tempo;
+                }
+            }
+            finally { _suppressSettingsEvents = was; }
+            UpdateCaptionSourceUi();
+            PersistNotificationSettings();   // the shared "save settings now" helper
+            Utils.Logger.Info("[Captions] caption source set to Tempo's own engine from the Windows bar diagnostic.");
+            if (before != _settings.CaptionSource && _captionsActive)
+            {
+                RestartCaptionEngine("caption source changed from the Windows bar diagnostic");
+            }
+        }
+
+        /// <summary>
+        /// The checks behind the diagnostic. Runs on a WORKER thread, so it touches nothing of the UI's: a
+        /// fresh reader (the live one belongs to the caption pipeline), and Tempo's state handed in.
+        /// </summary>
+        private static CaptionDiagnosticForm.Result DiagnoseWindowsCaptions(string source, bool engineRunning, bool movedByTempo,
+                                                                            string version, string officialId)
+        {
+            var r = new CaptionDiagnosticForm.Result();
+            Version os = Environment.OSVersion.Version;
+            r.Windows11 = os.Major > 10 || (os.Major == 10 && os.Build >= 22000);
+            r.Installed = Utils.LiveCaptionReader.IsInstalled;
+            r.ProcessRunning = Utils.LiveCaptionReader.IsProcessRunning;
+
+            var reader = new Utils.LiveCaptionReader();
+            try { r.BarVisible = reader.IsWindowPresentFast(); } catch { }
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            try { r.Found = reader.Locate(); } catch { }
+            long locateMs = clock.ElapsedMilliseconds;
+
+            string readResult = "(not run: the bar was not found)";
+            if (r.Found)
+            {
+                clock.Restart();
+                try
+                {
+                    string t = reader.ReadText();
+                    r.ReadMs = clock.ElapsedMilliseconds;
+                    r.ReadOk = !reader.UiaBroken;
+                    r.ReadChars = string.IsNullOrWhiteSpace(t) ? 0 : t.Trim().Length;
+                    readResult = !r.ReadOk ? "FAILED: UI Automation would not read the bar"
+                               : r.ReadChars > 0 ? "OK: " + r.ReadChars + " characters in " + r.ReadMs + " ms"
+                               : "(empty: nothing is being said, or nothing readable) in " + r.ReadMs + " ms";
+                }
+                catch (Exception ex) { readResult = "ERROR: " + ex.Message; }
+
+                Rectangle? at = reader.WindowRect();
+                if (at.HasValue)
+                {
+                    bool onAScreen = false;
+                    try { foreach (Screen s in Screen.AllScreens) { if (s.Bounds.IntersectsWith(at.Value)) { onAScreen = true; break; } } }
+                    catch { onAScreen = true; }
+                    r.OffScreen = !onAScreen;
+                    r.MovedAsideByTempo = r.OffScreen && movedByTempo;
+                }
+            }
+            r.UiaOk = !reader.UiaBroken;
+            r.Verdict = !r.Windows11 || !r.Installed ? "unsupported" : !r.Found ? "off" : !r.UiaOk ? "uia" : "works";
+
+            string dump;
+            try { dump = reader.DescribeCandidateWindows(); }
+            catch (Exception ex) { dump = "(window list failed: " + ex.Message + ")"; }
+            string selfTest = "DETECTION: " + (r.Found ? "FOUND the window" : "NOT found") + " (" + locateMs + " ms)\r\nREADING TEST: " + readResult;
+            r.Report = BuildWindowsCaptionReport(r, os, source, engineRunning, version, officialId, selfTest, dump);
+            return r;
+        }
+
+        /// <summary>
+        /// The technical half of the diagnostic, in English for a bug report: what this PC has, the
+        /// self-test, and the windows that could be the captions bar (other windows only counted).
+        /// </summary>
+        private static string BuildWindowsCaptionReport(CaptionDiagnosticForm.Result r, Version os, string source,
+                                                        bool engineRunning, string version, string officialId,
+                                                        string selfTest, string dump)
         {
             var sb = new System.Text.StringBuilder();
-            bool found = false;
-            bool uiaBroken = false;
-            try { found = reader.Found || reader.IsWindowPresent(); } catch { }
-            try { uiaBroken = reader.UiaBroken; } catch { }
-
-            // Windows 11 is where Live Captions exists at all. Saying so up front saves
-            // a Windows 10 user from chasing a feature their build does not have.
-            Version os = Environment.OSVersion.Version;
-            bool win11 = os.Major > 10 || (os.Major == 10 && os.Build >= 22000);
-
-            sb.AppendLine("=== VERDICT ===");
-            if (!win11)
-            {
-                sb.AppendLine("Windows Live Captions is a Windows 11 feature and this PC reports Windows "
-                              + os.Major + " (build " + os.Build + ").");
-                sb.AppendLine("→ Use Tempo's OWN caption engine instead: set 'Caption source' to");
-                sb.AppendLine("  \"Tempo's Live Captions (offline)\". It does not need the Windows bar.");
-            }
-            else if (found && !uiaBroken)
-            {
-                sb.AppendLine("The Windows Live Captions bar was FOUND and Tempo can read it.");
-                sb.AppendLine("→ Nothing to fix. If captions still look wrong, the problem is what");
-                sb.AppendLine("  Windows itself is transcribing, not Tempo's ability to read it.");
-            }
-            else if (found && uiaBroken)
-            {
-                sb.AppendLine("The bar was FOUND, but Windows refused to hand its text to Tempo (UI Automation failed).");
-                sb.AppendLine("→ This is usually a stuck accessibility service. Sign out and back in, or");
-                sb.AppendLine("  switch 'Caption source' to Tempo's own offline engine, which does not use it.");
-            }
-            else
-            {
-                sb.AppendLine("The Windows Live Captions bar was NOT found.");
-                sb.AppendLine("→ Turn it on first: press Win + Ctrl + L, or Settings → Accessibility →");
-                sb.AppendLine("  Captions → Live captions. The first run downloads a speech pack.");
-                sb.AppendLine("  Then click 'Diagnose Windows bar' again.");
-                sb.AppendLine("→ Or avoid it entirely: set 'Caption source' to Tempo's own offline engine.");
-            }
-            sb.AppendLine();
-
             sb.AppendLine("=== THIS PC ===");
-            sb.AppendLine("Windows          : " + os + (win11 ? "  (Windows 11 — Live Captions supported)"
-                                                              : "  (pre-Windows 11 — no Live Captions)"));
+            sb.AppendLine("Windows          : " + os + (r.Windows11 ? "  (Windows 11)" : "  (before Windows 11: no Live Captions)"));
             // Build ID, not just the version — a bug report against "1.0.319" is
             // ambiguous between the release and every test build cut from it.
-            sb.AppendLine("Tempo            : " + VersionStamp() + "  ·  " + Utils.BuildInfo.Short);
-            sb.AppendLine("Official ID      : " + Utils.IntegrityCheck.OfficialIdReportLine());
-            sb.AppendLine("Caption source   : " + (_settings != null ? _settings.CaptionSource.ToString() : "?"));
-            sb.AppendLine("Tempo engine     : " + (_captionTranscriber != null && _captionTranscriber.IsRunning
-                                                    ? "running" : "not running"));
-            sb.AppendLine("Bar detected     : " + (found ? "yes" : "no"));
-            sb.AppendLine("UI Automation    : " + (uiaBroken ? "FAILED (cannot read text)" : "ok"));
+            sb.AppendLine("Tempo            : " + version);
+            sb.AppendLine("Official ID      : " + officialId);
+            sb.AppendLine("Caption source   : " + source);
+            sb.AppendLine("Tempo engine     : " + (engineRunning ? "running" : "not running"));
+            sb.AppendLine("LiveCaptions.exe : " + (r.Installed ? "present" : "MISSING") + ", " + (r.ProcessRunning ? "running" : "not running"));
+            sb.AppendLine("Bar on screen    : " + (r.BarVisible ? "yes" : "no") + (r.MovedAsideByTempo ? "  (moved aside by Tempo)" : r.OffScreen ? "  (off screen)" : ""));
+            sb.AppendLine("Bar detected     : " + (r.Found ? "yes" : "no"));
+            sb.AppendLine("UI Automation    : " + (r.UiaOk ? "ok" : "FAILED (cannot read text)"));
             sb.AppendLine();
-
             sb.AppendLine("=== SELF-TEST ===");
             sb.AppendLine(string.IsNullOrWhiteSpace(selfTest) ? "(none)" : selfTest.TrimEnd());
             sb.AppendLine();
-
             sb.AppendLine("=== CANDIDATE WINDOWS (technical detail) ===");
-            sb.AppendLine(string.IsNullOrWhiteSpace(dump) ? "(no windows reported)" : dump);
+            sb.AppendLine(string.IsNullOrWhiteSpace(dump) ? "(no windows reported)" : dump.TrimEnd());
             return sb.ToString();
         }
 
@@ -4162,6 +4484,9 @@ namespace AutoClicker.UI
                     return;
                 }
 
+                // The logger keeps the file open while lines arrive; let it go so an editor that
+                // won't share with a writer still opens it. The next line reopens it.
+                Logger.Close();
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = path,
@@ -4605,14 +4930,7 @@ namespace AutoClicker.UI
                 _settings.CaptionMaxLines = (int)_captionLinesNum.Value;
             }
 
-            _settings.MovementEnabled = _movementEnableCheck.Checked;
-            _settings.MovementFrame = Math.Max(0, _movementFrameCombo.SelectedIndex);
-            _settings.MovementDegreesPerCount = (double)_movementDegPerCountNum.Value;
-            _settings.MovementTurnSmoothing = (double)_movementSmoothingNum.Value;
-            _settings.MovementHysteresisDegrees = (double)_movementHysteresisNum.Value;
-            _settings.MovementUpdateHz = (int)_movementHzNum.Value;
-            _settings.MovementStickDeadzone = (double)_movementDeadzoneNum.Value;
-            _settings.MovementGamepadYawDps = (double)_movementPadYawNum.Value;
+            ReadMovementControls();
 
             _settings.CaptionShowBackground = _captionBackgroundCheck.Checked;
             if (_captionFontCombo.SelectedItem != null)
@@ -4642,6 +4960,10 @@ namespace AutoClicker.UI
             if (_ignoreOwnWindowCheck != null)
             {
                 _settings.IgnoreOwnWindowWhileRunning = _ignoreOwnWindowCheck.Checked;
+            }
+            if (_guardShortcutsCheck != null)
+            {
+                _settings.GuardWindowsShortcuts = _guardShortcutsCheck.Checked;
             }
             _settings.RememberWindowPosition = _rememberWindowCheck.Checked;
             _settings.RememberLastTab = _rememberTabCheck.Checked;

@@ -562,11 +562,15 @@ namespace AutoClicker.UI
                 // caption line.
                 Size sz = BarSizeFor(wa);
                 int w = sz.Width, h = sz.Height;
-                // Keep current position; just clamp so it stays on-screen.
+                // Keep current position; just clamp so it stays on-screen — unless the new size
+                // still lies wholly on the monitors (a bar across two of them stays across them).
                 int x = Left;
                 int y = Top;
-                if (x + w > wa.Right) x = Math.Max(wa.Left, wa.Right - w);
-                if (y + h > wa.Bottom) y = Math.Max(wa.Top, wa.Bottom - h);
+                if (!CaptionWindowChrome.FullyOnScreens(new Rectangle(x, y, w, h)))
+                {
+                    if (x + w > wa.Right) x = Math.Max(wa.Left, wa.Right - w);
+                    if (y + h > wa.Bottom) y = Math.Max(wa.Top, wa.Bottom - h);
+                }
                 Bounds = new Rectangle(x, y, w, h);
             }
             catch { }
@@ -709,6 +713,8 @@ namespace AutoClicker.UI
         internal Func<Rectangle?> SnapPartner;
 
         private Point _moveStart;
+        // Where on the bar the pointer took hold of it, for the magnet — see CaptionWindowChrome.SnapMoving.
+        private Point? _moveGrab;
 
         protected override void WndProc(ref Message m)
         {
@@ -723,7 +729,7 @@ namespace AutoClicker.UI
                     {
                         Rectangle? partner = null;
                         try { partner = SnapPartner?.Invoke(); } catch { }
-                        if (CaptionWindowChrome.SnapMoving(ref m, Dpi, partner)) { return; }
+                        if (CaptionWindowChrome.SnapMoving(ref m, Dpi, partner, ref _moveGrab)) { return; }
                         break;
                     }
                     case CaptionWindowChrome.WM_NCLBUTTONDBLCLK:
@@ -745,8 +751,10 @@ namespace AutoClicker.UI
             if (m.Msg == CaptionWindowChrome.WM_ENTERSIZEMOVE)
             {
                 _moveStart = Location;
+                _moveGrab = null;
             }
             base.WndProc(ref m);
+            if (m.Msg == CaptionWindowChrome.WM_EXITSIZEMOVE) { _moveGrab = null; }
             // Only when it actually moved: a move loop can end where it began (a click without a
             // drag), and that is no new place to save.
             if (m.Msg == CaptionWindowChrome.WM_EXITSIZEMOVE && Location != _moveStart)
@@ -771,12 +779,14 @@ namespace AutoClicker.UI
 
         /// <summary>
         /// Clamps the bar back onto the visible work area, in case a resolution
-        /// change left it partly or fully off-screen.
+        /// change left it partly or fully off-screen. A bar wholly on the monitors —
+        /// across two side by side included — is where the user put it, and stays.
         /// </summary>
         public void EnsureOnScreen()
         {
             try
             {
+                if (CaptionWindowChrome.FullyOnScreens(Bounds)) { return; }
                 var wa = Screen.FromControl(this).WorkingArea;
                 int x = Left, y = Top;
                 if (x + Width > wa.Right) x = wa.Right - Width;

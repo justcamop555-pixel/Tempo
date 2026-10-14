@@ -203,7 +203,6 @@ namespace AutoClicker.Utils
 
             try
             {
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
                 ServicePointManager.Expect100Continue = false;
 
                 // RESUME an interrupted download instead of starting over.
@@ -228,8 +227,10 @@ namespace AutoClicker.Utils
                 request.Timeout = 20000;
                 request.ReadWriteTimeout = 120000;
                 request.AllowAutoRedirect = true; // HuggingFace redirects to a CDN.
-                // Avoid the WPAD proxy-discovery hang on networks without a proxy.
-                request.Proxy = null;
+                // A proxy set in Windows is used; automatic discovery (WPAD) on its own is not — it
+                // hung on networks without a proxy. "No proxy" outright meant a network whose only
+                // way out is a proxy could never download a model.
+                request.Proxy = SystemProxy.Get();
                 request.KeepAlive = false;
                 if (already > 0)
                 {

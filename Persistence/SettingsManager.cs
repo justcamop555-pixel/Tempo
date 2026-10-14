@@ -235,7 +235,9 @@ namespace AutoClicker.Persistence
                 bool ok = PersistenceHelper.WriteAtomic(GetSettingsPath(), json);
                 if (ok)
                 {
-                    Logger.Info("[Settings] saved.");
+                    // Debug: a save follows nearly every click (tab switches included) — 299 lines in
+                    // ten days of one log. A failure is still logged where it happens.
+                    Logger.Debug("[Settings] saved.");
                 }
                 return ok;
             }

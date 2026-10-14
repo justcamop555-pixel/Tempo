@@ -104,7 +104,48 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>When false, nothing is written to the log file (privacy option).</summary>
-        public static bool Enabled { get; set; } = true;
+        public static bool Enabled
+        {
+            get { return _enabled; }
+            set
+            {
+                lock (Sync)
+                {
+                    _enabled = value;
+                    if (!value) { CloseFile(); }
+                }
+            }
+        }
+        private static bool _enabled = true;
+
+        /// <summary>Writes DEBUG lines to the file too — for chasing one particular problem.</summary>
+        public static bool FileDebug { get; set; }
+
+        // ── The file ────────────────────────────────────────────────────────────
+        // Kept OPEN while lines arrive and closed after a quiet spell. It used to be opened,
+        // appended to and closed for every line (File.AppendAllText): measured on this PC at
+        // 0.193 ms a line against 0.015 ms through one open stream — 12.7× — on whichever thread
+        // was logging, usually the UI thread, and a start-up writes a few hundred lines. Every line
+        // is still flushed to Windows as it is written, so a crash loses nothing; closing after a
+        // quiet spell leaves the file free for Notepad, a bug report or the uninstaller.
+        //
+        // It is also rotated while Tempo runs, not only when it starts: Tempo lives in the tray for
+        // days, and the size check at start-up was the only one, so a long session grew the file
+        // without limit. Three old files are kept instead of one.
+        private static FileStream _stream;
+        private static long _fileLength;
+        private static long _nextRotateAt = MaxFileBytes;
+        private static long _lastWriteTick;
+        private static System.Threading.Timer _idleTimer;
+        private static bool _sessionMarked;
+        private const int IdleCloseMs = 2000;
+        private const long MaxFileBytes = 1_048_576;
+        private const int Backups = 3;
+        private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
+
+        // The last report logged under each key by InfoIfChanged.
+        private static readonly System.Collections.Generic.Dictionary<string, string> LastReport =
+            new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
 
         public static void Initialize()
         {
@@ -140,6 +181,34 @@ namespace AutoClicker.Utils
         public static void Info(string message)
         {
             Write("INFO", message, null);
+        }
+
+        /// <summary>
+        /// Routine detail: kept in memory for Live debug, but not written to the log file (unless
+        /// <see cref="FileDebug"/>). For lines with nothing new to say each time — a layout
+        /// diagnostic on every tab switch, "settings saved", every hotkey registered. Over ten days
+        /// of a real log they were half its lines, and the file is capped, so they pushed out the
+        /// history a bug report needs.
+        /// </summary>
+        public static void Debug(string message)
+        {
+            Write("DEBUG", message, null);
+        }
+
+        /// <summary>
+        /// A state report ("hotkeys: …"): INFO when it differs from the last report logged under
+        /// <paramref name="key"/> this session, DEBUG when it says the same again — so the file
+        /// records each state once, and Live debug still sees every report.
+        /// </summary>
+        public static void InfoIfChanged(string key, string message)
+        {
+            bool changed;
+            lock (Sync)
+            {
+                changed = !LastReport.TryGetValue(key ?? "", out string last) || last != message;
+                if (changed) { LastReport[key ?? ""] = message; }
+            }
+            Write(changed ? "INFO" : "DEBUG", message, null);
         }
 
         public static void Warn(string message)
@@ -220,7 +289,7 @@ namespace AutoClicker.Utils
                     Ring.Dequeue();
                 }
 
-                if (Enabled)
+                if (_enabled && (level != "DEBUG" || FileDebug))
                 {
                     if (!_initialised)
                     {
@@ -230,11 +299,12 @@ namespace AutoClicker.Utils
                     {
                         try
                         {
-                            File.AppendAllText(_logPath, line + Environment.NewLine, Encoding.UTF8);
+                            WriteToFile(line);
                         }
                         catch
                         {
-                            // Never let logging crash the caller.
+                            // Never let logging crash the caller; the next line opens it afresh.
+                            CloseFile();
                         }
                     }
                 }
@@ -243,34 +313,133 @@ namespace AutoClicker.Utils
             try { LineLogged?.Invoke(line); } catch { }
         }
 
+        /// <summary>Appends one line to the open file (opening it if needed). Under Sync.</summary>
+        private static void WriteToFile(string line)
+        {
+            if (_stream == null)
+            {
+                OpenFile();
+                if (_stream == null) { return; }
+            }
+            byte[] bytes = Utf8NoBom.GetBytes(line + Environment.NewLine);
+            _stream.Write(bytes, 0, bytes.Length);
+            _stream.Flush();
+            _fileLength += bytes.Length;
+            _lastWriteTick = Environment.TickCount64;
+            if (_fileLength > _nextRotateAt)
+            {
+                Rotate();
+            }
+        }
+
+        /// <summary>Opens the log for appending; others may read it, and delete or rename it. Under Sync.</summary>
+        private static void OpenFile()
+        {
+            try
+            {
+                var fs = new FileStream(_logPath, FileMode.Append, FileAccess.Write,
+                                        FileShare.ReadWrite | FileShare.Delete);
+                long had = fs.Length;
+                if (had == 0)
+                {
+                    // A new file starts with the BOM File.AppendAllText used to write, so a tool that
+                    // sniffs the encoding still reads it as UTF-8.
+                    byte[] bom = Encoding.UTF8.GetPreamble();
+                    fs.Write(bom, 0, bom.Length);
+                }
+                else if (!_sessionMarked)
+                {
+                    // A blank line between sessions, so each run stands apart in the file.
+                    byte[] gap = Utf8NoBom.GetBytes(Environment.NewLine);
+                    fs.Write(gap, 0, gap.Length);
+                }
+                _sessionMarked = true;
+                _fileLength = fs.Length;
+                _nextRotateAt = Math.Max(MaxFileBytes, _fileLength);
+                _stream = fs;
+                ScheduleIdleClose(IdleCloseMs);
+            }
+            catch
+            {
+                _stream = null;
+            }
+        }
+
+        private static void CloseFile()
+        {
+            try { _stream?.Dispose(); } catch { }
+            _stream = null;
+        }
+
+        /// <summary>Closes the log file now; the next line opens it again. For shutdown and uninstall.</summary>
+        public static void Close()
+        {
+            lock (Sync) { CloseFile(); }
+        }
+
+        private static void ScheduleIdleClose(int dueMs)
+        {
+            try
+            {
+                if (_idleTimer == null)
+                {
+                    _idleTimer = new System.Threading.Timer(_ => CloseIfIdle(), null,
+                        System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+                }
+                _idleTimer.Change(Math.Max(50, dueMs), System.Threading.Timeout.Infinite);
+            }
+            catch { }
+        }
+
+        /// <summary>One-shot, re-armed while lines keep coming: no timer runs while the file is closed.</summary>
+        private static void CloseIfIdle()
+        {
+            lock (Sync)
+            {
+                if (_stream == null) { return; }
+                long quiet = Environment.TickCount64 - _lastWriteTick;
+                if (quiet >= IdleCloseMs) { CloseFile(); }
+                else { ScheduleIdleClose((int)(IdleCloseMs - quiet)); }
+            }
+        }
+
+        /// <summary>
+        /// autoclicker.log → .1 → .2 → .3, the oldest dropped. If the file can't be moved (someone
+        /// has it open without sharing), it is tried again 256 KB later rather than on every line.
+        /// Under Sync (or before anything is written).
+        /// </summary>
+        private static void Rotate()
+        {
+            CloseFile();
+            try
+            {
+                for (int i = Backups; i >= 1; i--)
+                {
+                    string from = i == 1 ? _logPath : _logPath + "." + (i - 1);
+                    string to = _logPath + "." + i;
+                    if (!File.Exists(from)) { continue; }
+                    if (File.Exists(to)) { File.Delete(to); }
+                    File.Move(from, to);
+                }
+                _fileLength = 0;
+                _nextRotateAt = MaxFileBytes;
+            }
+            catch
+            {
+                _nextRotateAt = _fileLength + 262_144;
+            }
+        }
+
         private static void TrimIfLarge()
         {
             try
             {
-                if (_logPath != null && File.Exists(_logPath))
+                if (_logPath != null && File.Exists(_logPath) && new FileInfo(_logPath).Length > MaxFileBytes)
                 {
-                    var info = new FileInfo(_logPath);
-                    if (info.Length > 1_048_576)
-                    {
-                        // Rotate: keep the previous log as a single .1 backup so a
-                        // crash that happened just before launch is not lost.
-                        string backup = _logPath + ".1";
-                        try
-                        {
-                            if (File.Exists(backup))
-                            {
-                                File.Delete(backup);
-                            }
-
-                            File.Move(_logPath, backup);
-                        }
-                        catch
-                        {
-                            // If rotation fails for any reason, fall back to deleting
-                            // so the log cannot grow without bound.
-                            File.Delete(_logPath);
-                        }
-                    }
+                    // The previous runs move to .1 (and on down), so a crash that happened just
+                    // before this launch is not lost.
+                    _fileLength = new FileInfo(_logPath).Length;
+                    Rotate();
                 }
             }
             catch

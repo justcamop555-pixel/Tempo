@@ -177,14 +177,16 @@ namespace AutoClicker.UI
                 string names = string.Join(", ", fallbacks.ToArray());
                 parts.Add(fallbacks.Count == 1
                     ? Utils.Localization.F(
-                        "⚠ Windows wouldn't reserve {0} — another program already owns it. Tempo still "
-                        + "catches it with a keyboard hook, so the action works — but the key ALSO keeps "
-                        + "doing its normal job in the other app. Pick a different combination to avoid that.",
+                        "⚠ Windows wouldn't reserve {0} — another program already owns it. Tempo catches it "
+                        + "with a keyboard hook instead and keeps the key to itself, so that program no longer "
+                        + "reacts to it while Tempo is open. Pick a different combination if you need that "
+                        + "program's shortcut.",
                         names)
                     : Utils.Localization.F(
-                        "⚠ Windows wouldn't reserve {0} — another program already owns them. Tempo still "
-                        + "catches them with a keyboard hook, so the actions work — but the keys ALSO keep "
-                        + "doing their normal job in the other app. Pick different combinations to avoid that.",
+                        "⚠ Windows wouldn't reserve {0} — another program already owns them. Tempo catches them "
+                        + "with a keyboard hook instead and keeps the keys to itself, so that program no longer "
+                        + "reacts to them while Tempo is open. Pick different combinations if you need that "
+                        + "program's shortcuts.",
                         names));
             }
 
@@ -265,7 +267,7 @@ namespace AutoClicker.UI
                     if (combo == null || combo.IsDisposed) { continue; }
 
                     combo.Items.Clear();
-                    combo.Items.Add(Utils.Localization.T("(first in the list)"));
+                    combo.Items.Add(QuickPlayFallbackText(pair.Key));
                     foreach (var m in _macros.Macros)
                     {
                         if (m != null) { combo.Items.Add(m.Name); }
@@ -313,15 +315,29 @@ namespace AutoClicker.UI
             // restores that name. It used to save the whole LABEL as the macro's name —
             // "Name  (missing)" — a macro that could never exist, and the next refresh showed
             // "Name  (missing)  (missing)".
-            // Index 0 is "(first in the list)" — i.e. clear the assignment and fall
-            // back to the old positional behaviour.
+            // Index 0 is "(first/second/third in the list)" — i.e. clear the assignment and
+            // fall back to the old positional behaviour.
             string name = combo.SelectedItem is MissingMacroSlot missing ? missing.Name
                         : combo.SelectedIndex <= 0 ? "" : combo.SelectedItem as string;
             SetMacroSlotName(slot, name);
             try { Persistence.SettingsManager.Save(_settings); } catch { }
 
             Utils.Logger.Info("[Macros] quick-play slot " + slot + " -> " +
-                              (string.IsNullOrEmpty(name) ? "(first in the list)" : "'" + name + "'"));
+                              (string.IsNullOrEmpty(name) ? "(macro #" + slot + " in the list)" : "'" + name + "'"));
+        }
+
+        /// <summary>
+        /// The picker's "nothing chosen" entry: an unassigned slot N plays the Nth macro in the list. All
+        /// three said "(first in the list)", so slot 2's picker named a different macro than its key played.
+        /// </summary>
+        private static string QuickPlayFallbackText(int slot)
+        {
+            switch (slot)
+            {
+                case 2: return Utils.Localization.T("(second in the list)");
+                case 3: return Utils.Localization.T("(third in the list)");
+                default: return Utils.Localization.T("(first in the list)");
+            }
         }
 
         /// <summary>A quick-play choice naming a macro that is no longer in the library.</summary>
@@ -438,9 +454,9 @@ namespace AutoClicker.UI
 
             // Windows can REFUSE a hotkey (another program already owns the combo).
             // Tempo then quietly falls back to a keyboard hook: the action still fires,
-            // but the key is no longer reserved, so it ALSO keeps doing its normal job
-            // in whatever app you're using. That is the classic "my hotkey half works"
-            // report, and until now nothing anywhere said it had happened. It also
+            // and the hook keeps the key from the other program — which no longer gets
+            // its shortcut. Until it did that, the key ALSO kept doing its normal job there
+            // (the classic "my hotkey half works"), and nothing anywhere said so. It also
             // carries a second sentence for bindings that got no route at all, which is
             // a different problem from "another app owns it".
             _keybindsRouteLabel = NewKeybindNotice(rowY + 112, _theme.WarningText);
@@ -1345,43 +1361,7 @@ namespace AutoClicker.UI
         {
             try
             {
-                var bound = new System.Text.StringBuilder();
-                var free = new System.Text.StringBuilder();
-                int boundCount = 0, total = 0;
-
-                foreach (HotkeyActions.Info info in HotkeyActions.All)
-                {
-                    total++;
-                    string label = Utils.Localization.T(info.Label);
-                    HotkeyDefinition hk = _bindingControls.TryGetValue(info.Action, out var ctl)
-                        ? ctl.Hotkey
-                        : null;
-
-                    if (hk != null && hk.IsValid)
-                    {
-                        boundCount++;
-                        bound.Append("  ").Append(label.PadRight(28)).Append(hk.ToString()).AppendLine();
-                    }
-                    else
-                    {
-                        free.Append("  ").Append(label).AppendLine();
-                    }
-                }
-
-                var sb = new System.Text.StringBuilder();
-                sb.Append("Tempo ").Append(Utils.AppVersion.Stamp)
-                  .Append("  ·  ").Append(Utils.Localization.T("Keybinds")).AppendLine();
-                sb.AppendLine(Utils.Localization.F("{0} of {1} actions bound", boundCount, total));
-                sb.AppendLine();
-                if (boundCount > 0) { sb.Append(bound); }
-                if (free.Length > 0)
-                {
-                    sb.AppendLine();
-                    sb.AppendLine(Utils.Localization.T("Not bound:"));
-                    sb.Append(free);
-                }
-
-                Clipboard.SetText(sb.ToString());
+                Clipboard.SetText(KeybindsAsText());
                 ConfirmOnButton(_copyKeybindsBtn, Utils.Localization.T("Copied  ✓"));
             }
             catch (Exception ex)
@@ -1389,6 +1369,83 @@ namespace AutoClicker.UI
                 Utils.Logger.Swallow("OnCopyKeybinds", ex);
                 ShowWarning(Utils.Localization.T("Could not copy the keybinds to the clipboard."));
             }
+        }
+
+        /// <summary>The text Copy keybinds puts on the clipboard (kept apart so it can be checked without it).</summary>
+        private string KeybindsAsText()
+        {
+            var free = new System.Text.StringBuilder();
+            var rows = new List<KeyValuePair<string, string>>();   // label, what is bound (and played)
+            int total = 0;
+
+            foreach (HotkeyActions.Info info in HotkeyActions.All)
+            {
+                total++;
+                string label = Utils.Localization.T(info.Label);
+                HotkeyDefinition hk = _bindingControls.TryGetValue(info.Action, out var ctl)
+                    ? ctl.Hotkey
+                    : null;
+
+                if (hk != null && hk.IsValid)
+                {
+                    string bound = hk.ToDisplayString();
+                    // "Play macro #1  F10" left the one question this page answers — which macro? —
+                    // out of the copy. Its picker says, so the copy says too.
+                    int slot = SlotForAction(info.Action);
+                    if (slot > 0)
+                    {
+                        string picked = _macroSlotCombos.TryGetValue(slot, out ComboBox pick) && pick != null &&
+                                        pick.SelectedItem != null
+                            ? pick.SelectedItem.ToString()
+                            : QuickPlayFallbackText(slot);
+                        bound += "  →  " + picked;
+                    }
+                    rows.Add(new KeyValuePair<string, string>(label, bound));
+                }
+                else
+                {
+                    free.Append("  ").Append(label).AppendLine();
+                }
+            }
+
+            // One column for the keys, as wide as the longest label in THIS language. A fixed 28
+            // fitted English, and the German and French labels ran past it, so their keys no
+            // longer lined up.
+            int width = 0;
+            foreach (var row in rows) { width = Math.Max(width, row.Key.Length); }
+            width = Math.Min(width, 44) + 3;
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append("Tempo ").Append(Utils.AppVersion.Stamp)
+              .Append("  ·  ").Append(Utils.Localization.T("Keybinds")).AppendLine();
+            sb.AppendLine(Utils.Localization.F("{0} of {1} actions bound", rows.Count, total));
+            sb.AppendLine();
+            foreach (var row in rows)
+            {
+                // Past the cap a label keeps a gap of its own rather than running into its key.
+                sb.Append("  ").Append(row.Key.Length < width ? row.Key.PadRight(width) : row.Key + "   ")
+                  .Append(row.Value).AppendLine();
+            }
+            // The two settings on this page that change what a key press does.
+            if (_extraShiftCtrlCheck != null)
+            {
+                sb.AppendLine();
+                sb.Append("  ").Append(_extraShiftCtrlCheck.Checked ? "☑ " : "☐ ")
+                  .AppendLine(Utils.Localization.T("Hotkeys also work while you hold Shift or Ctrl"));
+            }
+            if (_intervalStepNum != null)
+            {
+                sb.Append("  ").Append(Utils.Localization.T("Interval step (ms):")).Append(' ')
+                  .Append(((int)_intervalStepNum.Value).ToString(System.Globalization.CultureInfo.CurrentCulture)).AppendLine();
+            }
+            if (free.Length > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine(Utils.Localization.T("Not bound:"));
+                sb.Append(free);
+            }
+
+            return sb.ToString();
         }
 
         private void OnResetKeybinds(object sender, EventArgs e)

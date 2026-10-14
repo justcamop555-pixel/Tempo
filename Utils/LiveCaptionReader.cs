@@ -357,7 +357,12 @@ namespace AutoClicker.Utils
             }
             sb.AppendLine();
 
-            sb.AppendLine("[caption-diag] visible top-level windows (title | class | process):");
+            // Only windows that could BE the captions bar are listed by name. This report is made to be
+            // copied into a bug report, and it used to list the title of every window on the screen —
+            // browser tabs, documents, chats — none of which helps find a caption window. The rest are
+            // counted, so a dump that finds nothing still shows how much it looked through.
+            sb.AppendLine("[caption-diag] visible top-level windows that could be the captions bar (title | class | process):");
+            int otherWindows = 0;
             try
             {
                 var title = new StringBuilder(256);
@@ -373,17 +378,15 @@ namespace AutoClicker.Utils
                         GetClassName(hWnd, cls, cls.Capacity);
                         string t = title.ToString();
                         string c = cls.ToString();
-                        // Skip titleless utility windows unless the class looks caption-
-                        // related, to keep the dump short and readable.
-                        if (t.Length == 0 &&
-                            c.IndexOf("caption", StringComparison.OrdinalIgnoreCase) < 0)
-                        {
-                            return true;
-                        }
                         GetWindowThreadProcessId(hWnd, out uint pid);
                         string proc = "";
                         try { using (var p = Process.GetProcessById((int)pid)) proc = p.ProcessName; }
                         catch { }
+                        if (!LooksCaptionRelated(t, c, proc))
+                        {
+                            otherWindows++;
+                            return true;
+                        }
                         sb.AppendLine("  '" + t + "' | '" + c + "' | " + proc);
                     }
                     catch { }
@@ -391,8 +394,9 @@ namespace AutoClicker.Utils
                 }, IntPtr.Zero);
             }
             catch (Exception ex) { sb.AppendLine("  (window enum failed: " + ex.Message + ")"); }
+            sb.AppendLine("  (+ " + otherWindows + " other visible window(s), not listed: their titles say what you have open)");
 
-            sb.AppendLine("[caption-diag] UIA root child windows (name | class | pid):");
+            sb.AppendLine("[caption-diag] UIA root child windows that could be the captions bar (name | class | pid):");
             try
             {
                 AutomationElement root = AutomationElement.RootElement;
@@ -404,23 +408,26 @@ namespace AutoClicker.Utils
                     TreeWalker walker = TreeWalker.RawViewWalker;
                     AutomationElement child = null;
                     try { child = walker.GetFirstChild(root); } catch { child = null; }
-                    int guard = 0;
+                    int guard = 0, others = 0;
                     while (child != null && guard++ < 200)
                     {
                         try
                         {
-                            string nm = "", cls = "";
+                            string nm = "", cls = "", proc = "";
                             int pid = 0;
                             try { nm = (child.GetCurrentPropertyValue(AutomationElement.NameProperty) as string) ?? ""; } catch { }
                             try { cls = (child.GetCurrentPropertyValue(AutomationElement.ClassNameProperty) as string) ?? ""; } catch { }
                             try { object pv = child.GetCurrentPropertyValue(AutomationElement.ProcessIdProperty); if (pv is int pi) pid = pi; } catch { }
-                            sb.AppendLine("  '" + nm + "' | '" + cls + "' | " + pid);
+                            try { using (var p = Process.GetProcessById(pid)) proc = p.ProcessName; } catch { }
+                            if (LooksCaptionRelated(nm, cls, proc)) { sb.AppendLine("  '" + nm + "' | '" + cls + "' | " + pid + " " + proc); }
+                            else { others++; }
                         }
                         catch { }
                         AutomationElement next = null;
                         try { next = walker.GetNextSibling(child); } catch { next = null; }
                         child = next;
                     }
+                    sb.AppendLine("  (+ " + others + " other window(s), not listed)");
                 }
             }
             catch (Exception ex) { sb.AppendLine("  (uia enum failed: " + ex.Message + ")"); }
@@ -452,6 +459,54 @@ namespace AutoClicker.Utils
             catch (Exception ex) { sb.AppendLine("  (text-tree dump failed: " + ex.Message + ")"); }
 
             return sb.ToString();
+        }
+
+        /// <summary>A window the captions bar could be: its title or class says caption, or the Live Captions program owns it.</summary>
+        private static bool LooksCaptionRelated(string title, string cls, string process)
+        {
+            return (title ?? "").IndexOf("caption", StringComparison.OrdinalIgnoreCase) >= 0
+                   || (cls ?? "").IndexOf("caption", StringComparison.OrdinalIgnoreCase) >= 0
+                   || string.Equals(process, "LiveCaptions", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Whether this Windows has Live Captions at all (LiveCaptions.exe ships with Windows 11 22H2 and later).</summary>
+        public static bool IsInstalled
+        {
+            get
+            {
+                try
+                {
+                    return System.IO.File.Exists(System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.System), "LiveCaptions.exe"));
+                }
+                catch { return false; }
+            }
+        }
+
+        /// <summary>Whether the Live Captions program is running (it can be, with its bar switched off).</summary>
+        public static bool IsProcessRunning
+        {
+            get
+            {
+                try
+                {
+                    Process[] ps = Process.GetProcessesByName("LiveCaptions");
+                    foreach (Process p in ps) { p.Dispose(); }
+                    return ps.Length > 0;
+                }
+                catch { return false; }
+            }
+        }
+
+        /// <summary>Where the located captions window is, in screen coordinates, or null when none is held.</summary>
+        public System.Drawing.Rectangle? WindowRect()
+        {
+            try
+            {
+                if (!Found || !GetWindowRect(_hwnd, out RECT r)) { return null; }
+                return System.Drawing.Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+            }
+            catch { return null; }
         }
 
         // Recursively lists elements under the captions window, showing control type,

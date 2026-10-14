@@ -114,6 +114,16 @@ namespace AutoClicker.Utils
         /// <summary>What the online check concluded, for the status line.</summary>
         public static string OnlineSummary { get; private set; } = "not checked";
 
+        /// <summary>
+        /// The last run could not reach GitHub, and asking again could change the verdict — so the app
+        /// should ask again later (<see cref="RecheckOnlineInBackground"/>). Without it a launch while
+        /// offline, or while GitHub's rate limit was spent, meant no Official ID until the next launch.
+        /// </summary>
+        public static bool OnlineRetryWanted { get; private set; }
+
+        /// <summary>Not before this (GitHub's rate limit resets then), or null.</summary>
+        public static DateTime? OnlineRetryAtUtc { get; private set; }
+
         /// <summary>What comparing the unpacked copy with Tempo.exe found, for Live Debug.</summary>
         public static string PayloadSummary { get; private set; } = "not checked";
 
@@ -237,6 +247,36 @@ namespace AutoClicker.Utils
             lock (RunGate) { RunAndReportLocked(settings, onDone); }
         }
 
+        /// <summary>
+        /// Asks GitHub again, without re-reading the files, when the last run could not reach it
+        /// (<see cref="OnlineRetryWanted"/>). The local verdict stands until GitHub answers; reports
+        /// through <paramref name="onDone"/> only when it did ask. Never throws.
+        /// </summary>
+        public static void RecheckOnlineInBackground(Models.AppSettings settings, Action<IntegrityVerdict> onDone)
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                IntegrityVerdict v;
+                lock (RunGate)
+                {
+                    // A full run may have answered in the meantime.
+                    if (!OnlineRetryWanted || settings == null || !settings.IntegrityCheckEnabled) { return; }
+                    OnlineRetryWanted = false;
+                    OnlineRetryAtUtc = null;
+                    try
+                    {
+                        v = VerifyAgainstGitHub(settings);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Swallow("IntegrityCheck.RecheckOnline", ex);
+                        return;
+                    }
+                }
+                try { onDone?.Invoke(v); } catch (Exception ex) { Logger.Swallow("IntegrityCheck.RecheckOnline.onDone", ex); }
+            });
+        }
+
         private static void RunAndReportLocked(Models.AppSettings settings, Action<IntegrityVerdict> onDone)
         {
             IntegrityVerdict v;
@@ -299,6 +339,8 @@ namespace AutoClicker.Utils
             ConfirmedByGitHub = false;
             OfficialTag = null;
             OnlineSummary = "not checked";
+            OnlineRetryWanted = false;
+            OnlineRetryAtUtc = null;
 
             if (settings != null && !settings.IntegrityCheckEnabled)
             {
@@ -542,7 +584,10 @@ namespace AutoClicker.Utils
             if (lookup == UpdateChecker.ReleaseLookup.Unavailable)
             {
                 OnlineSummary = "could not reach GitHub (" + (error ?? "unknown") + ")";
-                Logger.Warn("[Integrity] " + OnlineSummary + " — keeping the local result.");
+                // Ask again later — not before GitHub's rate limit resets, if that is why.
+                OnlineRetryWanted = true;
+                OnlineRetryAtUtc = GitHubApi.QuietUntilUtc;
+                Logger.Warn("[Integrity] " + OnlineSummary + " — keeping the local result; will ask again later.");
                 return Verdict;                                  // offline ≠ tampered
             }
 

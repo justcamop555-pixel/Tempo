@@ -168,8 +168,8 @@ namespace AutoClicker.UI
                     kv.Key.Top = bottom + L(kv.Value) + dy;
                 }
 
-                // Same [layout] channel the fitter reports on.
-                Logger.Info("[layout] settings stack: " + _settingsCards.Count +
+                // Same [layout] channel the fitter reports on; Debug, as it says the same every start.
+                Logger.Debug("[layout] settings stack: " + _settingsCards.Count +
                             " cards, bottom " + bottom + ", " + _settingsTail.Count + " tail");
             }
             catch (Exception ex) { Logger.Swallow("RestackSettingsCards", ex); }

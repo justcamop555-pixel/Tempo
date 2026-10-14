@@ -34,6 +34,10 @@ namespace AutoClicker.UI
         /// </summary>
         private const int WM_APPCOMMAND = 0x0319;
 
+        /// <summary>WM_APPCOMMAND's device bits (GET_DEVICE_LPARAM), and the value for a mouse.</summary>
+        private const int FAPPCOMMAND_MASK = 0xF000;
+        private const int FAPPCOMMAND_MOUSE = 0x8000;
+
         private HotkeyDefinition _hotkey = new HotkeyDefinition();
 
         public event EventHandler HotkeyChanged;
@@ -108,9 +112,22 @@ namespace AutoClicker.UI
         {
             if (m.Msg == WM_APPCOMMAND && Focused)
             {
-                // The command sits in the high word of lParam, with device/key-state
-                // flags in the top nibble that have to be masked off first.
-                int cmd = ((int)(m.LParam.ToInt64() >> 16)) & 0x0FFF;
+                // The command sits in the high word of lParam, with the DEVICE that sent it in
+                // the top nibble.
+                int high = (int)((m.LParam.ToInt64() >> 16) & 0xFFFF);
+                int cmd = high & 0x0FFF;
+
+                // From the MOUSE: DefWindowProc makes Browser Back / Forward out of a side
+                // button's RELEASE — the release of the press OnMouseDown has just bound. Taken
+                // as a key, it replaced "Mouse X1 (Back)" with the Browser Back KEY a moment
+                // later: a key the side button never sends, so the binding never fired from the
+                // mouse at all. Swallowed, not passed up, so nothing else acts on it either.
+                if ((high & FAPPCOMMAND_MASK) == FAPPCOMMAND_MOUSE)
+                {
+                    m.Result = (IntPtr)1;
+                    return;
+                }
+
                 Keys mapped = KeyForAppCommand(cmd);
                 if (mapped != Keys.None)
                 {
@@ -349,6 +366,19 @@ namespace AutoClicker.UI
                 return;
             }
 
+            // A field that is not listening only takes the focus, the way a left click does. It
+            // used to bind whatever button was pressed over it: a wheel pressed while scrolling the
+            // list, or Back pressed out of habit, quietly rebound the row under the pointer — and
+            // took that button from the action that had it. Nor was it really listening: the
+            // hotkeys are only paused while a field has focus, so a button that was already bound
+            // ran its action instead. (A left click has focused the field by now: the text box
+            // takes the focus on the press, before this runs.)
+            if (!Focused)
+            {
+                Focus();
+                return;
+            }
+
             // A bare Left/Right would consume normal clicking, so require a
             // modifier for those two.
             bool bareLeftRight =
@@ -396,6 +426,14 @@ namespace AutoClicker.UI
                 keyCode == Keys.Menu || keyCode == Keys.LWin || keyCode == Keys.RWin)
             {
                 ShowPendingModifiers();
+                return;
+            }
+
+            // Not keys at all. VK_PACKET carries a character typed by the emoji panel, an on-screen
+            // keyboard or a password manager, and VK_PROCESSKEY is an IME holding the real key back.
+            // Bound, either is a hotkey that no key on the keyboard presses.
+            if (keyCode == Keys.Packet || keyCode == Keys.ProcessKey)
+            {
                 return;
             }
 

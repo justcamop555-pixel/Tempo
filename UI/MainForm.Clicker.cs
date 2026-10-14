@@ -484,6 +484,14 @@ namespace AutoClicker.UI
             _antiFreezeStatusLabel.ForeColor = _theme.TextMuted;
             afGroup.Controls.Add(_antiFreezeStatusLabel);
 
+            // ── Windows shortcuts ──────────────────────────────────────────────
+            // Settings ▸ Behaviour's "Hold back Windows shortcuts…", here where a run is started
+            // (the same setting: SetGuardWindowsShortcuts). In the right-hand column's gap under
+            // Anti-Freeze, its bottom level with Manual Speed's.
+            var guardGroup = UiFactory.Group(Localization.T("Windows Shortcuts"), 384, 668, 324, 62, CardIcon.Keyboard);
+            _clickerGuardCheck = MakeGuardShortcutsCheck(16, 28, "Clicker tab");
+            guardGroup.Controls.Add(_clickerGuardCheck);
+
             page.Controls.Add(profileLabel);
             page.Controls.Add(_profileCombo);
             page.Controls.Add(_newProfileBtn);
@@ -505,6 +513,7 @@ namespace AutoClicker.UI
             page.Controls.Add(_cpsTestBtn);
             page.Controls.Add(speedGroup);
             page.Controls.Add(afGroup);
+            page.Controls.Add(guardGroup);
 
             Control secondCursorGroup = BuildSecondCursorGroup();
             page.Controls.Add(secondCursorGroup);
@@ -2988,11 +2997,6 @@ namespace AutoClicker.UI
             {
                 if (wasVisible)
                 {
-                    Show();
-                    EnsureOnScreen();
-                    Activate();
-                    ReassertTopMost();
-
                     // Rebuild what Hide() threw away. A bare Show() left the window in
                     // the state the user reported: the tab page's backdrop composite was
                     // never rebuilt, and because a wallpaper flips every label, checkbox
@@ -3000,22 +3004,47 @@ namespace AutoClicker.UI
                     // behind them — so the window came back as a hole with the desktop
                     // showing through and only a few controls visible.
                     //
-                    // This is the same repair the tray-restore path already does; the
-                    // picker simply never called it.
-                    TryRepairLayoutNow();
-                    InvalidateBackdropSurfaces();
+                    // This is the same repair the tray-restore path does — and like it, done
+                    // with the window cloaked, so it comes back whole instead of in pieces.
+                    ShowWholeAfterHide(() =>
+                    {
+                        Show();
+                        EnsureOnScreen();
+                        Activate();
+                        ReassertTopMost();
+                    });
                 }
             }
         }
 
         private void OpenCpsTest()
         {
-            using (var form = new CpsTestForm(_theme, _settings.CpsTestBest))
+            // The clicker's rate while it runs, so a run it makes on the pad shows against what it was set to.
+            Func<double> clickerRate = () => _engine != null && _engine.IsRunning && !_engine.IsPaused ? _engine.EffectiveClicksPerSecond : 0;
+            using (var form = new CpsTestForm(_theme, _settings.CpsTestBest, _settings.CpsTestBests, clickerRate))
             {
                 form.ShowDialog(this);
+                bool changed = false;
                 if (form.AllTimeBest > _settings.CpsTestBest)
                 {
                     _settings.CpsTestBest = form.AllTimeBest;
+                    changed = true;
+                }
+                // The best for each input and length the test was run with.
+                if (form.BestsChanged)
+                {
+                    if (_settings.CpsTestBests == null)
+                    {
+                        _settings.CpsTestBests = new System.Collections.Generic.Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                    }
+                    foreach (var kv in form.Bests)
+                    {
+                        _settings.CpsTestBests.TryGetValue(kv.Key, out double had);
+                        if (kv.Value > had) { _settings.CpsTestBests[kv.Key] = kv.Value; changed = true; }
+                    }
+                }
+                if (changed)
+                {
                     SettingsManager.Save(_settings);
                 }
             }

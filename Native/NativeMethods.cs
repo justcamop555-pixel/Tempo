@@ -335,6 +335,8 @@ namespace AutoClicker.Native
         public const uint LLMHF_INJECTED = 0x00000001;
         // Low-level keyboard hook flag: event was injected by SendInput / keybd_event.
         public const uint LLKHF_INJECTED = 0x00000010;
+        // Low-level keyboard hook flag: the key is in the extended block (its scan code had the 0xE0 prefix).
+        public const uint LLKHF_EXTENDED = 0x00000001;
         public const int WM_MOUSEWHEEL = 0x020A;
         public const int WM_MOUSEHWHEEL = 0x020E;
 

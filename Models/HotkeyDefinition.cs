@@ -190,7 +190,7 @@ namespace AutoClicker.Models
 
         /// <summary>
         /// True when this is a BARE (unmodified) key that Windows normally needs for
-        /// typing or moving around — a letter, a digit, Tab, Space, Enter, an arrow…
+        /// typing or moving around — a letter, a digit, punctuation, Tab, Space, Enter, an arrow…
         ///
         /// This matters because a global hotkey is registered SYSTEM-WIDE: the key stops
         /// being delivered to whatever app you are using. Bind a bare "A" and you can no
@@ -212,6 +212,16 @@ namespace AutoClicker.Models
                 if (Key >= Keys.A && Key <= Keys.Z) { return true; }
                 if (Key >= Keys.D0 && Key <= Keys.D9) { return true; }
                 if (Key >= Keys.NumPad0 && Key <= Keys.NumPad9) { return true; }
+
+                // The punctuation keys and the keypad's operators type characters exactly like a letter
+                // does, and were the gap in this list: a bare ` , . / ; ' [ ] \ - = or keypad + bound
+                // here took that character away from every program with no warning at all.
+                if (Key >= Keys.Multiply && Key <= Keys.Divide) { return true; }   // * + separator - . /
+                if ((Key >= Keys.Oem1 && Key <= Keys.Oem3) || (Key >= Keys.Oem4 && Key <= Keys.Oem8) ||
+                    Key == Keys.Oem102)
+                {
+                    return true;
+                }
 
                 switch (Key)
                 {

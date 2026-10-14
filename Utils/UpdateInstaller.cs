@@ -241,9 +241,13 @@ namespace AutoClicker.Utils
         {
             var handler = new SocketsHttpHandler
             {
-                // Same as the check: automatic proxy (WPAD) discovery is not covered by any
-                // timeout, and it is what made downloads hang on networks without a proxy.
-                UseProxy = false,
+                // Same as the check (GitHubApi): a proxy set in Windows is used, automatic proxy
+                // (WPAD) discovery on its own is not — it is not covered by any timeout, and it is
+                // what made downloads hang on networks without a proxy. This said "no proxy" outright,
+                // so on a network whose only way out is a proxy the update could never download.
+                UseProxy = true,
+                Proxy = SystemProxy.Live,
+                DefaultProxyCredentials = CredentialCache.DefaultCredentials,
                 AllowAutoRedirect = true,        // GitHub asset URLs redirect to its CDN
                 MaxAutomaticRedirections = 10,
                 ConnectTimeout = TimeSpan.FromSeconds(15),

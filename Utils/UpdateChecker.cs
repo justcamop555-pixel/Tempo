@@ -92,6 +92,17 @@ namespace AutoClicker.Utils
 
             public string Notes { get; set; }
             public DateTime? ReleaseDate { get; set; }
+
+            /// <summary>
+            /// The check was refused for GitHub's rate limit (or not sent, because it has not reset yet).
+            /// </summary>
+            public bool RateLimited { get; set; }
+
+            /// <summary>
+            /// When asking again can work — the rate limit's reset — or null. The automatic retry waits for
+            /// it: its 5/15/60-minute steps used to fire straight into the same refusal.
+            /// </summary>
+            public DateTime? RetryAtUtc { get; set; }
         }
 
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
@@ -129,60 +140,34 @@ namespace AutoClicker.Utils
                 return ReleaseLookup.Unavailable;
             }
 
+            // Through GitHubApi: the proxy, the rate limit (not asked at all while it is spent) and TLS
+            // are decided there, once, for the update check too.
+            GitHubApi.Answer answer = GitHubApi.Get("/repos/" + Repository + "/releases/tags/" + Uri.EscapeDataString(tag));
+
+            // A 404 is an ANSWER, not a failure: GitHub is telling us this version was never
+            // published. Everything else that is not a 200 means we could not ask.
+            if (answer.Status == 404) { return ReleaseLookup.NoSuchRelease; }
+            if (!answer.Ok)
+            {
+                error = answer.Error ?? "no answer";
+                return ReleaseLookup.Unavailable;
+            }
+
             try
             {
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-                ServicePointManager.Expect100Continue = false;
-
-                string url = "https://api.github.com/repos/" + Repository + "/releases/tags/" +
-                             Uri.EscapeDataString(tag);
-                var request = (HttpWebRequest)WebRequest.Create(url);
-                request.Method = "GET";
-                request.Timeout = 9000;
-                request.ReadWriteTimeout = 9000;
-                // Same reasoning as the update check: automatic proxy discovery is not
-                // covered by Timeout and is the usual cause of a long silent hang.
-                request.Proxy = null;
-                request.KeepAlive = false;
-                request.UserAgent = "Tempo/" + CurrentVersion + " (+https://github.com/" + Repository + ")";
-                request.Accept = "application/vnd.github+json";
-                request.Headers["X-GitHub-Api-Version"] = "2022-11-28";
-                request.CachePolicy =
-                    new System.Net.Cache.RequestCachePolicy(System.Net.Cache.RequestCacheLevel.NoCacheNoStore);
-
-                string json;
-                using (var response = (HttpWebResponse)request.GetResponse())
-                using (Stream stream = response.GetResponseStream())
-                using (var reader = new StreamReader(stream))
-                {
-                    json = reader.ReadToEnd();
-                }
-
-                release = JsonSerializer.Deserialize<GitHubRelease>(json, JsonOptions);
-                if (release == null || string.IsNullOrWhiteSpace(release.tag_name))
-                {
-                    error = "the release data could not be read";
-                    return ReleaseLookup.Unavailable;
-                }
-                return ReleaseLookup.Found;
+                release = JsonSerializer.Deserialize<GitHubRelease>(answer.Body, JsonOptions);
             }
-            catch (WebException wex)
+            catch (JsonException)
             {
-                // A 404 is an ANSWER, not a failure: GitHub is telling us this version
-                // was never published. Everything else means we could not ask.
-                var http = wex.Response as HttpWebResponse;
-                if (http != null && http.StatusCode == HttpStatusCode.NotFound)
-                {
-                    return ReleaseLookup.NoSuchRelease;
-                }
-                error = wex.Message;
+                release = null;
+            }
+            if (release == null || string.IsNullOrWhiteSpace(release.tag_name))
+            {
+                release = null;
+                error = "the release data could not be read";
                 return ReleaseLookup.Unavailable;
             }
-            catch (Exception ex)
-            {
-                error = ex.Message;
-                return ReleaseLookup.Unavailable;
-            }
+            return ReleaseLookup.Found;
         }
 
         /// <summary>The version of the running build (e.g. 1.0.25.0).</summary>
@@ -202,12 +187,12 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
-        /// The longest a <see cref="Check"/> can take: two attempts of up to 9 s for the answer
-        /// plus 9 s reading it, and the pause between them. A caller waiting on a check uses
-        /// this, so its safety net cannot fire while a slow but healthy check is still running —
-        /// the old 22 s net was shorter than the check it guarded.
+        /// The longest a <see cref="Check"/> can take: two attempts of up to 18 s each (GitHubApi's
+        /// timeout covers the answer AND reading it), and the pause between them. A caller waiting on a
+        /// check uses this, so its safety net cannot fire while a slow but healthy check is still
+        /// running — the old 22 s net was shorter than the check it guarded.
         /// </summary>
-        public static readonly TimeSpan WorstCaseCheckTime = TimeSpan.FromSeconds(2 * (9 + 9) + 2);
+        public static readonly TimeSpan WorstCaseCheckTime = TimeSpan.FromSeconds(2 * 18 + 2);
 
         /// <summary>
         /// Blocking fetch + compare. Call from a background thread. Never throws —
@@ -217,83 +202,35 @@ namespace AutoClicker.Utils
         public static UpdateResult Check()
         {
             var result = new UpdateResult();
-            // One retry. With a generous 9s per-attempt timeout, a second attempt keeps
-            // the worst case inside WorstCaseCheckTime while still riding out a slow cold
-            // connection or a brief server hiccup.
+            // One retry. With a generous 18 s per attempt (GitHubApi), a second attempt keeps the
+            // worst case inside WorstCaseCheckTime while still riding out a slow cold connection or a
+            // brief server hiccup.
             const int maxAttempts = 2;
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
-            try
-            {
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-                ServicePointManager.Expect100Continue = false;
-
-                var request = (HttpWebRequest)WebRequest.Create(ManifestUrl);
-                request.Method = "GET";
-                // Generous per-attempt timeout: a cold first connection (DNS + TLS
-                // handshake) or a momentarily slow GitHub can take several seconds, so
-                // don't give up too early. With one retry this still fits the caller's
-                // safety window.
-                request.Timeout = 9000;
-                request.ReadWriteTimeout = 9000;
-                // Skip automatic proxy (WPAD) discovery — it isn't covered by Timeout
-                // and is the usual cause of the check intermittently hanging for a long
-                // time on networks without a proxy.
-                request.Proxy = null;
-                request.KeepAlive = false;
-                // GitHub requires a User-Agent and recommends an explicit API version.
-                request.UserAgent = "Tempo/" + CurrentVersion + " (+https://github.com/" + Repository + ")";
-                request.Accept = "application/vnd.github+json";
-                request.Headers["X-GitHub-Api-Version"] = "2022-11-28";
-                request.CachePolicy =
-                    new System.Net.Cache.RequestCachePolicy(System.Net.Cache.RequestCacheLevel.NoCacheNoStore);
-
-                string json;
-                using (var response = (HttpWebResponse)request.GetResponse())
-                using (Stream stream = response.GetResponseStream())
-                using (var reader = new StreamReader(stream))
+                GitHubApi.Answer answer = GitHubApi.Get("/repos/" + Repository + "/releases/latest");
+                if (answer.Ok)
                 {
-                    json = reader.ReadToEnd();
+                    return FromReleaseJson(answer.Body, CurrentVersion);
                 }
 
-                return FromReleaseJson(json, CurrentVersion);
-            }
-            catch (WebException wex)
-            {
-                var http = wex.Response as HttpWebResponse;
-                int code = http != null ? (int)http.StatusCode : 0;
-
-                // Transient server-side or connection hiccups - a 500/502/503/504 gateway
-                // error, a dropped connection, or a timeout (often just a slow cold
-                // connection) - usually clear on an immediate retry, so try again before
-                // bothering the user. A 429 is NOT retried: it means "stop asking".
-                bool transient =
-                    code == 500 || code == 502 || code == 503 || code == 504 ||
-                    wex.Status == WebExceptionStatus.Timeout ||
-                    wex.Status == WebExceptionStatus.ConnectFailure ||
-                    wex.Status == WebExceptionStatus.ReceiveFailure ||
-                    wex.Status == WebExceptionStatus.SendFailure ||
-                    wex.Status == WebExceptionStatus.KeepAliveFailure ||
-                    wex.Status == WebExceptionStatus.PipelineFailure;
-
-                if (transient && attempt < maxAttempts)
+                // A server error, a dropped connection or a timeout (often just a slow cold connection)
+                // usually clears on an immediate retry, so try again before bothering the user. A rate
+                // limit is NOT retried: it means "stop asking", and GitHubApi now holds every request
+                // back until it resets.
+                if (answer.Transient && !answer.RateLimited && attempt < maxAttempts)
                 {
-                    Logger.Warn($"Update check transient error (attempt {attempt} of {maxAttempts}, code {code}): " + wex.Message);
+                    Logger.Warn("[Update] check attempt " + attempt + " of " + maxAttempts + " failed (" + answer.Error + "); trying again.");
                     try { System.Threading.Thread.Sleep(600 * attempt); } catch { }
                     continue;
                 }
 
-                result.Error = DescribeFailure(wex, http, code);
-                Logger.Warn("Update check network error: " + wex.Message);
+                result.Error = DescribeFailure(answer);
+                result.RetryAtUtc = answer.RetryAtUtc;
+                result.RateLimited = answer.RateLimited;
+                Logger.Warn("[Update] the check failed: " + (answer.Error ?? "no answer") + ".");
                 return result;
-            }
-            catch (Exception ex)
-            {
-                result.Error = Localization.F("The update check failed: {0}", ex.Message);
-                Logger.Warn("Update check failed: " + ex.Message);
-                return result;
-            }
             }
 
             // Reached only if every attempt hit a transient error without producing a
@@ -376,30 +313,37 @@ namespace AutoClicker.Utils
         /// the result goes straight onto the screen, and several carry a value (a status code, a
         /// time), which a finished English sentence could never be looked up by.
         /// </summary>
-        private static string DescribeFailure(WebException wex, HttpWebResponse http, int code)
+        private static string DescribeFailure(GitHubApi.Answer answer)
         {
-            if (http != null && http.StatusCode == HttpStatusCode.NotFound)
+            int code = answer.Status;
+            if (code == 404)
             {
                 // A 404 here usually just means no release has been published yet.
                 return Localization.F("No published release was found for {0} yet.", Repository);
             }
 
-            if (code == 403 || code == 429)
+            if (answer.RateLimited)
             {
                 // GitHub allows 60 unauthenticated API requests an hour per address. When it says
                 // when the allowance comes back, pass that on: "try again later" with no idea how
                 // much later is how the button gets pressed ten more times.
-                string resetAt = RateLimitResetText(http);
-                if (resetAt != null)
+                if (answer.RetryAtUtc.HasValue)
                 {
                     return Localization.F("GitHub is limiting how often Tempo can ask about updates. Please try again after {0}.",
-                                          resetAt);
+                                          answer.RetryAtUtc.Value.ToLocalTime().ToString("t", Localization.DateCulture));
                 }
                 return Localization.T("GitHub is rate-limiting update checks right now. " +
                                       "Please wait a little while and try again.");
             }
 
-            if (wex.Status == WebExceptionStatus.Timeout)
+            if (code == 403)
+            {
+                // Not the rate limit (that says so in its headers): something in between refused it.
+                return Localization.T("GitHub refused the update check (error 403). A firewall, proxy or network filter " +
+                                      "may be blocking Tempo's connection to github.com.");
+            }
+
+            if (answer.TimedOut)
             {
                 // Not "your internet is fine": a timeout proves nothing about the connection, and
                 // this sentence used to claim that it did.
@@ -416,27 +360,12 @@ namespace AutoClicker.Utils
                                       "This isn't a problem with Tempo — please try again in a few minutes.", code);
             }
 
-            if (http != null)
+            if (code > 0)
             {
                 return Localization.F("The update server returned an error ({0}). Please try again later.", code);
             }
 
             return Localization.T("Couldn't reach GitHub. Check your internet connection.");
-        }
-
-        /// <summary>The local time GitHub's API allowance resets, or null when it did not say.</summary>
-        private static string RateLimitResetText(HttpWebResponse http)
-        {
-            try
-            {
-                string remaining = http?.Headers["X-RateLimit-Remaining"];
-                string reset = http?.Headers["X-RateLimit-Reset"];
-                if (remaining == null || remaining.Trim() != "0" || string.IsNullOrWhiteSpace(reset)) { return null; }
-                if (!long.TryParse(reset.Trim(), out long epoch)) { return null; }
-                DateTime local = DateTimeOffset.FromUnixTimeSeconds(epoch).LocalDateTime;
-                return local.ToString("t", Localization.DateCulture);
-            }
-            catch { return null; }
         }
 
         /// <summary>

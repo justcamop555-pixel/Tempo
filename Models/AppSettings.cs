@@ -226,6 +226,15 @@ namespace AutoClicker.Models
         /// <summary>Best clicks-per-second ever recorded in the CPS test.</summary>
         public double CpsTestBest { get; set; } = 0;
 
+        /// <summary>
+        /// The CPS test's best for each input and length, keyed "left-10", "right-5", "space-30": a
+        /// 5-second spacebar burst and a 30-second click test are not the same contest, and one best
+        /// for all of them meant a short test's record could never be beaten in a long one.
+        /// <see cref="CpsTestBest"/> stays the best of them all.
+        /// </summary>
+        public System.Collections.Generic.Dictionary<string, double> CpsTestBests { get; set; }
+            = new System.Collections.Generic.Dictionary<string, double>(System.StringComparer.OrdinalIgnoreCase);
+
         /// <summary>When false, Tempo writes nothing to its on-disk log (privacy).</summary>
         public bool WriteLogFile { get; set; } = true;
 
@@ -382,6 +391,16 @@ namespace AutoClicker.Models
         public double MovementGamepadYawDps { get; set; } = 220.0;
 
         /// <summary>
+        /// Which mouse movement counts as turning the camera: 0 = only while the game hides or holds
+        /// the pointer (Roblox turns its camera only then; otherwise the mouse moves a pointer),
+        /// 1 = every movement (Engine.MovementTurnDetection).
+        /// </summary>
+        public int MovementTurnDetection { get; set; } = 0;
+
+        /// <summary>Pulse the keys to aim between the 8 directions W/A/S/D can make (Engine.MovementTuning.FineSteering).</summary>
+        public bool MovementFineSteering { get; set; } = false;
+
+        /// <summary>
         /// One-time notice shown when a portable copy runs as Tempo.exe — Discord takes a program
         /// by that name for the Steam game "Tempo". A new name on purpose: the old notice
         /// (DiscordPathHintShown, still in older settings files) advised renaming the FOLDER,
@@ -479,11 +498,14 @@ namespace AutoClicker.Models
         /// <summary>Caption colour as an ARGB int. Default = bright amber/yellow.</summary>
         public int CaptionColorArgb { get; set; } = unchecked((int)0xFFF4BF4F);
 
-        /// <summary>Saved live-caption bar position; -1 means "use default (bottom centre)".</summary>
+        /// <summary>
+        /// Saved live-caption bar position. X AND Y both -1 means "use default (bottom centre)"; one
+        /// negative coordinate on its own is a real place — a monitor left of or above the main one.
+        /// </summary>
         public int CaptionBarX { get; set; } = -1;
         public int CaptionBarY { get; set; } = -1;
 
-        /// <summary>Saved history overlay position; -1 means "use default (top left)".</summary>
+        /// <summary>Saved history overlay position; X and Y both -1 means "use default (top left)".</summary>
         public int CaptionHistoryX { get; set; } = -1;
         public int CaptionHistoryY { get; set; } = -1;
 
@@ -512,6 +534,14 @@ namespace AutoClicker.Models
         /// </summary>
         public bool IgnoreOwnWindowWhileRunning { get; set; } = true;
 
+        /// <summary>
+        /// While the clicker runs or a macro plays or records, hold back Windows' own shortcuts — the
+        /// Windows key (Start) and Win+anything, Ctrl+Esc, and the Sticky / Filter / Toggle Keys
+        /// questions — so only Tempo's keybinds act (Native/ShortcutGuard). Alt+Tab, Ctrl+Shift+Esc and
+        /// Tempo's own hotkeys are never held back. Recordings leave those shortcuts out too.
+        /// </summary>
+        public bool GuardWindowsShortcuts { get; set; } = true;
+
         /// <summary>Capture mouse movement when recording a macro (Macros tab checkbox).</summary>
         public bool RecordMacroMovements { get; set; } = true;
 
@@ -521,6 +551,13 @@ namespace AutoClicker.Models
         /// Off by default: positions are what clicking on screens and menus needs.
         /// </summary>
         public bool RecordMacroCameraMovement { get; set; } = false;
+
+        /// <summary>
+        /// The Macros tab's Live Monitor lists one row per step ("Show every step"). Off by
+        /// default: a run of mouse travel — the moves and the short waits between them — is one
+        /// row, and so is a run of camera turns.
+        /// </summary>
+        public bool LiveMonitorEveryStep { get; set; } = false;
 
         /// <summary>Capture keyboard input when recording a macro (Macros tab checkbox).</summary>
         public bool RecordMacroKeyboard { get; set; } = true;
@@ -670,8 +707,9 @@ namespace AutoClicker.Models
 
         /// <summary>
         /// A localhost HTTP server that lets other tools on this PC list accounts and trigger
-        /// launches. OFF by default — it is an automation surface, so it is opt-in, loopback-only,
-        /// token-gated, and runs only while the vault is unlocked. It never exposes stored secrets.
+        /// launches. OFF by default — it is an automation surface, so it is opt-in, loopback-only and
+        /// token-gated; while the vault is locked it refuses every account call (and says why). It never
+        /// exposes stored secrets.
         /// </summary>
         public bool AccountApiEnabled { get; set; } = false;
         public int AccountApiPort { get; set; } = 7963;
@@ -792,6 +830,25 @@ namespace AutoClicker.Models
         public bool OverlayShowClicks { get; set; } = true;
         /// <summary>Show elapsed run time on the badge.</summary>
         public bool OverlayShowElapsed { get; set; } = false;
+
+        /// <summary>
+        /// "Not dragged anywhere": the badge sits in its corner. Not -1 (or any other place a monitor
+        /// left of or above the main one can genuinely have — see the caption bar's history with that).
+        /// </summary>
+        public const int OverlayUnplaced = int.MinValue;
+
+        /// <summary>
+        /// Where the user dragged each running badge (tray ▸ Overlays ▸ Move overlays): its top-left on
+        /// THIS PC's monitors (kept through Reset and Import, like the caption bar's place), or
+        /// <see cref="OverlayUnplaced"/>. The clicking badge, the "playing macro" badge and the
+        /// recording badge each have their own.
+        /// </summary>
+        public int ClickingOverlayX { get; set; } = OverlayUnplaced;
+        public int ClickingOverlayY { get; set; } = OverlayUnplaced;
+        public int MacroOverlayX { get; set; } = OverlayUnplaced;
+        public int MacroOverlayY { get; set; } = OverlayUnplaced;
+        public int RecordingOverlayX { get; set; } = OverlayUnplaced;
+        public int RecordingOverlayY { get; set; } = OverlayUnplaced;
 
         // ── Statistics ────────────────────────────────────────────────────────
         public long LifetimeClicks { get; set; } = 0;
@@ -960,6 +1017,13 @@ namespace AutoClicker.Models
             CaptionHistoryY = local.CaptionHistoryY;
             CaptionHistoryWidth = local.CaptionHistoryWidth;
             CaptionHistoryHeight = local.CaptionHistoryHeight;
+            // The running badges' places too — "Default places" in the tray's Overlays menu resets those.
+            ClickingOverlayX = local.ClickingOverlayX;
+            ClickingOverlayY = local.ClickingOverlayY;
+            MacroOverlayX = local.MacroOverlayX;
+            MacroOverlayY = local.MacroOverlayY;
+            RecordingOverlayX = local.RecordingOverlayX;
+            RecordingOverlayY = local.RecordingOverlayY;
             CaptionResumeAfterRestart = local.CaptionResumeAfterRestart;
             InstallOfferDeclined = local.InstallOfferDeclined;
         }
@@ -999,6 +1063,17 @@ namespace AutoClicker.Models
             LifetimeYearClicks = s.LifetimeYearClicks;
             LifetimeYearOf = s.LifetimeYearOf;
             CpsTestBest = s.CpsTestBest;
+            CpsTestBests = new System.Collections.Generic.Dictionary<string, double>(System.StringComparer.OrdinalIgnoreCase);
+            if (s.CpsTestBests != null)
+            {
+                // Merged, not copied, for the same reason as LifetimeByProfile above.
+                foreach (var kv in s.CpsTestBests)
+                {
+                    if (kv.Key == null) { continue; }
+                    CpsTestBests.TryGetValue(kv.Key, out double had);
+                    CpsTestBests[kv.Key] = Math.Max(had, kv.Value);
+                }
+            }
             SessionGoalClicks = s.SessionGoalClicks;
         }
 

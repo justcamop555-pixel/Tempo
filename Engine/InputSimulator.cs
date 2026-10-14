@@ -648,6 +648,33 @@ namespace AutoClicker.Engine
         }
 
         /// <summary>
+        /// Presses or releases the key at a keyboard POSITION, by its scan code, whatever the layout
+        /// prints on it. <see cref="KeyDown"/> goes by the letter: on a French AZERTY keyboard the
+        /// letter W sits where QWERTY has Z, so "press W" pressed the wrong key for a game that steers
+        /// by position (most read scan codes), and Windows hands a game reading letters the one the
+        /// layout puts at that position, Z — the French forward key.
+        /// </summary>
+        public static void KeyAtPosition(int scanCode, bool down, bool extended = false)
+        {
+            uint flags = NativeMethods.KEYEVENTF_SCANCODE | (down ? 0u : NativeMethods.KEYEVENTF_KEYUP);
+            if (extended) { flags |= NativeMethods.KEYEVENTF_EXTENDEDKEY; }
+            var inputs = new NativeMethods.INPUT[1];
+            inputs[0].type = NativeMethods.INPUT_KEYBOARD;
+            inputs[0].U.ki = new NativeMethods.KEYBDINPUT
+            {
+                wVk = 0,
+                wScan = (ushort)scanCode,
+                dwFlags = flags,
+                time = 0,
+                dwExtraInfo = CurrentExtraInfo
+            };
+            if (NativeMethods.SendInput(1, inputs, InputStructSize) == 0)
+            {
+                WarnKeyboardBlocked();
+            }
+        }
+
+        /// <summary>
         /// Presses and releases a key as a single batched SendInput call (no
         /// blocking sleep between events).
         /// </summary>

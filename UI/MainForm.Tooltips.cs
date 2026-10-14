@@ -87,7 +87,7 @@ namespace AutoClicker.UI
             T(_captionCaptureCombo, "What Tempo listens to for its own captions. System audio captions whatever your PC plays (needs a speaker). If this PC has no speaker, choose Microphone (or Auto, which switches to the mic automatically).");
             T(_captionFontNum, "Caption text size, in points.");
             T(_captionOpacityNum, "How opaque the caption text is. The bar's background always stays fully transparent.");
-            T(_captionFontCombo, "Font for the caption overlay text.");
+            T(_captionFontCombo, "Font for the captions. Each name in the list is drawn in its own font, and every installed text font follows the recommended ones. Changes show at once.");
             T(_captionColorBtn, "Pick the caption text colour. Bright yellow reads well over most games. (The bar background always stays transparent.)");
             T(_captionBackgroundCheck, "Show the rounded panel behind captions. Turn this off for a clean text-only look with no background \u2014 the text keeps a soft glow so it stays readable.");
             T(_profileCombo, "Switch between your saved click profiles.");
@@ -243,7 +243,7 @@ namespace AutoClicker.UI
             T(_followSystemThemeCheck, "Match Windows: with the Light or Dark theme selected, Tempo follows Windows' light/dark mode AND adopts your Windows accent colour, switching live the moment you change either in Windows Settings. Pick a colourful theme (Synthwave, Ocean, …) and it keeps that look untouched. While this is on the theme picker is turned off; a custom accent colour still overrides everything.");
             T(_audioDeviceStatus, "Live view of the audio devices Tempo can hear through, updated every few seconds. Captions capture 'what the PC is playing' via the speaker shown here; with no speaker, switch \"Listen to\" to Microphone. When a speaker appears or comes back (headphones plugged in, Bluetooth reconnects), running captions recover automatically.");
             T(_captionSourceTagCheck, "Show which app the audio comes from at the start of the caption bar — '♪ YouTube ·', '♪ Roblox ·', and the app name on the '♪ Music or sounds' note. Untick to hide the tag and keep only the words and speaker labels. Takes effect from the next caption line.");
-            T(_captionGpuCheck, "Run the speech engine on your graphics card (Vulkan — works on AMD, Intel and NVIDIA) instead of the processor. Experimental: on some PCs it's much faster, on others slower than CPU. Takes effect the next time Tempo starts. If the GPU engine can't keep up with live audio, Tempo switches this off again by itself and returns to the proven CPU engine. AMD processors always use the normal CPU engine — nothing special needed.");
+            T(_captionGpuCheck, "Run the speech engine on your graphics card (Vulkan — works on AMD, Intel and NVIDIA) instead of the processor. Experimental: on some PCs it's much faster, on others slower than CPU. Takes effect the next time Tempo starts. If the GPU can't keep up with live audio (a game using the card, say), Tempo uses Windows Live Captions for the rest of that session and tries the GPU again the next time it starts — this option stays on. AMD processors always use the normal CPU engine — nothing special needed.");
             T(_captionLyricsCheck, "Off (the default): Tempo's voice detection skips stretches of sound with no voice in them — music, a fan, gunfire, a game's menus — before the speech engine hears them, because that is where it invents words. Singing can count as 'no voice', so song lyrics may be skipped too. On: everything with sound is transcribed, lyrics included, and instrumental music can bring stray invented words back. Applies at once.");
             T(_speakerDeviceCombo, "Which SPEAKER captions listen through. Tempo hears 'what the PC plays' via this device — with several outputs (headset + monitor speakers), pick the one your videos/games actually play on. 'Default' follows whatever Windows has as its output. Devices are listed by model; a device whose model can't be read shows as 'Unknown speaker'. Applies immediately, and if the chosen device is unplugged, captions fall back to the default and say so below.");
             T(_micDeviceCombo, "Which MICROPHONE is used when 'Listen to' is set to Microphone (or Auto falls back to it). With several mics (webcam mic + USB mic), pick the good one. 'Default' follows Windows. Applies immediately; an unplugged choice falls back to the default with a note below.");
@@ -256,6 +256,9 @@ namespace AutoClicker.UI
             T(_movementHzNum, "How often the movement loop runs. Everything is time-based, so this changes only how finely the camera is tracked — never how fast you move or turn.");
             T(_movementDeadzoneNum, "Gamepad stick deadzone, applied to the stick's overall push rather than to each axis separately — which is what keeps diagonals honest instead of bending them toward the cardinal directions.");
             T(_movementPadYawNum, "How fast a fully-pushed right stick turns the camera, in degrees per second. Only matters if you play with a controller; match it to the game's look speed.");
+            T(_movementTurnsCombo, "Which mouse movement counts as turning the camera. 'While the game holds the pointer' counts it only while the game hides the pointer or keeps it in one place, which is what games do while the mouse turns the camera (in Roblox: holding the right button, shift lock, first person). Moving the pointer around then turns nothing, just as in the game. 'With every mouse movement' counts all of it, for a game whose camera always follows the mouse.");
+            T(_movementFineCheck, "W/A/S/D can only make 8 directions, so the heading can be up to 22.5° off. With this on, Tempo pulses the keys to aim between them (W held and D pressed a quarter of the time goes about 11° right of forward), and the error stays under about 4°. The character zig-zags slightly to do it; in a game without movement acceleration, such as Roblox, its body visibly flicks between the two directions. Anti-jitter does not apply while this is on.");
+            T(_movementCalibrateBtn, "Measures it from one 360° turn in your game — far better than guessing.");
 
             T(_languageCombo, "Interface language. Choosing one offers to restart Tempo so it applies everywhere. English, Español, Français, Deutsch, Italiano, Português.");
             T(_alwaysOnTopCheck, "Keep the Tempo window above other windows.");
@@ -277,10 +280,19 @@ namespace AutoClicker.UI
             T(_updateFreqCombo, "How often the automatic check may run: every launch, at most once a day, or at most once a week. While Tempo stays open it checks again at the same pace (twice a day for 'Every launch'). Only applies while the box beside it is ticked.");
             T(_startupDelayNum, "When Windows launches Tempo at sign-in, wait this many extra seconds before its background update check — so it doesn't fight other startup apps for the network. Has no effect when you open Tempo yourself.");
             T(_checkUpdatesCheck, "Quietly check GitHub for a newer version when Tempo starts, and again while it stays open. A check that fails is tried again a few minutes later.");
-            T(_writeLogCheck, "Write a diagnostic log file. Turn off for extra privacy.");
-            T(_showIndicatorCheck, "Show a small click-through badge on screen while clicking, so you can tell Tempo is running even when its window is hidden.");
+            // Where the log is and how big it is now — refreshed whenever the switch changes.
+            RefreshLogTip();
+            T(_showIndicatorCheck, "Shows a small click-through badge while the clicker runs or a macro plays, so you can tell Tempo is working even when its window is hidden. Customise… sets where it sits and what it shows. The recording badge always shows.");
             T(_minimizeRecordingCheck, "When you start recording or playing a macro, minimise Tempo so it isn't in the way. Stop with the Record/Stop or Emergency-stop hotkey; the window returns automatically.");
             T(_ignoreOwnWindowCheck, "Stops a run from clicking or typing into Tempo itself if the cursor is left over this window — it would otherwise tick boxes, switch tabs and hit buttons at full speed. Your own clicks and keys always work, so Stop is never blocked. This also covers the clicker, which never minimises. Turn off only if you deliberately automate Tempo's own interface.");
+            T(_guardShortcutsCheck, "While the clicker runs or a macro plays or records, the Windows key and its shortcuts (Start, Win+D, Win+G, Win+Tab…), Ctrl+Esc and the Sticky Keys and Filter Keys pop-ups are held back, so a stray press can't pull the game out of focus mid-run. Tempo's own keybinds always work, and recordings leave these shortcuts out. Never held back: Alt+Tab and Ctrl+Shift+Esc, so there is always a way out — nor Ctrl+Alt+Del and Win+L, which Windows keeps for itself. Not while the clicker uses \"Click without moving my cursor\": you are using the PC then.");
+            // Its copies on the Clicker and Macros tabs explain the same thing, in the same words.
+            foreach (Control copy in new Control[] { _clickerGuardCheck, _macroGuardCheck })
+            {
+                if (copy == null || _guardShortcutsCheck == null) { continue; }
+                TipStyle.Set(_tips, copy, _guardShortcutsCheck.AccessibleDescription);
+                copy.AccessibleDescription = _guardShortcutsCheck.AccessibleDescription;
+            }
             // (header/footer backdrop pickers were replaced by the full-window one)
             T(_recordHistoryCheck, "When off, finished runs aren't saved to your session history and your lifetime totals stop changing — Tempo keeps no record of your activity.");
 

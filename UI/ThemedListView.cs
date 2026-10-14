@@ -205,7 +205,9 @@ namespace AutoClicker.UI
             {
                 if (index >= 0 && index < Items.Count)
                 {
-                    Items[index].EnsureVisible();
+                    // The list's own EnsureVisible, which works the same for a virtual list
+                    // (the Live Monitor) and an ordinary one.
+                    EnsureVisible(index);
                 }
             }
             catch { }

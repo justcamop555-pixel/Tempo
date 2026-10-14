@@ -10,11 +10,43 @@ using Windows.UI.Notifications.Management;
 namespace AutoClicker.Utils
 {
     /// <summary>
+    /// One notification the mirror passes on. Whoever receives it owns the three pictures.
+    /// </summary>
+    public sealed class MirroredNotification
+    {
+        public string App = "", Title = "", Body = "", Aumid = "";
+        /// <summary>The header icon: the sender's own where Windows has one (an Edge web site's), else the app's; null when none was found.</summary>
+        public Image Icon;
+        /// <summary>The picture under the text, or null.</summary>
+        public Image Picture;
+        /// <summary>The picture beside the text (a contact's photo, a site's notification icon), or null.</summary>
+        public Image Logo;
+        /// <summary>
+        /// Removes Windows' own copy from the Action Center; null when that setting is off. Run it only once
+        /// Tempo's card is really on screen (see WindowsNotificationMirror.Emit).
+        /// </summary>
+        public Action RemoveWindowsCopy;
+        /// <summary>Everything else the toast said. Never null.</summary>
+        public NotificationExtras Extras = new NotificationExtras();
+
+        /// <summary>Frees the pictures — for a receiver that shows none of them.</summary>
+        public void DisposeImages()
+        {
+            try { Icon?.Dispose(); } catch { }
+            try { if (Picture != null && !ReferenceEquals(Picture, Icon)) { Picture.Dispose(); } } catch { }
+            try { if (Logo != null && !ReferenceEquals(Logo, Icon) && !ReferenceEquals(Logo, Picture)) { Logo.Dispose(); } } catch { }
+            Icon = Picture = Logo = null;
+        }
+    }
+
+    /// <summary>
     /// Watches the Windows notification stream and re-emits each new toast from OTHER
     /// apps so Tempo can show it in its own animated style ("mirror"). Built on the OS
     /// <see cref="UserNotificationListener"/> — the same on-device API a smartwatch app
-    /// uses to relay phone notifications. Nothing leaves the PC; Tempo only reads the
-    /// title/body text of notifications the user already received.
+    /// uses to relay phone notifications. Nothing leaves the PC; Tempo only reads
+    /// notifications the user already received — their text from the listener, and the
+    /// rest of each one (pictures, the sender's name, a progress bar) from Windows' own
+    /// store on this PC (see <see cref="NotificationPayload"/>).
     ///
     /// Honest limits (surfaced in <see cref="StatusText"/> so the UI can be truthful):
     ///  • The listener needs Windows to grant "notification access". On most Win10/11
@@ -32,7 +64,7 @@ namespace AutoClicker.Utils
     /// </summary>
     public sealed class WindowsNotificationMirror : IDisposable
     {
-        private readonly Action<string, string, string, Image, string> _onNew;  // app, title, body, icon, aumid
+        private readonly Action<MirroredNotification> _onNew;
         private readonly Func<bool> _removeFromActionCenter;
 
         private UserNotificationListener _listener;
@@ -50,8 +82,8 @@ namespace AutoClicker.Utils
         private volatile int _mirroredCount;
         private volatile string _lastApp;
         private volatile int _eventHits;
-        private volatile int _suppressedDuplicates;
-        private volatile string _lastSuppressed;
+        private int _copiesRemoved;
+        private int _identicalRepeats;
 
         public bool Running => _running;
         public string StatusText => _statusText;
@@ -70,10 +102,13 @@ namespace AutoClicker.Utils
         public string LastApp => _lastApp;
         /// <summary>Times the instant NotificationChanged fast-path fired (vs. polling).</summary>
         public int EventFastPathHits => _eventHits;
-        /// <summary>Identical notifications collapsed into one card (e.g. the same site in many tabs).</summary>
-        public int SuppressedDuplicates => _suppressedDuplicates;
-        /// <summary>App whose duplicate was most recently suppressed.</summary>
-        public string LastSuppressedApp => _lastSuppressed;
+        /// <summary>Windows' own copies removed from the Action Center once Tempo's card showed.</summary>
+        public int WindowsCopiesRemoved => Volatile.Read(ref _copiesRemoved);
+        /// <summary>
+        /// Notifications identical to one passed on moments before (the same site in many tabs, a
+        /// page re-sending). Passed on all the same — the card counts them "×N" — and counted here.
+        /// </summary>
+        public int IdenticalRepeats => Volatile.Read(ref _identicalRepeats);
         /// <summary>App logos decoded and cached (each one saves a slow decode per notification).</summary>
         public int CachedIcons { get { lock (_iconCache) { return _iconCache.Count; } } }
         /// <summary>
@@ -86,8 +121,7 @@ namespace AutoClicker.Utils
         /// <summary>Measured cost of a single poll, in ms — what the interval adapts to.</summary>
         public int PollCostMs => _lastPollCostMs;
 
-        public WindowsNotificationMirror(Action<string, string, string, Image, string> onNew,
-                                         Func<bool> removeFromActionCenter)
+        public WindowsNotificationMirror(Action<MirroredNotification> onNew, Func<bool> removeFromActionCenter)
         {
             _onNew = onNew;
             _removeFromActionCenter = removeFromActionCenter ?? (() => false);
@@ -218,6 +252,9 @@ namespace AutoClicker.Utils
                 // which is what it does for an app with no package identity.
                 Logger.Info("[Notify] Windows notification mirror started — access granted by the " +
                             "global notifications-access setting (no per-app prompt: Tempo is not a Store app).");
+                // Where each app's click handler is (its Start-menu shortcut), read now in the background
+                // rather than on the first notification's way to the screen.
+                ToastActivator.Warm();
                 return true;
             }
             catch (Exception ex)
@@ -412,74 +449,120 @@ namespace AutoClicker.Utils
             if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(body)) { return; }
             if (string.IsNullOrWhiteSpace(title)) { title = appName.Length > 0 ? appName : "Notification"; }
 
-            // ── Duplicate suppression ───────────────────────────────────────────
-            // One web site open in ten browser tabs posts ONE logical notification, but
-            // each tab raises its own Windows toast — so the mirror faithfully produced
-            // ten identical cards at once and buried the screen. Windows gives each of
-            // them a different notification id, so the id-based "seen" set above can't
-            // catch it; only the CONTENT can. Suppress a repeat of the same
-            // app+title+body inside a short window, which collapses the burst to one
-            // card while still letting a genuinely repeated message through later
-            // (a second "You have a new message" a minute on is real news).
-            //
-            // Deliberately content-based rather than per-tab: the listener API never
-            // tells us which tab, window, or even which browser profile a toast came
-            // from, so there is no "active instance" to elect. Collapsing identical
-            // content is the only thing that actually works here — and it fixes the
-            // same burst from any source, not just browsers.
-            if (IsDuplicate(appName, title, body))
+            // ── Identical repeats are PASSED ON, not swallowed ──────────────────
+            // This used to drop any notification identical to one seen in the last 8 s, and
+            // every repeat restarted the 8 s — so a page that kept notifying (or a test that
+            // spammed) got ONE card, then nothing for as long as it kept going: no card, no
+            // "×N", no history row, and Windows' own copy never cleared, so Windows' toasts
+            // were all that appeared. Tempo's card system already folds a repeat into the
+            // card on screen ("×N", the dwell restarted, a "repeat" in the history), which
+            // covers the case this was written for — the same site in ten tabs — without
+            // losing anything. Only counted here, for Live debug.
+            if (IsRecentRepeat(appName, title, body)) { Interlocked.Increment(ref _identicalRepeats); }
+
+            // Everything else the toast says: its pictures, the sender Windows names (Edge registers each
+            // web site as a sender with its own name and icon), a progress bar, whether Windows keeps it up
+            // until it is dismissed. The listener hands out text only; NotificationPayload reads the rest
+            // from Windows' own store.
+            NotificationPayload.Details details = NotificationPayload.TryGet(n.Id, aumid);
+            NotificationExtras extras = details?.Extras ?? new NotificationExtras();
+            if (extras.Sender.Equals(appName, StringComparison.OrdinalIgnoreCase)) { extras.Sender = ""; }
+
+            // A browser notification's web site — in Edge's sender identity, or the bare host Chrome puts
+            // on its attribution line. It names the sender when the store had no name for it, and gives
+            // the card somewhere to go when it is clicked.
+            Uri site = NotificationExtras.SiteFromAumid(aumid);
+            if (site == null && AppActivator.LooksLikeBrowser(appName, aumid)) { site = NotificationExtras.SiteFromHost(extras.Attribution); }
+            if (site != null)
             {
-                _suppressedDuplicates++;
-                _lastSuppressed = appName;
-                return;
+                extras.SiteUrl = site.GetLeftPart(UriPartial.Authority) + "/";
+                if (extras.Sender.Length == 0 && extras.Attribution.Length == 0) { extras.Sender = NotificationExtras.HostLabel(site); }
             }
 
-            // Detect the source app's ICON for the top-left, exactly like the real
-            // Windows 11 toast. We deliberately DON'T turn the app's square logo into a
-            // big "picture" below the text — Windows 11 doesn't, and a blown-up icon in
-            // a box looked wrong. A real inline content image (e.g. a screenshot
-            // thumbnail) isn't exposed by the listener API, so there's no hero to show.
-            Image icon = GetAppIconCached(n, aumid, appName);
+            // The app's own click handler, which Windows starts when one of its toasts is clicked (every Edge site:
+            // Edge's notification_helper; Discord, Chrome, Teams…). Looked up here, off the UI thread, so a click on
+            // the card can hand it the toast's launch arguments exactly as Windows would — see ToastActivator.
+            extras.Activator = ToastActivator.Find(aumid);
 
-            // Remove the Windows copy FIRST, with no delay, so the mirrored card
-            // replaces it rather than sitting alongside it. (This clears the Action
-            // Center entry immediately; on the Windows builds where RemoveNotification
-            // also retracts the banner, calling it this early gives the best chance of
-            // the pop-up never lingering. The banner itself can only be reliably hidden
-            // by Windows "Do not disturb" — see the setting's guidance.)
-            if (_removeFromActionCenter())
-            {
-                try { _listener.RemoveNotification(n.Id); } catch { }
-            }
+            // The ICON for the top-left, exactly as Windows' own pop-up wears it: the sender's own (a web
+            // site's) where the store has one, else the app's — looked up only when it is needed. The app's
+            // square logo is deliberately NOT blown up into a picture below the text: Windows doesn't.
+            Image icon = details?.SenderIcon;
+            if (icon == null) { icon = GetAppIconCached(n, aumid, appName); }
+            Image picture = details?.Picture;   // under the text: a web page's image, a screenshot
+            Image logo = details?.Logo;         // beside the text: a contact's photo, a site's notification icon
 
             // No consumer (or we were stopped mid-emit) — don't count it, and don't leak
-            // the icon bitmap we just decoded.
+            // the bitmaps we just decoded.
             if (_onNew == null || !_running)
             {
                 try { icon?.Dispose(); } catch { }
+                try { picture?.Dispose(); } catch { }
+                try { logo?.Dispose(); } catch { }
                 return;
+            }
+
+            // Windows' own copy is removed only ONCE TEMPO'S CARD IS ON SCREEN — the consumer
+            // runs this action then. It used to be removed here, before anything had decided
+            // whether a card would appear at all: a muted app, a card held back during a
+            // fullscreen game, or one dropped from a full queue then existed NOWHERE but in
+            // Tempo's history, gone from the Action Center as well. Removing it does NOT take
+            // Windows' BANNER off the screen — measured 2026-10-12 on Windows 11 build 26300
+            // (scratchpad/bannerprobe): the banner stayed its full time after the removal. Only
+            // Windows' "Do not disturb", or turning off an app's "Show notification banners",
+            // hides it; the mirror still receives the notification either way.
+            Action removeWindowsCopy = null;
+            if (_removeFromActionCenter())
+            {
+                uint id = n.Id;
+                int done = 0;
+                removeWindowsCopy = () =>
+                {
+                    if (Interlocked.Exchange(ref done, 1) == 1) { return; }
+                    RemoveWindowsCopy(id);
+                };
             }
 
             _mirroredCount++;
             _lastApp = appName;
-            try { _onNew(appName, title, body, icon, aumid); }
-            catch { try { icon?.Dispose(); } catch { } }
+            var note = new MirroredNotification
+            {
+                App = appName, Title = title, Body = body, Aumid = aumid,
+                Icon = icon, Picture = picture, Logo = logo,
+                RemoveWindowsCopy = removeWindowsCopy, Extras = extras,
+            };
+            try { _onNew(note); }
+            catch { note.DisposeImages(); }
         }
 
-        // Recent notification CONTENT, for duplicate suppression. Small and bounded —
-        // this holds at most DedupeMax entries and is pruned on every check, so it can't
-        // grow over a long session.
+        /// <summary>
+        /// Removes one notification from the Action Center — off the caller's thread: it is a
+        /// blocking cross-process call (a poll costs ~60 ms here), and the caller is the card
+        /// being put on screen.
+        /// </summary>
+        private void RemoveWindowsCopy(uint id)
+        {
+            UserNotificationListener listener = _listener;
+            if (listener == null || _disposed) { return; }
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    listener.RemoveNotification(id);
+                    Interlocked.Increment(ref _copiesRemoved);
+                }
+                catch (Exception ex) { Logger.Swallow("Notify.RemoveCopy", ex); }
+            });
+        }
+
+        // Recent notification CONTENT, to COUNT identical repeats for Live debug (never to drop
+        // one). Small and bounded: at most DedupeMax entries, pruned on every check.
         private readonly Dictionary<string, long> _recentContent = new Dictionary<string, long>();
-        private const int DedupeWindowMs = 8000;   // a burst from N tabs lands well inside this
+        private const int DedupeWindowMs = 8000;
         private const int DedupeMax = 64;
 
-        /// <summary>
-        /// True when this exact app+title+body was already mirrored moments ago — i.e.
-        /// the same logical notification arriving once per open tab. Also refreshes the
-        /// timestamp, so a continuing burst keeps collapsing instead of leaking a second
-        /// card as the window rolls over.
-        /// </summary>
-        private bool IsDuplicate(string appName, string title, string body)
+        /// <summary>True when this exact app+title+body was passed on moments ago.</summary>
+        private bool IsRecentRepeat(string appName, string title, string body)
         {
             string key = (appName ?? "") + "" + (title ?? "") + "" + (body ?? "");
             long now = Environment.TickCount64;

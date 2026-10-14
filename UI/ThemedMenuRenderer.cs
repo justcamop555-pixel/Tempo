@@ -25,7 +25,11 @@ namespace AutoClicker.UI
         /// <summary>Restart Tempo: the power ring and stem with an arrow where the ring opens — off, and straight back on.</summary>
         Restart,
         /// <summary>A submenu choice: a filled dot beside the one that is current, nothing beside the rest.</summary>
-        Dot
+        Dot,
+        /// <summary>The running badges (Overlays): a pill with its status dot, like the badge itself.</summary>
+        Badge,
+        /// <summary>Windows' shortcuts held back during a run: a keyboard (Keybinds' colour).</summary>
+        Keys
     }
 
     /// <summary>
@@ -670,6 +674,8 @@ namespace AutoClicker.UI
                 case TrayGlyph.Power: c = _theme.Danger; break;
                 case TrayGlyph.Restart: c = _theme.Warning; break;
                 case TrayGlyph.Profile: c = SectionColors.For(Section.Profiles, _theme); break;
+                case TrayGlyph.Badge: c = SectionColors.For(Section.Clicker, _theme); break;
+                case TrayGlyph.Keys: c = SectionColors.For(Section.Keybinds, _theme); break;
                 case TrayGlyph.Accounts:
                 case TrayGlyph.Lock: c = SectionColors.For(Section.Accounts, _theme); break;
                 case TrayGlyph.Captions:
@@ -959,6 +965,37 @@ namespace AutoClicker.UI
                             float d = w * 0.38f;
                             g.FillEllipse(fill, x + (w - d) / 2f, y + (h - d) / 2f, d, d);
                         }
+                        break;
+                    }
+                    case TrayGlyph.Badge:
+                    {
+                        // The running badge: a rounded pill with its status dot at the left.
+                        var r = new RectangleF(x + 1f, y + h * 0.28f, w - 2f, h * 0.44f);
+                        using (var rp = RoundedF(r, r.Height / 2f))
+                        {
+                            g.DrawPath(pen, rp);
+                        }
+                        float d = r.Height * 0.46f;
+                        g.FillEllipse(fill, r.Left + r.Height * 0.3f, r.Top + (r.Height - d) / 2f, d, d);
+                        break;
+                    }
+                    case TrayGlyph.Keys:
+                    {
+                        // A keyboard: its outline, two rows of keys and the space bar.
+                        var r = new RectangleF(x + 1f, y + h * 0.24f, w - 2f, h * 0.54f);
+                        using (var rp = RoundedF(r, 2f)) { g.DrawPath(pen, rp); }
+                        float k = w * 0.10f;
+                        for (int row = 0; row < 2; row++)
+                        {
+                            float ky = r.Top + r.Height * (row == 0 ? 0.22f : 0.48f);
+                            for (int i = 0; i < 4; i++)
+                            {
+                                float kx = r.Left + r.Width * (0.16f + i * 0.21f);
+                                g.FillRectangle(fill, kx, ky, k, k * 0.9f);
+                            }
+                        }
+                        g.DrawLine(pen, r.Left + r.Width * 0.30f, r.Bottom - r.Height * 0.20f,
+                                        r.Right - r.Width * 0.30f, r.Bottom - r.Height * 0.20f);
                         break;
                     }
                 }

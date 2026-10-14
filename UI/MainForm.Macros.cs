@@ -140,10 +140,41 @@ namespace AutoClicker.UI
         private CheckBox _cursorTrailCheck;
         private LiveStepListView _liveStepList;
         private Label _liveHeaderLabel;
+        private CheckBox _liveEveryStepCheck;
         private Macro _appendTarget;
         private Macro _liveMonitorMacro;
-        private long _liveCumulativeMs;
         private bool _liveRecording;
+
+        // The macro being PLAYED. The Live Monitor showed whichever macro was last selected, and the
+        // list is not locked during playback: clicking another macro mid-run put ITS steps under the
+        // playback highlight, and the "finished" notice then named the macro clicked, not the one run.
+        private Macro _playingMacro;
+
+        // ── Live Monitor model ─────────────────────────────────────────────────
+        // The list is virtual: a row is made when it is drawn, from these. It used to make a
+        // ListViewItem per step, so it stopped at the first 2,000 steps of a macro (and kept the last
+        // 1,000 of a recording), and past step 2,000 the playback highlight simply stopped following.
+        // Every step is listed now, at any length, and filling it costs no window work.
+        //
+        // In the compact view (the default; "Show every step" turns it off) a run of mouse travel —
+        // the moves and the short waits between them, which is most of any recording — is ONE row
+        // ("Path · 48 moves → (1067, 446) · 0.86s"), and so is a run of camera turns; a short wait
+        // between two other steps folds into the Time column. A wait of a quarter second or more
+        // keeps a row of its own: that is a pause somebody meant.
+        private struct LiveRow
+        {
+            public int First, Last;     // the steps the row covers
+            public long AtMs, EndMs;    // when its first step starts, and when its last one is done
+            public int Moves;           // the moves (or camera turns) in a travel row
+            public long SumX, SumY;     // a camera row's whole turn
+        }
+
+        private readonly List<LiveRow> _liveRows = new List<LiveRow>();
+        private IList<MacroAction> _liveActions = Array.Empty<MacroAction>();
+        private readonly List<MacroAction> _liveTake = new List<MacroAction>();
+        private long _liveClockMs;          // the time once every step fed so far is done
+        private bool _liveTravelOpen;       // the last row is a travel row still taking moves
+        private const int LiveLongWaitMs = 250;
 
         // Playback progress + per-macro default bookkeeping.
         private int _playbackTotalSteps;
@@ -402,7 +433,8 @@ namespace AutoClicker.UI
             recGroup.Controls.Add(_recordStatusLabel);
 
             // ── Playback group ─────────────────────────────────────────────────
-            var playGroup = UiFactory.Group(Utils.Localization.T("Playback"), 444, 314, 268, 334, CardIcon.Play);
+            // 362, not 334: a row for holding back Windows' shortcuts while a macro plays or records.
+            var playGroup = UiFactory.Group(Utils.Localization.T("Playback"), 444, 314, 268, 362, CardIcon.Play);
 
             playGroup.Controls.Add(UiFactory.Caption("Loops (0 = infinite)", 16, 26));
             _macroLoopNum = UiFactory.Numeric(170, 22, 86, 0, 1000000, 1);
@@ -459,6 +491,11 @@ namespace AutoClicker.UI
             _macroPreserveHoldsCheck.CheckedChanged += OnMacroPreserveHoldsChanged;
             playGroup.Controls.Add(_macroPreserveHoldsCheck);
 
+            // Settings ▸ Behaviour's "Hold back Windows shortcuts…", here where a macro is played and
+            // recorded (the same setting: SetGuardWindowsShortcuts).
+            _macroGuardCheck = MakeGuardShortcutsCheck(12, 326, "Macros tab");
+            playGroup.Controls.Add(_macroGuardCheck);
+
             _stopPlayBtn = UiFactory.Button("■ Stop", 178, 176, 74, 38);
             _stopPlayBtn.BackColor = _theme.Danger;
             _stopPlayBtn.ForeColor = Theme.ReadableOn(_theme.Danger);
@@ -489,13 +526,24 @@ namespace AutoClicker.UI
             // selected macro at rest, and highlights the current step during
             // playback (auto-scrolling to follow along).
             // 656, not 634: the Record card grew a row (the camera option) and pushed the
-            // Playback card down by 22 px.
-            var liveGroup = UiFactory.Group(Utils.Localization.T("Live Monitor"), 12, 656, 700, 240, CardIcon.Wave);
+            // Playback card down by 22 px. 684: the Playback card grew a row of its own (28 px).
+            var liveGroup = UiFactory.Group(Utils.Localization.T("Live Monitor"), 12, 684, 700, 240, CardIcon.Wave);
+
+            // Compact rows by default; this shows one row per step instead. Right-aligned, so the
+            // header keeps whatever width the switch leaves in the language shown.
+            _liveEveryStepCheck = UiFactory.Check("Show every step", 0, 24, _settings != null && _settings.LiveMonitorEveryStep);
+            // In the window's layout units (LayoutSize): an auto-sized box measures itself in screen
+            // pixels while the window is built, 1.5× too wide on a 150% screen.
+            _liveEveryStepCheck.Left = Math.Max(16, 684 - LayoutSize(_liveEveryStepCheck).Width);
+            _liveEveryStepCheck.CheckedChanged += OnLiveEveryStepChanged;
+            liveGroup.Controls.Add(_liveEveryStepCheck);
 
             _liveHeaderLabel = UiFactory.Label("Select, record, or play a macro to see steps here.", 16, 26, FontStyle.Italic, 9f);
             _liveHeaderLabel.AutoSize = false;
-            _liveHeaderLabel.Width = 668;
+            _liveHeaderLabel.Width = Math.Max(120, _liveEveryStepCheck.Left - 16 - 12);
             _liveHeaderLabel.Height = 20;
+            _liveHeaderLabel.AutoEllipsis = true;
+            _liveHeaderLabel.UseMnemonic = false;   // a macro name may hold an "&"
             _liveHeaderLabel.ForeColor = _theme.TextMuted;
             liveGroup.Controls.Add(_liveHeaderLabel);
 
@@ -504,7 +552,8 @@ namespace AutoClicker.UI
                 Left = 16,
                 Top = 50,
                 Width = 668,
-                Height = 186
+                Height = 186,
+                RowSource = MakeLiveItem
             };
             _liveStepList.Columns.Add("#", 54);
             _liveStepList.Columns.Add(Utils.Localization.T("Time"), 84);
@@ -620,12 +669,13 @@ namespace AutoClicker.UI
                 _playbackCurrentLoop = 0;
                 _macroProgressLabel.Text = Utils.Localization.T("Playing…");
                 _liveHeaderLabel.ForeColor = _theme.AccentText;
-                string playName = _liveMonitorMacro != null
-                    ? _liveMonitorMacro.Name : Utils.Localization.T("macro");
-                string playMeta = _liveMonitorMacro != null
+                Macro played = _playingMacro ?? _liveMonitorMacro;
+                string playName = played != null
+                    ? played.Name : Utils.Localization.T("macro");
+                string playMeta = played != null
                     ? Utils.Localization.F("  \u2014  {0} steps, \u2248{1}",
-                        _liveMonitorMacro.StepCount,
-                        FormatLiveTime(_liveMonitorMacro.EstimatedDurationMs))
+                        played.StepCount,
+                        FormatLiveTime(played.EstimatedDurationMs))
                     : "";
                 _liveHeaderLabel.Text = Utils.Localization.F("\u25B6 Playing {0}", playName) + playMeta;
             });
@@ -686,10 +736,15 @@ namespace AutoClicker.UI
                     ? Utils.Localization.T("Ready. The auto-clicker was stopped for this macro.")
                     : Utils.Localization.T("Ready.");
                 _clickerYieldedToMacro = false;
+                Macro played = _playingMacro;
+                _playingMacro = null;
                 ClearLiveHighlight();
                 HideMacroIndicator();
                 _liveHeaderLabel.ForeColor = _theme.TextMuted;
-                _liveHeaderLabel.Text = Utils.Localization.T("Finished \u2014 select a macro to view its steps.");
+                // Back to the monitor's resting rule, "the selected macro" \u2014 with the run counted in
+                // its header. It used to say "Finished \u2014 select a macro to view its steps" over the
+                // steps of the macro it had just played.
+                PopulateLiveMonitor(SelectedMacro() ?? played);
                 UpdateMacroEstTime();
                 RefreshBusyLock();
 
@@ -702,11 +757,13 @@ namespace AutoClicker.UI
                     try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
                     try
                     {
-                        string nm = _liveMonitorMacro != null && !string.IsNullOrEmpty(_liveMonitorMacro.Name)
-                            ? _liveMonitorMacro.Name : "Macro";
+                        string nm = played != null && !string.IsNullOrEmpty(played.Name)
+                            ? played.Name : Utils.Localization.T("macro");
+                        // Translated: it was English in every language.
                         TempoNotify(2000, "Tempo",
-                            "Macro '" + nm + "' finished (" + _playbackTotalLoops +
-                            (_playbackTotalLoops == 1 ? " loop)." : " loops)."),
+                            _playbackTotalLoops == 1
+                                ? Utils.Localization.F("Macro '{0}' finished (1 loop).", nm)
+                                : Utils.Localization.F("Macro '{0}' finished ({1} loops).", nm, _playbackTotalLoops),
                             ToolTipIcon.Info);
                     }
                     catch { }
@@ -803,22 +860,15 @@ namespace AutoClicker.UI
             bool recording = _recorder != null && _recorder.IsRecording;
             bool live = recording && _liveRecording && _liveStepList != null;
             int count = 0;
-            ListViewItem lastRow = null;
-            if (live) { _liveStepList.BeginUpdate(); }
-            try
+            int rowsBefore = _liveRows.Count;
+            while (_recordFeed.TryDequeue(out MacroAction action))
             {
-                while (_recordFeed.TryDequeue(out MacroAction action))
+                count++;
+                if (live)
                 {
-                    count++;
-                    if (live)
-                    {
-                        lastRow = AddLiveRow(action);
-                    }
+                    _liveTake.Add(action);
+                    FeedLive(_liveTake.Count - 1);
                 }
-            }
-            finally
-            {
-                if (live) { _liveStepList.EndUpdate(); }
             }
 
             if (!recording || count == 0)
@@ -833,64 +883,209 @@ namespace AutoClicker.UI
 
             if (live)
             {
-                // Scrolled to once for the whole batch, not once per step.
-                try { lastRow?.EnsureVisible(); } catch { }
+                // Told once for the whole batch, and scrolled to the newest row once.
+                ShowLiveRows(rowsBefore, follow: true);
                 UpdateLiveRecordingHeader();
             }
         }
 
         // ── Live Monitor ───────────────────────────────────────────────────────
 
-        /// <summary>Fills the live monitor with a macro's steps (used at rest / on selection / on play).</summary>
+        /// <summary>
+        /// Shows a macro's steps (at rest, on selection, on play); null shows nothing. Every step,
+        /// however many: the rows are made as they are drawn (see the Live Monitor model).
+        /// </summary>
         private void PopulateLiveMonitor(Macro macro)
         {
             _liveMonitorMacro = macro;
-            _liveStepList.BeginUpdate();
-            _liveStepList.Items.Clear();
-
-            // Huge macros (a long recording can run to hundreds of thousands of
-            // steps) would freeze the UI if every row were created. The first
-            // window is enough to inspect — and playback highlighting stays
-            // index-aligned with it; beyond the window it simply stops following.
-            const int LivePopulateMaxRows = 2000;
-            bool truncated = macro != null && macro.Actions.Count > LivePopulateMaxRows;
-            int rows = macro == null ? 0 : Math.Min(macro.Actions.Count, LivePopulateMaxRows);
-
-            long cumulative = 0;
-            if (macro != null)
-            {
-                for (int i = 0; i < rows; i++)
-                {
-                    MacroAction a = macro.Actions[i];
-                    var item = new ListViewItem((i + 1).ToString());
-                    item.SubItems.Add(FormatLiveTime(cumulative));
-                    item.SubItems.Add(Models.MacroAction.FriendlyType(a.Type));
-                    item.SubItems.Add(LiveDetail(a));
-                    item.Tag = a.Type;      // exact colour, no name matching needed
-                    _liveStepList.Items.Add(item);
-
-                    if (a.Type == MacroActionType.Delay)
-                    {
-                        cumulative += a.DelayMilliseconds;
-                    }
-                }
-            }
-
-            _liveStepList.EndUpdate();
+            if (!_liveRecording) { _liveTake.Clear(); }    // a finished take's steps, let go
+            RebuildLiveRows(macro?.Actions);
             // After the rows exist, so the column fit accounts for the scrollbar.
             _liveStepList.RefreshLayout();
+            _liveHeaderLabel.Text = macro != null
+                ? LiveMonitorHeader(macro)
+                : Utils.Localization.T("Select, record, or play a macro to see steps here.");
+        }
 
-            if (macro != null)
+        /// <summary>
+        /// The Live Monitor's line about a macro at rest. One builder: the header after playback
+        /// used to drop the notes, and the notes went in whole, line breaks and all, into a label
+        /// one line high.
+        /// </summary>
+        private static string LiveMonitorHeader(Macro m)
+        {
+            string notes = (m.Notes ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+            if (notes.Length > 80) { notes = notes.Substring(0, 79).TrimEnd() + "…"; }
+            return Utils.Localization.F("{0}  —  {1:N0} steps, ≈{2}",
+                       m.Name, m.StepCount, FormatLiveTime(m.EstimatedDurationMs)) +
+                   (m.TimesPlayed > 0 ? Utils.Localization.F("  •  played {0}×", m.TimesPlayed) : "") +
+                   LastPlayedText(m) +
+                   (notes.Length > 0 ? "   “" + notes + "”" : "");
+        }
+
+        /// <summary>Rebuilds the rows for <paramref name="actions"/> (a macro's, or the take so far).</summary>
+        private void RebuildLiveRows(IList<MacroAction> actions)
+        {
+            _liveActions = actions ?? (IList<MacroAction>)Array.Empty<MacroAction>();
+            _liveRows.Clear();
+            _liveClockMs = 0;
+            _liveTravelOpen = false;
+            for (int i = 0; i < _liveActions.Count; i++)
             {
-                _liveHeaderLabel.Text =
-                    Utils.Localization.F("{0}  —  {1:N0} steps, ≈{2}",
-                        macro.Name, macro.StepCount, FormatLiveTime(macro.EstimatedDurationMs)) +
-                    (truncated
-                        ? Utils.Localization.F("  (showing first {0:N0})", LivePopulateMaxRows) : "") +
-                    (macro.TimesPlayed > 0
-                        ? Utils.Localization.F("  •  played {0}×", macro.TimesPlayed) : "") +
-                    LastPlayedText(macro) +
-                    (!string.IsNullOrWhiteSpace(macro.Notes) ? $"   “{macro.Notes}”" : "");
+                FeedLive(i);
+            }
+            try
+            {
+                _liveStepList.HighlightIndex = -1;
+                _liveStepList.SelectedIndices.Clear();
+            }
+            catch { }
+            ShowLiveRows(0, follow: false);
+        }
+
+        /// <summary>
+        /// Tells the list how many rows there are. The row that was last before (<paramref name="rowsBefore"/>
+        /// − 1) is redrawn too: a travel row keeps taking moves, so it may say something new.
+        /// </summary>
+        private void ShowLiveRows(int rowsBefore, bool follow)
+        {
+            try
+            {
+                int n = _liveRows.Count;
+                if (_liveStepList.VirtualListSize != n) { _liveStepList.VirtualListSize = n; }
+                if (rowsBefore > 0 && rowsBefore <= n) { _liveStepList.RedrawItems(rowsBefore - 1, rowsBefore - 1, true); }
+                if (follow && n > 0) { _liveStepList.EnsureVisible(n - 1); }
+                _liveStepList.Invalidate();
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Adds step <paramref name="i"/> of <see cref="_liveActions"/> to the rows: a row of its own,
+        /// a move (or camera turn) or short wait joining the travel row before it, or — in the compact
+        /// view — a short wait between other steps, folded into the Time column.
+        /// </summary>
+        private void FeedLive(int i)
+        {
+            MacroAction a = _liveActions[i];
+            long at = _liveClockMs;
+            if (a.Type == MacroActionType.Delay) { _liveClockMs += Math.Max(0, a.DelayMilliseconds); }
+
+            if (_settings != null && _settings.LiveMonitorEveryStep)
+            {
+                _liveRows.Add(new LiveRow { First = i, Last = i, AtMs = at, EndMs = _liveClockMs });
+                return;
+            }
+
+            bool travel = a.Type == MacroActionType.MouseMove || a.Type == MacroActionType.MouseMoveRelative;
+            bool shortWait = a.Type == MacroActionType.Delay && a.DelayMilliseconds < LiveLongWaitMs;
+            if (_liveTravelOpen && _liveRows.Count > 0)
+            {
+                LiveRow last = _liveRows[_liveRows.Count - 1];
+                MacroActionType kind = _liveActions[last.First].Type;
+                if (shortWait || a.Type == kind)
+                {
+                    last.Last = i;
+                    last.EndMs = _liveClockMs;
+                    if (a.Type == kind)
+                    {
+                        last.Moves++;
+                        if (kind == MacroActionType.MouseMoveRelative) { last.SumX += a.X; last.SumY += a.Y; }
+                    }
+                    _liveRows[_liveRows.Count - 1] = last;
+                    return;
+                }
+            }
+            _liveTravelOpen = false;
+            if (shortWait) { return; }
+
+            var row = new LiveRow { First = i, Last = i, AtMs = at, EndMs = _liveClockMs };
+            if (travel)
+            {
+                row.Moves = 1;
+                if (a.Type == MacroActionType.MouseMoveRelative) { row.SumX = a.X; row.SumY = a.Y; }
+                _liveTravelOpen = true;
+            }
+            _liveRows.Add(row);
+        }
+
+        /// <summary>The row holding step <paramref name="step"/>, or -1. Rows are in step order.</summary>
+        private int LiveRowOf(int step)
+        {
+            int lo = 0, hi = _liveRows.Count - 1, found = -1;
+            while (lo <= hi)
+            {
+                int mid = (lo + hi) >> 1;
+                if (_liveRows[mid].First <= step) { found = mid; lo = mid + 1; }
+                else { hi = mid - 1; }
+            }
+            return found;
+        }
+
+        /// <summary>Makes row <paramref name="index"/> for the virtual list.</summary>
+        private ListViewItem MakeLiveItem(int index)
+        {
+            if (index < 0 || index >= _liveRows.Count) { return null; }
+            LiveRow r = _liveRows[index];
+            if (r.First < 0 || r.First >= _liveActions.Count) { return null; }
+            MacroAction first = _liveActions[r.First];
+            bool grouped = r.Moves >= 2;
+            string action, detail;
+            if (grouped && first.Type == MacroActionType.MouseMoveRelative)
+            {
+                action = Models.MacroAction.FriendlyType(MacroActionType.MouseMoveRelative);
+                detail = Utils.Localization.F("{0} turns · {1} · {2}", r.Moves,
+                    MacroAction.RelativeText((int)Math.Max(int.MinValue, Math.Min(int.MaxValue, r.SumX)),
+                                             (int)Math.Max(int.MinValue, Math.Min(int.MaxValue, r.SumY))),
+                    FormatLiveTime(r.EndMs - r.AtMs));
+            }
+            else if (grouped)
+            {
+                MacroAction end = first;
+                for (int k = Math.Min(r.Last, _liveActions.Count - 1); k >= r.First; k--)
+                {
+                    if (_liveActions[k].Type == MacroActionType.MouseMove) { end = _liveActions[k]; break; }
+                }
+                action = Utils.Localization.T("Path");
+                detail = Utils.Localization.F("{0} moves → ({1}, {2}) · {3}", r.Moves, end.X, end.Y,
+                    FormatLiveTime(r.EndMs - r.AtMs));
+            }
+            else
+            {
+                action = Models.MacroAction.FriendlyType(first.Type);
+                detail = LiveDetail(first);
+            }
+            var item = new ListViewItem(new[] { (r.First + 1).ToString(), FormatLiveTime(r.AtMs), action, detail })
+            {
+                Tag = first.Type      // exact colour, no name matching needed
+            };
+            if (r.Last > r.First)
+            {
+                item.ToolTipText = Utils.Localization.F("Steps {0}–{1}", r.First + 1, r.Last + 1);
+            }
+            return item;
+        }
+
+        /// <summary>"Show every step" switched: the same steps, regrouped, with the playhead kept.</summary>
+        private void OnLiveEveryStepChanged(object sender, EventArgs e)
+        {
+            if (_settings == null || _liveEveryStepCheck == null) { return; }
+            if (_settings.LiveMonitorEveryStep == _liveEveryStepCheck.Checked) { return; }
+            _settings.LiveMonitorEveryStep = _liveEveryStepCheck.Checked;
+            try { SettingsManager.Save(_settings); } catch { }
+
+            int hl = _liveStepList.HighlightIndex;
+            int step = hl >= 0 && hl < _liveRows.Count ? _liveRows[hl].First : -1;
+            RebuildLiveRows(_liveActions);
+            _liveStepList.RefreshLayout();
+            if (step >= 0)
+            {
+                int row = LiveRowOf(step);
+                if (row >= 0) { _liveStepList.MoveHighlightTo(row); }
+            }
+            else if (_liveRecording && _liveRows.Count > 0)
+            {
+                try { _liveStepList.EnsureVisible(_liveRows.Count - 1); } catch { }
             }
         }
 
@@ -904,53 +1099,20 @@ namespace AutoClicker.UI
                 m.LastPlayedUtc.Value.ToLocalTime().ToString("d MMM HH:mm"));
         }
 
-        /// <summary>
-        /// The live list keeps only the most recent rows during recording; the
-        /// recording itself is unaffected. Without a cap, a long session (hours —
-        /// the recorder happily runs for 24h+) would pour millions of ListView
-        /// rows into the UI and exhaust memory long before the engine cared.
-        /// </summary>
-        private const int LiveRecordingMaxRows = 1000;
-        private long _liveStepTotal;
-
-        /// <summary>
-        /// Adds one captured step to the live monitor. The caller scrolls to the newest row
-        /// and relabels the header once per batch (see DrainRecordFeed).
-        /// </summary>
-        private ListViewItem AddLiveRow(MacroAction action)
-        {
-            _liveStepTotal++;
-            var item = new ListViewItem(_liveStepTotal.ToString());
-            item.SubItems.Add(FormatLiveTime(_liveCumulativeMs));
-            item.SubItems.Add(Models.MacroAction.FriendlyType(action.Type));
-            item.SubItems.Add(LiveDetail(action));
-            item.Tag = action.Type;
-
-            if (_liveStepList.Items.Count >= LiveRecordingMaxRows)
-            {
-                _liveStepList.Items.RemoveAt(0);
-            }
-            _liveStepList.Items.Add(item);
-
-            if (action.Type == MacroActionType.Delay)
-            {
-                _liveCumulativeMs += action.DelayMilliseconds;
-            }
-            return item;
-        }
-
+        /// <summary>The header while recording: every step captured is listed, with no cap.</summary>
         private void UpdateLiveRecordingHeader()
         {
-            _liveHeaderLabel.Text = _liveStepTotal > LiveRecordingMaxRows
-                ? Utils.Localization.F("● Recording…  {0:N0} steps captured (showing last {1:N0})",
-                    _liveStepTotal, LiveRecordingMaxRows)
-                : Utils.Localization.F("● Recording…  {0} steps captured", _liveStepTotal);
+            _liveHeaderLabel.Text = Utils.Localization.F("● Recording…  {0} steps captured", _liveTake.Count);
         }
 
-        /// <summary>Highlights the step currently being played and keeps it in view.</summary>
+        /// <summary>
+        /// Highlights the row holding the step being played (in the compact view, the travel row a
+        /// move belongs to; a short wait, the row before it) and keeps it in view.
+        /// </summary>
         private void HighlightLiveStep(int index)
         {
-            if (index < 0 || index >= _liveStepList.Items.Count)
+            int row = LiveRowOf(index);
+            if (row < 0 || row >= _liveStepList.VirtualListSize || row == _liveStepList.HighlightIndex)
             {
                 return;
             }
@@ -959,25 +1121,17 @@ namespace AutoClicker.UI
             // is a single assignment. The old code stamped BackColor/ForeColor onto the
             // row and reset the previous one to the LIST's colours — which would now
             // erase that row's own action colour and its stripe.
-            _liveStepList.SelectedItems.Clear();
-            _liveStepList.Items[index].Selected = false;
-            _liveStepList.MoveHighlightTo(index);
+            try { _liveStepList.SelectedIndices.Clear(); } catch { }
+            _liveStepList.MoveHighlightTo(row);
         }
 
         private void ClearLiveHighlight()
         {
             _liveStepList.HighlightIndex = -1;
-            _liveStepList.SelectedItems.Clear();
+            try { _liveStepList.SelectedIndices.Clear(); } catch { }
             if (_liveMonitorMacro != null)
             {
-                // Same key as PopulateLiveSteps above, so both headers share one translation.
-                _liveHeaderLabel.Text =
-                    Utils.Localization.F("{0}  —  {1:N0} steps, ≈{2}",
-                        _liveMonitorMacro.Name, _liveMonitorMacro.StepCount,
-                        FormatLiveTime(_liveMonitorMacro.EstimatedDurationMs)) +
-                    (_liveMonitorMacro.TimesPlayed > 0
-                        ? Utils.Localization.F("  •  played {0}×", _liveMonitorMacro.TimesPlayed) : "") +
-                    LastPlayedText(_liveMonitorMacro);
+                _liveHeaderLabel.Text = LiveMonitorHeader(_liveMonitorMacro);
             }
         }
 
@@ -1003,9 +1157,14 @@ namespace AutoClicker.UI
                 case MacroActionType.Delay: return a.DelayMilliseconds + " ms";
                 case MacroActionType.MouseMove: return $"({a.X}, {a.Y})";
                 case MacroActionType.MouseMoveRelative: return MacroAction.RelativeText(a.X, a.Y);
-                case MacroActionType.Wheel: return "delta " + a.WheelDelta;
+                // ▲ up, ▼ down, in the wheel's own units (120 a notch). It read "delta 120", in
+                // English in every language, with no sign of the direction.
+                case MacroActionType.Wheel: return (a.WheelDelta >= 0 ? "▲ " : "▼ ") + Math.Abs(a.WheelDelta);
                 case MacroActionType.KeyDown:
                 case MacroActionType.KeyUp: return MacroAction.KeyName(a.VirtualKey);
+                // As the step editor shows it. A script step fell through to the position below and
+                // read "(0, 0)".
+                case MacroActionType.Script: return a.ScriptFileName() + "  ·  " + a.ScriptTimeoutMs + " ms";
                 default: return $"({a.X}, {a.Y})";
             }
         }
@@ -1068,9 +1227,11 @@ namespace AutoClicker.UI
                 _suppressMacroDefaults = false;
             }
 
-            // Show the selected macro's steps in the live monitor (unless we're
-            // mid-recording, in which case the monitor is busy with the feed).
-            if (!_liveRecording)
+            // Show the selected macro's steps in the live monitor — unless it is busy: with a
+            // recording's feed, or with the macro being played (the list is not locked while one
+            // plays, and its steps under the playback highlight were another macro's).
+            // PlaybackFinished shows the selection once the run ends.
+            if (!_liveRecording && !(_player != null && _player.IsPlaying))
             {
                 PopulateLiveMonitor(macro);
             }
@@ -1402,15 +1563,15 @@ namespace AutoClicker.UI
 
             // Reset the live monitor for a fresh recording feed.
             _liveRecording = true;
-            _liveCumulativeMs = 0;
-            _liveStepTotal = 0;
-            _liveStepList.Items.Clear();
+            _liveTake.Clear();
+            RebuildLiveRows(_liveTake);
             _liveHeaderLabel.Text = Utils.Localization.T("● Recording…");
 
             string name = "Macro " + DateTime.Now.ToString("HH-mm-ss");
             if (!_recorder.Start(name))
             {
                 _liveRecording = false;
+                PopulateLiveMonitor(SelectedMacro());   // not left saying "● Recording…"
                 ShowWarning("Could not start recording. The input hook failed to install.");
                 return;
             }
@@ -1521,6 +1682,9 @@ namespace AutoClicker.UI
                 }
 
                 _recordIndicator = new RecordingIndicatorForm(_theme, hint);
+                // Where it was dragged, the overlays' opacity, and movable if moving is on.
+                DropOverlayPreview(OverlayBadge.Recording);
+                WireBadge(_recordIndicator);
                 _recordIndicator.Show();
             }
             catch
@@ -1540,6 +1704,8 @@ namespace AutoClicker.UI
                 }
                 catch { /* ignore */ }
                 _recordIndicator = null;
+                // Being placed: the take ended, but there is still a badge to put somewhere.
+                if (_overlayMoveMode) { ShowOverlayPreview(OverlayBadge.Recording); }
             }
         }
 
@@ -1622,6 +1788,9 @@ namespace AutoClicker.UI
             else
             {
                 _recordStatusLabel.Text = Utils.Localization.T("Nothing was recorded.");
+                // The take's rows and "● Recording… N steps captured" stayed up, though the take
+                // (all of it trimmed away, or nothing caught) was never saved.
+                PopulateLiveMonitor(SelectedMacro());
             }
 
             _appendTarget = null;
@@ -1829,7 +1998,9 @@ namespace AutoClicker.UI
                 _playbackTotalEstimateMs = 0; // infinite loop — no estimate
             }
 
-            // Show the macro in the live monitor so playback can highlight steps.
+            // Show the macro in the live monitor so playback can highlight steps — and remember
+            // which macro is running, whatever is selected meanwhile.
+            _playingMacro = macro;
             PopulateLiveMonitor(macro);
 
             // Track run statistics.
@@ -2766,7 +2937,6 @@ namespace AutoClicker.UI
             }
         }
 
-        /// <summary>Plays the macro at the given 1-based slot (for quick-play hotkeys).</summary>
         /// <summary>The macro name assigned to a quick-play slot, or "" if unassigned.</summary>
         private string MacroSlotName(int slot)
         {
@@ -2830,8 +3000,10 @@ namespace AutoClicker.UI
                 return;
             }
 
-            int index = slot - 1;
-            if (index < 0 || index >= _macros.Macros.Count)
+            // The Nth macro as the Macros tab LISTS it — favourites first. This took the Nth of the stored
+            // order, so with a macro pinned "the 1st macro in the list" was not the one at the top of it.
+            Macro positional = MacroAtListPosition(slot - 1);
+            if (positional == null)
             {
                 // No macro picked for the slot (unassigned, slot N plays the Nth macro in the list)
                 // and fewer macros than its number: the key did nothing at all.
@@ -2840,7 +3012,27 @@ namespace AutoClicker.UI
                     ToolTipIcon.Info, always: true);
                 return;
             }
-            PlayMacro(_macros.Macros[index]);
+            PlayMacro(positional);
+        }
+
+        /// <summary>
+        /// The macro at <paramref name="index"/> in the Macros tab's list as RefreshMacroList draws it —
+        /// favourites first, then the stored order — ignoring the search box, which only hides rows for
+        /// a while. Null past the end.
+        /// </summary>
+        private Macro MacroAtListPosition(int index)
+        {
+            if (_macros == null || index < 0) { return null; }
+            int at = 0;
+            foreach (bool favourites in new[] { true, false })
+            {
+                foreach (Macro m in _macros.Macros)
+                {
+                    if (m == null || m.IsFavorite != favourites) { continue; }
+                    if (at++ == index) { return m; }
+                }
+            }
+            return null;
         }
 
         private void OnDeleteMacroClicked(object sender, EventArgs e)
@@ -2948,7 +3140,8 @@ namespace AutoClicker.UI
 
         /// <summary>
         /// What a take leaves out: the main key of every hotkey that controls macros (see
-        /// AddExclusions), and every MOUSE-button hotkey, whatever it does. The hotkey hook
+        /// AddExclusions), every key press that runs any other Tempo hotkey (MacroRecorder.FiresHotkey),
+        /// and every MOUSE-button hotkey, whatever it does. The hotkey hook
         /// swallows those presses, so the app being recorded never saw them — and replayed, a
         /// side button bound to, say, Start / Stop would be Back or Forward in whatever window
         /// is under the pointer.
@@ -2957,10 +3150,19 @@ namespace AutoClicker.UI
         {
             _recorder.ExcludedVirtualKeys.Clear();
             _recorder.ExcludedMouseHotkeys.Clear();
+            // And any key press that runs one of Tempo's other hotkeys, asked at the moment of the
+            // press — the routes and the Shift/Ctrl versions are the manager's to know.
+            _recorder.FiresHotkey = vk => _hotkeys != null && _hotkeys.FiresHotkeyNow(vk);
+            _recorder.LeaveOutWindowsShortcuts = false;
             if (_settings == null)
             {
                 return;
             }
+            _recorder.ExtraShiftCtrl = _settings.HotkeysIgnoreExtraShiftCtrl;
+            // With the guard: the shortcuts it holds back while recording never happened, so they are no
+            // part of the take either (MacroRecorder.LeaveOutWindowsShortcuts). Without it they work, and
+            // are recorded like any other keys.
+            _recorder.LeaveOutWindowsShortcuts = _settings.GuardWindowsShortcuts;
 
             foreach (HotkeyAction a in new[]
             {

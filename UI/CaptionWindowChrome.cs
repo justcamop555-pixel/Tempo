@@ -84,25 +84,66 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
-        /// WM_MOVING: snaps the proposed rectangle in place (see <see cref="Snap"/>). Holding Alt
-        /// moves freely. Returns true when it handled the message.
+        /// WM_MOVING: puts the window where the POINTER says, pulled flush to an edge, the middle or
+        /// the other caption window when it is within reach (see <see cref="Snap"/>). Holding Alt
+        /// moves freely. Returns true when it changed the rectangle.
+        ///
+        /// It used to snap the rectangle Windows proposed — and Windows builds each proposal from where
+        /// the window was put LAST (already snapped) plus the pointer's latest small step. So a window
+        /// on a magnet could never leave it: every step under the 14 px reach landed back inside it and
+        /// was snapped home. Measured with real drags (scratchpad/bardrag): from x=0 a 1200 px drag to
+        /// the left went 110, 50, 0, 0, 0 … and stayed on the main screen's left edge; the history,
+        /// sitting on that edge, did not move at all. Both caption windows had been parked there — "the
+        /// live captions won't move". The free place now comes from the pointer and
+        /// <paramref name="grab"/> (where on the window the pointer holds it), so the magnet lets go as
+        /// soon as the pointer is out of reach. The window clears <paramref name="grab"/> at
+        /// WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE; the drag's first WM_MOVING sets it.
         /// </summary>
-        internal static bool SnapMoving(ref Message m, float dpi, Rectangle? partner)
+        internal static bool SnapMoving(ref Message m, float dpi, Rectangle? partner, ref Point? grab)
         {
-            if ((Control.ModifierKeys & Keys.Alt) == Keys.Alt || m.LParam == IntPtr.Zero) { return false; }
+            if (m.LParam == IntPtr.Zero) { return false; }
             try
             {
                 RECT rc = Marshal.PtrToStructure<RECT>(m.LParam);
-                var r = new Rectangle(rc.Left, rc.Top, rc.Right - rc.Left, rc.Bottom - rc.Top);
-                Rectangle area = Screen.FromRectangle(r).WorkingArea;
-                Rectangle s = Snap(r, area, (int)Math.Round(14 * dpi), partner, (int)Math.Round(8 * dpi));
-                if (s.Location == r.Location) { return false; }
+                var proposed = new Rectangle(rc.Left, rc.Top, rc.Right - rc.Left, rc.Bottom - rc.Top);
+                Point p = Cursor.Position;
+                // The drag's first step: Windows' proposal is still the window's place plus the pointer's
+                // travel, untouched by any snap, so it says exactly where on the window the pointer is.
+                // (Taken at WM_ENTERSIZEMOVE instead, it trailed the pointer by a step: Windows starts
+                // the move loop only once the pointer has moved.)
+                if (grab == null) { grab = new Point(p.X - proposed.X, p.Y - proposed.Y); }
+                var free = new Rectangle(p.X - grab.Value.X, p.Y - grab.Value.Y, proposed.Width, proposed.Height);
+                // Alt: no magnet — but still the pointer's place, not the proposal, which may carry the
+                // offset of a snap made a moment before Alt went down.
+                Rectangle s = (Control.ModifierKeys & Keys.Alt) == Keys.Alt
+                    ? free
+                    : Snap(free, Screen.FromRectangle(free).WorkingArea, (int)Math.Round(14 * dpi), partner, (int)Math.Round(8 * dpi));
+                if (s.Location == proposed.Location) { return false; }
                 rc.Left = s.Left; rc.Top = s.Top; rc.Right = s.Right; rc.Bottom = s.Bottom;
                 Marshal.StructureToPtr(rc, m.LParam, false);
                 m.Result = (IntPtr)1;
                 return true;
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// True when all of <paramref name="r"/> lies on the monitors' working areas — on one monitor,
+        /// or across two side by side. The caption windows' keep-it-on-screen checks clamped a window
+        /// into ONE monitor every time it was shown and on every display change (a monitor waking from
+        /// sleep is one), so a bar placed across the line between two monitors later jumped onto one of
+        /// them by itself. Working areas never overlap, so summing the overlaps is exact.
+        /// </summary>
+        internal static bool FullyOnScreens(Rectangle r)
+        {
+            if (r.Width <= 0 || r.Height <= 0) { return false; }
+            long covered = 0;
+            foreach (Screen s in Screen.AllScreens)
+            {
+                Rectangle i = Rectangle.Intersect(s.WorkingArea, r);
+                if (!i.IsEmpty) { covered += (long)i.Width * i.Height; }
+            }
+            return covered >= (long)r.Width * r.Height;
         }
 
         /// <summary>

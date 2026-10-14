@@ -32,12 +32,28 @@ namespace AutoClicker.Native
         /// </summary>
         public bool Suppress { get; set; }
 
-        public KeyboardHookEventArgs(int virtualKey, bool isKeyDown, uint timeStamp = 0, bool injected = false)
+        /// <summary>
+        /// The key's hardware scan code: WHERE it is on the keyboard, whatever the layout prints on it.
+        /// The key in the W position is 0x11 on every layout, though it types Z on a French AZERTY one.
+        /// 0 for a key some program injected by its virtual key alone.
+        /// </summary>
+        public int ScanCode { get; }
+
+        /// <summary>
+        /// The scan code came with the 0xE0 prefix: an arrow or another key of the extended block, as
+        /// opposed to the number-pad key that shares its scan code.
+        /// </summary>
+        public bool Extended { get; }
+
+        public KeyboardHookEventArgs(int virtualKey, bool isKeyDown, uint timeStamp = 0, bool injected = false,
+                                     int scanCode = 0, bool extended = false)
         {
             VirtualKey = virtualKey;
             IsKeyDown = isKeyDown;
             TimeStamp = timeStamp;
             Injected = injected;
+            ScanCode = scanCode;
+            Extended = extended;
         }
     }
 
@@ -54,6 +70,13 @@ namespace AutoClicker.Native
         public event EventHandler<KeyboardHookEventArgs> KeyEvent;
 
         public bool IsRunning => _hookHandle != IntPtr.Zero;
+
+        /// <summary>
+        /// Installing and removing are Live debug lines, not log-file ones. For a hook that comes and goes
+        /// with every run (the shortcut guard): two Info lines per click run filled the log file.
+        /// A failure to install is an error either way.
+        /// </summary>
+        public bool Quiet { get; set; }
 
         public LowLevelKeyboardHook()
         {
@@ -83,7 +106,8 @@ namespace AutoClicker.Native
                 return false;
             }
 
-            Logger.Info("[Hooks] low-level keyboard hook installed.");
+            if (Quiet) { Logger.Debug("[Hooks] low-level keyboard hook installed."); }
+            else { Logger.Info("[Hooks] low-level keyboard hook installed."); }
             return true;
         }
 
@@ -93,7 +117,8 @@ namespace AutoClicker.Native
             {
                 NativeMethods.UnhookWindowsHookEx(_hookHandle);
                 _hookHandle = IntPtr.Zero;
-                Logger.Info("[Hooks] low-level keyboard hook removed.");
+                if (Quiet) { Logger.Debug("[Hooks] low-level keyboard hook removed."); }
+                else { Logger.Info("[Hooks] low-level keyboard hook removed."); }
             }
         }
 
@@ -113,7 +138,8 @@ namespace AutoClicker.Native
                     {
                         bool injected = (data.flags & NativeMethods.LLKHF_INJECTED) != 0;
                         var args = new KeyboardHookEventArgs(
-                            (int)data.vkCode, isDown, data.time, injected);
+                            (int)data.vkCode, isDown, data.time, injected,
+                            (int)data.scanCode, (data.flags & NativeMethods.LLKHF_EXTENDED) != 0);
                         // TIMED: Windows judges this callback against LowLevelHooksTimeout and
                         // removes the hook without a word when it is missed — see HookHealth.
                         long started = System.Diagnostics.Stopwatch.GetTimestamp();

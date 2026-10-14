@@ -60,9 +60,17 @@ namespace AutoClicker.Utils
         /// here would break the feature the user turned it on for. The fullscreen and
         /// presentation states carry no such ambiguity.
         /// </summary>
+        /// <summary>For the tests: a hold reason to report (non-null = hold), instead of asking Windows.</summary>
+        internal static Func<string> HoldForTest;
+
         public static bool ShouldHoldNotifications(out string reason)
         {
             reason = null;
+            if (HoldForTest != null)
+            {
+                reason = HoldForTest();
+                return reason != null;
+            }
             try
             {
                 if (SHQueryUserNotificationState(out int st) != 0)

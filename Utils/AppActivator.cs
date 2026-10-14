@@ -269,29 +269,224 @@ namespace AutoClicker.Utils
                 || s.Contains("brave") || s.Contains("vivaldi");
         }
 
+        [DllImport("user32.dll")] private static extern bool AllowSetForegroundWindow(int processId);
+        private const int ASFW_ANY = -1;
+
         /// <summary>
-        /// Builds the click action for a mirrored notification card — as close to the
-        /// Windows 11 "click to open" behaviour as Windows lets a listener app get:
-        ///  • a link found in the notification's text → open THAT (a real redirect);
-        ///  • otherwise a non-browser app → activate the app;
-        ///  • a browser with no link → null (don't open a blank tab).
-        /// Returns null when there's nowhere useful to go, so the card isn't clickable.
-        /// Only ever runs from an explicit user click, and only follows http/https links.
+        /// Lets whatever a click starts come to the front. Called on the click itself: Tempo has just received that
+        /// input, which is what entitles it to pass the right on — later (off the UI thread) it may not have it.
         /// </summary>
-        public static Action BuildNotificationClickAction(string appName, string title, string body, string aumid)
+        private static void AllowForeground()
         {
+            try { AllowSetForegroundWindow(ASFW_ANY); } catch { }
+        }
+
+        /// <summary>
+        /// Builds the click action for a mirrored notification card — what a click on Windows' own pop-up does,
+        /// as far as Windows lets another app do it:
+        ///  • the toast's own action, exactly as Windows performs it: its launch address (a web page, or an app's
+        ///    own link such as unigetui://…), or its launch arguments handed to the app's own notification handler
+        ///    (see ToastActivator) — the page a web site's notification is about, the chat a message came from;
+        ///  • failing that, a link found in the notification's text → open THAT (a real redirect);
+        ///  • a browser notification's web site → that site, in the browser that sent it;
+        ///  • otherwise a non-browser app → activate the app;
+        ///  • a browser with nothing known → null (don't open a blank tab).
+        /// Returns null when there's nowhere useful to go, so the card isn't clickable.
+        /// Only ever runs from an explicit user click.
+        /// </summary>
+        public static Action BuildNotificationClickAction(string appName, string title, string body, string aumid,
+                                                          NotificationExtras extras = null)
+        {
+            (string kind, string to) = ClickTarget(appName, title, body, aumid, extras);
+            switch (kind)
+            {
+                case "toast":
+                {
+                    // The app's own handler, with the toast's launch arguments. If it will not take them (it would
+                    // not start, or refused), the click still goes somewhere: the next best place below.
+                    Guid clsid = extras.Activator.Value;
+                    string args = extras.Launch;
+                    Action fallback = Fallback(appName, title, body, aumid, extras);
+                    string who = string.IsNullOrWhiteSpace(appName) ? "the app" : appName;
+                    return () =>
+                    {
+                        AllowForeground();
+                        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                        {
+                            if (ToastActivator.Activate(clsid, aumid, args, out string error))
+                            {
+                                Logger.Info("[Notify] card clicked → handed to " + who + "'s own notification handler, as Windows would");
+                                return;
+                            }
+                            Logger.Info("[Notify] card clicked → " + who + "'s notification handler failed (" + error + ")"
+                                        + (fallback != null ? "; going to the next best place" : ""));
+                            if (fallback != null) { RunOnSta(fallback); }
+                        });
+                    };
+                }
+                case "protocol":
+                {
+                    Action fallback = Fallback(appName, title, body, aumid, extras);
+                    return () =>
+                    {
+                        AllowForeground();
+                        if (ToastActivator.OpenProtocol(to, out string error))
+                        {
+                            Logger.Info("[Notify] card clicked → opened the notification's own " + SchemeOf(to) + ": link");
+                            return;
+                        }
+                        Logger.Info("[Notify] card clicked → its " + SchemeOf(to) + ": link did not open (" + error + ")");
+                        fallback?.Invoke();
+                    };
+                }
+                default:
+                    return Simple(kind, to, aumid);
+            }
+        }
+
+        /// <summary>Where a click goes when the toast's own action could not be taken: the rest of the order.</summary>
+        private static Action Fallback(string appName, string title, string body, string aumid, NotificationExtras extras)
+        {
+            (string kind, string to) = ClickTarget(appName, title, body, aumid, extras, skipToast: true);
+            return Simple(kind, to, aumid);
+        }
+
+        private static Action Simple(string kind, string to, string aumid)
+        {
+            switch (kind)
+            {
+                case "own link":
+                    return () => { AllowForeground(); Logger.Info("[Notify] card clicked → opening the notification's own link " + to); OpenUrl(to); };
+                case "link":
+                    return () => { AllowForeground(); Logger.Info("[Notify] card clicked → opening link " + to); OpenUrl(to); };
+                case "site":
+                    // In the browser that sent it: a site you are signed in to in Edge would open signed
+                    // out in another browser.
+                    bool edge = (aumid ?? "").StartsWith("Microsoft.MicrosoftEdge", StringComparison.OrdinalIgnoreCase);
+                    return () =>
+                    {
+                        AllowForeground();
+                        Logger.Info("[Notify] card clicked → opening the site " + to);
+                        if (!(edge && OpenUrl("microsoft-edge:" + to))) { OpenUrl(to); }
+                    };
+                case "app":
+                    return () => { AllowForeground(); Logger.Info("[Notify] card clicked → activating app " + to); LaunchByAumid(to); };
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
+        /// Runs <paramref name="action"/> on a short-lived STA thread: opening a link goes through ShellExecute, which
+        /// wants a single-threaded apartment (some handlers fail on the thread pool's MTA).
+        /// </summary>
+        private static void RunOnSta(Action action)
+        {
+            try
+            {
+                var t = new System.Threading.Thread(() =>
+                {
+                    try { action(); } catch (Exception ex) { Logger.Swallow("AppActivator.RunOnSta", ex); }
+                }) { IsBackground = true, Name = "Tempo notification click" };
+                t.SetApartmentState(System.Threading.ApartmentState.STA);
+                t.Start();
+            }
+            catch (Exception ex) { Logger.Swallow("AppActivator.RunOnSta", ex); }
+        }
+
+        private static string SchemeOf(string address)
+        {
+            int colon = (address ?? "").IndexOf(':');
+            return colon > 0 ? address.Substring(0, colon) : "?";
+        }
+
+        /// <summary>
+        /// What pressing one of the toast's buttons on Tempo's card does — what pressing it on Windows' own pop-up
+        /// does: the app's own handler gets the button's arguments, or the button's address opens. Null when Tempo
+        /// cannot press it the way Windows would (no handler it can reach), and then the card leaves it out.
+        /// </summary>
+        public static Action BuildButtonAction(string appName, string aumid, NotificationExtras extras,
+                                               NotificationExtras.ToastButton button)
+        {
+            if (button == null) { return null; }
+            string who = string.IsNullOrWhiteSpace(appName) ? "the app" : appName;
+            string label = button.Text;
+            switch (button.ActivationType)
+            {
+                case "dismiss":
+                    return () => { };   // Windows' own close button: the card closes after any button
+                case "protocol":
+                {
+                    Uri web = NotificationExtras.WebAddress(button.Arguments);
+                    if (web != null)
+                    {
+                        string to = web.AbsoluteUri;
+                        return () => { AllowForeground(); Logger.Info("[Notify] button \"" + label + "\" → opening " + to); OpenUrl(to); };
+                    }
+                    if (!ToastActivator.ProtocolAllowed(button.Arguments, out _)) { return null; }
+                    string address = button.Arguments.Trim();
+                    return () =>
+                    {
+                        AllowForeground();
+                        bool ok = ToastActivator.OpenProtocol(address, out string error);
+                        Logger.Info("[Notify] button \"" + label + "\" → " + (ok ? "opened its " + SchemeOf(address) + ": link" : "its link did not open (" + error + ")"));
+                    };
+                }
+                default:
+                {
+                    // foreground / background: the app's own handler, with this button's arguments.
+                    if (extras?.Activator == null) { return null; }
+                    Guid clsid = extras.Activator.Value;
+                    string args = button.Arguments;
+                    return () =>
+                    {
+                        AllowForeground();
+                        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                        {
+                            bool ok = ToastActivator.Activate(clsid, aumid, args, out string error);
+                            Logger.Info("[Notify] button \"" + label + "\" → " + (ok ? "handed to " + who + "'s own notification handler"
+                                                                                      : who + "'s handler failed (" + error + ")"));
+                        });
+                    };
+                }
+            }
+        }
+
+        /// <summary>
+        /// Where a click on a mirrored card goes, in the order above: ("own link", url), ("protocol", address),
+        /// ("toast", activator), ("link", url), ("site", url), ("app", aumid), or (null, null) for nowhere.
+        /// <paramref name="skipToast"/> leaves out the toast's own action (its fallback). Decides without going anywhere.
+        /// </summary>
+        internal static (string Kind, string Target) ClickTarget(string appName, string title, string body, string aumid,
+                                                                 NotificationExtras extras, bool skipToast = false)
+        {
+            if (!skipToast && extras != null)
+            {
+                Uri launch = NotificationExtras.WebAddress(extras.LaunchUrl);
+                if (launch != null) { return ("own link", launch.AbsoluteUri); }
+                if (extras.ActivationType == "protocol")
+                {
+                    if (ToastActivator.ProtocolAllowed(extras.Launch, out _)) { return ("protocol", extras.Launch.Trim()); }
+                }
+                else if (extras.Activator.HasValue)
+                {
+                    return ("toast", extras.Activator.Value.ToString("B"));
+                }
+            }
+
             string url = FindUrl((title ?? "") + "\n" + (body ?? ""));
-            if (url != null)
-            {
-                return () => { Logger.Info("[Notify] card clicked → opening link " + url); OpenUrl(url); };
-            }
-            if (!string.IsNullOrWhiteSpace(aumid) && !LooksLikeBrowser(appName, aumid))
-            {
-                return () => { Logger.Info("[Notify] card clicked → activating app " + aumid); LaunchByAumid(aumid); };
-            }
-            // Browser web-push with no link in the text: Windows doesn't hand us the
+            if (url != null) { return ("link", url); }
+
+            // A web site's notification: Windows does not hand a listener the page the site's own click
+            // would open, but it does say which site sent it — so the site opens.
+            Uri site = NotificationExtras.WebAddress(extras?.SiteUrl);
+            if (site != null) { return ("site", site.AbsoluteUri); }
+
+            if (!string.IsNullOrWhiteSpace(aumid) && !LooksLikeBrowser(appName, aumid)) { return ("app", aumid); }
+
+            // Browser web-push with no link and no known site: Windows doesn't hand us the
             // destination, so there's nowhere to go — don't open a blank browser tab.
-            return null;
+            return (null, null);
         }
 
         [DllImport("user32.dll")]

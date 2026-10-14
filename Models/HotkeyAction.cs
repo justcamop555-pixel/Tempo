@@ -114,10 +114,15 @@ namespace AutoClicker.Models
             new Info(HotkeyAction.ShowPointsOverlay, "Show points on screen",   "Flash numbered markers at the multi-point targets.", new HotkeyDefinition()),
             new Info(HotkeyAction.ToggleAntiFreeze,  "Toggle anti-freeze",      "Enable or disable anti-freeze protection.",   new HotkeyDefinition()),
             new Info(HotkeyAction.AddPointAtCursor,  "Add point at cursor",     "Append a multi-point target at the current cursor position.", new HotkeyDefinition()),
-            new Info(HotkeyAction.PlayMacro1,        "Play macro #1",           "Play the 1st macro in the list.",             new HotkeyDefinition()),
-            new Info(HotkeyAction.PlayMacro2,        "Play macro #2",           "Play the 2nd macro in the list.",             new HotkeyDefinition()),
-            new Info(HotkeyAction.PlayMacro3,        "Play macro #3",           "Play the 3rd macro in the list.",             new HotkeyDefinition()),
-            new Info(HotkeyAction.ToggleLiveCaptions,"Toggle Live Captions",    "Turn Windows Live Captions on or off (sends Win+Ctrl+L). Windows 11 captions all PC audio - game voice chat, Discord, streams.", new HotkeyDefinition()),
+            // The quick-play keys play the macro picked beside them (by name), and only fall back to a
+            // position when none is picked. "The 1st macro in the list" described the old behaviour.
+            new Info(HotkeyAction.PlayMacro1,        "Play macro #1",           "Play the macro picked in the box beside the key. If none is picked, the 1st macro in the Macros list.", new HotkeyDefinition()),
+            new Info(HotkeyAction.PlayMacro2,        "Play macro #2",           "Play the macro picked in the box beside the key. If none is picked, the 2nd macro in the Macros list.", new HotkeyDefinition()),
+            new Info(HotkeyAction.PlayMacro3,        "Play macro #3",           "Play the macro picked in the box beside the key. If none is picked, the 3rd macro in the Macros list.", new HotkeyDefinition()),
+            // Follows the caption source chosen in Settings (ToggleLiveCaptions → SetCaptionsActive): Auto,
+            // Tempo's own engine first, by default. It said it sent Win+Ctrl+L to Windows' captions, which is
+            // only what the Windows source does.
+            new Info(HotkeyAction.ToggleLiveCaptions,"Toggle Live Captions",    "Start or stop live captions, from the source chosen in Settings.", new HotkeyDefinition()),
             new Info(HotkeyAction.ToggleCameraMovement, "Camera-relative movement (toggle)", "Arm or disarm camera-relative movement. While armed it takes over W/A/S/D, so it is deliberately off until you press this.", new HotkeyDefinition()),
             new Info(HotkeyAction.RecenterCameraMovement, "Re-centre camera estimate", "Re-zero the tracked camera direction. Press it while the camera faces your heading - this is the cure for the drift any estimated camera eventually picks up.", new HotkeyDefinition()),
             new Info(HotkeyAction.GrabSecondCursor, "Second cursor: grab / park", "Grab the second cursor to aim it (it follows your mouse), press again to park it wherever you left it — on either monitor.", new HotkeyDefinition()),

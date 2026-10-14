@@ -45,6 +45,16 @@ namespace AutoClicker.UI
         /// </summary>
         private const int StaleAfterMs = 60000;
 
+        /// <summary>
+        /// How many cards may stay up until dismissed at once. Windows keeps a reminder, an alarm or a call
+        /// on screen until it is dismissed, and so does the card — but a page firing a dozen "reminders"
+        /// must not pin a column of cards that each need a click. The rest get Windows' long time instead.
+        /// </summary>
+        private const int MaxKept = 3;
+
+        /// <summary>How long Windows shows a toast that asks for the long duration (duration="long").</summary>
+        private const int LongDwellMs = 25000;
+
         private bool _disposed;
 
         private struct Pending
@@ -53,10 +63,13 @@ namespace AutoClicker.UI
             public ToastKind Kind;
             public Image Icon;
             public Image Hero;
+            public Image Logo;                   // the picture beside the text (a mirrored toast's)
+            public Utils.NotificationExtras Extras;
             public Action OnActivate;
             public DateTime RaisedUtc;    // when it was RAISED, so the history stays honest
             public long RaisedTick;       // monotonic, for the staleness test
             public int Repeats;           // folded-in twins that arrived while it waited
+            public Action OnShown;        // every folded-in twin's too — run if (and when) it shows
         }
 
         /// <summary>Total cards shown this session (for Live Debug).</summary>
@@ -106,12 +119,17 @@ namespace AutoClicker.UI
 
         /// <summary>
         /// Shows a notification card. Safe to call from any thread. Newest cards appear
-        /// nearest the chosen corner and push older ones away.
+        /// nearest the chosen corner and push older ones away. <paramref name="onShown"/> runs
+        /// once the message is really on screen — as its own card, or counted "×N" on the card
+        /// already saying it — and never when it is held back or dropped; the mirror removes
+        /// Windows' own copy through it. <paramref name="extras"/> and <paramref name="logo"/> are
+        /// what a mirrored toast said beyond its text (null for Tempo's own).
         /// </summary>
         public void Notify(string appName, string title, string body, ToastKind kind,
-                           Image icon = null, Image hero = null, Action onActivate = null)
+                           Image icon = null, Image hero = null, Action onActivate = null,
+                           Action onShown = null, Utils.NotificationExtras extras = null, Image logo = null)
         {
-            NotifyCard(appName, title, body, kind, icon, hero, onActivate);
+            NotifyCard(appName, title, body, kind, icon, hero, onActivate, onShown, extras, logo);
         }
 
         /// <summary>
@@ -120,25 +138,48 @@ namespace AutoClicker.UI
         /// Returns null when the card was queued behind a full stack, or on any failure.
         /// </summary>
         public NotificationToastForm NotifyCard(string appName, string title, string body, ToastKind kind,
-                                                Image icon = null, Image hero = null, Action onActivate = null)
+                                                Image icon = null, Image hero = null, Action onActivate = null,
+                                                Action onShown = null, Utils.NotificationExtras extras = null,
+                                                Image logo = null)
         {
-            if (_disposed) { icon?.Dispose(); hero?.Dispose(); return null; }
+            if (_disposed) { Release(icon, hero, logo); return null; }
             try
             {
-                if (_owner == null || _owner.IsDisposed) { icon?.Dispose(); hero?.Dispose(); return null; }
+                if (_owner == null || _owner.IsDisposed) { Release(icon, hero, logo); return null; }
                 if (_owner.InvokeRequired)
                 {
-                    _owner.BeginInvoke((Action)(() => ShowOrQueue(appName, title, body, kind, icon, hero, onActivate)));
+                    _owner.BeginInvoke((Action)(() => ShowOrQueue(appName, title, body, kind, icon, hero, onActivate, onShown, extras, logo)));
                     return null;   // created on the UI thread a moment from now
                 }
-                return ShowOrQueue(appName, title, body, kind, icon, hero, onActivate);
+                return ShowOrQueue(appName, title, body, kind, icon, hero, onActivate, onShown, extras, logo);
             }
-            catch { icon?.Dispose(); hero?.Dispose(); return null; }
+            catch { Release(icon, hero, logo); return null; }
         }
 
-        private NotificationToastForm ShowOrQueue(string appName, string title, string body, ToastKind kind, Image icon, Image hero, Action onActivate)
+        /// <summary>Frees a card's pictures when it will never be shown (two slots may hold one image).</summary>
+        private static void Release(Image icon, Image hero, Image logo)
         {
-            if (_disposed) { icon?.Dispose(); hero?.Dispose(); return null; }
+            try { icon?.Dispose(); } catch { }
+            try { if (hero != null && !ReferenceEquals(hero, icon)) { hero.Dispose(); } } catch { }
+            try { if (logo != null && !ReferenceEquals(logo, icon) && !ReferenceEquals(logo, hero)) { logo.Dispose(); } } catch { }
+        }
+
+        /// <summary>Runs each <c>onShown</c> handed in for a message that is now on screen; one failing stops none.</summary>
+        private static void FireShown(Action onShown)
+        {
+            if (onShown == null) { return; }
+            foreach (Delegate d in onShown.GetInvocationList())
+            {
+                try { ((Action)d)(); }
+                catch (Exception ex) { Utils.Logger.Swallow("NotificationCenter.onShown", ex); }
+            }
+        }
+
+        private NotificationToastForm ShowOrQueue(string appName, string title, string body, ToastKind kind, Image icon,
+                                                  Image hero, Action onActivate, Action onShown = null,
+                                                  Utils.NotificationExtras extras = null, Image logo = null)
+        {
+            if (_disposed) { Release(icon, hero, logo); return null; }
 
             // Don't put a card on screen while Windows says not to.
             //
@@ -170,9 +211,8 @@ namespace AutoClicker.UI
                 // one path where the user cannot possibly have seen it, so it is the
                 // path the history exists for.
                 Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
-                    Utils.NotificationHistory.Outcome.Missed, holdReason);
-                icon?.Dispose();
-                if (hero != null && !ReferenceEquals(hero, icon)) { hero.Dispose(); }
+                    Utils.NotificationHistory.Outcome.Missed, holdReason, null, extras, hero);
+                Release(icon, hero, logo);
                 return null;
             }
 
@@ -185,15 +225,16 @@ namespace AutoClicker.UI
             // had not read yet off the bottom of the stack. One card marked "×3" says
             // more and costs less. Only cards still on screen are considered, so a
             // message repeated minutes later is a genuinely new event and appears again.
+            string sender = extras?.Sender ?? "";
             for (int i = 0; i < _active.Count; i++)
             {
-                if (!_active[i].Matches(appName, title, body)) { continue; }
-                _active[i].Repeat(DurationFor(title, body));
+                if (!_active[i].Matches(appName, title, body, sender)) { continue; }
+                _active[i].Repeat(DurationFor(title, body, extras));
                 RepeatsCollapsed++;
                 Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
-                    Utils.NotificationHistory.Outcome.Repeated);
-                icon?.Dispose();
-                if (hero != null && !ReferenceEquals(hero, icon)) { hero.Dispose(); }
+                    Utils.NotificationHistory.Outcome.Repeated, "", null, extras);
+                FireShown(onShown);   // on screen: counted on the card that is up
+                Release(icon, hero, logo);
                 return _active[i];
             }
 
@@ -204,14 +245,14 @@ namespace AutoClicker.UI
             for (int i = 0; i < _queue.Count; i++)
             {
                 Pending q = _queue[i];
-                if (!SameMessage(q.App, q.Title, q.Body, appName, title, body)) { continue; }
+                if (!SameMessage(q.App, q.Title, q.Body, q.Extras?.Sender, appName, title, body, sender)) { continue; }
                 q.Repeats++;
+                q.OnShown += onShown;   // run if the waiting card is ever shown
                 _queue[i] = q;
                 RepeatsCollapsed++;
                 Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
-                    Utils.NotificationHistory.Outcome.Repeated);
-                icon?.Dispose();
-                if (hero != null && !ReferenceEquals(hero, icon)) { hero.Dispose(); }
+                    Utils.NotificationHistory.Outcome.Repeated, "", null, extras);
+                Release(icon, hero, logo);
                 return null;
             }
 
@@ -223,8 +264,9 @@ namespace AutoClicker.UI
                 var pending = new Pending
                 {
                     App = appName, Title = title, Body = body, Kind = kind,
-                    Icon = icon, Hero = hero, OnActivate = onActivate,
-                    RaisedUtc = DateTime.UtcNow, RaisedTick = Environment.TickCount64, Repeats = 1
+                    Icon = icon, Hero = hero, Logo = logo, Extras = extras, OnActivate = onActivate,
+                    RaisedUtc = DateTime.UtcNow, RaisedTick = Environment.TickCount64, Repeats = 1,
+                    OnShown = onShown
                 };
 
                 // Full. Drop the OLDEST waiting card, not this one: in a burst the newest
@@ -243,8 +285,11 @@ namespace AutoClicker.UI
             // the card was raised — the history is about what Tempo had to say and when,
             // not about window management.
             Utils.NotificationHistory.Add(appName, title, body, kind.ToString(),
-                Utils.NotificationHistory.Outcome.Shown);
-            return SpawnCard(appName, title, body, kind, icon, hero, onActivate);
+                Utils.NotificationHistory.Outcome.Shown, "", null, extras, hero);
+            // Before the card is built, not after: what it does (removing Windows' copy) runs off
+            // this thread, and the sooner it starts the less the two overlap on screen.
+            FireShown(onShown);
+            return SpawnCard(appName, title, body, kind, icon, hero, onActivate, extras, logo);
         }
 
         /// <summary>
@@ -254,7 +299,7 @@ namespace AutoClicker.UI
         /// read. Extra time is granted by reading length (~200 wpm, the pace Windows
         /// paces its own toasts at), capped so nothing camps on screen.
         /// </summary>
-        private int DurationFor(string title, string body)
+        private int DurationFor(string title, string body, Utils.NotificationExtras extras = null)
         {
             int baseMs = _durationMs();
             try
@@ -265,7 +310,9 @@ namespace AutoClicker.UI
                 int readMs = 700 + chars * 60;
                 int want = Math.Max(baseMs, readMs);
                 // Never more than 3× the chosen duration, and never past 20 s.
-                return Math.Min(want, Math.Min(baseMs * 3, 20000));
+                int ms = Math.Min(want, Math.Min(baseMs * 3, 20000));
+                // A toast that asked Windows for its long duration gets as long here.
+                return extras != null && extras.LongDuration ? Math.Max(ms, LongDwellMs) : ms;
             }
             catch { return baseMs; }
         }
@@ -274,9 +321,10 @@ namespace AutoClicker.UI
         // one after another instead of the whole stack blinking out at once.
         private long _lastSpawnTick;
 
-        private NotificationToastForm SpawnCard(string appName, string title, string body, ToastKind kind, Image icon, Image hero, Action onActivate)
+        private NotificationToastForm SpawnCard(string appName, string title, string body, ToastKind kind, Image icon, Image hero,
+                                                Action onActivate, Utils.NotificationExtras extras = null, Image logo = null)
         {
-            int ms = DurationFor(title, body);
+            int ms = DurationFor(title, body, extras);
 
             // Stagger: if another card appeared moments ago, hold this one a little
             // longer so the stack drains from the bottom up rather than all at once.
@@ -288,8 +336,17 @@ namespace AutoClicker.UI
             }
             _lastSpawnTick = now;
 
+            // A reminder, an alarm or a call stays until it is dismissed, as Windows keeps it — up to
+            // MaxKept at once; past that it gets Windows' long time instead of pinning another card.
+            bool keep = ShouldKeep(extras);
+            if (!keep && extras != null && extras.StaysUntilDismissed) { ms = Math.Max(ms, LongDwellMs); }
+
             var card = new NotificationToastForm(_theme(), appName, title, body, kind,
-                                                 _corner(), ms, icon, hero, onActivate);
+                                                 _corner(), ms, icon, hero, onActivate, extras, logo);
+            card.StaysUntilDismissed = keep;
+            card.HeightChanged += OnCardHeightChanged;
+            card.DismissAllRequested = DismissAll;
+            card.CardsOnScreen = () => _active.Count + _queue.Count;
 
             // Only Tempo's own cards follow the animated logo. Mirrored cards carry the
             // sending app's icon and must keep it — replacing a Discord message's icon
@@ -347,9 +404,41 @@ namespace AutoClicker.UI
         private void OnCardDismissed(NotificationToastForm card)
         {
             _active.Remove(card);
+            card.HeightChanged -= OnCardHeightChanged;
             try { card.Dispose(); } catch { }
             Reflow();
             DrainQueue();
+        }
+
+        /// <summary>A card opened to its whole message (or closed again): the stack makes room.</summary>
+        private void OnCardHeightChanged(NotificationToastForm card)
+        {
+            if (!_disposed) { Reflow(); }
+        }
+
+        /// <summary>True when a card saying this should stay until dismissed, and there is room for one more such card.</summary>
+        internal bool ShouldKeep(Utils.NotificationExtras extras)
+        {
+            if (extras == null || !extras.StaysUntilDismissed) { return false; }
+            int kept = 0;
+            foreach (NotificationToastForm c in _active) { if (c.StaysUntilDismissed) { kept++; } }
+            return kept < MaxKept;
+        }
+
+        /// <summary>
+        /// "Dismiss all", from any card's menu: every card on screen slides away, and what was still
+        /// waiting is dropped rather than arriving the moment the screen clears. Every dropped one is
+        /// in the history with the reason.
+        /// </summary>
+        public void DismissAll()
+        {
+            if (_disposed) { return; }
+            for (int i = 0; i < _queue.Count; i++) { DropPending(_queue[i], "you dismissed all notifications"); }
+            _queue.Clear();
+            foreach (NotificationToastForm c in _active.ToArray())
+            {
+                try { c.BeginDismiss(); } catch { }
+            }
         }
 
         /// <summary>
@@ -389,15 +478,16 @@ namespace AutoClicker.UI
                 }
 
                 Utils.NotificationHistory.Add(p.App, p.Title, p.Body, p.Kind.ToString(),
-                    Utils.NotificationHistory.Outcome.Shown, "", p.RaisedUtc);
+                    Utils.NotificationHistory.Outcome.Shown, "", p.RaisedUtc, p.Extras, p.Hero);
+                FireShown(p.OnShown);   // it and every twin folded into it while it waited
                 NotificationToastForm spawned =
-                    SpawnCard(p.App, p.Title, p.Body, p.Kind, p.Icon, p.Hero, p.OnActivate);
+                    SpawnCard(p.App, p.Title, p.Body, p.Kind, p.Icon, p.Hero, p.OnActivate, p.Extras, p.Logo);
 
                 // Twins that arrived while it waited become the "×3" badge, so the card
                 // says what actually happened instead of arriving as a single event.
                 if (spawned != null && p.Repeats > 1)
                 {
-                    for (int r = 1; r < p.Repeats; r++) { spawned.Repeat(DurationFor(p.Title, p.Body)); }
+                    for (int r = 1; r < p.Repeats; r++) { spawned.Repeat(DurationFor(p.Title, p.Body, p.Extras)); }
                 }
                 break;      // one card per freed slot; the next dismissal releases the next
             }
@@ -412,17 +502,18 @@ namespace AutoClicker.UI
                               + (string.IsNullOrWhiteSpace(p.App) ? "?" : p.App.Trim())
                               + ": " + (p.Title ?? "").Trim());
             Utils.NotificationHistory.Add(p.App, p.Title, p.Body, p.Kind.ToString(),
-                Utils.NotificationHistory.Outcome.Missed, reason, p.RaisedUtc);
-            try { p.Icon?.Dispose(); } catch { }
-            try { if (p.Hero != null && !ReferenceEquals(p.Hero, p.Icon)) { p.Hero.Dispose(); } } catch { }
+                Utils.NotificationHistory.Outcome.Missed, reason, p.RaisedUtc, p.Extras, p.Hero);
+            Release(p.Icon, p.Hero, p.Logo);
         }
 
-        private static bool SameMessage(string app1, string title1, string body1,
-                                        string app2, string title2, string body2)
+        /// <summary>The same message from the same sender — two web sites sending "New message" through one browser are two messages.</summary>
+        private static bool SameMessage(string app1, string title1, string body1, string sender1,
+                                        string app2, string title2, string body2, string sender2)
         {
             return string.Equals(app1 ?? "", app2 ?? "", StringComparison.Ordinal)
                    && string.Equals(title1 ?? "", title2 ?? "", StringComparison.Ordinal)
-                   && string.Equals(body1 ?? "", body2 ?? "", StringComparison.Ordinal);
+                   && string.Equals(body1 ?? "", body2 ?? "", StringComparison.Ordinal)
+                   && string.Equals(sender1 ?? "", sender2 ?? "", StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -493,14 +584,10 @@ namespace AutoClicker.UI
             _disposed = true;
             foreach (var c in _active.ToArray())
             {
-                try { c.Dismissed -= OnCardDismissed; c.Close(); c.Dispose(); } catch { }
+                try { c.Dismissed -= OnCardDismissed; c.HeightChanged -= OnCardHeightChanged; c.Close(); c.Dispose(); } catch { }
             }
             _active.Clear();
-            foreach (var p in _queue)
-            {
-                try { p.Icon?.Dispose(); } catch { }
-                try { if (p.Hero != null && !ReferenceEquals(p.Hero, p.Icon)) { p.Hero.Dispose(); } } catch { }
-            }
+            foreach (var p in _queue) { Release(p.Icon, p.Hero, p.Logo); }
             _queue.Clear();
         }
     }

@@ -45,8 +45,28 @@ namespace AutoClicker.Utils
             public Outcome How;
             /// <summary>Why it was missed, or "" when it was shown.</summary>
             public string Reason;
+            /// <summary>
+            /// How many times this message arrived — repeats are counted here, not given rows of
+            /// their own (see <see cref="FindRowToCount"/>). 1 for a message that came once.
+            /// </summary>
+            public int Count = 1;
+            /// <summary>When it last arrived; <see cref="WhenUtc"/> is the first time.</summary>
+            public DateTime LastUtc;
+            /// <summary>Who Windows named as the sender when it was not the app (an Edge web site), or "".</summary>
+            public string Sender = "";
+            /// <summary>The toast's attribution line ("via SMS"), or "".</summary>
+            public string Attribution = "";
+            /// <summary>
+            /// The notification's picture, small, for THIS SESSION only — never written to disk: a history
+            /// file full of other apps' pictures (screenshots, people's photos) is not something to leave
+            /// lying around. Read it through <see cref="CopyPicture"/>; the history disposes its own.
+            /// </summary>
+            internal System.Drawing.Image Picture;
 
             public DateTime WhenLocal => WhenUtc.ToLocalTime();
+
+            /// <summary>Who sent it, named the way its card named it ("www.kenherbert.dev · Microsoft Edge").</summary>
+            public string SourceLine => NotificationExtras.SourceLine(string.IsNullOrEmpty(Source) ? "Tempo" : Source, Sender, Attribution);
         }
 
         /// <summary>
@@ -62,10 +82,14 @@ namespace AutoClicker.Utils
         /// <summary>Raised after an entry is added, on the caller's thread.</summary>
         public static event Action Changed;
 
+        /// <summary>For the tests: a scratch file instead of the user's history.</summary>
+        internal static string PathForTest;
+
         private static string PathOnDisk
         {
             get
             {
+                if (PathForTest != null) { return PathForTest; }
                 return Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "AutoClicker", "notification-history.tsv");
@@ -84,7 +108,7 @@ namespace AutoClicker.Utils
             }
         }
 
-        /// <summary>How many were dropped without being seen, over the whole history.</summary>
+        /// <summary>How many were dropped without being seen, over the whole history (repeats included).</summary>
         public static int MissedCount()
         {
             lock (Lock)
@@ -93,10 +117,80 @@ namespace AutoClicker.Utils
                 int n = 0;
                 foreach (Entry e in Items)
                 {
-                    if (e.How == Outcome.Missed) { n++; }
+                    if (e.How == Outcome.Missed) { n += Math.Max(1, e.Count); }
                 }
                 return n;
             }
+        }
+
+        /// <summary>
+        /// A repeat is counted on the row it repeats instead of becoming a row of its own: a card
+        /// counting "×N" (Repeated → the row it was shown on), or the same message dropped again for
+        /// the same reason (Missed — a game in front while an app kept notifying). One busy app or one
+        /// spamming web page used to fill all 300 rows within minutes that way, pushing out everything
+        /// else — the notifications the user had not seen yet included.
+        /// </summary>
+        private const int CoalesceLookBack = 20;
+        private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMinutes(10);
+
+        private static Entry FindRowToCount(string source, string sender, string title, string body, Outcome how,
+                                            string reason, DateTime now)
+        {
+            if (how == Outcome.Shown) { return null; }   // a card on screen again is a new event
+            for (int i = Items.Count - 1, seen = 0; i >= 0 && seen < CoalesceLookBack; i--, seen++)
+            {
+                Entry e = Items[i];
+                if (now - (e.LastUtc == default ? e.WhenUtc : e.LastUtc) > CoalesceWindow) { continue; }
+                if (!string.Equals(e.Source, source, StringComparison.Ordinal)
+                    || !string.Equals(e.Sender ?? "", sender, StringComparison.Ordinal)
+                    || !string.Equals(e.Title, title, StringComparison.Ordinal)
+                    || !string.Equals(e.Body, body, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (how == Outcome.Repeated && (e.How == Outcome.Shown || e.How == Outcome.Repeated)) { return e; }
+                if (how == Outcome.Missed && e.How == Outcome.Missed
+                    && string.Equals(e.Reason, reason, StringComparison.Ordinal))
+                {
+                    return e;
+                }
+                return null;   // its latest row is of another kind: don't merge across that
+            }
+            return null;
+        }
+
+        // A counted repeat changes a row already written, so the file is rewritten — at most once
+        // per FlushDelayMs however fast the repeats come (a spam test must not become a disk loop).
+        private const int FlushDelayMs = 1500;
+        private static System.Threading.Timer _flushTimer;
+        private static bool _dirty;
+        private static bool _flushArmed;
+
+        /// <summary>Writes any counted repeats not on disk yet. Called on a timer, and at shutdown.</summary>
+        public static void Flush()
+        {
+            lock (Lock)
+            {
+                _flushArmed = false;
+                if (!_dirty) { return; }
+                _dirty = false;
+                try { WriteAll(); }
+                catch (Exception ex) { Logger.Swallow("NotificationHistory.Flush", ex); }
+            }
+        }
+
+        private static void ScheduleFlush()
+        {
+            // The FIRST mark arms it; later ones ride along. Re-arming on every repeat would push the
+            // write back for as long as the repeats kept coming.
+            if (_flushArmed) { return; }
+            _flushArmed = true;
+            if (_flushTimer == null)
+            {
+                _flushTimer = new System.Threading.Timer(_ => Flush(), null,
+                                                         System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            }
+            _flushTimer.Change(FlushDelayMs, System.Threading.Timeout.Infinite);
         }
 
         /// <summary>
@@ -104,42 +198,71 @@ namespace AutoClicker.Utils
         /// its fate was known: the outcome is decided when a slot frees (or when it is
         /// dropped), but the entry must still carry the moment Tempo had something to say,
         /// or a queued message reads as though it arrived a minute after the thing it was
-        /// about.
+        /// about. <paramref name="extras"/> names the sender a mirrored toast had (kept on
+        /// disk); <paramref name="picture"/> is copied small and kept for this session only.
         /// </summary>
         public static void Add(string source, string title, string body, string kind,
-                               Outcome how, string reason = "", DateTime? whenUtc = null)
+                               Outcome how, string reason = "", DateTime? whenUtc = null,
+                               NotificationExtras extras = null, System.Drawing.Image picture = null)
         {
+            // Made outside the lock: scaling a picture is the one slow step here.
+            System.Drawing.Image thumb = picture != null && how != Outcome.Repeated ? Thumbnail(picture) : null;
             Entry entry;
             lock (Lock)
             {
                 EnsureLoaded();
-                entry = new Entry
-                {
-                    WhenUtc = whenUtc ?? DateTime.UtcNow,
-                    Source = Clean(source),
-                    Title = Clean(title),
-                    Body = Clean(body),
-                    Kind = Clean(kind),
-                    How = how,
-                    Reason = Clean(reason),
-                };
-                Items.Add(entry);
+                DateTime now = DateTime.UtcNow;
+                string src = Clean(source), ttl = Clean(title), bdy = Clean(body), why = Clean(reason);
+                string snd = Clean(extras?.Sender), att = Clean(extras?.Attribution);
 
-                bool trimmed = false;
-                while (Items.Count > MaxEntries)
+                Entry counted = FindRowToCount(src, snd, ttl, bdy, how, why, now);
+                if (counted != null)
                 {
-                    Items.RemoveAt(0);
-                    trimmed = true;
+                    counted.Count = Math.Max(1, counted.Count) + 1;
+                    counted.LastUtc = now;
+                    if (counted.Picture == null && thumb != null) { counted.Picture = thumb; thumb = null; }
+                    _dirty = true;
+                    ScheduleFlush();
                 }
+                else
+                {
+                    entry = new Entry
+                    {
+                        WhenUtc = whenUtc ?? now,
+                        Source = src,
+                        Title = ttl,
+                        Body = bdy,
+                        Kind = Clean(kind),
+                        How = how,
+                        Reason = why,
+                        Sender = snd,
+                        Attribution = att,
+                        Picture = thumb,
+                    };
+                    thumb = null;
+                    entry.LastUtc = entry.WhenUtc;
+                    Items.Add(entry);
 
-                try
-                {
-                    // Rewrite the whole file after a trim (rare), append otherwise.
-                    if (trimmed) { WriteAll(); }
-                    else { AppendOne(entry); }
+                    bool trimmed = false;
+                    while (Items.Count > MaxEntries)
+                    {
+                        DropPicture(Items[0]);
+                        Items.RemoveAt(0);
+                        trimmed = true;
+                    }
+                    KeepPicturesBounded();
+
+                    try
+                    {
+                        // Rewrite the whole file after a trim (rare) or while a counted repeat is
+                        // waiting to be written (the rewrite carries this row too); append otherwise.
+                        if (trimmed || _dirty) { WriteAll(); _dirty = false; }
+                        else { AppendOne(entry); }
+                    }
+                    catch (Exception ex) { Logger.Swallow("NotificationHistory.Add(write)", ex); }
                 }
-                catch (Exception ex) { Logger.Swallow("NotificationHistory.Add(write)", ex); }
             }
+            try { thumb?.Dispose(); } catch { }   // a repeat of a row that already has its picture
 
             try { Changed?.Invoke(); } catch { }
         }
@@ -148,12 +271,76 @@ namespace AutoClicker.Utils
         {
             lock (Lock)
             {
+                foreach (Entry e in Items) { DropPicture(e); }
                 Items.Clear();
                 _loaded = true;
+                _dirty = false;
                 try { File.Delete(PathOnDisk); }
                 catch (Exception ex) { Logger.Swallow("NotificationHistory.Clear", ex); }
             }
             try { Changed?.Invoke(); } catch { }
+        }
+
+        // ── the session's pictures ─────────────────────────────────────────────
+
+        /// <summary>
+        /// How many entries keep a picture: the newest ones. Each is at most 320×180 (≈230 KB), so the
+        /// whole set stays a few MB however long Tempo runs.
+        /// </summary>
+        private const int MaxPictures = 24;
+        private const int ThumbW = 320, ThumbH = 180;
+
+        /// <summary>A copy of an entry's picture for the caller to own (and dispose), or null when it has none.</summary>
+        public static System.Drawing.Image CopyPicture(Entry e)
+        {
+            if (e == null) { return null; }
+            lock (Lock)
+            {
+                try { return e.Picture == null ? null : new System.Drawing.Bitmap(e.Picture); }
+                catch { return null; }
+            }
+        }
+
+        private static System.Drawing.Image Thumbnail(System.Drawing.Image src)
+        {
+            try
+            {
+                if (src.Width <= 0 || src.Height <= 0) { return null; }
+                double scale = Math.Min(1.0, Math.Min((double)ThumbW / src.Width, (double)ThumbH / src.Height));
+                int w = Math.Max(1, (int)Math.Round(src.Width * scale));
+                int h = Math.Max(1, (int)Math.Round(src.Height * scale));
+                var copy = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                using (var g = System.Drawing.Graphics.FromImage(copy))
+                {
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                    g.DrawImage(src, 0, 0, w, h);
+                }
+                return copy;
+            }
+            catch (Exception ex)
+            {
+                Logger.Swallow("NotificationHistory.Thumbnail", ex);
+                return null;
+            }
+        }
+
+        private static void DropPicture(Entry e)
+        {
+            if (e?.Picture == null) { return; }
+            try { e.Picture.Dispose(); } catch { }
+            e.Picture = null;
+        }
+
+        /// <summary>Only the newest <see cref="MaxPictures"/> entries keep their picture.</summary>
+        private static void KeepPicturesBounded()
+        {
+            int kept = 0;
+            for (int i = Items.Count - 1; i >= 0; i--)
+            {
+                if (Items[i].Picture == null) { continue; }
+                if (++kept > MaxPictures) { DropPicture(Items[i]); }
+            }
         }
 
         // ── disk ────────────────────────────────────────────────────────────────
@@ -187,7 +374,7 @@ namespace AutoClicker.Utils
                     Entry e = Parse(line);
                     if (e != null) { Items.Add(e); }
                 }
-                while (Items.Count > MaxEntries) { Items.RemoveAt(0); }
+                while (Items.Count > MaxEntries) { DropPicture(Items[0]); Items.RemoveAt(0); }
             }
             catch (Exception ex) { Logger.Swallow("NotificationHistory.Load", ex); }
         }
@@ -205,6 +392,21 @@ namespace AutoClicker.Utils
             }
             int how;
             if (!int.TryParse(f[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out how)) { how = 0; }
+            // Columns 8 and 9 (the count and the last time) are newer: a file an older Tempo wrote
+            // has neither, and an older Tempo reading this one ignores them.
+            int count = 1;
+            if (f.Length > 7 && int.TryParse(f[7], NumberStyles.Integer, CultureInfo.InvariantCulture, out int c) && c > 1)
+            {
+                count = c;
+            }
+            DateTime last = when;
+            if (f.Length > 8 && DateTime.TryParse(f[8], CultureInfo.InvariantCulture,
+                                                  DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                                                  out DateTime l))
+            {
+                last = l;
+            }
+            // Columns 10 and 11 (the sender and the attribution) are newer still; the same rule holds.
             return new Entry
             {
                 WhenUtc = when,
@@ -214,15 +416,23 @@ namespace AutoClicker.Utils
                 How = (Outcome)how,
                 Kind = f[5],
                 Reason = f.Length > 6 ? f[6] : "",
+                Count = count,
+                LastUtc = last,
+                Sender = f.Length > 9 ? f[9] : "",
+                Attribution = f.Length > 10 ? f[10] : "",
             };
         }
 
         private static string Format(Entry e)
         {
+            DateTime last = e.LastUtc == default ? e.WhenUtc : e.LastUtc;
             return e.WhenUtc.ToString("o", CultureInfo.InvariantCulture) + Sep +
                    e.Source + Sep + e.Title + Sep + e.Body + Sep +
                    ((int)e.How).ToString(CultureInfo.InvariantCulture) + Sep +
-                   e.Kind + Sep + e.Reason;
+                   e.Kind + Sep + e.Reason + Sep +
+                   Math.Max(1, e.Count).ToString(CultureInfo.InvariantCulture) + Sep +
+                   last.ToString("o", CultureInfo.InvariantCulture) + Sep +
+                   (e.Sender ?? "") + Sep + (e.Attribution ?? "");
         }
 
         private static void AppendOne(Entry e)

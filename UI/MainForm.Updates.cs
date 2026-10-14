@@ -168,6 +168,16 @@ namespace AutoClicker.UI
                 int minutes = AutoCheckRetryMinutes[Math.Min(_autoCheckFailures, AutoCheckRetryMinutes.Length - 1)];
                 _autoCheckFailures++;
                 _nextAutoCheckUtc = DateTime.UtcNow.AddMinutes(minutes);
+                // Refused for GitHub's rate limit: not before it resets. The 5-minute retry used to fire
+                // straight into the same refusal — and spend one more of the address's 60 an hour.
+                DateTime? retryAt = result?.RetryAtUtc;
+                if (retryAt.HasValue && retryAt.Value.AddSeconds(30) > _nextAutoCheckUtc)
+                {
+                    _nextAutoCheckUtc = retryAt.Value.AddSeconds(30);
+                    Logger.Info("[Update] the automatic check was refused for GitHub's rate limit; trying again after "
+                                + _nextAutoCheckUtc.ToLocalTime().ToString("HH:mm") + ".");
+                    return;
+                }
                 Logger.Info("[Update] the automatic check didn't reach GitHub; trying again in " + minutes + " min.");
                 return;
             }

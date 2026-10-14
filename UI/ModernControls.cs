@@ -614,9 +614,22 @@ namespace AutoClicker.UI
             {
                 string s = GetItemText(Items[e.Index]);
                 var r = new Rectangle(e.Bounds.X + ListTextLeft, e.Bounds.Y, e.Bounds.Width - ListTextLeft, e.Bounds.Height);
-                TextRenderer.DrawText(e.Graphics, s, Font, r, fg, ItemFlags);
+                // A row of the open list may be drawn in a font of its own (a font picker shows each font
+                // in itself); the closed box keeps the page's font, so it lines up with its neighbours.
+                Font rowFont = null;
+                if (!isEditField && ItemFont != null)
+                {
+                    try { rowFont = ItemFont(e.Index); } catch { rowFont = null; }
+                }
+                TextRenderer.DrawText(e.Graphics, s, rowFont ?? Font, r, fg, ItemFlags);
             }
         }
+
+        /// <summary>
+        /// The font to draw open-list row N in, or null for the box's own. The caller owns the fonts and keeps
+        /// them alive while the box is (they are asked for on every draw).
+        /// </summary>
+        internal Func<int, Font> ItemFont { get; set; }
 
         // How a choice is drawn, in the open list and in the closed box. NoPrefix: a choice is shown as
         // written. Without it a lone "&" — in a profile, macro or device name — was taken for a shortcut

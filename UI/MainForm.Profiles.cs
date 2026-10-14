@@ -992,6 +992,22 @@ namespace AutoClicker.UI
                 profile.AppSettings.ApplyTo(_settings);
                 LoadSettingsIntoUi();
                 ApplyThemeToEverything();
+                // The appearance carries the caption bar's look (text size, font, colour, opacity, panel)
+                // and whether there is a bar at all. Only the Settings page followed: the caption bar and
+                // the history window on screen kept the old look until settings were next saved, and a
+                // profile without the bar left it up (or one with it left it down).
+                ApplyCaptionSettingsToOverlays();
+                if (!_settings.CaptionOverlayEnabled && IsUp(_captionOverlay))
+                {
+                    try { _captionOverlay.Hide(); } catch { }
+                    SyncCaptionMoveUi();
+                }
+                else if (_settings.CaptionOverlayEnabled && _captionsActive && !IsUp(_captionOverlay))
+                {
+                    ShowCaptionOverlay();
+                    SyncCaptionMoveUi();
+                }
+                RefreshCaptionsTab();
                 Logger.Info("[profiles] applied the appearance saved with '" + profile.Name + "'.");
             }
         }

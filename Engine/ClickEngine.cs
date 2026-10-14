@@ -132,6 +132,22 @@ namespace AutoClicker.Engine
         public bool IsRunning => _running;
 
         /// <summary>
+        /// True while the run clicks in the background ("Click without moving my cursor" with a target
+        /// point): its clicks are posted to a window, the real mouse and keyboard stay the user's, so
+        /// Windows' own shortcuts must keep working for them (MainForm.UpdateShortcutGuard). Key mode
+        /// and "where the cursor is" always use the real input — see <see cref="Actuate"/>.
+        /// </summary>
+        public bool ClicksInBackground
+        {
+            get
+            {
+                ClickProfile p = _activeProfile;
+                return _running && p != null && p.Target != ClickTarget.Key && p.BackgroundClick &&
+                       (p.PositionMode == PositionMode.FixedPosition || p.PositionMode == PositionMode.MultiPoint);
+            }
+        }
+
+        /// <summary>
         /// Starts clicking with a snapshot of the supplied profile. Returns a
         /// validation error string, or null on success.
         /// </summary>

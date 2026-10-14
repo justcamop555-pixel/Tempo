@@ -1018,12 +1018,24 @@ namespace AutoClicker.UI
         {
             if (string.IsNullOrWhiteSpace(text)) { return 0; }
             _textExamined++;
-            if (!Utils.Localization.ShowsUntranslated(text)) { return 0; }
             Control container = where.Parent ?? where;
-            Utils.Logger.Warn("[layout] SHOWS ENGLISH in \"" + Shorten(container.Text) + "\": \"" + Shorten(text) +
-                              "\" (" + where.GetType().Name + ") — " + Utils.Localization.Current +
-                              " has a translation for it, but it was never looked up.");
-            return 1;
+            if (Utils.Localization.ShowsUntranslated(text))
+            {
+                Utils.Logger.Warn("[layout] SHOWS ENGLISH in \"" + Shorten(container.Text) + "\": \"" + Shorten(text) +
+                                  "\" (" + where.GetType().Name + ") — " + Utils.Localization.Current +
+                                  " has a translation for it, but it was never looked up.");
+                return 1;
+            }
+            // English that has no translation at all — built at run time, or never given a key — which the
+            // check above cannot see: it only knows the phrases the tables hold.
+            if (Utils.Localization.LooksEnglish(text))
+            {
+                Utils.Logger.Warn("[layout] LOOKS ENGLISH in \"" + Shorten(container.Text) + "\": \"" + Shorten(text) +
+                                  "\" (" + where.GetType().Name + ") — no " + Utils.Localization.Current +
+                                  " translation exists for it.");
+                return 1;
+            }
+            return 0;
         }
 
         /// <summary>How many fixed-size labels the last CountCutText measured.</summary>
@@ -1361,7 +1373,8 @@ namespace AutoClicker.UI
                     }
                     else if (shortened > 0)
                     {
-                        Utils.Logger.Info("[layout] " + shortened + " long choice(s) of the combo box @" + cb.Left + "," + cb.Top + " in \"" +
+                        // Debug: this is the declared, expected state, repeated at every start.
+                        Utils.Logger.Debug("[layout] " + shortened + " long choice(s) of the combo box @" + cb.Left + "," + cb.Top + " in \"" +
                                           Shorten(container.Text) + "\" end in … when chosen, as declared — the open list shows them whole, " +
                                           "and so does the hover.");
                     }

@@ -44,7 +44,10 @@ namespace AutoClicker.Utils
 
                 var vs = SystemInformation.VirtualScreen;
                 sb.AppendLine($"  Virtual desktop : {vs.Width}x{vs.Height} @ ({vs.X},{vs.Y})");
-                sb.Append("  Working set     : " + (Environment.WorkingSet / (1024 * 1024)) + " MB");
+                ProcessMemory.Reading mem = ProcessMemory.Read();
+                sb.AppendLine("  Memory          : " + ProcessMemory.Megabytes(mem.PrivateWorkingSet) +
+                              " MB private working set (what Task Manager shows)" + (mem.Exact ? "" : " ~"));
+                sb.Append("  Working set     : " + ProcessMemory.Megabytes(mem.WorkingSet) + " MB (with shared libraries)");
 
                 Logger.Info(sb.ToString());
             }

@@ -2,62 +2,55 @@
 
 This file always holds the notes for the most recent version. Per-version notes live in the `release-notes/` folder, and every change is in `CHANGELOG.md`.
 
-## Tempo 1.0.323
+## Tempo 1.0.324
 
-**Captions tell speakers apart, by name and by face, and stop inventing words over music · hotkeys fire while you hold Shift or Ctrl · Tempo starts about three times faster and idles quietly · Accounts can be a window of its own · Discord no longer shows Tempo as the Steam game "Tempo" · laptops at 125% and 150% · hundreds of fixes**
+**Mirrored notifications look and act like Windows' own · only Tempo's keybinds act during a run · the CPS test shows every detail and can measure Tempo's own clicker · camera-relative movement counts only real camera turns · Tempo opens in one piece · hundreds of fixes**
+
+### Notifications
+- **Tempo's cards show what Windows shows.** The picture under the text, the small picture beside it (a site's icon, a contact's photo), and the website a browser notification came from ("www.example.com · Microsoft Edge"). Tempo reads them from Windows' own notification store on this PC, only for that notification and without changing anything. A picture on the internet is never fetched.
+- **Clicking a card does what clicking Windows' pop-up does.** A website's notification opens the page it meant, and a Discord, Teams or Outlook notification opens the conversation it's about. Before, a browser's card did nothing. Links that would run files or scripts are never opened.
+- **The notification's own buttons work on the card** ("Mark as read", "Close" and the like).
+- **Reminders, alarms and calls stay on screen** until you dismiss them, as Windows keeps them. Right-click a card for **Dismiss all**.
+- **Progress bars, long messages that open on hover, the time a late message was sent,** and **mute one website** instead of all of Edge.
+- **Four round corners.** The cards' bottom corners came out square; on Windows 11, Windows now rounds the card itself.
+- **The notification history shows the whole message**, with where it came from and why it was held back.
+- **Fixed: a burst of the same notification left only Windows' pop-ups.** Repeats were dropped for as long as they kept coming. And Windows' copy of a notification is now cleared only once Tempo's card is really on screen, so a muted or held-back notification stays in the Action Center.
+
+### Only Tempo's keybinds act during a run
+- **While the clicker runs or a macro plays or records, Windows' own shortcuts are held back:** the Windows key (a stray press opened Start over the game), Win+D, Win+G, Win+Tab and the other Win shortcuts, Ctrl+Esc, and the Sticky Keys pop-up (a sprinting macro can press Shift five times). Tempo's own keybinds still work. Alt+Tab and Ctrl+Shift+Esc are left alone, so there is always a way out. On by default; one switch in Settings, on the Clicker and Macros tabs, and in the tray menu.
+- **Recordings leave Windows shortcuts out**, so a macro no longer opens Start or switches windows when it plays.
+- **A hotkey another program also owns now runs only Tempo's action**, instead of both.
+
+### CPS test
+- **The details of every run**, in a panel beside the pad: your clicks in each second, with your average as a line; your best second; how even your rhythm was; the fastest, average and slowest gaps; whether you kept your speed; and this session's tries.
+- **A best for each input and test length** ("Best for Left, 10 s"), with the all-time best beside it.
+- **Measure Tempo's own clicker:** start it with the pointer on the pad. The run is labelled "Tempo's clicker" and shown against the speed it was set to, and it never counts as your best. Before, Tempo's safety guard dropped every one of those clicks.
+- **Fixed:** clicks just after the time ran out were counted; the last click could start a new test and wipe your result; a held Space counted twice; two captions were cut off in five languages. **Esc** stops a test.
+
+### Camera-relative movement
+- **It counts only the mouse movement that turns the camera.** Roblox turns its camera only while it holds the pointer (right button held, shift lock, first person), so moving the mouse to click something while running steered the wrong way. **Settings → Camera-relative movement → Camera turns** keeps the old behaviour as a choice.
+- **Calibration you can check:** after measuring a full turn with F10, press F11 and Tempo turns exactly one circle; if it stops short or goes past, hold F10 and turn the rest of the way, and Tempo works out the exact value.
+- **Fine steering (off by default)** aims between the 8 directions W/A/S/D can make, by pulsing the keys.
+- **Fixed:** French keyboards steer with Z/Q/S/D; changing the mode or rate (or calibrating) no longer takes W/A/S/D from every program; keys no longer wait for Tempo's window; it follows the game when its window comes back; tray sleep no longer stops its hotkey. Settings apply as you change them.
 
 ### Live captions
-- **Captions ignore sound with no voice in it.** Before Whisper hears a stretch of audio, a small voice-detection network (Silero VAD) checks whether anyone is speaking. Music, fans, gunfire and game sound no longer turn into invented words: on 30 seconds of exactly that, with nobody speaking, the captions now show nothing. Speech is untouched. **Settings → Live Captions → Caption song lyrics** lets music through when you want lyrics captioned.
-- **One person, one label.** The face analysis and the voice matcher used to number speakers each their own way. Faces are now linked to voices, labels land on the words that person actually said, and the voice matcher tells people apart much better.
-- **See who is talking, and name them.** A new **Speakers** card on the Captions tab lists each speaker in their caption-bar colour, with their face from the video once it is linked. Click a speaker to give them a name, and "Speaker 2" becomes "Mia" on the caption bar and in the transcript.
-- **Captions read like sentences, not fragments**, and the caption history is easier to follow.
-- **Moving the captions shows what you're doing** and no longer leaves anything behind. Where you put the bar and the history now stays with this PC.
-- **Save, Copy and Subtitles… say what happened** (a file that couldn't be written, a clipboard another program is holding, nothing transcribed yet) instead of failing silently. WebVTT subtitles now escape their text, so a "<" no longer hides the rest of a line.
+- **"Diagnose Windows bar" is a real check**: a ✔/✖ list of what works and the button that fixes the problem. It runs in the background instead of freezing Tempo, and its report no longer lists the titles of your other windows.
+- **Caption font:** every installed font, each shown in its own style, and font, size, colour, opacity and background apply as you change them.
+- **Fixed: the caption bar and history wouldn't move off a snap point**, and a bar placed on a monitor to the left forgot its place.
+- **Changing the engine while captions run no longer wipes the transcript.** Clear asks first, and saved transcripts never overwrite each other.
 
-### Hotkeys and keybinds
-- **Hotkeys work while you hold Shift or Ctrl.** F6 now fires while you hold Shift to sprint or Ctrl to crouch. This covers the function keys, the middle and side mouse buttons, the media keys, Pause, Scroll Lock and the Hold-to-click key. Keys that type (letters, digits, arrows, Enter) still need their exact combination. It's on by default, with a tick box on the Keybinds tab.
-- **Fixed: hotkeys did nothing while Tempo sat in the tray**, and every hotkey could stop working after you used a keybind field. The keys Tempo shows everywhere now match the keys that work.
-- **A side mouse button bound to Tempo no longer also sends your browser Back.**
-- **The Keybinds tab:** a key Tempo has reserved can now be pressed into another action's field, one combination always runs one action, and new warnings name combinations that would break other programs (Ctrl + C, keys that type a character with AltGr, Tempo's own window shortcuts). The list shows 12 rows where it showed 7.
+### Macros and keybinds
+- **The Live Monitor shows every step of any macro**, instantly, and a compact view folds mouse paths and camera turns into one row each.
+- **Binding a mouse side button works**, a stray click on a Keybinds field no longer rebinds it, and pressing a Tempo hotkey while recording no longer records it.
 
-### Faster and lighter
-- **Tempo starts about three times faster.** A start to the tray is ready in about 0.45 s instead of about 1.2 s, and starting with Windows is lighter.
-- **Fixed: Tempo used a tenth of a CPU core while doing nothing.**
-- **Switching tabs shows the new page in one piece**, in 20–100 ms where it took up to 600 ms.
+### Accounts
+- **Nothing is lost when the vault locks under an open window.** A new or changed account is saved the moment you unlock.
+- **Local API 5:** a locked vault answers (with why it locked) instead of going silent, and `/unlock` asks you at the PC to unlock.
 
-### Macros
-- **Record camera turns for games, and the mouse side buttons.** Macros replay what you actually did, smooth mouse movement keeps the macro's timing, and recordings no longer include Tempo's own controls.
-- **The macro hotkeys respect what's running.** Play no longer starts during a recording and Record no longer starts during playback. A quick-play key whose macro was deleted now says so, and renaming a macro carries its quick-play key along.
-- **Import is safer.** Import all now asks about macros that run Python scripts, as Import… always has, and a macro you turn down is discarded rather than kept in the recycle bin.
-- **Test a Python script before it's in a macro** with the new **Test run** button. A failed script now tells you why instead of "The script exited with code 1".
-
-### Roblox accounts
-- **Accounts can open in a window of its own**, beside your game, and its first screen was redesigned.
-- **The Roblox client check looks at everything the game loads**, recognises Bloxstrap, Fishstrap and Voidstrap by where they are, and no longer leaks memory on every check.
-- **Fixed: multi-instance could close the Roblox game you were already playing.**
-- **Local API, version 4.**
-
-### Profiles
-- **Switching profiles no longer throws away unsaved changes**, and every way of switching (the dropdown, the cards, the tray, the hotkeys) now does the same thing.
-- **Fixed: Save on the Clicker tab threw away the rest of the profile**, and renaming a profile through Save deleted the old one.
-- **Fixed: "Click without moving my cursor" never actually worked.** It does now.
-
-### Updates
-- **Downloads survive a bad connection** and pick up where they stopped. A failed update is no longer silent and can't leave Tempo closed. Tempo also checks while it stays open in the tray, and the update dialog is in your language.
-
-### Looks and readability
-- **Laptops at 125% and 150%:** every window now grows with its text instead of cutting it off.
-- **Colours are right with HDR on**, and hints and notes are muted the way they were designed.
-- **The tray menu uses the app's colours**, with its own icon for every item and a new **Restart Tempo** item.
-- **The status bar, the tab list and the tooltips were redone**: easier to read, and tooltips stay on the screen.
-- **The privacy note at the foot of Settings is a panel you can read**, and it now lists accurately everything that goes online and where to switch it off.
-
-### Live debug
-- **Live debug no longer freezes Tempo.** Its filter is a real search (two words, `"a phrase"`, `-hide`, `tag:captions`, `level:warn`), and reading older lines, Clear view and selecting text all behave while new lines arrive.
-
-### Also fixed
-- **Discord showed Tempo users as playing the Steam game "Tempo".** The installed program is now called TempoClicker.exe.
-- **Tempo sometimes didn't start with Windows** after a sign-out. There is also a new option to open the window at sign-in.
-- **Tempo "not responding" on first use**: the slow first-time work no longer runs on the window's thread.
-- **Double-clicking the tray icon "did nothing"**, and **"&" in macro, profile and account names** went missing in lists.
-- Many texts that still showed in English are translated, and every dialog is now checked in all six languages.
+### Opening, overlays and the rest
+- **Tempo opens in one piece.** The window used to appear half-drawn for up to 200 ms, with the safety note over it. It now appears complete in its first frame.
+- **Move and fade the running badges** from tray → Overlays: drag them anywhere, on any monitor, and set one opacity for all three.
+- **GitHub:** Tempo waits when GitHub says its limit is used up, instead of asking again and again, and it works through a proxy set in Windows.
+- **The RAM figure matches Task Manager** (it showed nearly three times as much).
+- **The cursor trail no longer turns on Do Not Disturb** and stops your notifications.
+- **The log file and overlay switches apply at once**, and turning the log off offers to delete the log already written. The log file keeps three old copies and no longer fills with routine lines.

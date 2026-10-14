@@ -39,23 +39,24 @@
 > **Use responsibly.** Auto-clicking may break the terms of service of some games and apps,
 > and some anti-cheat systems detect it. You are responsible for how you use Tempo.
 
-## What's new in 1.0.323
+## What's new in 1.0.324
 
-- **Captions stop inventing words over music.** A small voice-detection network checks each
-  stretch of audio for speech before Whisper hears it, so music, fans and game sound no longer
-  turn into made-up sentences. **Caption song lyrics** lets music through when you want it.
-- **Captions tell speakers apart, by voice and by face**, and a new **Speakers** card lets you
-  name them: "Speaker 2" becomes "Mia" on the caption bar and in the transcript.
-- **Hotkeys fire while you hold Shift or Ctrl**, so F6 still works while you sprint or crouch.
-  Hotkeys also work again while Tempo sits in the tray.
-- **About three times faster to start** (ready in the tray in about 0.45 s instead of 1.2 s), no
-  more tenth of a CPU core spent doing nothing, and tabs that switch in one piece.
-- **Accounts can open in a window of its own**, beside your game, and multi-instance no longer
-  closes the Roblox game you were already playing.
-- **Discord no longer shows you playing the Steam game "Tempo".** The installed program is now
-  called `TempoClicker.exe`.
-- **Laptops at 125% and 150%:** every window grows with its text instead of cutting it off.
-- **Updates survive a bad connection** and pick up where they stopped. A failed update says so.
+- **Mirrored notifications look and act like Windows' own:** their pictures, the website they came
+  from, their buttons, and a click that opens the page or conversation they're about. Reminders
+  stay until you dismiss them, and the cards have four round corners.
+- **Only Tempo's keybinds act during a run.** While the clicker runs or a macro plays or records,
+  the Windows key, the Win shortcuts and the Sticky Keys pop-up are held back. Alt+Tab still works.
+- **The CPS test shows every detail of a run** (clicks in each second, your rhythm, the gaps,
+  whether you kept your speed) and keeps a best for each input and length. Start the clicker
+  over its pad to measure Tempo's own speed.
+- **Camera-relative movement counts only real camera turns**, so moving the mouse in Roblox
+  without turning the camera no longer steers you off course. Calibration can now be checked
+  with one key, and French keyboards steer with Z/Q/S/D.
+- **Tempo opens in one piece**, complete in its first frame instead of half-drawn.
+- **Move and fade the running badges** from the tray, and the RAM figure matches Task Manager.
+- **Captions:** a real "Diagnose Windows bar" check, every installed font for the caption bar,
+  and a bar that moves freely again.
+- **Kinder to GitHub:** Tempo waits when GitHub's limit is used up, and works through a proxy.
 
 The full notes are on the [release page](https://github.com/justcamop555-pixel/Tempo/releases/latest),
 and every change is in [CHANGELOG.md](CHANGELOG.md).
@@ -150,6 +151,11 @@ or by time, with a live estimate · timing and position **randomisation** to sof
 Quick **CPS presets** with the active one highlighted, a box for an **exact CPS**, and a speed
 slider you can scroll to dial in the rate live.
 
+The **CPS test** measures you: your clicks in each second, your best second, how even your rhythm
+was, the gaps between clicks and whether you kept your speed, with a best for each button and
+length. Start the clicker with the pointer on its pad and it measures Tempo instead, against the
+speed you set.
+
 ### 🎯 Multi-Point
 Click a whole route — **sequential, reverse, random or ping-pong** — with each point's own
 button, click style, dwell time and repeat count. Numbered markers show the points on screen, and
@@ -188,6 +194,9 @@ show/hide the window, Live Captions, the second cursor and more.
 - **No clashes:** live conflict detection, and warnings for combinations that would break other
   programs (Ctrl + C, keys that type a character with AltGr, Tempo's own window shortcuts). A side
   button bound to Tempo no longer also sends your browser **Back**.
+- **Only Tempo's keys during a run:** while the clicker runs or a macro plays or records, the
+  Windows key, the Win shortcuts, Ctrl+Esc and the Sticky Keys pop-up are held back, so a stray
+  press can't open Start over your game. Alt+Tab and Ctrl+Shift+Esc always work. On by default.
 
 Defaults: **F6** start/stop · **F9** pause/resume · **F7** pick position · **F8** emergency stop.
 In the Tempo window, **Esc** also stops a run (you can turn that off) and **F11** goes full screen.
@@ -214,6 +223,14 @@ leaves your PC.
 - Captions read as sentences, a searchable caption history, transcripts you can **Save** or
   **Copy**, **subtitle files** (SubRip or WebVTT), and a movable, fully styleable caption bar — or
   mirror **Windows 11's own Live Captions** through Tempo's bar instead.
+
+### 🔔 Notifications
+Tempo's messages appear as its own cards in the theme, in the corner you choose, and wait while a
+fullscreen game has the screen. Optionally (**Settings › Notifications**, off until you turn it on),
+Tempo shows **Windows' own notifications** as its cards too, with their pictures, the website they
+came from and their buttons. Clicking one does what clicking Windows' pop-up does: it opens the page
+or the conversation it's about. Reminders stay until you dismiss them, any app or website can be
+muted, and the notification history keeps every message in full.
 
 ### 📊 Statistics
 A live dashboard with session and lifetime totals, personal records and insights (streaks, busiest
@@ -307,8 +324,11 @@ at the second cursor while your main pointer stays where it is.
 
 ### 🕹 Camera-relative movement (advanced)
 An experimental input mode for games: Tempo takes over W/A/S/D and re-aims them relative to the
-in-game camera, with a calibration wizard, smoothing, anti-jitter and a deadzone. Many online games
-forbid input automation — use it with care.
+in-game camera, with a calibration wizard you can check (Tempo turns one full circle itself),
+smoothing, anti-jitter, optional fine steering between the 8 key directions, and a deadzone. It
+counts only the mouse movement that turns the camera (in Roblox: right button held, shift lock,
+first person) and takes the keys by position, so Z/Q/S/D work on a French keyboard. Many online
+games forbid input automation — use it with care.
 
 ---
 

@@ -77,8 +77,21 @@ namespace AutoClicker.UI
         {
             base.OnHandleCreated(e);
             _overlayHandle = Handle;
+            // Before it is ever shown: a window spanning every monitor is taken by Windows for a
+            // full-screen app, and Windows 11 then turns Do Not Disturb ON by itself for as long as
+            // the trail is up — notification banners stopped the moment the trail was switched on.
+            NotFullscreen.Mark(_overlayHandle);
             OverlayTopmost.Register(_overlayHandle);   // stay above fullscreen games / video
         }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            NotFullscreen.Unmark(Handle);
+            base.OnHandleDestroyed(e);
+        }
+
+        /// <summary>For Live debug and the tests: is the shell told this is not a full-screen app?</summary>
+        internal bool MarkedNotFullscreen => IsHandleCreated && NotFullscreen.IsMarked(Handle);
 
         protected override void WndProc(ref Message m)
         {

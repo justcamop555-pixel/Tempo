@@ -15,6 +15,11 @@ namespace AutoClicker.UI
     /// It slides in from the screen edge with a fade, sits while a thin progress bar
     /// drains, then slides out. Hovering pauses the countdown; a click dismisses it.
     ///
+    /// A MIRRORED card also shows what the toast itself carried (Utils.NotificationExtras):
+    /// the sender Windows names (an Edge web site), the picture beside the text, a progress
+    /// bar — and a reminder, alarm or call stays until dismissed, as Windows keeps it.
+    /// Hovering a card whose message was cut off opens it to the whole message.
+    ///
     /// The <see cref="NotificationCenter"/> owns a stack of these and tells each one
     /// where to sit (<see cref="MoveTo"/>) as cards come and go.
     /// </summary>
@@ -41,12 +46,19 @@ namespace AutoClicker.UI
         private readonly Image _hero;          // large picture below the text (owned; optional)
         private Action _onActivate;            // run when the card body is clicked (open the app)
 
+        // What a MIRRORED toast said beyond its text — the sender Windows names, a progress bar, its
+        // scenario — and the picture beside its text. Both null on Tempo's own cards.
+        private readonly Utils.NotificationExtras _extras;
+        private readonly Image _logo;          // owned; disposed on close
+        private readonly DateTime _createdUtc = DateTime.UtcNow;
+
         // Fonts (disposed on close).
         private readonly Font _appFont;
         private readonly Font _titleFont;
         private readonly Font _bodyFont;
         private readonly Font _glyphFont;
         private readonly Font _closeFont;
+        private readonly Font _smallFont;      // a toast's progress bar: its title, status and value
 
         // Geometry — a Windows 11-like card.
         private const int CardWidth = 386;
@@ -57,6 +69,50 @@ namespace AutoClicker.UI
         private const int ProgressH = 2;       // slimmer — a timer, not a divider
         private const int Radius = 11;
         private const int HeroMaxH = 150;      // max height of the picture below the text
+        private const int LogoSize = 44;       // the picture beside the text (Windows draws it at 48)
+        private const int LogoGap = 12;
+        private const int BarH = 4;            // a toast's own progress bar
+
+        // How much of the message shows. Collapsed, as Windows shows a toast (it allows the title two
+        // lines and the text four); hovered for a moment, the card opens to all of it — a long chat
+        // message or a web page's paragraph was cut at three lines with no way to read the rest.
+        private const int TitleLines = 3, BodyLines = 4;
+        private const int TitleLinesOpen = 8, BodyLinesOpen = 30;
+        private const int HeroMaxHOpen = 300;
+        private const int OpenAfterMs = 350;   // hover intent: passing over the card does not open it
+        private const int CloseAfterMs = 450;  // and leaving it for a moment does not snap it shut
+        private bool _canOpen;                 // the collapsed card cuts something off
+        private bool _open;
+        private int _openCap = int.MaxValue;   // an opened card stays within the screen
+        private long _hoverSinceTick, _leftTick;
+        private Rectangle _toastBarRect;       // where the toast's own (indeterminate) bar was last painted
+
+        // The toast's own buttons (a mirrored card's), pressed the way Windows presses them — see
+        // Utils.AppActivator.BuildButtonAction. Only those Tempo can press are drawn.
+        private readonly System.Collections.Generic.List<Utils.NotificationExtras.ToastButton> _buttons =
+            new System.Collections.Generic.List<Utils.NotificationExtras.ToastButton>();
+        private Rectangle[] _buttonRects = new Rectangle[0];   // where they were last laid out
+        private int _hotButton = -1;
+        private const int ButtonH = 30, ButtonGap = 8;
+
+        // Windows 11 rounds the card itself (smooth corners, a border in the theme's colour, like its own pop-ups);
+        // before that, a region cuts the corners.
+        private bool _dwmRounded;
+
+        /// <summary>
+        /// Kept on screen until dismissed — Windows' way with a reminder, an alarm or a call. No countdown
+        /// runs and none is drawn. Set by the centre before the card is shown.
+        /// </summary>
+        internal bool StaysUntilDismissed { get; set; }
+
+        /// <summary>Raised when the card opens to its whole message or closes again, so the stack can make room.</summary>
+        internal event Action<NotificationToastForm> HeightChanged;
+
+        /// <summary>"Dismiss all" from this card's menu (set by the centre).</summary>
+        internal Action DismissAllRequested;
+
+        /// <summary>How many cards are up or waiting — "Dismiss all" is offered only when this one is not alone.</summary>
+        internal Func<int> CardsOnScreen;
 
         // Animation.
         private readonly Timer _anim;
@@ -164,7 +220,8 @@ namespace AutoClicker.UI
 
         public NotificationToastForm(Theme theme, string appName, string title,
                                      string body, ToastKind kind, int corner, int dwellMs,
-                                     Image icon, Image hero, Action onActivate)
+                                     Image icon, Image hero, Action onActivate,
+                                     Utils.NotificationExtras extras = null, Image logo = null)
         {
             _theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
             _appName = appName ?? "";
@@ -177,6 +234,12 @@ namespace AutoClicker.UI
             _icon = icon;
             _hero = hero;
             _onActivate = onActivate;
+            _extras = extras;
+            _logo = logo;
+            if (extras != null)
+            {
+                foreach (var b in extras.Buttons) { if (b != null && b.Invoke != null) { _buttons.Add(b); } }
+            }
 
             AutoScaleMode = AutoScaleMode.None;   // raw screen pixels, like the other overlays
             FormBorderStyle = FormBorderStyle.None;
@@ -194,9 +257,16 @@ namespace AutoClicker.UI
             _bodyFont = new Font("Segoe UI", 9.25f, FontStyle.Regular);
             _glyphFont = new Font("Segoe UI Symbol", 12f, FontStyle.Bold);
             _closeFont = new Font("Segoe UI", 9f, FontStyle.Regular);
+            _smallFont = new Font("Segoe UI", 8.25f, FontStyle.Regular);
 
             Width = CardWidth;
-            Height = MeasureHeight();
+            Height = MeasureHeight(false);
+            // Only a card that cuts something off — text past its lines, a picture shrunk — opens on hover.
+            _canOpen = MeasureHeight(true) > Height;
+            if (_buttons.Count > 0)
+            {
+                using (var g = CreateGraphics()) { _buttonRects = CurrentLayout(g, false).Buttons ?? new Rectangle[0]; }
+            }
 
             _anim = new Timer { Interval = 16 };   // ~60 fps
             _anim.Tick += OnAnimTick;
@@ -248,46 +318,124 @@ namespace AutoClicker.UI
             }
         }
 
-        private int TextWidth => Width - Pad * 2;
-
         /// <summary>
-        /// The size the hero picture is drawn at: fit inside (content-width × HeroMaxH)
+        /// The size the hero picture is drawn at: fit inside (card content width × <paramref name="maxH"/>)
         /// preserving aspect ratio. Zero when there's no picture.
         /// </summary>
-        private Size HeroDrawSize()
+        private Size HeroDrawSize(int maxH)
         {
             if (_hero == null || _hero.Width <= 0 || _hero.Height <= 0) { return Size.Empty; }
-            int maxW = TextWidth;
-            double scale = Math.Min((double)maxW / _hero.Width, (double)HeroMaxH / _hero.Height);
+            int maxW = Width - Pad * 2;
+            double scale = Math.Min((double)maxW / _hero.Width, (double)maxH / _hero.Height);
             if (scale > 1.0) { scale = 1.0; }   // never upscale past native size
             int w = Math.Max(1, (int)Math.Round(_hero.Width * scale));
             int h = Math.Max(1, (int)Math.Round(_hero.Height * scale));
             return new Size(w, h);
         }
 
-        /// <summary>Measures the card height for the current text (top row + title + body + picture).</summary>
-        private int MeasureHeight()
+        /// <summary>Where everything on the card goes. Measuring and painting share it, so they cannot disagree.</summary>
+        private struct CardLayout
         {
-            using (var g = CreateGraphics())
+            public int Height;
+            public Rectangle Logo, Title, Body, BarTitle, Bar, BarText, Hero;
+            public Rectangle[] Buttons;
+        }
+
+        /// <summary>
+        /// The card laid out collapsed or <paramref name="open"/>: the header row, then the title, the
+        /// text and a toast's progress bar (beside the toast's picture, when it has one), then the big
+        /// picture across the card, then the countdown.
+        /// </summary>
+        private CardLayout ComputeLayout(Graphics g, bool open, int bodyLinesOpen = BodyLinesOpen)
+        {
+            var L = new CardLayout();
+            var wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPadding;
+            int y = Pad + Math.Max(IconSize, _appFont.Height) + 8;   // under the header row
+            int textLeft = Pad;
+            if (_logo != null)
             {
-                int tw = TextWidth;
-                var wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPadding;
-
-                int topRow = Math.Max(IconSize, _appFont.Height);
-                int titleH = TextRenderer.MeasureText(g, _title, _titleFont, new Size(tw, 0), wrap).Height;
-                int bodyLine = _bodyFont.Height;
-                int bodyH = string.IsNullOrEmpty(_body)
-                    ? 0
-                    : Math.Min(bodyLine * 3,
-                        TextRenderer.MeasureText(g, _body, _bodyFont, new Size(tw, 0), wrap).Height);
-
-                int h = Pad + topRow + 8 + titleH;
-                if (bodyH > 0) { h += 3 + bodyH; }
-                var hero = HeroDrawSize();
-                if (hero.Height > 0) { h += 10 + hero.Height; }
-                h += Pad + ProgressH;
-                return h;
+                L.Logo = new Rectangle(Pad, y + 2, LogoSize, LogoSize);
+                textLeft = Pad + LogoSize + LogoGap;
             }
+            int tw = Math.Max(40, Width - Pad - textLeft);
+
+            int titleFull = TextRenderer.MeasureText(g, _title, _titleFont, new Size(tw, 0), wrap).Height;
+            L.Title = new Rectangle(textLeft, y, tw, Math.Min(titleFull, _titleFont.Height * (open ? TitleLinesOpen : TitleLines)));
+            y += L.Title.Height;
+
+            if (!string.IsNullOrEmpty(_body))
+            {
+                y += 5;   // was 3 — the body crowded the title
+                int bodyFull = TextRenderer.MeasureText(g, _body, _bodyFont, new Size(tw, 0), wrap).Height;
+                L.Body = new Rectangle(textLeft, y, tw, Math.Min(bodyFull, _bodyFont.Height * (open ? bodyLinesOpen : BodyLines)));
+                y += L.Body.Height;
+            }
+
+            Utils.NotificationExtras.ProgressBar bar = _extras?.Progress;
+            if (bar != null)
+            {
+                y += 9;
+                if (bar.Title.Length > 0)
+                {
+                    L.BarTitle = new Rectangle(textLeft, y, tw, _smallFont.Height);
+                    y += _smallFont.Height + 3;
+                }
+                L.Bar = new Rectangle(textLeft, y, tw, BarH);
+                y += BarH;
+                if (bar.Status.Length > 0 || bar.ValueLabel().Length > 0)
+                {
+                    y += 3;
+                    L.BarText = new Rectangle(textLeft, y, tw, _smallFont.Height);
+                    y += _smallFont.Height;
+                }
+            }
+            if (!L.Logo.IsEmpty) { y = Math.Max(y, L.Logo.Bottom); }
+
+            Size hero = HeroDrawSize(open ? HeroMaxHOpen : HeroMaxH);
+            if (hero.Height > 0)
+            {
+                y += 10;
+                L.Hero = new Rectangle(Pad + (Width - Pad * 2 - hero.Width) / 2, y, hero.Width, hero.Height);
+                y += hero.Height;
+            }
+
+            // The toast's buttons, side by side across the card, as Windows lays them out.
+            L.Buttons = new Rectangle[_buttons.Count];
+            if (_buttons.Count > 0)
+            {
+                y += 12;
+                int full = Width - Pad * 2;
+                int w = (full - ButtonGap * (_buttons.Count - 1)) / _buttons.Count;
+                for (int i = 0; i < _buttons.Count; i++)
+                {
+                    int x = Pad + i * (w + ButtonGap);
+                    // The last one takes the rounding, so the row ends exactly at the margin.
+                    L.Buttons[i] = new Rectangle(x, y, i == _buttons.Count - 1 ? Pad + full - x : w, ButtonH);
+                }
+                y += ButtonH;
+            }
+            L.Height = y + Pad + ProgressH;
+            return L;
+        }
+
+        /// <summary>The layout as the card is now — opened, but never taller than the screen allows.</summary>
+        private CardLayout CurrentLayout(Graphics g, bool open)
+        {
+            CardLayout L = ComputeLayout(g, open);
+            if (open && L.Height > _openCap && !L.Body.IsEmpty)
+            {
+                // Too tall to fit: give up whole lines of text until it does (never fewer than collapsed).
+                int over = L.Height - _openCap;
+                int lines = Math.Max(BodyLines, L.Body.Height / Math.Max(1, _bodyFont.Height) - (over + _bodyFont.Height - 1) / Math.Max(1, _bodyFont.Height));
+                L = ComputeLayout(g, true, lines);
+            }
+            return L;
+        }
+
+        /// <summary>The card's height collapsed or opened.</summary>
+        private int MeasureHeight(bool open)
+        {
+            using (var g = CreateGraphics()) { return CurrentLayout(g, open).Height; }
         }
 
         // ── positioning (called by the centre) ──────────────────────────────────
@@ -369,6 +517,7 @@ namespace AutoClicker.UI
                     return;
                 }
                 if (!string.IsNullOrWhiteSpace(appName)) { _appName = appName; }
+                bool newText = body != null && !string.Equals(body, _body, StringComparison.Ordinal);
                 if (body != null) { _body = body; }
                 if (icon != null)
                 {
@@ -376,6 +525,13 @@ namespace AutoClicker.UI
                     _icon = icon;
                     // Never dispose an image the hero slot is also using.
                     if (old != null && !ReferenceEquals(old, _hero)) { try { old.Dispose(); } catch { } }
+                }
+                if (newText)
+                {
+                    // The new text can need more (or fewer) lines than the old one had.
+                    _canOpen = MeasureHeight(true) > MeasureHeight(false);
+                    ApplyHeight(MeasureHeight(_open && _canOpen));
+                    if (!_canOpen) { _open = false; }
                 }
                 Invalidate();
             }
@@ -392,6 +548,7 @@ namespace AutoClicker.UI
             _bodyFont?.Dispose();
             _glyphFont?.Dispose();
             _closeFont?.Dispose();
+            _smallFont?.Dispose();
             if (_logoSubscribed)
             {
                 // A static event outlives this card; staying subscribed would keep it
@@ -405,19 +562,21 @@ namespace AutoClicker.UI
             _cardMenu = null;
             _icon?.Dispose();
             if (_hero != null && !ReferenceEquals(_hero, _icon)) { _hero.Dispose(); }
+            if (_logo != null && !ReferenceEquals(_logo, _icon) && !ReferenceEquals(_logo, _hero)) { _logo.Dispose(); }
             base.OnFormClosed(e);
         }
 
-        /// <summary>Begins the slide-out; the card closes itself when it finishes.</summary>
-        /// <summary>The app, title and body this card is showing — used to spot a repeat.</summary>
-        internal bool Matches(string appName, string title, string body)
+        /// <summary>The app, title, body and sender this card is showing — used to spot a repeat.</summary>
+        internal bool Matches(string appName, string title, string body, string sender = "")
         {
-            // ALL THREE must match. An earlier version used "app OR (title AND body)",
+            // ALL of them must match. An earlier version used "app OR (title AND body)",
             // which would have collapsed every unrelated notification from the same app
-            // into one card — the opposite of the point.
+            // into one card — the opposite of the point. The sender too: two web sites
+            // sending "New message" through one browser are two messages.
             return string.Equals(_appName ?? "", appName ?? "", StringComparison.Ordinal)
                    && string.Equals(_title ?? "", title ?? "", StringComparison.Ordinal)
-                   && string.Equals(_body ?? "", body ?? "", StringComparison.Ordinal);
+                   && string.Equals(_body ?? "", body ?? "", StringComparison.Ordinal)
+                   && string.Equals(_extras?.Sender ?? "", sender ?? "", StringComparison.Ordinal);
         }
 
         private int _repeats = 1;
@@ -453,6 +612,7 @@ namespace AutoClicker.UI
         protected override void OnMouseEnter(EventArgs e)
         {
             base.OnMouseEnter(e);
+            if (!_hovered) { _hoverSinceTick = Environment.TickCount64; }
             _hovered = true;
             Invalidate();
         }
@@ -461,7 +621,71 @@ namespace AutoClicker.UI
         {
             base.OnMouseLeave(e);
             _hovered = false;
+            _leftTick = Environment.TickCount64;
+            _hotButton = -1;
             Invalidate();
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            int hot = ButtonAt(e.Location);
+            if (hot == _hotButton) { return; }
+            _hotButton = hot;
+            Cursor = hot >= 0 || _onActivate != null ? Cursors.Hand : Cursors.Default;
+            Invalidate();
+        }
+
+        /// <summary>The toast button under <paramref name="p"/>, or -1.</summary>
+        private int ButtonAt(Point p)
+        {
+            Rectangle[] rects = _buttonRects;
+            for (int i = 0; i < rects.Length && i < _buttons.Count; i++)
+            {
+                if (rects[i].Contains(p)) { return i; }
+            }
+            return -1;
+        }
+
+        /// <summary>Opens the card to its whole message, or closes it back to Windows' toast size.</summary>
+        private void SetOpen(bool open)
+        {
+            if (_open == open || IsDisposed) { return; }
+            if (open)
+            {
+                // Never taller than most of the screen it is on.
+                try { _openCap = Math.Max(240, Screen.FromControl(this).WorkingArea.Height * 4 / 5); } catch { }
+            }
+            _open = open;
+            ApplyHeight(MeasureHeight(open));
+        }
+
+        /// <summary>
+        /// Resizes the card in place. In a BOTTOM corner the stack is built upwards, so the card grows
+        /// upwards: its bottom edge stays where it is and the cards above make room. Growing downwards
+        /// there would push it under the taskbar while the stack caught up.
+        /// </summary>
+        private void ApplyHeight(int h)
+        {
+            if (IsDisposed || h == Height) { return; }
+            int delta = h - Height;
+            if (_corner == 2 || _corner == 3)
+            {
+                _y -= delta;
+                _fromY -= delta;
+                _targetY -= delta;
+                _yTweenTarget = _targetY;
+            }
+            try
+            {
+                var pt = new Point((int)Math.Round(_x), (int)Math.Round(_y));
+                if (IsHandleCreated && Visible) { SetBounds(pt.X, pt.Y, Width, h); _lastAppliedPoint = pt; }
+                else { Height = h; }
+                // The corners follow by themselves: Windows rounds the new size, or OnSizeChanged re-cuts the region.
+            }
+            catch { /* closing */ }
+            Invalidate();
+            try { HeightChanged?.Invoke(this); } catch (Exception ex) { Utils.Logger.Swallow("NotificationToastForm.HeightChanged", ex); }
         }
 
         /// <summary>
@@ -500,6 +724,15 @@ namespace AutoClicker.UI
                 BeginDismiss();
                 return;
             }
+            // One of the toast's own buttons: that button's action, not the body's.
+            int pressed = ButtonAt(e.Location);
+            if (pressed >= 0)
+            {
+                var press = _buttons[pressed].Invoke;
+                try { press?.Invoke(); } catch (Exception ex) { Utils.Logger.Swallow("NotificationToastForm.Button", ex); }
+                BeginDismiss();
+                return;
+            }
             if (_onActivate != null)
             {
                 var act = _onActivate;
@@ -521,22 +754,44 @@ namespace AutoClicker.UI
                 menu.BackColor = _theme.Surface2;
                 menu.ForeColor = _theme.Text;
 
-                if (MuteAppRequested != null && !string.IsNullOrWhiteSpace(_appName))
+                void AddMute(string name)
                 {
-                    string app = _appName;
-                    var mute = new ToolStripMenuItem(Utils.Localization.F("Mute {0}", app));
+                    var mute = new ToolStripMenuItem(Utils.Localization.F("Mute {0}", name));
                     mute.Click += (s, e) =>
                     {
                         var ask = MuteAppRequested;
                         BeginDismiss();
-                        try { ask(app); } catch { }
+                        try { ask(name); } catch { }
                     };
                     menu.Items.Add(mute);
+                }
+                if (MuteAppRequested != null)
+                {
+                    // A sender of its own — a web site in Edge — can be muted by itself, without
+                    // silencing every other site the browser passes on.
+                    string sender = _extras?.Sender ?? "";
+                    if (sender.Length > 0) { AddMute(sender); }
+                    if (!string.IsNullOrWhiteSpace(_appName)) { AddMute(_appName); }
                 }
 
                 var close = new ToolStripMenuItem(Utils.Localization.T("Dismiss"));
                 close.Click += (s, e) => BeginDismiss();
                 menu.Items.Add(close);
+
+                // With a reminder or two kept up until dismissed, clearing the corner one card at a
+                // time is a chore.
+                int others = 0;
+                try { others = CardsOnScreen?.Invoke() ?? 0; } catch { }
+                if (DismissAllRequested != null && others > 1)
+                {
+                    var all = new ToolStripMenuItem(Utils.Localization.T("Dismiss all"));
+                    all.Click += (s, e) =>
+                    {
+                        var dismissAll = DismissAllRequested;
+                        try { dismissAll(); } catch (Exception ex) { Utils.Logger.Swallow("NotificationToastForm.DismissAll", ex); }
+                    };
+                    menu.Items.Add(all);
+                }
 
                 // Keep the card alive while the menu is open, and let the dwell resume
                 // (from a full window, so there is time to read what is left) after.
@@ -591,10 +846,21 @@ namespace AutoClicker.UI
 
                 case Phase.Dwell:
                     _x = _targetX;
+                    // Hovering opens a card that cuts its message off, after a moment (a pointer
+                    // passing over it must not); leaving closes it again, after a moment too.
+                    if (_canOpen)
+                    {
+                        if (_hovered || _menuOpen)
+                        {
+                            if (!_open && now - _hoverSinceTick >= OpenAfterMs) { SetOpen(true); }
+                        }
+                        else if (_open && now - _leftTick >= CloseAfterMs) { SetOpen(false); }
+                    }
                     // Hovering pauses the countdown, and so does an open card menu: the
                     // mouse is over the MENU, not the card, so _hovered alone would let the
-                    // card slide away underneath the choice being made.
-                    if (!_hovered && !_menuOpen)
+                    // card slide away underneath the choice being made. A card kept up until
+                    // dismissed (a reminder, a call) has no countdown at all.
+                    if (!_hovered && !_menuOpen && !StaysUntilDismissed)
                     {
                         // Count down by REAL elapsed time. Subtracting the timer's
                         // nominal interval assumed every tick arrived exactly on
@@ -686,7 +952,12 @@ namespace AutoClicker.UI
                 if (_phase == Phase.Dwell && now - _lastBarPaintTick >= 50)
                 {
                     _lastBarPaintTick = now;
-                    Invalidate(new Rectangle(0, Height - ProgressH - 6, Width, ProgressH + 6));
+                    if (!StaysUntilDismissed) { Invalidate(new Rectangle(0, Height - ProgressH - 6, Width, ProgressH + 6)); }
+                    // A toast's own bar that cannot say how far along it is runs a moving stripe.
+                    if (!_toastBarRect.IsEmpty && _extras?.Progress != null && _extras.Progress.Indeterminate)
+                    {
+                        Invalidate(Rectangle.Inflate(_toastBarRect, 2, 2));
+                    }
                 }
             }
             catch { /* handle destroyed mid-tick */ }
@@ -733,8 +1004,53 @@ namespace AutoClicker.UI
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            Region = RoundedRegion(Width, Height, Radius);
+            _dwmRounded = TryRoundWithDwm();
+            // Region = null too: the window is sized while it is being created, BEFORE this runs, and a region cut
+            // then (by OnSizeChanged) would stop Windows rounding it — the corners stayed region-cut and jagged.
+            Region = _dwmRounded ? null : RoundedRegion(Width, Height, Radius);
+            _cornersChosen = true;
         }
+
+        private bool _cornersChosen;
+
+        /// <summary>
+        /// Keeps the region-cut corners on the card's REAL size. The card is measured after its window already
+        /// exists (measuring needs a Graphics, which creates the window), so the region cut in OnHandleCreated was
+        /// for the window's starting 300 px: every card's bottom corners came out square below a rounded border.
+        /// </summary>
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            if (_cornersChosen && !_dwmRounded && IsHandleCreated) { Region = RoundedRegion(Width, Height, Radius); }   // the setter disposes the old one
+        }
+
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWA_BORDER_COLOR = 34, DWMWCP_ROUND = 2;
+
+        /// <summary>
+        /// Asks Windows 11 to round the card itself: smooth corners (a region's are cut pixel by pixel, jagged) and a
+        /// border in the theme's colour — the look of Windows' own pop-ups, as Tempo's menus already have. Windows
+        /// will not round a window that has a region, so with this there is none. False before Windows 11, which has
+        /// neither attribute; the card then cuts its corners with a region.
+        /// </summary>
+        private bool TryRoundWithDwm()
+        {
+            if (Environment.OSVersion.Version.Build < 22000) { return false; }
+            try
+            {
+                int pref = DWMWCP_ROUND;
+                if (DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int)) != 0) { return false; }
+                Color b = _theme.Border;
+                int colorref = b.R | (b.G << 8) | (b.B << 16);
+                DwmSetWindowAttribute(Handle, DWMWA_BORDER_COLOR, ref colorref, sizeof(int));
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>For the tests: whether Windows rounds this card (true) or a region cuts its corners.</summary>
+        internal bool RoundedByWindows => _dwmRounded;
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -746,11 +1062,16 @@ namespace AutoClicker.UI
 
             Color accent = Accent;
 
-            // Card border (Windows 11 style — no big coloured stripe).
-            using (var path = RoundedPath(Width, Height, Radius))
-            using (var border = new Pen(_theme.Border, 1))
+            // Card border (Windows 11 style — no big coloured stripe). When Windows rounds the card it draws the
+            // border itself, in the theme's colour, along its own (smooth) corners; a second one painted here
+            // would run inside it.
+            if (!_dwmRounded)
             {
-                g.DrawPath(border, path);
+                using (var path = RoundedPath(Width, Height, Radius))
+                using (var border = new Pen(_theme.Border, 1))
+                {
+                    g.DrawPath(border, path);
+                }
             }
 
             // ── Top row: [✕] [app icon] app name ───────────────────────────────
@@ -813,8 +1134,7 @@ namespace AutoClicker.UI
             var nameRect = new Rectangle(nameLeft, Pad, Math.Max(10, nameWidth), IconSize);
             // The repeat marker rides on the small app line rather than the title: it is
             // metadata about the card, not part of what the message says.
-            string appLabel = (string.IsNullOrEmpty(_appName) ? "Notification" : _appName) + RepeatBadge;
-            TextRenderer.DrawText(g, appLabel, _appFont, nameRect, _theme.TextMuted,
+            TextRenderer.DrawText(g, HeaderText(), _appFont, nameRect, _theme.TextMuted,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter
                 | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
 
@@ -836,35 +1156,67 @@ namespace AutoClicker.UI
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             }
 
-            // ── Title + body (full width, left-aligned under the icon) ─────────
-            int tx = Pad;
-            int tw = TextWidth;
-            int y = Pad + Math.Max(IconSize, _appFont.Height) + 8;
-            var wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis;
+            // ── Title + body (left-aligned under the icon; beside the toast's picture when it has one) ──
+            CardLayout L = CurrentLayout(g, _open);
+            // TextBoxControl (DT_EDITCONTROL) is what makes the "…" appear on the LAST line that fits when
+            // the text runs past its lines; with word-wrapping alone the text was just cut off, which gave
+            // no hint that hovering opens the rest.
+            var wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis
+                       | TextFormatFlags.TextBoxControl;
 
-            int titleH = TextRenderer.MeasureText(g, _title, _titleFont, new Size(tw, 0),
-                TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height;
-            TextRenderer.DrawText(g, _title, _titleFont, new Rectangle(tx, y, tw, titleH), _theme.Text, wrap);
-            y += titleH;
-
-            if (!string.IsNullOrEmpty(_body))
+            // The toast's own picture beside the text — a contact's photo (round, as Windows draws a
+            // person), a web site's notification icon — at the size Windows gives it.
+            if (_logo != null && !L.Logo.IsEmpty)
             {
-                y += 5;   // was 3 — the body crowded the title
-                int bodyH = Math.Min(_bodyFont.Height * 3,
-                    TextRenderer.MeasureText(g, _body, _bodyFont, new Size(tw, 0),
-                        TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height);
-                TextRenderer.DrawText(g, _body, _bodyFont, new Rectangle(tx, y, tw, bodyH),
-                    _theme.TextMuted, wrap);
-                y += bodyH;
+                bool round = _extras != null && _extras.LogoCircle;
+                using (var clip = round ? Circle(L.Logo) : RoundedRect(L.Logo, 8))
+                {
+                    var saved = g.Save();
+                    g.SetClip(clip, CombineMode.Intersect);
+                    g.DrawImage(_logo, FitInto(_logo.Size, L.Logo, fill: round));
+                    g.Restore(saved);
+                }
+            }
+
+            TextRenderer.DrawText(g, _title, _titleFont, L.Title, _theme.Text, wrap);
+            if (!L.Body.IsEmpty)
+            {
+                TextRenderer.DrawText(g, _body, _bodyFont, L.Body, _theme.TextMuted, wrap);
+            }
+
+            // A toast's own progress bar (a download, an install), as Windows lays it out: its title
+            // above, the bar, then its status on the left and how far along on the right.
+            Utils.NotificationExtras.ProgressBar bar = _extras?.Progress;
+            _toastBarRect = bar != null ? L.Bar : Rectangle.Empty;
+            if (bar != null)
+            {
+                var line = TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding
+                           | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine;
+                if (!L.BarTitle.IsEmpty) { TextRenderer.DrawText(g, bar.Title, _smallFont, L.BarTitle, _theme.TextMuted, line); }
+                DrawToastBar(g, bar, L.Bar, accent);
+                if (!L.BarText.IsEmpty)
+                {
+                    string value = bar.ValueLabel();
+                    int valueW = value.Length == 0 ? 0
+                        : TextRenderer.MeasureText(g, value, _smallFont, Size.Empty, TextFormatFlags.NoPadding).Width;
+                    if (value.Length > 0)
+                    {
+                        TextRenderer.DrawText(g, value, _smallFont, new Rectangle(L.BarText.Right - valueW, L.BarText.Y, valueW, L.BarText.Height),
+                            _theme.TextMuted, line);
+                    }
+                    if (bar.Status.Length > 0)
+                    {
+                        TextRenderer.DrawText(g, bar.Status, _smallFont,
+                            new Rectangle(L.BarText.X, L.BarText.Y, Math.Max(10, L.BarText.Width - valueW - (valueW > 0 ? 12 : 0)), L.BarText.Height),
+                            _theme.TextMuted, line);
+                    }
+                }
             }
 
             // The picture (Windows 11 hero image), rounded, centred under the text.
-            var heroSize = HeroDrawSize();
-            if (heroSize.Height > 0 && _hero != null)
+            if (_hero != null && !L.Hero.IsEmpty)
             {
-                y += 10;
-                int hx = tx + (tw - heroSize.Width) / 2;
-                var heroRect = new Rectangle(hx, y, heroSize.Width, heroSize.Height);
+                Rectangle heroRect = L.Hero;
                 using (var clip = RoundedRect(heroRect, 8))
                 {
                     var saved = g.Save();
@@ -878,11 +1230,30 @@ namespace AutoClicker.UI
                 }
             }
 
+            // The toast's own buttons, as Windows draws them: a row of quiet rounded buttons under the content.
+            _buttonRects = L.Buttons ?? new Rectangle[0];
+            for (int i = 0; i < _buttonRects.Length && i < _buttons.Count; i++)
+            {
+                Rectangle r = _buttonRects[i];
+                bool hot = i == _hotButton;
+                using (var path = RoundedRect(r, 6))
+                using (var fill = new SolidBrush(hot ? Blend(_theme.Surface2, accent, 0.22) : _theme.Surface2))
+                using (var edge = new Pen(hot ? Color.FromArgb(160, accent) : _theme.Border, 1))
+                {
+                    g.FillPath(fill, path);
+                    g.DrawPath(edge, path);
+                }
+                TextRenderer.DrawText(g, _buttons[i].Text, _appFont, Rectangle.Inflate(r, -6, 0), _theme.Text,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding
+                    | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            }
+
             // Draining progress bar along the bottom (time remaining). Slimmer than
             // before, rounded at the ends, and faded along its length so it reads as a
-            // countdown rather than a hard divider under the card.
+            // countdown rather than a hard divider under the card. None on a card kept up
+            // until dismissed: nothing is counting down.
             double frac = Math.Max(0, Math.Min(1, _remainingMs / (double)_dwellMs));
-            int barW = (int)((Width - Pad * 2) * frac);
+            int barW = StaysUntilDismissed ? 0 : (int)((Width - Pad * 2) * frac);
             if (barW > 2)
             {
                 var barRect = new Rectangle(Pad, Height - ProgressH - 3, barW, ProgressH);
@@ -900,6 +1271,79 @@ namespace AutoClicker.UI
                     g.FillPath(pb, RoundedRect(barRect, ProgressH / 2f));
                 }
             }
+        }
+
+        /// <summary>
+        /// The small line beside the icon: who sent it, as Windows' own pop-up names it — the web site and
+        /// the browser ("www.kenherbert.dev · Microsoft Edge"), the app and its attribution ("Phone Link ·
+        /// via SMS") — then when, if it happened well before it arrived, then the repeat count.
+        /// </summary>
+        private string HeaderText()
+        {
+            string app = string.IsNullOrEmpty(_appName) ? "Notification" : _appName;
+            string line = _extras == null ? app : Utils.NotificationExtras.SourceLine(app, _extras.Sender, _extras.Attribution);
+            // A message delivered late (the PC was asleep, the app caught up) says when it was sent, as
+            // Windows' notification centre does — otherwise it reads as something that just happened.
+            if (_extras?.SentUtc is DateTime sent)
+            {
+                TimeSpan late = _createdUtc - sent;
+                if (late >= TimeSpan.FromMinutes(2) && late <= TimeSpan.FromDays(7))
+                {
+                    line += " · " + sent.ToLocalTime().ToString(late >= TimeSpan.FromHours(20) ? "ddd HH:mm" : "HH:mm");
+                }
+            }
+            return line + RepeatBadge;
+        }
+
+        /// <summary>A toast's own progress bar: filled to its value, or a moving stripe when it cannot say.</summary>
+        private void DrawToastBar(Graphics g, Utils.NotificationExtras.ProgressBar bar, Rectangle r, Color accent)
+        {
+            if (r.Width < 8) { return; }
+            using (var track = new SolidBrush(Color.FromArgb(46, accent)))
+            using (var path = RoundedRect(r, BarH / 2f))
+            {
+                g.FillPath(track, path);
+            }
+            Rectangle fill;
+            if (bar.Indeterminate)
+            {
+                // A third of the bar sliding across, once every 1.6 s (repainted from the dwell tick).
+                int seg = Math.Max(BarH * 2, r.Width / 3);
+                double t = (Environment.TickCount64 % 1600) / 1600.0;
+                int x = r.X - seg + (int)Math.Round((r.Width + seg) * t);
+                fill = Rectangle.Intersect(r, new Rectangle(x, r.Y, seg, r.Height));
+            }
+            else
+            {
+                fill = new Rectangle(r.X, r.Y, (int)Math.Round(r.Width * bar.Value), r.Height);
+            }
+            if (fill.Width < 2) { return; }
+            using (var b = new SolidBrush(accent))
+            using (var path = RoundedRect(fill, BarH / 2f))
+            {
+                g.FillPath(b, path);
+            }
+        }
+
+        /// <summary>
+        /// Where a picture of <paramref name="size"/> is drawn inside <paramref name="box"/>, keeping its shape:
+        /// filling the box (a round photo — its circle must be full) or fitting inside it.
+        /// </summary>
+        private static Rectangle FitInto(Size size, Rectangle box, bool fill)
+        {
+            if (size.Width <= 0 || size.Height <= 0) { return box; }
+            double sx = (double)box.Width / size.Width, sy = (double)box.Height / size.Height;
+            double s = fill ? Math.Max(sx, sy) : Math.Min(sx, sy);
+            int w = Math.Max(1, (int)Math.Round(size.Width * s));
+            int h = Math.Max(1, (int)Math.Round(size.Height * s));
+            return new Rectangle(box.X + (box.Width - w) / 2, box.Y + (box.Height - h) / 2, w, h);
+        }
+
+        private static GraphicsPath Circle(Rectangle r)
+        {
+            var path = new GraphicsPath();
+            path.AddEllipse(r);
+            return path;
         }
 
         private static GraphicsPath RoundedPath(int w, int h, int r)

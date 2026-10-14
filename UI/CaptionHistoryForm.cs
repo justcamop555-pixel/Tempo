@@ -401,6 +401,8 @@ namespace AutoClicker.UI
         internal Func<Rectangle?> SnapPartner;
 
         private Rectangle _sizeMoveStart;
+        // Where on the panel the pointer took hold of it, for the magnet — see CaptionWindowChrome.SnapMoving.
+        private Point? _moveGrab;
 
         protected override void WndProc(ref Message m)
         {
@@ -418,7 +420,7 @@ namespace AutoClicker.UI
                     {
                         Rectangle? partner = null;
                         try { partner = SnapPartner?.Invoke(); } catch { }
-                        if (CaptionWindowChrome.SnapMoving(ref m, Dpi, partner)) { return; }
+                        if (CaptionWindowChrome.SnapMoving(ref m, Dpi, partner, ref _moveGrab)) { return; }
                         break;
                     }
                     case CaptionWindowChrome.WM_NCLBUTTONDBLCLK:
@@ -456,8 +458,10 @@ namespace AutoClicker.UI
             if (m.Msg == CaptionWindowChrome.WM_ENTERSIZEMOVE)
             {
                 _sizeMoveStart = Bounds;
+                _moveGrab = null;
             }
             base.WndProc(ref m);
+            if (m.Msg == CaptionWindowChrome.WM_EXITSIZEMOVE) { _moveGrab = null; }
             if (m.Msg == CaptionWindowChrome.WM_EXITSIZEMOVE && Bounds != _sizeMoveStart)
             {
                 bool resized = Bounds.Size != _sizeMoveStart.Size;
@@ -476,6 +480,8 @@ namespace AutoClicker.UI
         {
             try
             {
+                // Wholly on the monitors (across two side by side included) is where the user put it.
+                if (CaptionWindowChrome.FullyOnScreens(Bounds)) { return; }
                 var wa = Screen.FromControl(this).WorkingArea;
                 Size sz = FitToArea(Size, wa);
                 int x = Left, y = Top;

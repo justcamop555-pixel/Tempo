@@ -541,17 +541,17 @@ namespace AutoClicker.UI
 
                 if (wasVisible)
                 {
-                    Show();
-                    EnsureOnScreen();
-                    Activate();
-                    ReassertTopMost();
-
                     // Same repair the coordinate picker needs: without it the window
                     // returns from Hide() with its backdrop composite unbuilt, and with a
                     // wallpaper every control is transparent — so the window comes back as
-                    // a hole showing the desktop through it.
-                    TryRepairLayoutNow();
-                    InvalidateBackdropSurfaces();
+                    // a hole showing the desktop through it. Cloaked until it is whole.
+                    ShowWholeAfterHide(() =>
+                    {
+                        Show();
+                        EnsureOnScreen();
+                        Activate();
+                        ReassertTopMost();
+                    });
                 }
             }
         }

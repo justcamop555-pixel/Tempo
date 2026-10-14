@@ -110,19 +110,28 @@ namespace AutoClicker
             }
         }
 
-        private static void TryActivateExistingInstance()
+        /// <summary>
+        /// Asks the running Tempo to bring its window forward. With <paramref name="waitMs"/>, waits that
+        /// long for it to say the window is on screen (MainForm.ShownAckEventName) and returns whether it did.
+        /// </summary>
+        private static bool TryActivateExistingInstance(int waitMs = 0)
         {
             try
             {
                 GrantForegroundToOtherTempo();
 
-                int msg = RegisterWindowMessage(MainForm.ShowInstanceMessageName);
-                if (msg != 0)
+                // Made before the request goes out, so the answer cannot arrive first.
+                using (var shown = new EventWaitHandle(false, EventResetMode.AutoReset, MainForm.ShownAckEventName))
                 {
-                    PostMessage(HWND_BROADCAST, msg, IntPtr.Zero, IntPtr.Zero);
+                    int msg = RegisterWindowMessage(MainForm.ShowInstanceMessageName);
+                    if (msg != 0)
+                    {
+                        PostMessage(HWND_BROADCAST, msg, IntPtr.Zero, IntPtr.Zero);
+                    }
+                    return waitMs > 0 && msg != 0 && shown.WaitOne(waitMs);
                 }
             }
-            catch { }
+            catch { return false; }
         }
 
         /// <summary>
@@ -229,7 +238,20 @@ namespace AutoClicker
             {
                 // Pull the running window forward so the user isn't left hunting the
                 // tray — that's the actual thing they want when they double-click again.
-                TryActivateExistingInstance();
+                //
+                // And when the running copy says its window is up, that is all: this launch leaves
+                // without a word. "Tempo is already running" used to come up every time, and came
+                // up FIRST — recorded (scratchpad/openframes), the notice was on screen a quarter of
+                // a second before the window it said had been brought to the front, which is the
+                // "some GUI appears before Tempo has loaded" people saw on opening it. It is kept for
+                // when the running copy does not answer (busy, hung, or a version without the reply),
+                // where saying where Tempo is still helps.
+                if (TryActivateExistingInstance(3000))
+                {
+                    Logger.Info("[startup] Tempo is already running — its window is on screen now; this launch exits quietly.");
+                    return;
+                }
+                Logger.Info("[startup] Tempo is already running but did not confirm its window within 3 s — showing the notice.");
 
                 // Show the version so support/bug reports always name the exact build.
                 // Read from the assembly so this can never drift from the real number.
@@ -552,6 +574,9 @@ namespace AutoClicker
         {
             var ex = e.ExceptionObject as Exception;
             Logger.Error("Unhandled application domain exception.", ex);
+            // A run's shortcut guard may have the Sticky Keys shortcut switched off: put it back before
+            // the process goes, or it stays off until the user signs out.
+            try { AutoClicker.Native.AccessibilityShortcuts.Restore(); } catch { }
             // The process is usually terminating here, so don't try to show UI —
             // just preserve the report on disk for later.
             try
