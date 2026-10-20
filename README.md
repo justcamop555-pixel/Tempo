@@ -39,24 +39,26 @@
 > **Use responsibly.** Auto-clicking may break the terms of service of some games and apps,
 > and some anti-cheat systems detect it. You are responsible for how you use Tempo.
 
-## What's new in 1.0.324
+## What's new in 1.0.325
 
-- **Mirrored notifications look and act like Windows' own:** their pictures, the website they came
-  from, their buttons, and a click that opens the page or conversation they're about. Reminders
-  stay until you dismiss them, and the cards have four round corners.
-- **Only Tempo's keybinds act during a run.** While the clicker runs or a macro plays or records,
-  the Windows key, the Win shortcuts and the Sticky Keys pop-up are held back. Alt+Tab still works.
-- **The CPS test shows every detail of a run** (clicks in each second, your rhythm, the gaps,
-  whether you kept your speed) and keeps a best for each input and length. Start the clicker
-  over its pad to measure Tempo's own speed.
-- **Camera-relative movement counts only real camera turns**, so moving the mouse in Roblox
-  without turning the camera no longer steers you off course. Calibration can now be checked
-  with one key, and French keyboards steer with Z/Q/S/D.
-- **Tempo opens in one piece**, complete in its first frame instead of half-drawn.
-- **Move and fade the running badges** from the tray, and the RAM figure matches Task Manager.
-- **Captions:** a real "Diagnose Windows bar" check, every installed font for the caption bar,
-  and a bar that moves freely again.
-- **Kinder to GitHub:** Tempo waits when GitHub's limit is used up, and works through a proxy.
+- **Anti-Freeze watches the app you click.** It slows down while the app is slow to answer, and
+  holds the clicks while the app is frozen. Before, it watched Tempo's own CPU use. Its card shows
+  the PC's CPU, GPU, memory and power, and Tempo asks Windows for full speed while a run is on.
+- **Randomized clicks keep your speed and your spot.** They stay around the spot where you put the
+  cursor instead of drifting away, jitter no longer changes your average speed, and no click
+  strays into the next window. Changes apply mid-run, and Humanize fits the speed.
+- **Roblox update alerts:** Tempo tells you when Roblox releases a new client, with **Update now**,
+  **Later** or **Keep this version**.
+- **Sign in with any Chromium browser**: Opera GX, Vivaldi, Yandex, Thorium, the Canary channels
+  and more. And Roblox launches again after it updates itself.
+- **Right at 125% and 150%:** the macro list, charts, cards and splash screen scale with the
+  screen, and the window fits the screen on first start.
+- **Every window follows a theme change.** Spinners lost their stray "[ ]" frame, 17 rows that
+  touched are fixed, and dates follow Tempo's language.
+- **Tamper check details** in Settings › Data & Backup, a warning for DLLs that aren't Tempo's, and
+  an installer that copies only Tempo itself.
+- **Updates and uninstall:** a restart after an update waits for the old copy to close, and
+  uninstalling keeps your latest changes and cleans up after itself.
 
 The full notes are on the [release page](https://github.com/justcamop555-pixel/Tempo/releases/latest),
 and every change is in [CHANGELOG.md](CHANGELOG.md).
@@ -151,6 +153,10 @@ or by time, with a live estimate · timing and position **randomisation** to sof
 Quick **CPS presets** with the active one highlighted, a box for an **exact CPS**, and a speed
 slider you can scroll to dial in the rate live.
 
+**Randomisation** varies each gap by up to the jitter you set without changing your average speed,
+and spreads clicks in a circle around the spot you chose without leaving its window. **Humanize**
+sets it all up for the current speed in one click, and changes apply while a run is going.
+
 The **CPS test** measures you: your clicks in each second, your best second, how even your rhythm
 was, the gaps between clicks and whether you kept your speed, with a best for each button and
 length. Start the clicker with the pointer on its pad and it measures Tempo instead, against the
@@ -243,9 +249,10 @@ by **Place ID** or a private server, **follow** a player into whatever they're p
 accounts without signing in and out. It can sit on its own tab or **open in a window of its own**,
 beside your game.
 
-- **You never type a Roblox password into Tempo.** Signing in opens **your own browser** — Chrome
-  by preference, then Edge, Brave or Opera — in a private window, and you sign in to Roblox as you
-  always do. Tempo takes the session from that window when you're done. Sign in with a **passkey or
+- **You never type a Roblox password into Tempo.** Signing in opens **your own browser** in a
+  private window, and you sign in to Roblox as you always do. Chrome is used by preference, then
+  Edge, Brave, Opera, Opera GX, Vivaldi, or any other Chromium browser on your PC. Firefox can't be
+  driven for this. Tempo takes the session from that window when you're done. Sign in with a **passkey or
   "quick log in"** and Tempo saves only the username.
 - **An encrypted vault.** Sessions and any saved passwords are sealed with **AES-256-GCM** under a
   key stretched from a master password you choose (PBKDF2-SHA256, 1.2 million iterations), and the
@@ -278,8 +285,9 @@ window at sign-in), per-tab scroll memory, and windows that fit laptops at 125% 
 Colours stay right with HDR on.
 
 ### 🛡 Dependable
-**Anti-freeze protection** — a CPS cap **plus** a CPU-aware throttle that backs off when your PC gets
-busy. **Crash-safe saving** keeps the previous copy, so an interrupted write costs one save rather
+**Anti-freeze protection** — a CPS cap **plus** a watch on the app you're clicking. Tempo slows down
+while that app is slow to answer, and holds the clicks while it's frozen. While a run is on, Tempo
+asks Windows for full speed, even on battery. **Crash-safe saving** keeps the previous copy, so an interrupted write costs one save rather
 than everything. Errors arrive as notifications instead of hiding in a log, and a **notification
 history** keeps every message — including the ones held back while a fullscreen game had the
 screen, which is exactly when you were most likely to miss one.
@@ -297,11 +305,14 @@ Tempo hashes its own program file at every launch, and once per release compares
 SHA-256 that GitHub publishes for that release. **Settings › Data & Backup** then tells you whether
 the copy you're running is the one that was published, and a confirmed copy shows its
 **Official ID** — the first 16 characters of that SHA-256 — in the sidebar and in About, so anyone
-can check the answer on GitHub instead of taking Tempo's word for it.
+can check the answer on GitHub instead of taking Tempo's word for it. **Details…** shows what the
+check looked at — the file, its full SHA-256, its signature, the site the browser says it came
+from — and the result of each of its six checks.
 
 It catches a patched or repackaged build, a copy that came from somewhere other than the releases
 page, a file damaged by a crash or a failed update, and changed files among the ones Tempo unpacks
-to run. Being offline is never treated as evidence of anything, and a build you made yourself can
+to run. It also warns when program files that aren't Tempo's have been loaded into it from its
+folder. Being offline is never treated as evidence of anything, and a build you made yourself can
 be marked trusted in one click.
 
 Honest about its limits: this is tamper-**evident**, not tamper-proof. Someone who can rewrite
@@ -341,6 +352,11 @@ connection, is checked against the SHA-256 GitHub publishes for it, and a failed
 rather than leaving Tempo closed. The **Check for updates** button at the foot of Settings, or the
 same item in the tray menu, asks straight away.
 
+Tempo can also tell you when **Roblox** has released a new client, with **Update now**, **Later**
+or **Keep this version**. Roblox updates itself and turns old clients away after a while, so
+keeping a version means no reminders until the next release. Switch it off with **Settings ›
+Behaviour › Check for Roblox updates**.
+
 ## Privacy
 
 Tempo runs **entirely on your PC**. Your clicks, macros, profiles, statistics and captions never
@@ -353,6 +369,7 @@ list:
 | --- | --- | --- | --- |
 | **Update check** | GitHub releases API | Automatically, at start and while Tempo is open. Off: **Settings › Behaviour › Check for updates** | nothing but the request itself |
 | **Release check** | GitHub releases API | Automatically, once per release (test builds never ask). Off: **Settings › Data & Backup › Check that Tempo hasn't been tampered with** | nothing but the request itself |
+| **Roblox update check** | Roblox's client-version address (the one Roblox's own client asks) and its public deploy log | Automatically, every two hours, only while Roblox is installed. Off: **Settings › Behaviour › Check for Roblox updates** | nothing but the request itself |
 | Downloading an update | GitHub release asset | When you choose to update | — |
 | Speech models | Hugging Face | When you download a model | — |
 | A logo from a URL | the address you enter | When you set it | — |
@@ -361,9 +378,9 @@ list:
 | **Accounts:** a game from a Place ID | roblox.com | When you type one | nothing but the Place ID |
 | **Local API** | nothing — it only listens on this PC (127.0.0.1 and ::1) | Only if you turn it on | — |
 
-The Roblox rows only ever happen if you turn the **Accounts** tab on and add an account; with it off,
-Tempo never contacts Roblox. Account sessions are stored encrypted on your PC and are sent to nobody
-but Roblox itself. None of these rows carry your data anywhere else, and every one can be avoided.
+The **Accounts** rows only ever happen if you turn the Accounts tab on and add an account. With it
+off, the only thing Tempo asks Roblox is the update check above, and that can be switched off too.
+Account sessions are stored encrypted on your PC and are sent to nobody but Roblox itself. None of these rows carry your data anywhere else, and every one can be avoided.
 
 **Bug reports are yours to review.** Nothing is sent until you choose how to send it, and Tempo shows
 you the whole report first so you can edit or delete any of it. Your Windows account name, PC name
