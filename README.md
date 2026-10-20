@@ -524,10 +524,11 @@ embedded version matches the project) with a progress display; a full log goes t
 
 > [!IMPORTANT]
 > Attach the **exact** `Tempo.exe` that `publish.cmd` produced. Tempo's tamper check compares the
-> running file with the SHA-256 GitHub publishes for the release, so an exe rebuilt from different
-> source would make every user's copy report as modified, with no Official ID. The build is
-> deterministic — the same source rebuilds to a byte-identical exe — so re-running `publish.cmd` on
-> unchanged source is safe.
+> running file with the SHA-256 GitHub publishes for the release, so any other exe makes every
+> user's copy report as modified, with no Official ID. Every run of `publish.cmd` stamps a new build
+> ID, so even unchanged source rebuilds to a **different** exe: once a release is uploaded, don't
+> rebuild it. The compiler itself is deterministic. The same commit with the same build stamp
+> (the exact one is in `bin\build-history.tsv`) rebuilds byte for byte.
 
 ## Project structure
 
