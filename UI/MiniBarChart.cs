@@ -17,6 +17,14 @@ namespace AutoClicker.UI
         private string[] _labels = new string[0];
         private int _hoverIndex = -1;
         private readonly ToolTip _tip = new ToolTip();
+        private Rectangle _plot;   // where the bars went on the last paint, for the hover tip
+
+        // Every size below is a 100% number scaled by Px, and the title row and the scale column are
+        // as big as their text. They were plain pixels — title at y 10, bars from y 32, a 40 px column
+        // for the top value — so on a 150% laptop the title ran into the bars ("LAST 7 DAYS · … PEAK"
+        // over the bars) and a big value lost its end at the card's edge ("3,316,(" ).
+        private float DpiScale => DeviceDpi / 96f;
+        private int Px(float size96) => (int)Math.Round(size96 * DpiScale, MidpointRounding.AwayFromZero);
 
         public string Title { get; set; } = "";
 
@@ -90,7 +98,7 @@ namespace AutoClicker.UI
             }
 
             // Map the cursor to a bar slot and show its exact value as a tooltip.
-            var plot = new Rectangle(14, 32, Width - 28 - 40, Height - 44 - (_labels.Length > 0 ? 16 : 0));
+            Rectangle plot = _plot;
             int idx = -1;
             if (e.X >= plot.Left && e.X <= plot.Right && plot.Width > 0)
             {
@@ -129,7 +137,7 @@ namespace AutoClicker.UI
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
             var card = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (var path = Rounded(card, 10))
+            using (var path = Rounded(card, Px(10)))
             {
                 using (var bg = new LinearGradientBrush(new Rectangle(0, 0, Width, Height),
                            Brighten(CardColor, 0.05), CardColor, LinearGradientMode.Vertical))
@@ -142,23 +150,12 @@ namespace AutoClicker.UI
                 }
             }
 
+            int titleH;
             using (var titleBrush = new SolidBrush(MutedColor))
             using (var titleFont = new Font("Segoe UI", 9f, FontStyle.Bold))
             {
-                g.DrawString(Title.ToUpperInvariant(), titleFont, titleBrush, 14, 10);
-            }
-
-            int labelSpace = _labels.Length > 0 ? 16 : 0;
-            var plot = new Rectangle(14, 32, Width - 28 - 40, Height - 44 - labelSpace);
-
-            if (_values.Length == 0)
-            {
-                using (var emptyBrush = new SolidBrush(MutedColor))
-                using (var emptyFont = new Font("Segoe UI", 9f, FontStyle.Italic))
-                {
-                    g.DrawString(Utils.Localization.T("No data yet."), emptyFont, emptyBrush, plot.Left + 4, plot.Top + plot.Height / 2 - 8);
-                }
-                return;
+                g.DrawString(Title.ToUpperInvariant(), titleFont, titleBrush, Px(14), Px(10));
+                titleH = (int)Math.Ceiling(titleFont.GetHeight(g));
             }
 
             long max = 1;
@@ -166,24 +163,46 @@ namespace AutoClicker.UI
             {
                 if (v > max) max = v;
             }
-            bool hasReference = !double.IsNaN(ReferenceValue) && ReferenceValue > 0;
+            bool hasReference = _values.Length > 0 && !double.IsNaN(ReferenceValue) && ReferenceValue > 0;
             if (hasReference && ReferenceValue > max) { max = (long)Math.Ceiling(ReferenceValue); }
 
-            // Max scale label on the right.
-            using (var scaleBrush = new SolidBrush(MutedColor))
             // 8.5pt, not 7.5. The chart's scale and axis labels were the smallest text in
             // the app — about ten pixels tall at 100% scaling — and they carry real
             // numbers, not decoration. 8.5 is the size the rest of the interface already
             // uses for secondary text, so this reads as consistent rather than enlarged.
             using (var scaleFont = new Font("Segoe UI", 8.5f, FontStyle.Regular))
             {
-                g.DrawString(max.ToString("N0"), scaleFont, scaleBrush, plot.Right + 4, plot.Top - 4);
+                // At 100% with a short top value: bars from (14, 32), 40 px for the value, 16 for the labels.
+                string maxText = max.ToString("N0");
+                int scaleCol = _values.Length == 0 ? Px(40)
+                    : Math.Max(Px(40), (int)Math.Ceiling(g.MeasureString(maxText, scaleFont).Width) + Px(4));
+                int labelSpace = _labels.Length > 0 ? (int)Math.Ceiling(scaleFont.GetHeight(g)) : 0;
+                int plotTop = Px(10) + titleH + Px(6);
+                _plot = new Rectangle(Px(14), plotTop, Width - Px(28) - scaleCol, Height - plotTop - Px(12) - labelSpace);
+
+                if (_values.Length == 0)
+                {
+                    using (var emptyBrush = new SolidBrush(MutedColor))
+                    using (var emptyFont = new Font("Segoe UI", 9f, FontStyle.Italic))
+                    {
+                        g.DrawString(Utils.Localization.T("No data yet."), emptyFont, emptyBrush,
+                                     _plot.Left + Px(4), _plot.Top + _plot.Height / 2 - Px(8));
+                    }
+                    return;
+                }
+
+                // Max scale label on the right.
+                using (var scaleBrush = new SolidBrush(MutedColor))
+                {
+                    g.DrawString(maxText, scaleFont, scaleBrush, _plot.Right + Px(4), _plot.Top - Px(4));
+                }
             }
+            Rectangle plot = _plot;
 
             int n = _values.Length;
             float slot = plot.Width / (float)n;
             float barW = Math.Max(2f, slot * 0.7f);
-            float barRadius = Math.Min(4f, barW / 2f);
+            float barRadius = Math.Min(4f * DpiScale, barW / 2f);
 
             using (var labelFont = new Font("Segoe UI", 8.5f, FontStyle.Regular))
             using (var labelBrush = new SolidBrush(MutedColor))
@@ -220,7 +239,7 @@ namespace AutoClicker.UI
                     {
                         SizeF ls = g.MeasureString(_labels[i], labelFont);
                         float lx = plot.Left + i * slot + (slot - ls.Width) / 2f;
-                        g.DrawString(_labels[i], labelFont, labelBrush, lx, plot.Bottom + 2);
+                        g.DrawString(_labels[i], labelFont, labelBrush, lx, plot.Bottom + Px(2));
                     }
                 }
             }
@@ -236,7 +255,7 @@ namespace AutoClicker.UI
             if (hasReference)
             {
                 float y = plot.Bottom - (float)(ReferenceValue / max) * plot.Height;
-                using (var pen = new Pen(TextColor, 1.2f) { DashStyle = DashStyle.Dash })
+                using (var pen = new Pen(TextColor, 1.2f * DpiScale) { DashStyle = DashStyle.Dash })
                 {
                     g.DrawLine(pen, plot.Left, y, plot.Right, y);
                 }
@@ -248,7 +267,7 @@ namespace AutoClicker.UI
                     {
                         SizeF rs = g.MeasureString(ReferenceLabel, refFont);
                         float rx = plot.Right - rs.Width;
-                        float ry = Math.Max(plot.Top - 2, y - rs.Height);
+                        float ry = Math.Max(plot.Top - Px(2), y - rs.Height);
                         g.FillRectangle(back, rx, ry, rs.Width, rs.Height - 1);
                         g.DrawString(ReferenceLabel, refFont, refBrush, rx, ry);
                     }

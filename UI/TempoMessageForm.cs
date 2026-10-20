@@ -35,6 +35,22 @@ namespace AutoClicker.UI
         /// </summary>
         internal static Theme CurrentTheme;
 
+        // The two fonts this box makes, given back when it closes: a control does not dispose a Font it is
+        // handed, and each box left its glyph's and one per button behind — GDI handles, for a process that
+        // stays up for days.
+        private readonly Font _glyphFont = new Font("Segoe UI Symbol", 19f);
+        private readonly Font _buttonFont = new Font("Segoe UI", 9.75f);
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing)
+            {
+                _glyphFont.Dispose();
+                _buttonFont.Dispose();
+            }
+        }
+
         private TempoMessageForm(Theme theme, string text, string caption,
                                  WinForms.MessageBoxButtons buttons, WinForms.MessageBoxIcon icon,
                                  WinForms.MessageBoxDefaultButton defaultButton)
@@ -71,7 +87,7 @@ namespace AutoClicker.UI
             var badge = new Label
             {
                 Text = GlyphFor(icon),
-                Font = new Font("Segoe UI Symbol", 19f),
+                Font = _glyphFont,
                 ForeColor = accent,
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -107,7 +123,7 @@ namespace AutoClicker.UI
             for (int i = specs.Length - 1; i >= 0; i--)
             {
                 bool primary = IsDefault(specs.Length, i, defaultButton);
-                Button b = MakeButton(Localization.T(specs[i].Item1), t, primary);
+                Button b = MakeButton(Localization.T(specs[i].Item1), t, primary, _buttonFont);
                 b.DialogResult = specs[i].Item2;
                 bx -= b.Width;
                 b.Left = bx;
@@ -185,7 +201,7 @@ namespace AutoClicker.UI
             }
         }
 
-        private static Button MakeButton(string text, Theme t, bool primary)
+        private static Button MakeButton(string text, Theme t, bool primary, Font font)
         {
             var b = new Button
             {
@@ -194,7 +210,7 @@ namespace AutoClicker.UI
                 FlatStyle = FlatStyle.Flat,
                 BackColor = primary ? t.Accent : t.Surface,
                 ForeColor = primary ? t.OnAccent : t.Text,
-                Font = new Font("Segoe UI", 9.75f)
+                Font = font
             };
             b.FlatAppearance.BorderColor = primary ? t.Accent : t.Border;
             // Sized to its own translated caption, never below a comfortable minimum — in 100% units,

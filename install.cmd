@@ -277,16 +277,18 @@ if not errorlevel 1 (
   reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Tempo /t REG_SZ /d "\"%EXE%\" --startup" /f >nul
   >> "%LOG%" echo Moved  : sign-in entry to %EXE%
 )
-if exist "%SRC%Tempo.exe.sha256" copy /y "%SRC%Tempo.exe.sha256" "%INSTALL_DIR%\Tempo.exe.sha256" >nul
 if exist "%SRC%uninstall.cmd"     ( copy /y "%SRC%uninstall.cmd"     "%UNINST%" >nul ) else if exist "%~dp0uninstall.cmd" ( copy /y "%~dp0uninstall.cmd" "%UNINST%" >nul )
-if exist "%SRC%INSTALL-README.txt" copy /y "%SRC%INSTALL-README.txt" "%INSTALL_DIR%\INSTALL-README.txt" >nul
-REM Copy any native runtime libraries that ship beside Tempo.exe (e.g. the
-REM Whisper speech-engine DLLs). Without these, Tempo's own Live Captions fail
-REM with "install the default libraries with the Whisper.net.Runtime nuget".
-if exist "%SRC%*.dll" copy /y "%SRC%*.dll" "%INSTALL_DIR%\" >nul 2>&1
-REM Some runtimes place native libs in a runtimes\ subfolder; bring it along too.
-if exist "%SRC%runtimes" xcopy /e /i /y /q "%SRC%runtimes" "%INSTALL_DIR%\runtimes" >nul 2>&1
->> "%LOG%" echo Copied : Tempo.exe (+ extras, native libs)
+REM  Only the program and its uninstaller. Tempo is ONE file - the speech engine is inside it -
+REM  so nothing else from the download folder belongs here. This used to copy every *.dll and
+REM  any "runtimes" folder found beside the download (in Downloads: other programs' files), and
+REM  Windows looks in a program's own folder first when the program asks for a library by name.
+REM  The setup note and the checksum went stale with the first update. What an older install
+REM  copied in goes too: the install folder is Tempo's alone.
+del /q "%INSTALL_DIR%\*.dll" >nul 2>&1
+if exist "%INSTALL_DIR%\runtimes" rd /s /q "%INSTALL_DIR%\runtimes" >nul 2>&1
+del /q "%INSTALL_DIR%\INSTALL-README.txt" >nul 2>&1
+del /q "%INSTALL_DIR%\Tempo.exe.sha256" >nul 2>&1
+>> "%LOG%" echo Copied : TempoClicker.exe and uninstall.cmd
 
 REM ---------------------------------------------------------------------------
 REM  Optional: fetch the Base speech model for Tempo's own offline Live Captions

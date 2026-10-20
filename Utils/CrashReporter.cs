@@ -55,6 +55,9 @@ namespace AutoClicker.Utils
             // blank exactly where it is meant to be reassuring. Short always names the
             // build ("build 260905-0234 · TEST", or "unstamped dev build").
             sb.AppendLine("Build    : " + Safe(() => BuildInfo.Short));
+            // The code that crashed: a test build carries work in progress ("+ local changes").
+            string source = Safe(() => BuildInfo.SourceText);
+            if (!string.IsNullOrEmpty(source)) { sb.AppendLine("Source   : " + source); }
             // Which copy crashed: a GitHub-verified release names its Official ID, anything else says why not.
             sb.AppendLine("Official : " + Safe(() => IntegrityCheck.OfficialIdReportLine()));
             sb.AppendLine("Where    : " + (string.IsNullOrEmpty(context) ? "(unspecified)" : context));

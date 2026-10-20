@@ -20,7 +20,7 @@ namespace AutoClicker.UI
     /// </summary>
     public sealed class RecordingIndicatorForm : Form
     {
-        private readonly Theme _theme;
+        private Theme _theme;
         private readonly Label _label;
         private readonly Label _hint;
         private readonly Timer _tick;
@@ -155,6 +155,22 @@ namespace AutoClicker.UI
         public void SetStepCount(int steps)
         {
             _steps = steps;
+        }
+
+        /// <summary>
+        /// Re-themes the badge. It had no way to be told: a theme picked while recording (or while placing
+        /// the badge from the tray's Overlays menu) left it in the colours it came up with — surface, text,
+        /// the red of the dot and the outline.
+        /// </summary>
+        public void ApplyTheme(Theme theme)
+        {
+            if (theme == null || IsDisposed) { return; }
+            _theme = theme;
+            BackColor = theme.Surface;
+            _hint.ForeColor = theme.TextMuted;
+            // The dot's half of the pulse as it stands now — not a tick of the pulse.
+            _label.ForeColor = Preview || _dotOn ? theme.Danger : theme.Text;
+            Invalidate(true);
         }
 
         // ── Where the user put it, and how opaque ─────────────────────────────────────────────

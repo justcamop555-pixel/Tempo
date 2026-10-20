@@ -39,9 +39,6 @@ namespace AutoClicker.Utils
         /// <summary>True when this process is running from a single-file bundle.</summary>
         public static bool IsSingleFile { get; private set; }
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr LoadLibraryW(string name);
-
         /// <summary>
         /// Probes the bundle. Cheap (a few library loads) and safe to call once at start-up.
         /// Never throws — a self-check that crashes the app would be worse than the fault
@@ -68,9 +65,18 @@ namespace AutoClicker.Utils
                                               StringComparison.OrdinalIgnoreCase);
                 ExtractionDir = IsSingleFile ? baseDir : exeDir;
 
-                // The caption engine's natives. Loading by bare name goes through the same
-                // search path the real engine uses, so this proves the actual thing rather
-                // than merely checking a file exists.
+                // The caption engine's natives: are they where Tempo unpacked itself?
+                //
+                // On disk, in Tempo's own folder, and NOT loaded by bare name. This used to try
+                // LoadLibrary("whisper") first, on the idea that it proves the real engine would load.
+                // It never did: the engine loads its libraries by full path from the unpack folder, and
+                // that folder is not on Windows' search path — measured on the installed 1.0.324, no
+                // whisper module was loaded after the probe, so it failed every time and the disk check
+                // decided. What the bare name DID do, at every start, was ask Windows to look for a
+                // whisper.dll in Tempo's install folder, the working folder and every folder on the
+                // PATH — and load the first one found into Tempo. A whisper.cpp install on the PATH, or
+                // a DLL planted beside TempoClicker.exe, would have run inside Tempo at sign-in.
+                //
                 // Probe ONLY the engine's entry library. Its ggml dependencies are named
                 // ggml-*-whisper.dll and are loaded BY whisper.dll — if any of them were
                 // missing, whisper itself would fail to load, so checking it alone is both
@@ -81,7 +87,7 @@ namespace AutoClicker.Utils
                 var missing = new System.Collections.Generic.List<string>();
                 foreach (string lib in needed)
                 {
-                    if (LoadLibraryW(lib) == IntPtr.Zero && !ProbeOnDisk(ExtractionDir, lib))
+                    if (!ProbeOnDisk(ExtractionDir, lib))
                     {
                         missing.Add(lib);
                     }

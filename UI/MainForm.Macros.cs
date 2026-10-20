@@ -204,16 +204,20 @@ namespace AutoClicker.UI
             help.AutoSize = true;
             help.ForeColor = _theme.TextMuted;
 
-            var listLabel = UiFactory.Label(Utils.Localization.T("Saved macros"), 12, 64, FontStyle.Bold);
-            _macroSearchBox = UiFactory.Text(140, 61, 172);
+            // The row is centred on the Sort combo (61-91 once it has its window): the 23 px search box sat on
+            // its Top, a step up the row. The list starts 6 px under the search box.
+            var listLabel = UiFactory.Label(Utils.Localization.T("Saved macros"), 12, 68, FontStyle.Bold);
+            _macroSearchBox = UiFactory.Text(140, 64, 172);
             _macroSearchBox.PlaceholderText = Utils.Localization.T("Search macros\u2026");
             _macroSearchBox.TextChanged += (s, e) => { _macroFilter = _macroSearchBox.Text; RefreshMacroList(); };
+            // 296 wide, ending at 308: the three columns (list, Manage, Record/Playback) sat edge to edge with no
+            // gap at all; now 6 px between each, and the list still ends at 460.
             _macroListBox = new MacroListBox
             {
                 Left = 12,
-                Top = 86,
-                Width = 300,
-                Height = 374,
+                Top = 93,
+                Width = 296,
+                Height = 367,
                 Font = UiFactory.BodyFont,
                 BorderStyle = BorderStyle.FixedSingle
             };
@@ -270,7 +274,9 @@ namespace AutoClicker.UI
             // bottom moves to 628 and still clears the Live Monitor card at 634.
             // 460 rather than 536: Move up / Move down are gone (drag the rows instead), so the card is
             // two rows shorter and still ends well clear of the Live Monitor at y=634.
-            var manageGroup = UiFactory.Group(Utils.Localization.T("Manage"), 320, 92, 124, 460, CardIcon.Gear);
+            // 314-438 and from 97 down: 6 px from the list on its left, the Record and Playback cards on its right
+            // (it touched both) and the Sort combo above (it was a pixel under it).
+            var manageGroup = UiFactory.Group(Utils.Localization.T("Manage"), 314, 97, 124, 460, CardIcon.Gear);
             int mx = 6;
             int mw = 112;
 
@@ -333,7 +339,7 @@ namespace AutoClicker.UI
             manageGroup.Controls.Add(_deleteMacroBtn);
 
             // Sort lives above the list, next to the search box.
-            _macroSortCombo = UiFactory.Combo(320, 61, 124, Utils.Localization.T("Sort: A \u2192 Z"), Utils.Localization.T("Sort: Most played"), Utils.Localization.T("Sort: Newest"));
+            _macroSortCombo = UiFactory.Combo(314, 61, 124, Utils.Localization.T("Sort: A \u2192 Z"), Utils.Localization.T("Sort: Most played"), Utils.Localization.T("Sort: Newest"));
             _macroSortCombo.DropDownStyle = ComboBoxStyle.DropDownList;
             // As wide as its longest choice, still ending at the column's right edge; the search box
             // beside it gives up the difference. "Ordem: mais usadas" needed 114 px of the 100 it had
@@ -341,7 +347,7 @@ namespace AutoClicker.UI
             if (_macroSortCombo is FlatComboBox sortBox)
             {
                 sortBox.Width = sortBox.WidthForChoices96(124);
-                sortBox.Left = 444 - sortBox.Width;
+                sortBox.Left = 438 - sortBox.Width;   // ends where the Manage card does
                 if (_macroSearchBox != null)
                 {
                     _macroSearchBox.Width = Math.Max(96, sortBox.Left - 8 - _macroSearchBox.Left);
@@ -350,16 +356,16 @@ namespace AutoClicker.UI
             _macroSortCombo.SelectedIndexChanged += OnMacroSortChanged;
 
             // Pin / Reset stats sit under the list as a compact action row.
-            _pinMacroBtn = UiFactory.Button("\u2605 Pin", 12, 468, 146, 30);
+            _pinMacroBtn = UiFactory.Button("\u2605 Pin", 12, 468, 144, 30);
             LayoutFitter.DeclareCaptions(_pinMacroBtn, Utils.Localization.T("\u2605 Pin"), Utils.Localization.T("\u2605 Unpin"));
             _pinMacroBtn.Click += OnPinMacroClicked;
 
-            _resetMacroStatsBtn = UiFactory.Button("Reset stats", 166, 468, 146, 30);
+            _resetMacroStatsBtn = UiFactory.Button("Reset stats", 164, 468, 144, 30);
             _resetMacroStatsBtn.Click += OnResetMacroStats;
 
             _macroSummaryLabel = UiFactory.Caption("", 12, 504);
             _macroSummaryLabel.AutoSize = false;
-            _macroSummaryLabel.Width = 300;
+            _macroSummaryLabel.Width = 296;
             _macroSummaryLabel.Height = 16;
             _macroSummaryLabel.ForeColor = _theme.TextMuted;
 
@@ -368,13 +374,13 @@ namespace AutoClicker.UI
             // have selected, and only if you think to press it. A macro that cannot work
             // looks exactly like one that can until then. This says so without being asked.
             // Hidden when the library is clean, like every other notice in the app.
-            // (12,526)..(312,622): under the summary line, clear of the Manage card at
-            // x=320 and the Live Monitor at y=634.
+            // (12,526)..(308,622): under the summary line, clear of the Manage card at
+            // x=314 and the Live Monitor at y=634.
             _macroHealthLabel = new Label
             {
                 AutoSize = false,
                 Location = new Point(12, 526),
-                Size = new Size(300, 96),
+                Size = new Size(296, 96),
                 Font = new Font("Segoe UI", 8.5f),
                 ForeColor = _theme.WarningText,
                 Visible = false
@@ -776,10 +782,10 @@ namespace AutoClicker.UI
                 // is consumed here whether the run finished naturally or was stopped.
                 bool wasAutoMin = _autoMinimizedForPlayback;
                 _autoMinimizedForPlayback = false;
-                if (wasAutoMin && WindowState == FormWindowState.Minimized)
-                {
-                    try { WindowState = FormWindowState.Normal; Activate(); } catch { }
-                }
+                // A macro started by a hotkey from inside a game ended with Tempo popping up over the game and taking
+                // its focus — after every run of a key the user presses again and again. It stays down then; a
+                // macro started from Tempo's own window brings it back as before.
+                RestoreAfterMacro(wasAutoMin, restore: !_playbackFromOtherApp);
             });
         }
 
@@ -1096,7 +1102,7 @@ namespace AutoClicker.UI
                 return "";
             }
             return "  •  " + Utils.Localization.F("last {0}",
-                m.LastPlayedUtc.Value.ToLocalTime().ToString("d MMM HH:mm"));
+                m.LastPlayedUtc.Value.ToLocalTime().ToString("d MMM HH:mm", Utils.Localization.DateCulture));
         }
 
         /// <summary>The header while recording: every step captured is listed, with no cap.</summary>
@@ -1600,7 +1606,7 @@ namespace AutoClicker.UI
                 (_settings?.HotkeyFor(HotkeyAction.EmergencyStop)?.IsValid ?? false);
             if (_settings != null && _settings.MinimizeWhileRecording && canStopByHotkey)
             {
-                try { WindowState = FormWindowState.Minimized; _autoMinimizedForRecording = true; } catch { }
+                _autoMinimizedForRecording = MinimizeForMacro();
             }
         }
 
@@ -1731,10 +1737,8 @@ namespace AutoClicker.UI
             // steal focus the moment recording ended.
             bool wasAutoMin = _autoMinimizedForRecording;
             _autoMinimizedForRecording = false;
-            if (wasAutoMin && WindowState == FormWindowState.Minimized)
-            {
-                try { WindowState = FormWindowState.Normal; Activate(); } catch { }
-            }
+            // Brought forward: a finished recording is what the user wants to look at next.
+            RestoreAfterMacro(wasAutoMin, restore: true);
 
             if (_lastRecorded != null && _lastRecorded.StepCount > 0)
             {
@@ -1791,6 +1795,7 @@ namespace AutoClicker.UI
                 // The take's rows and "● Recording… N steps captured" stayed up, though the take
                 // (all of it trimmed away, or nothing caught) was never saved.
                 PopulateLiveMonitor(SelectedMacro());
+                _emptyTakeToExplain = true;
             }
 
             _appendTarget = null;
@@ -1809,6 +1814,66 @@ namespace AutoClicker.UI
             {
                 WindowState = FormWindowState.Normal;
             }
+
+            // Said out loud, once the window is back: an empty take used to end in a small grey "Nothing was
+            // recorded." under the buttons — easy to miss after the window had been minimised — and a short
+            // test then simply looked like Tempo not saving it (the user's report, 2026-10-18).
+            if (_emptyTakeToExplain)
+            {
+                _emptyTakeToExplain = false;
+                ShowInfo(ExplainEmptyTake(_recorder.LastTake));
+            }
+        }
+
+        private bool _emptyTakeToExplain;
+
+        /// <summary>Why a take came out with nothing to save, in the user's terms, and what to do instead.</summary>
+        private string ExplainEmptyTake(AutoClicker.Engine.MacroRecorder.TakeReport take)
+        {
+            take = take ?? new AutoClicker.Engine.MacroRecorder.TakeReport();
+            string text;
+            if (take.OwnWindowInput > 0)
+            {
+                text = Utils.Localization.F(
+                    "Nothing was saved: the {0} click(s) and key press(es) in this take went to Tempo's own window. "
+                    + "A macro leaves those out, because played back they would land on whatever is there by then.\n\n"
+                    + "Press Record, then switch to the app you want to automate and do the steps there.",
+                    take.OwnWindowInput);
+                bool canStopByHotkey =
+                    (_settings?.HotkeyFor(HotkeyAction.ToggleRecordMacro)?.IsValid ?? false) ||
+                    (_settings?.HotkeyFor(HotkeyAction.EmergencyStop)?.IsValid ?? false);
+                if (_settings != null && (!_settings.MinimizeWhileRecording || !canStopByHotkey))
+                {
+                    text += "\n\n" + Utils.Localization.T(
+                        "Tip: give Record a hotkey and turn on \"Minimise window during macro record & playback\" in "
+                        + "Settings — Tempo then steps out of the way the moment recording starts.");
+                }
+            }
+            else if (take.HotkeyPresses > 0 && take.MovementSteps == 0)
+            {
+                text = Utils.Localization.T(
+                    "Nothing was saved: the only keys pressed were Tempo's own hotkeys, and those are never part of a macro.");
+            }
+            else if (take.MovementSteps > 0)
+            {
+                text = Utils.Localization.F(
+                    "Nothing was saved: the take was only the pointer moving to and from Tempo's buttons ({0}). "
+                    + "Record at least one click, key press or scroll — or a second or more of movement.",
+                    IntegrityDetailsForm.Elapsed(take.MovementMs));
+            }
+            else
+            {
+                text = Utils.Localization.T(
+                    "Nothing was saved: no click, key press or mouse movement reached Tempo while it was recording.");
+                if (_recordMovesCheck != null && _recordKeysCheck != null &&
+                    (!_recordMovesCheck.Checked || !_recordKeysCheck.Checked))
+                {
+                    text += "\n\n" + Utils.Localization.T(
+                        "\"Capture mouse movement\" or \"Capture keyboard\" is off on the Macros tab — turn on what you want recorded.");
+                }
+            }
+            Utils.Logger.Info("[Macro] the take had nothing to save; told the user why.");
+            return text;
         }
 
         // ── Playback ───────────────────────────────────────────────────────────
@@ -1818,6 +1883,63 @@ namespace AutoClicker.UI
         // steals focus from a window the user minimised themselves.
         private bool _autoMinimizedForPlayback;
         private bool _autoMinimizedForRecording;
+        private bool _autoMinimizedAccountsWindow;
+        private bool _playbackFromOtherApp;
+
+        /// <summary>
+        /// Gets Tempo out of the way of a macro being recorded or played ("Minimise window during macro record &amp;
+        /// playback"): the main window, and the Accounts window when it is open on its own — it stayed up, over the
+        /// game, through every recording and playback (pinned on top, in front of it), and a recording took any
+        /// click made on it. Only windows on screen are touched, and only those are put back afterwards: the flag
+        /// used to be set even when Tempo was already minimised or in the tray, and the end of the macro then
+        /// brought up a window the user had put away themselves. Returns whether the MAIN window was minimised.
+        /// </summary>
+        private bool MinimizeForMacro()
+        {
+            bool main = false;
+            try
+            {
+                if (Visible && WindowState != FormWindowState.Minimized)
+                {
+                    WindowState = FormWindowState.Minimized;
+                    main = true;
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("MinimizeForMacro", ex); }
+            try
+            {
+                if (AccountsAreDetached && _accountsWindow.Visible && _accountsWindow.WindowState != FormWindowState.Minimized)
+                {
+                    _accountsWindow.WindowState = FormWindowState.Minimized;
+                    _autoMinimizedAccountsWindow = true;
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("MinimizeForMacro/accounts", ex); }
+            return main;
+        }
+
+        /// <summary>
+        /// Puts back what <see cref="MinimizeForMacro"/> took down — when <paramref name="restore"/>, the main window
+        /// in front; otherwise both stay minimised.
+        /// </summary>
+        private void RestoreAfterMacro(bool mainWasMinimizedByUs, bool restore)
+        {
+            bool accounts = _autoMinimizedAccountsWindow;
+            _autoMinimizedAccountsWindow = false;
+            if (!restore) { return; }
+            try
+            {
+                if (accounts && AccountsAreDetached && _accountsWindow.WindowState == FormWindowState.Minimized)
+                {
+                    _accountsWindow.WindowState = FormWindowState.Normal;
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RestoreAfterMacro/accounts", ex); }
+            if (mainWasMinimizedByUs && WindowState == FormWindowState.Minimized)
+            {
+                try { WindowState = FormWindowState.Normal; Activate(); } catch { }
+            }
+        }
 
         private void OnMacroListKeyDown(object sender, KeyEventArgs e)
         {
@@ -2033,8 +2155,11 @@ namespace AutoClicker.UI
                 (_settings?.HotkeyFor(HotkeyAction.EmergencyStop)?.IsValid ?? false);
             if (_settings != null && _settings.MinimizeWhileRecording && canStopByHotkey)
             {
-                try { WindowState = FormWindowState.Minimized; _autoMinimizedForPlayback = true; } catch { }
+                _autoMinimizedForPlayback = MinimizeForMacro();
             }
+            // Started by a hotkey from inside another app — a game, usually: that is where the user is, and where
+            // they stay when it ends.
+            _playbackFromOtherApp = haveExternalTarget;
 
             // Re-aim keyboard/mouse focus at the game (captured above) so the very first
             // keystrokes land there and not in Tempo/desktop after the countdown + minimise.
@@ -3130,7 +3255,7 @@ namespace AutoClicker.UI
                         m.Name,
                         (m.Actions != null ? m.Actions.Count : 0).ToString(),
                         m.LastPlayedUtc.HasValue
-                            ? m.LastPlayedUtc.Value.ToLocalTime().ToString("g")
+                            ? m.LastPlayedUtc.Value.ToLocalTime().ToString("g", Localization.DateCulture)
                             : Localization.T("never")
                     }
                 });

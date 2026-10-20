@@ -108,6 +108,16 @@ namespace AutoClicker.UI
             g.SmoothingMode = prev;
         }
 
+        /// <summary>
+        /// Nothing: the bar's edge is the hairline the background draws. The professional renderer's own
+        /// border for a status strip is a line of the SYSTEM highlight colour across the top — pure white,
+        /// drawn after the background and so over the hairline: a bright 1 px line above the bar in every
+        /// dark theme (measured off the window: row 0 #FFFFFF on Nord's #384051 bar).
+        /// </summary>
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+        {
+        }
+
         protected override void OnRenderLabelBackground(ToolStripItemRenderEventArgs e)
         {
             // Under the pointer, a segment that opens a tab gets the sidebar's soft accent wash.

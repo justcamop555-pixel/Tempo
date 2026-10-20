@@ -33,6 +33,9 @@ param(
 
     [string] $Path,
 
+    # The checkout the source stamp is read from; by default the one $Path sits in (tests stamp a copy elsewhere).
+    [string] $Repo,
+
     [switch] $DryRun
 )
 
@@ -115,13 +118,52 @@ if ($prev) {
 $stamp = $now.ToString('yyyy-MM-ddTHH:mm:ssZ')
 $id    = $now.ToString('yyMMdd-HHmm')
 
+# ── the source it was built from ─────────────────────────────────────────────
+#
+# "58f72bf" (the commit), or "58f72bf+" when the working tree held changes that commit does not have —
+# a test build of work in progress. The build ID says WHEN; this says WHAT. Written as an assembly
+# attribute, not a constant: a generated file from before this existed (an older one, a fresh clone's
+# neutral one) still compiles, and the app simply reads no source. No git, no repository: no source.
+$source = ''
+try {
+    $repo = if ($Repo) { $Repo } else { Split-Path -Parent (Split-Path -Parent $Path) }
+    $head = & git -C $repo rev-parse --short=7 HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $head) {
+        # Tracked changes and untracked files that are not ignored (a new .cs file is compiled in too).
+        $dirty = & git -C $repo status --porcelain 2>$null
+        $source = ([string]$head).Trim() + $(if ($dirty) { '+' } else { '' })
+    }
+}
+catch { $source = '' }
+
 if ($DryRun) {
-    Write-Host "would stamp: build $id, channel $Channel"
+    Write-Host "would stamp: build $id, channel $Channel, source '$source'"
     exit 0
 }
 
 $text = [regex]::Replace($text, $reStamp,   { param($m) $m.Groups['a'].Value + $stamp   + $m.Groups['b'].Value })
 $text = [regex]::Replace($text, $reChannel, { param($m) $m.Groups['a'].Value + $Channel + $m.Groups['b'].Value })
+
+$reSource   = '(?m)^\[assembly: System\.Reflection\.AssemblyMetadata\("TempoSource", "[^"]*"\)\]\r?\n'
+$nl         = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+$sourceLine = '[assembly: System.Reflection.AssemblyMetadata("TempoSource", "' + $source + '")]' + $nl
+$found      = ([regex]::Matches($text, $reSource)).Count
+if ($found -gt 1) {
+    Write-Error "BuildInfo.Generated.cs: the TempoSource line appears $found times (expected at most 1). Nothing written."
+    exit 2
+}
+if ($found -eq 1) {
+    $text = [regex]::Replace($text, $reSource, { param($m) $sourceLine })
+}
+else {
+    # Assembly attributes go before the namespace.
+    $at = $text.IndexOf('namespace AutoClicker.Utils')
+    if ($at -lt 0) {
+        Write-Error "BuildInfo.Generated.cs: no 'namespace AutoClicker.Utils' to put the TempoSource line before. Nothing written."
+        exit 2
+    }
+    $text = $text.Insert($at, $sourceLine)
+}
 
 # UTF-8 WITH BOM, written through .NET rather than Set-Content: PowerShell 5.1's cmdlets
 # default to the ANSI codepage and would mangle the em dash in the header comment. The

@@ -343,6 +343,50 @@ namespace AutoClicker.UI
             };
             Controls.Add(openData);
 
+            // Everything above, as text. A report about a laptop arrived as a screenshot of this box —
+            // the version, build, Official ID, Windows and display, read off a picture. One click copies
+            // them instead (the data folder stays out: it carries the Windows account name).
+            string details = string.Join(Environment.NewLine, new[]
+            {
+                verText + "   ·   Official ID: " + Utils.IntegrityCheck.OfficialIdReportLine(),
+                $"{edition}  ·  {netVer}{builtAt}" + (Utils.BuildInfo.SourceText.Length > 0 ? "  ·  source " + Utils.BuildInfo.SourceText : ""),
+                osText ?? "",
+                disp,
+            });
+            string copyText = Localization.T("Copy details");
+            var copyDetails = new LinkLabel
+            {
+                Text = copyText,
+                AutoSize = true,
+                // After "Open data folder", by its width in 100% units: its Right is screen pixels while this
+                // window is built (see the links at the bottom).
+                Location = new Point(openData.Left + UiFactory.Measure96(openData.Text, openData.Font, 0, TextFormatFlags.Default).Width + 18, 180),
+                LinkColor = theme.Accent,
+                ActiveLinkColor = theme.Accent,
+                BackColor = Color.Transparent
+            };
+            var copiedTimer = new Timer { Interval = 1500 };
+            copiedTimer.Tick += (s, e) => { copiedTimer.Stop(); copyDetails.Text = copyText; };
+            copyDetails.LinkClicked += (s, e) =>
+            {
+                try { Clipboard.SetText(details); } catch { return; }   // the clipboard may be held by another app
+                copyDetails.Text = Localization.T("Copied ✓");
+                copiedTimer.Stop();
+                copiedTimer.Start();
+            };
+            Disposed += (s, e) => copiedTimer.Dispose();
+            TipStyle.Set(new ToolTip(), copyDetails,
+                Localization.T("Copies the version, build, Official ID, Windows and display — paste it into a bug report."));
+            Controls.Add(copyDetails);
+
+            // Which code this build is: the commit it was made from, and whether it carried changes on top.
+            if (Utils.BuildInfo.SourceCommit.Length > 0)
+            {
+                TipStyle.Set(new ToolTip(), version, Utils.BuildInfo.SourceChanged
+                    ? Localization.F("Built from commit {0}, plus changes that were not committed yet.", Utils.BuildInfo.SourceCommit)
+                    : Localization.F("Built from commit {0}.", Utils.BuildInfo.SourceCommit));
+            }
+
             // A thin rule between the identity block and the blurb, so the dialog reads
             // as two parts instead of one long column of left-aligned text.
             var rule = new Panel
@@ -494,6 +538,7 @@ namespace AutoClicker.UI
                     case Utils.IntegrityVerdict.Damaged:
                     case Utils.IntegrityVerdict.UnknownRelease:
                     case Utils.IntegrityVerdict.UnpackedModified:
+                    case Utils.IntegrityVerdict.ForeignCode:
                         text = Localization.T("✗ No Official ID — this copy failed its check");
                         colour = theme.DangerText;
                         tip = Localization.T("Open Settings to see what the check found.");

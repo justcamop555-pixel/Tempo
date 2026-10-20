@@ -31,16 +31,62 @@ namespace AutoClicker.UI
         private int _hoverIndex = -1;
         private int _dropLine = -1;
 
-        private const int RowHeight = 40;
+        // The two lines' fonts. Points, so they grow with the screen's scale by themselves.
+        private const float NamePt = 9.5f, MetaPt = 8.25f;
+
+        // Every other size here is a 100% number, multiplied out by Px for the screen's scale.
+        //
+        // They were plain pixels: a 40 px row with the name in a 17 px band and the detail line
+        // 20 px down. The fonts are points, so on a 150% laptop the text came out half as big
+        // again while the row stayed 40 px — the name ran into the detail line and both lost
+        // their bottoms ("Macro 10-39-20" over a cut-off "137 steps · 3.2 s"). Now the row is as
+        // tall as its two lines at this DPI: 40 px at 100% as before, 60 px at 150%.
         private const int PadX = 10;
 
         public MacroListBox()
         {
             DrawMode = DrawMode.OwnerDrawFixed;
-            ItemHeight = RowHeight;
+            ItemHeight = RowHeightForDpi();
             BorderStyle = BorderStyle.FixedSingle;
             IntegralHeight = false;   // otherwise WinForms trims the control's height to whole rows
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+        }
+
+        /// <summary>The screen's scale: 1 at 100%, 1.5 at 150%. Tempo is System-DPI-aware, so this is the system DPI.</summary>
+        private float DpiScale => DeviceDpi / 96f;
+
+        /// <summary>A 100% size in pixels at this screen's scale.</summary>
+        private int Px(float size96) => (int)Math.Round(size96 * DpiScale, MidpointRounding.AwayFromZero);
+
+        /// <summary>A text line's height in GDI+ (what DrawString lays out) at <paramref name="dpi"/>.</summary>
+        private static int LineHeight(Font f, float dpi) => (int)Math.Ceiling(f.GetHeight(dpi));
+
+        /// <summary>
+        /// Insets (2 + 2), the gap above the name (3) and below the detail (1), around the two lines as they
+        /// measure at this DPI.
+        /// </summary>
+        private int RowHeightForDpi()
+        {
+            using (var nameFont = new Font(Font.FontFamily, NamePt, FontStyle.Bold))
+            using (var metaFont = new Font(Font.FontFamily, MetaPt, FontStyle.Regular))
+            {
+                return Px(2 + 3 + 1 + 2) + LineHeight(nameFont, DeviceDpi) + LineHeight(metaFont, DeviceDpi);
+            }
+        }
+
+        // The row height follows the font family (the name and detail fonts take it from Font) and is set
+        // again once the window exists, after WinForms has scaled the page, so it is never scaled twice.
+        protected override void OnFontChanged(EventArgs e)
+        {
+            base.OnFontChanged(e);
+            ItemHeight = RowHeightForDpi();
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            int want = RowHeightForDpi();
+            if (ItemHeight != want) { ItemHeight = want; }
         }
 
         public void ApplyTheme(Theme theme)
@@ -205,14 +251,14 @@ namespace AutoClicker.UI
                 g.FillRectangle(back, e.Bounds);
             }
 
-            var row = new Rectangle(e.Bounds.X + 3, e.Bounds.Y + 2,
-                                    e.Bounds.Width - 6, e.Bounds.Height - 4);
+            var row = new Rectangle(e.Bounds.X + Px(3), e.Bounds.Y + Px(2),
+                                    e.Bounds.Width - Px(6), e.Bounds.Height - Px(4));
             if (selected || hover)
             {
                 Color fill = selected
                     ? Blend(th.Accent, th.Surface, 0.72)
                     : Blend(th.Surface2, th.Surface, 0.45);
-                using (var path = Rounded(row, 7))
+                using (var path = Rounded(row, Px(7)))
                 using (var b = new SolidBrush(fill))
                 {
                     g.FillPath(b, path);
@@ -223,7 +269,7 @@ namespace AutoClicker.UI
                     // without drowning the text it is meant to highlight.
                     using (var bar = new SolidBrush(th.Accent))
                     {
-                        g.FillRectangle(bar, row.X + 1, row.Y + 6, 3, row.Height - 12);
+                        g.FillRectangle(bar, row.X + Px(1), row.Y + Px(6), Px(3), row.Height - Px(12));
                     }
                 }
             }
@@ -233,39 +279,44 @@ namespace AutoClicker.UI
             // or below the insertion point, whichever this call is painting.
             if (_dropLine >= 0)
             {
-                using (var pen = new Pen(th.Accent, 2f))
+                using (var pen = new Pen(th.Accent, 2f * DpiScale))
                 {
                     if (e.Index == _dropLine)
                     {
-                        g.DrawLine(pen, e.Bounds.X + 3, e.Bounds.Y + 1, e.Bounds.Right - 3, e.Bounds.Y + 1);
+                        g.DrawLine(pen, e.Bounds.X + Px(3), e.Bounds.Y + Px(1), e.Bounds.Right - Px(3), e.Bounds.Y + Px(1));
                     }
                     else if (e.Index == _dropLine - 1)
                     {
-                        g.DrawLine(pen, e.Bounds.X + 3, e.Bounds.Bottom - 1, e.Bounds.Right - 3, e.Bounds.Bottom - 1);
+                        g.DrawLine(pen, e.Bounds.X + Px(3), e.Bounds.Bottom - Px(1), e.Bounds.Right - Px(3), e.Bounds.Bottom - Px(1));
                     }
                 }
             }
 
             if (macro == null) { return; }
 
-            int textLeft = row.X + PadX;
-            int textRight = row.Right - PadX;
+            int textLeft = row.X + Px(PadX);
+            int textRight = row.Right - Px(PadX);
+            int nameTop = row.Y + Px(3);
+            int metaTop;
 
             // ── Line 1: the name, plus a star for favourites ──────────────────
             string name = string.IsNullOrEmpty(macro.Name) ? "(unnamed)" : macro.Name;
-            using (var nameFont = new Font(Font.FontFamily, 9.5f, FontStyle.Bold))
+            using (var nameFont = new Font(Font.FontFamily, NamePt, FontStyle.Bold))
             using (var nameBrush = new SolidBrush(th.Text))
             {
+                // Measured on the Graphics that draws it, so the band always holds the line it draws.
+                int nameH = (int)Math.Ceiling(nameFont.GetHeight(g));
+                metaTop = nameTop + nameH;
                 if (macro.IsFavorite)
                 {
                     using (var star = new SolidBrush(th.Warning))
                     {
-                        g.DrawString("★", nameFont, star, textLeft - 2, row.Y + 3);
+                        g.DrawString("★", nameFont, star, textLeft - Px(2), nameTop);
                     }
-                    textLeft += 15;
+                    textLeft += Px(15);
                 }
                 g.DrawString(name, nameFont, nameBrush,
-                    new RectangleF(textLeft, row.Y + 3, textRight - textLeft, 17),
+                    new RectangleF(textLeft, nameTop, textRight - textLeft, nameH),
                     new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
             }
 
@@ -288,16 +339,17 @@ namespace AutoClicker.UI
             meta += "  ·  " + (everPlayed
                 ? Utils.Localization.F("{0}× played", macro.TimesPlayed)
                 : Utils.Localization.T("never played"));
-            using (var metaFont = new Font(Font.FontFamily, 8.25f, FontStyle.Regular))
+            using (var metaFont = new Font(Font.FontFamily, MetaPt, FontStyle.Regular))
             using (var metaBrush = new SolidBrush(th.TextMuted))
             {
-                // 62px, measured against the longest translations of this column —
+                int metaH = (int)Math.Ceiling(metaFont.GetHeight(g));
+                // 62px (at 100%), measured against the longest translations of this column —
                 // "il y a 2mo", "creado 2me", "2Mo alt" — which all sit inside it. Widening
                 // it was tried and was the wrong trade: every pixel here comes straight out
                 // of the meta line to its left, which is the one that was actually running
                 // out of room. The draw below trims with an ellipsis rather than clipping
                 // mid-glyph, so a language that still overruns degrades readably.
-                const int AgoWidth = 62;
+                int agoWidth = Px(62);
                 // Last played when it has been, otherwise how old the recording is — so
                 // the column is never empty. "old" rather than "ago" makes clear which
                 // of the two dates is being shown without needing a second label.
@@ -305,11 +357,11 @@ namespace AutoClicker.UI
                     ? Ago(macro.LastPlayedUtc)
                     : Age(macro.CreatedUtc);
                 int metaWidth = ago.Length > 0
-                    ? textRight - textLeft - AgoWidth - 6
+                    ? textRight - textLeft - agoWidth - Px(6)
                     : textRight - textLeft;
 
                 g.DrawString(meta, metaFont, metaBrush,
-                    new RectangleF(textLeft, row.Y + 20, Math.Max(20, metaWidth), 15),
+                    new RectangleF(textLeft, metaTop, Math.Max(Px(20), metaWidth), metaH),
                     new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap });
 
                 // Recency, right-aligned: the fastest way to spot the one you actually use
@@ -323,7 +375,7 @@ namespace AutoClicker.UI
                         Trimming = StringTrimming.EllipsisCharacter
                     };
                     g.DrawString(ago, metaFont, metaBrush,
-                        new RectangleF(textRight - AgoWidth, row.Y + 20, AgoWidth, 15), fmt);
+                        new RectangleF(textRight - agoWidth, metaTop, agoWidth, metaH), fmt);
                 }
             }
         }

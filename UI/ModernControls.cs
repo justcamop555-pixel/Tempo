@@ -1537,27 +1537,141 @@ namespace AutoClicker.UI
 
         // Draw a rounded border on top of the native paint (the edit child sits inset, so
         // a 1px ring at the very edge stays visible).
+        //
+        // UiFactory.Numeric keeps BorderStyle.FixedSingle — it is what insets the edit box from the edge — so
+        // Windows paints its own square, light visual-style frame there first. The rounded region cut that frame
+        // at every corner, and every spinner in Tempo showed a top line, a bottom line and two short ticks for
+        // sides — "[ 100 ]" — under the outline, the fault FlatTextBox had and lost. Same cure: the square frame
+        // is covered in the box's own background, then the outline goes on, in the input outline colour (the
+        // accent while the box has the focus).
         protected override void WndProc(ref Message m)
         {
             base.WndProc(ref m);
             if (m.Msg == WmPaint && _theme != null)
             {
+                PaintOutline();
+            }
+        }
+
+        private void PaintOutline()
+        {
+            if (!IsHandleCreated || _theme == null || Width <= 2 || Height <= 2) { return; }
+            try
+            {
                 using (var g = Graphics.FromHwnd(Handle))
                 {
+                    // UpDownBase is an Opaque control: it paints its border strips and a 1 px ring round the edit
+                    // box and leaves everything else to its two children. With the edit box seated lower and cut
+                    // short (SeatEdit), the strip it moved off and the rows under it kept whatever was on screen
+                    // there before — orange and blue ClearType scraps above the digits in the real Clicker tab
+                    // (build 261018-2335), which a freshly shown test window could not show. The children are
+                    // clipped out of this DC (WS_CLIPCHILDREN), so the fill reaches exactly the box's own pixels.
+                    using (var fill = new SolidBrush(BackColor))
+                    {
+                        g.FillRectangle(fill, ClientRectangle);
+                    }
+                    using (var cover = new Pen(BackColor, 2f))
+                    {
+                        g.DrawRectangle(cover, 0, 0, Width - 1, Height - 1);
+                    }
                     g.SmoothingMode = SmoothingMode.AntiAlias;
+                    Color edge = ContainsFocus && Enabled
+                        ? Theme.Readable(_theme.Accent, _theme.InputBackground, 3.0)
+                        : Theme.Readable(_theme.Border, _theme.InputBackground, 3.0);
                     using (var path = ModernPaint.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 7))
-                    using (var pen = new Pen(_theme.Border, 1.4f))
+                    using (var pen = new Pen(edge, 1.4f))
                     {
                         g.DrawPath(pen, path);
                     }
                 }
             }
+            catch { /* the outline is cosmetic; never let painting throw */ }
+        }
+
+        // The outline follows the focus, which lives in the edit box inside.
+        protected override void OnEnter(EventArgs e) { base.OnEnter(e); Invalidate(); }
+        protected override void OnLeave(EventArgs e) { base.OnLeave(e); Invalidate(); }
+        protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
+
+        // Where the digits sit. UpDownBase puts its edit box 2 px inside the edge at the full height, and an edit
+        // box writes on its TOP line. While ThemeManager gave that edit box a frame of its own, the frame was the
+        // only gap (and the gray "[ ]" square); without it the user's crop (2026-10-18) showed "100000" 2 px from
+        // the outline, 2 px above the middle, and the edit box's background covered the outline's left corners.
+        // So after WinForms has placed it: the box moves down to the middle, its bottom is cut off where the
+        // outline runs (a window region — resizing it instead would make UpDownBase put it straight back), and the
+        // text gets a margin.
+        private const int EmSetMargins = 0x00D3;
+        private const int EcLeftMargin = 0x0001;
+        private const int EcRightMargin = 0x0002;
+        private Size _editRegionSize;
+        private TextBox _edit;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        private int Px(int size96) => (int)Math.Round(size96 * DeviceDpi / 96f, MidpointRounding.AwayFromZero);
+
+        protected override void OnLayout(LayoutEventArgs e)
+        {
+            base.OnLayout(e);   // UpDownBase's PositionControls: the edit box back at (2, 2), full height
+            SeatEdit();
+        }
+
+        private TextBox EditBox()
+        {
+            foreach (Control c in Controls)
+            {
+                if (c is TextBox t) { return t; }
+            }
+            return null;
+        }
+
+        private void SeatEdit()
+        {
+            TextBox edit = EditBox();
+            if (edit == null || BorderStyle == BorderStyle.None) { return; }
+            if (!ReferenceEquals(edit, _edit))
+            {
+                if (_edit != null)
+                {
+                    _edit.HandleCreated -= OnEditFontOrHandle;
+                    _edit.FontChanged -= OnEditFontOrHandle;
+                }
+                _edit = edit;
+                edit.HandleCreated += OnEditFontOrHandle;
+                edit.FontChanged += OnEditFontOrHandle;
+                ApplyEditMargins();
+            }
+
+            int line = edit.Font.Height;
+            int top = Math.Max(edit.Top, (ClientSize.Height - line + 1) / 2);
+            if (edit.Top != top) { edit.Top = top; }
+
+            // Keep the box out of the bottom 4 rows: the outline's bottom edge and the start of its corner arcs.
+            int visible = Math.Max(line - 1, Math.Min(edit.Height, ClientSize.Height - 4 - top));
+            var size = new Size(edit.Width, visible);
+            if (size != _editRegionSize && size.Width > 0 && size.Height > 0)
+            {
+                _editRegionSize = size;
+                edit.Region = new Region(new Rectangle(Point.Empty, size));
+            }
+        }
+
+        // Windows puts an edit box's margins back to the font's defaults when its font changes.
+        private void OnEditFontOrHandle(object sender, EventArgs e) => ApplyEditMargins();
+
+        private void ApplyEditMargins()
+        {
+            if (_edit == null || !_edit.IsHandleCreated) { return; }
+            int left = Px(3), right = Px(1);
+            SendMessage(_edit.Handle, EmSetMargins, (IntPtr)(EcLeftMargin | EcRightMargin), (IntPtr)((right << 16) | left));
         }
 
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
             RoundRegion();
+            ApplyEditMargins();
             BeginInvoke(new Action(HookButtons));
         }
 

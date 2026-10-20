@@ -53,7 +53,120 @@ namespace AutoClicker.Utils
         /// Reinstalling the same exe does not fix it (the host reuses that folder); deleting the
         /// folder does, which is what Repair does.
         /// </summary>
-        UnpackedModified
+        UnpackedModified,
+        /// <summary>
+        /// Windows loaded a program library into Tempo from the folder Tempo.exe sits in. Tempo is ONE
+        /// file — everything it runs comes out of the bundle into its own TEMP folder — so a library from
+        /// beside the exe was put there by someone else, and its code is running inside Tempo. Windows
+        /// looks in a program's own folder before System32 when a program asks for a library by name;
+        /// planting one there is the oldest way to get code into another program.
+        /// </summary>
+        ForeignCode
+    }
+
+    /// <summary>How one layer of the check came out, for the Details window.</summary>
+    public enum IntegrityLayerState
+    {
+        /// <summary>The run stopped before this layer (an earlier one already decided the verdict).</summary>
+        NotRun,
+        Passed,
+        Failed,
+        /// <summary>Worth knowing, not a failure: a test build, a record re-taken for an update, a stray file.</summary>
+        Warning,
+        /// <summary>Does not apply here (a loose build, the check turned off, GitHub not asked).</summary>
+        Skipped
+    }
+
+    /// <summary>Why the unpacked copy was not compared.</summary>
+    public enum IntegrityUnpackedNote { None, CheckingACopy, NotSingleFile, ManifestUnreadable, NoManifest, FolderNotThisBundle, CompareFailed }
+
+    /// <summary>What comparing with the fingerprint this PC recorded found.</summary>
+    public enum IntegrityLocalOutcome { NotCompared, Matches, Recorded, RecordedForUpdate, Differs, TestBuildRebuilt }
+
+    /// <summary>What asking GitHub found.</summary>
+    public enum IntegrityOnlineOutcome { NotAsked, Confirmed, ConfirmedEarlier, TestBuildSkipped, NoSuchRelease, NoChecksum, Mismatch, Unreachable }
+
+    /// <summary>
+    /// Everything one run of the check found, layer by layer — what Settings › Details shows and what its
+    /// "Copy details" copies. A snapshot: published whole when a run, or the GitHub step after it, ends,
+    /// and never changed afterwards, so the window cannot show the verdict of one run beside the facts of
+    /// another (the separate static fields it replaces for the UI were written one at a time from a pool
+    /// thread). Lists are replaced, never edited, so a shallow copy is a true snapshot.
+    /// </summary>
+    public sealed class IntegrityReport
+    {
+        private static readonly IReadOnlyList<string> None = Array.Empty<string>();
+
+        public IntegrityVerdict Verdict { get; internal set; }
+        public string Summary { get; internal set; } = "";
+        /// <summary>When the local layers ran, and how long they took.</summary>
+        public DateTime CheckedUtc { get; internal set; }
+        public long LocalMs { get; internal set; }
+
+        // ── the file ──
+        public string ExePath { get; internal set; }
+        public long Length { get; internal set; } = -1;
+        public DateTime? WrittenUtc { get; internal set; }
+        public string Sha256 { get; internal set; }
+        public string Version { get; internal set; }
+        public string BuildId { get; internal set; }
+        public bool IsTestBuild { get; internal set; }
+        /// <summary>The file carries an Authenticode signature (Tempo's releases are not signed).</summary>
+        public bool HasSignature { get; internal set; }
+        /// <summary>Who signed it, when there is a signature that could be read.</summary>
+        public string SignedBy { get; internal set; }
+        /// <summary>The site the browser recorded in the file's download mark (host only), or null.</summary>
+        public string DownloadedFrom { get; internal set; }
+        /// <summary>True when that site is one of the project's (GitHub or its website).</summary>
+        public bool DownloadedFromOfficial { get; internal set; }
+
+        // ── 1. identity ──
+        public IntegrityLayerState Identity { get; internal set; }
+        public string IdentityProblem { get; internal set; }
+
+        // ── 2. the file itself ──
+        public IntegrityLayerState Structure { get; internal set; }
+        public bool LooksExecutable { get; internal set; }
+        public double ZeroFraction { get; internal set; }
+        public bool HasNativePayload { get; internal set; }
+
+        // ── 3. the unpacked copy ──
+        public IntegrityLayerState Unpacked { get; internal set; }
+        public IntegrityUnpackedNote UnpackedNote { get; internal set; }
+        public string UnpackedError { get; internal set; }
+        public string UnpackDirectory { get; internal set; }
+        public int UnpackedChecked { get; internal set; }
+        public long UnpackedBytes { get; internal set; }
+        public long UnpackedMs { get; internal set; }
+        public IReadOnlyList<string> UnpackedChanged { get; internal set; } = None;
+        public IReadOnlyList<string> UnpackedAdded { get; internal set; } = None;
+        public IReadOnlyList<string> UnpackedMissing { get; internal set; } = None;
+
+        // ── 4. code from beside the exe ──
+        public IntegrityLayerState Beside { get; internal set; }
+        /// <summary>Program libraries Windows loaded into Tempo from Tempo.exe's folder (full paths).</summary>
+        public IReadOnlyList<string> LoadedBeside { get; internal set; } = None;
+        /// <summary>Program files sitting in Tempo.exe's folder that Tempo never ships, not loaded (names).</summary>
+        public IReadOnlyList<string> StrayBeside { get; internal set; } = None;
+
+        // ── 5. this PC's record ──
+        public IntegrityLayerState Local { get; internal set; }
+        public IntegrityLocalOutcome LocalOutcome { get; internal set; }
+        public string BaselineVersion { get; internal set; }
+        public string BaselineBuild { get; internal set; }
+        public string BaselineRecorded { get; internal set; }
+
+        // ── 6. GitHub ──
+        public IntegrityLayerState Online { get; internal set; } = IntegrityLayerState.NotRun;
+        public IntegrityOnlineOutcome OnlineOutcome { get; internal set; }
+        public string OnlineTag { get; internal set; }
+        public string OnlineConfirmed { get; internal set; }
+        public string OnlineError { get; internal set; }
+        public DateTime? OnlineRetryAtUtc { get; internal set; }
+        public DateTime? OnlineCheckedUtc { get; internal set; }
+        public long OnlineMs { get; internal set; }
+
+        internal IntegrityReport Snapshot() => (IntegrityReport)MemberwiseClone();
     }
 
     /// <summary>
@@ -101,11 +214,29 @@ namespace AutoClicker.Utils
                     || Verdict == IntegrityVerdict.Damaged
                     || Verdict == IntegrityVerdict.Repackaged
                     || Verdict == IntegrityVerdict.UnpackedModified
+                    || Verdict == IntegrityVerdict.ForeignCode
                     // Not proof of tampering by itself — a build from source looks the
                     // same — but it does mean nothing outside this PC vouches for the
                     // file, which is worth saying rather than passing over in silence.
                     || Verdict == IntegrityVerdict.UnknownRelease;
             }
+        }
+
+        /// <summary>
+        /// The last run's findings, layer by layer (see <see cref="IntegrityReport"/>); null before the first
+        /// run. Replaced whole, never edited, so a reader always holds one consistent run.
+        /// </summary>
+        public static IntegrityReport LastReport => _published;
+
+        private static volatile IntegrityReport _published;
+
+        /// <summary>The report the run in progress is filling in. Only touched under <see cref="RunGate"/>
+        /// (or by a probe calling <see cref="Run"/> on its own thread).</summary>
+        private static IntegrityReport _report;
+
+        private static void Publish()
+        {
+            if (_report != null) { _published = _report.Snapshot(); }
         }
 
         /// <summary>True once GitHub has confirmed this exact file for this version.</summary>
@@ -190,6 +321,7 @@ namespace AutoClicker.Utils
                 case IntegrityVerdict.Damaged:
                 case IntegrityVerdict.UnknownRelease:
                 case IntegrityVerdict.UnpackedModified:
+                case IntegrityVerdict.ForeignCode:
                     return "none — " + Verdict;
                 case IntegrityVerdict.Unverified:
                     return "none — not verified: " + Summary;
@@ -283,6 +415,9 @@ namespace AutoClicker.Utils
             try
             {
                 v = Run(settings);
+                // What the file itself came to, before a library loaded from beside it overrode that: GitHub is
+                // still asked about the exe, so the details can say "the exe is genuine, the extra code is not".
+                IntegrityVerdict local = _localVerdict;
 
                 // Then ask GitHub, which is the only party that can tell a genuine
                 // build from a convincing one.
@@ -300,8 +435,8 @@ namespace AutoClicker.Utils
                 // a verdict that is already certain.
                 if (settings != null && settings.IntegrityCheckEnabled &&
                     !string.IsNullOrEmpty(CurrentHash) &&
-                    (v == IntegrityVerdict.Ok || v == IntegrityVerdict.Baselined ||
-                     v == IntegrityVerdict.Modified))
+                    (local == IntegrityVerdict.Ok || local == IntegrityVerdict.Baselined ||
+                     local == IntegrityVerdict.Modified))
                 {
                     v = VerifyAgainstGitHub(settings);
                 }
@@ -311,9 +446,7 @@ namespace AutoClicker.Utils
                 // A self-check that takes the app down is worse than the fault it
                 // was looking for.
                 Logger.Swallow("IntegrityCheck", ex);
-                Verdict = IntegrityVerdict.Unverified;
-                Summary = "could not be checked (" + ex.Message + ")";
-                v = Verdict;
+                v = Set(IntegrityVerdict.Unverified, "could not be checked (" + ex.Message + ")");
             }
             try { onDone?.Invoke(v); } catch (Exception ex) { Logger.Swallow("IntegrityCheck.onDone", ex); }
         }
@@ -341,7 +474,68 @@ namespace AutoClicker.Utils
             OnlineSummary = "not checked";
             OnlineRetryWanted = false;
             OnlineRetryAtUtc = null;
+            // Nor may the facts of an earlier run: a run that stops early (an unreadable file) used to
+            // leave the previous file's hash and unpacked-copy result on show beside its own verdict.
+            CurrentHash = null;
+            ExpectedHash = null;
+            PayloadSummary = "not checked";
+            UnpackDirectory = null;
 
+            _report = new IntegrityReport
+            {
+                CheckedUtc = DateTime.UtcNow,
+                Version = CrashReporter.CurrentVersion,
+                BuildId = BuildInfo.Id,
+                IsTestBuild = BuildInfo.IsTest && !BuildInfo.IsUnstamped,
+                BaselineVersion = settings?.IntegrityBaselineVersion,
+                BaselineBuild = settings?.IntegrityBaselineBuild,
+                BaselineRecorded = settings?.IntegrityBaselineUtc,
+            };
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            IntegrityVerdict v;
+            try
+            {
+                v = RunLayers(settings, exePathOverride, unpackDirOverride);
+            }
+            finally
+            {
+                _report.LocalMs = clock.ElapsedMilliseconds;
+            }
+            _localVerdict = v;
+            return ApplyForeign(v);
+        }
+
+        /// <summary>The verdict of the file's own layers in the last <see cref="Run"/>, before <see cref="ApplyForeign"/>.</summary>
+        private static IntegrityVerdict _localVerdict = IntegrityVerdict.Unknown;
+
+        /// <summary>
+        /// The verdict once code from beside the exe is counted: a library Windows loaded from Tempo.exe's folder
+        /// outranks a pass, a record re-taken and GitHub's confirmation of the exe alone — those vouch for
+        /// the file, and the code running is more than the file. A damaged, foreign or altered unpacked copy is
+        /// already the worse news and stays the verdict. Publishes the report either way.
+        /// </summary>
+        private static IntegrityVerdict ApplyForeign(IntegrityVerdict v)
+        {
+            IntegrityReport r = _report;
+            if (r != null && r.LoadedBeside.Count > 0 &&
+                v != IntegrityVerdict.Damaged && v != IntegrityVerdict.Repackaged &&
+                v != IntegrityVerdict.UnpackedModified && v != IntegrityVerdict.Unverified)
+            {
+                var names = new List<string>();
+                foreach (string p in r.LoadedBeside) { names.Add(Path.GetFileName(p)); }
+                return Set(IntegrityVerdict.ForeignCode,
+                    Path.GetFileName(r.ExePath) + " is intact, but Windows loaded " + names.Count +
+                    " program file(s) into Tempo from its folder that Tempo never ships (" + FirstFew(names) +
+                    ") — that code is running inside Tempo");
+            }
+            Publish();
+            return v;
+        }
+
+        private static IntegrityVerdict RunLayers(Models.AppSettings settings, string exePathOverride,
+                                                  string unpackDirOverride)
+        {
+            IntegrityReport report = _report;
             if (settings != null && !settings.IntegrityCheckEnabled)
             {
                 return Set(IntegrityVerdict.Unverified, "turned off in Settings");
@@ -356,14 +550,21 @@ namespace AutoClicker.Utils
             {
                 return Set(IntegrityVerdict.Unverified, "the running program file could not be located");
             }
+            report.ExePath = exe;
+            try { report.WrittenUtc = File.GetLastWriteTimeUtc(exe); } catch { }
+            ReadSignature(exe, report);
+            ReadDownloadMark(exe, report);
 
             // ── 1. Identity: is this even claiming to be Tempo? ─────────────────────
             string who = IdentityMismatch();
             if (who != null)
             {
+                report.Identity = IntegrityLayerState.Failed;
+                report.IdentityProblem = who;
                 return Set(IntegrityVerdict.Repackaged,
                     "this build is not stamped as an official Tempo build (" + who + ")");
             }
+            report.Identity = IntegrityLayerState.Passed;
 
             // ── 2 + 3. One pass over the file: hash, zero-density and native payload ─
             Scan scan;
@@ -375,26 +576,36 @@ namespace AutoClicker.Utils
             {
                 // Locked or unreadable is NOT evidence of tampering. Crying wolf here
                 // would teach the user to ignore the one warning that matters.
+                report.Structure = IntegrityLayerState.Warning;
                 return Set(IntegrityVerdict.Unverified, "the program file could not be read (" + ex.Message + ")");
             }
 
             CurrentHash = scan.Hash;
+            report.Sha256 = scan.Hash;
+            report.Length = scan.Length;
+            report.LooksExecutable = scan.LooksExecutable;
+            report.ZeroFraction = scan.ZeroFraction;
+            report.HasNativePayload = scan.HasNativePayload;
 
             if (!scan.LooksExecutable)
             {
+                report.Structure = IntegrityLayerState.Failed;
                 return Set(IntegrityVerdict.Damaged, "the program file is not a valid Windows executable");
             }
             if (scan.Length > 0 && scan.ZeroFraction > MaxZeroFraction)
             {
+                report.Structure = IntegrityLayerState.Failed;
                 return Set(IntegrityVerdict.Damaged,
                     "the program file is " + Math.Round(scan.ZeroFraction * 100) +
                     "% empty bytes — it is truncated or corrupted");
             }
             if (!scan.HasNativePayload)
             {
+                report.Structure = IntegrityLayerState.Failed;
                 return Set(IntegrityVerdict.Damaged,
                     "the bundled speech libraries are missing from the program file");
             }
+            report.Structure = IntegrityLayerState.Passed;
 
             // ── 3b. The code Tempo actually runs: its unpacked copy ────────────────
             // Tempo.exe can be byte-perfect while the files the host unpacked from it — the ones
@@ -405,6 +616,11 @@ namespace AutoClicker.Utils
                 return Set(IntegrityVerdict.UnpackedModified, unpackedProblem);
             }
 
+            // ── 3c. Code from beside the exe ───────────────────────────────────────
+            // Recorded here and counted at the end (ApplyForeign), so the layers below still run and
+            // the details can say what they found about the file itself.
+            CheckBesideExe(exe, exePathOverride, report);
+
             // ── 4. Fingerprint against what this build looked like when it first ran ─
             string version = CrashReporter.CurrentVersion;
             string baseVersion = settings != null ? settings.IntegrityBaselineVersion : null;
@@ -413,12 +629,15 @@ namespace AutoClicker.Utils
 
             if (settings == null)
             {
+                report.Local = IntegrityLayerState.Skipped;
                 return Set(IntegrityVerdict.Unverified, "no settings available to compare against");
             }
 
             if (string.IsNullOrEmpty(baseHash) || string.IsNullOrEmpty(baseVersion))
             {
                 Remember(settings, version, scan);
+                report.Local = IntegrityLayerState.Warning;
+                report.LocalOutcome = IntegrityLocalOutcome.Recorded;
                 return Set(IntegrityVerdict.Baselined,
                     "first run of " + version + " — fingerprint recorded");
             }
@@ -428,6 +647,8 @@ namespace AutoClicker.Utils
                 // A different version is an update, not an attack. Re-baseline quietly;
                 // warning on every legitimate update is how a check gets switched off.
                 Remember(settings, version, scan);
+                report.Local = IntegrityLayerState.Warning;
+                report.LocalOutcome = IntegrityLocalOutcome.RecordedForUpdate;
                 return Set(IntegrityVerdict.Baselined,
                     "updated to " + version + " — fingerprint re-recorded");
             }
@@ -476,18 +697,256 @@ namespace AutoClicker.Utils
                                    !string.Equals(wasBuild, nowBuild, StringComparison.OrdinalIgnoreCase)
                         ? ", replacing build " + wasBuild
                         : "";
+                    report.Local = IntegrityLayerState.Warning;
+                    report.LocalOutcome = IntegrityLocalOutcome.TestBuildRebuilt;
                     return Set(IntegrityVerdict.TestBuild,
                         "this is a test build (" + BuildInfo.Id + ")" + which +
                         ", rebuilt on every publish — nothing outside this PC has vouched for it");
                 }
 
+                report.Local = IntegrityLayerState.Failed;
+                report.LocalOutcome = IntegrityLocalOutcome.Differs;
                 return Set(IntegrityVerdict.Modified,
                     Path.GetFileName(exe) + " has changed since it was installed, but its version is still "
                     + version + detail);
             }
 
+            report.Local = IntegrityLayerState.Passed;
+            report.LocalOutcome = IntegrityLocalOutcome.Matches;
             return Set(IntegrityVerdict.Ok, "matches the copy installed on " +
                 (string.IsNullOrEmpty(settings.IntegrityBaselineUtc) ? "this PC" : settings.IntegrityBaselineUtc));
+        }
+
+        // ── Code from beside the exe ─────────────────────────────────────────────────
+
+        /// <summary>
+        /// Layer 3c. In a single-file run nothing of Tempo's lives beside its exe — the bundle unpacks into
+        /// TEMP — so any program library Windows loaded from that folder (or one below it) was put there by
+        /// someone else: a planted DLL Windows found before the System32 one a component asked for by name.
+        /// Not-loaded program files there are noted too, as a warning, for an INSTALLED copy only: its folder
+        /// is Tempo's alone, while a portable copy may sit in Downloads beside anything.
+        /// </summary>
+        private static void CheckBesideExe(string exe, string exePathOverride, IntegrityReport report)
+        {
+            try
+            {
+                string exeDir = Path.GetDirectoryName(exe) ?? "";
+                if (!string.IsNullOrEmpty(exePathOverride) || RunningUnpackDirectory(exe) == null || exeDir.Length == 0)
+                {
+                    // A copy of the exe has no process of its own to look at; a loose build keeps its whole
+                    // program beside the exe by design.
+                    report.Beside = IntegrityLayerState.Skipped;
+                    return;
+                }
+
+                report.LoadedBeside = ModulesUnder(exeDir, exe, LoadedModulePaths());
+                if (DeploymentInfo.IsInstalled) { report.StrayBeside = StrayProgramFiles(exeDir, exe, report.LoadedBeside); }
+                report.Beside = report.LoadedBeside.Count > 0 ? IntegrityLayerState.Failed
+                              : report.StrayBeside.Count > 0 ? IntegrityLayerState.Warning
+                              : IntegrityLayerState.Passed;
+                if (report.LoadedBeside.Count > 0)
+                {
+                    Logger.Error("[Integrity] loaded into Tempo from beside " + Path.GetFileName(exe) + ": " +
+                                 string.Join(", ", report.LoadedBeside));
+                }
+                else if (report.StrayBeside.Count > 0)
+                {
+                    Logger.Warn("[Integrity] program files beside " + Path.GetFileName(exe) + " that Tempo never ships (not loaded): " +
+                                string.Join(", ", report.StrayBeside));
+                }
+            }
+            catch (Exception ex)
+            {
+                report.Beside = IntegrityLayerState.Skipped;
+                Logger.Swallow("IntegrityCheck.CheckBesideExe", ex);
+            }
+        }
+
+        /// <summary>
+        /// The modules among <paramref name="modulePaths"/> that sit in <paramref name="folder"/> or below it,
+        /// other than <paramref name="exe"/> itself. Pure, so a probe can feed it any list.
+        /// </summary>
+        internal static List<string> ModulesUnder(string folder, string exe, IEnumerable<string> modulePaths)
+        {
+            var found = new List<string>();
+            if (string.IsNullOrEmpty(folder) || modulePaths == null) { return found; }
+            string root;
+            string self;
+            try
+            {
+                root = Path.GetFullPath(folder).TrimEnd('\\') + "\\";
+                self = string.IsNullOrEmpty(exe) ? "" : Path.GetFullPath(exe);
+            }
+            catch { return found; }
+            foreach (string m in modulePaths)
+            {
+                if (string.IsNullOrEmpty(m)) { continue; }
+                string full;
+                try { full = Path.GetFullPath(m); } catch { continue; }
+                if (full.StartsWith(root, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(full, self, StringComparison.OrdinalIgnoreCase) &&
+                    !found.Exists(f => string.Equals(f, full, StringComparison.OrdinalIgnoreCase)))
+                {
+                    found.Add(full);
+                }
+            }
+            return found;
+        }
+
+        /// <summary>Every module mapped into this process, by full path.</summary>
+        private static List<string> LoadedModulePaths()
+        {
+            var paths = new List<string>();
+            using (var me = System.Diagnostics.Process.GetCurrentProcess())
+            {
+                foreach (System.Diagnostics.ProcessModule m in me.Modules)
+                {
+                    try { paths.Add(m.FileName); }
+                    catch { }
+                    finally { m.Dispose(); }
+                }
+            }
+            return paths;
+        }
+
+        /// <summary>
+        /// Program files (.dll, .exe other than Tempo's own names) and a runtimes folder sitting in an installed
+        /// copy's folder, not already counted as loaded. Names only, at most twelve.
+        /// </summary>
+        internal static List<string> StrayProgramFiles(string exeDir, string exe, IReadOnlyList<string> loaded)
+        {
+            var stray = new List<string>();
+            try
+            {
+                foreach (string f in Directory.EnumerateFiles(exeDir))
+                {
+                    string ext = Path.GetExtension(f);
+                    bool program = ext.Equals(".dll", StringComparison.OrdinalIgnoreCase) ||
+                                   ext.Equals(".exe", StringComparison.OrdinalIgnoreCase);
+                    if (!program) { continue; }
+                    string name = Path.GetFileName(f);
+                    if (string.Equals(f, exe, StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals(DeploymentInfo.InstalledExeName, StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals(DeploymentInfo.LegacyExeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    bool counted = false;
+                    if (loaded != null)
+                    {
+                        foreach (string l in loaded)
+                        {
+                            if (string.Equals(Path.GetFileName(l), name, StringComparison.OrdinalIgnoreCase)) { counted = true; break; }
+                        }
+                    }
+                    if (!counted) { stray.Add(name); }
+                    if (stray.Count >= 12) { break; }
+                }
+                if (stray.Count < 12 && Directory.Exists(Path.Combine(exeDir, "runtimes"))) { stray.Add("runtimes\\"); }
+            }
+            catch { }
+            return stray;
+        }
+
+        // ── Facts about the file for the details: signature, download mark ──────────
+
+        /// <summary>
+        /// Whether the exe carries an Authenticode signature, and whose. Read from the PE header's security
+        /// directory (4 KB, no hashing) — Tempo's releases are not signed, so a signature means someone signed
+        /// a copy themselves. Never throws.
+        /// </summary>
+        private static void ReadSignature(string exe, IntegrityReport report)
+        {
+            try
+            {
+                byte[] head = new byte[4096];
+                int got;
+                using (var fs = new FileStream(exe, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    got = fs.Read(head, 0, head.Length);
+                }
+                report.HasSignature = SecurityDirectorySize(head, got) > 0;
+                if (!report.HasSignature) { return; }
+                using (var cert = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(exe))
+                {
+                    report.SignedBy = SubjectName(cert.Subject);
+                }
+            }
+            catch { /* unsigned, unreadable, or not a PE: the details just say what they can */ }
+        }
+
+        /// <summary>The size of the PE security (certificate) directory in a file's first bytes; 0 when there is none.</summary>
+        internal static int SecurityDirectorySize(byte[] head, int length)
+        {
+            if (head == null || length < 0x40 || head[0] != (byte)'M' || head[1] != (byte)'Z') { return 0; }
+            int pe = BitConverter.ToInt32(head, 0x3C);
+            if (pe <= 0 || pe + 24 > length || head[pe] != (byte)'P' || head[pe + 1] != (byte)'E') { return 0; }
+            int optional = pe + 24;
+            if (optional + 2 > length) { return 0; }
+            ushort magic = BitConverter.ToUInt16(head, optional);
+            int dirs = magic == 0x20B ? optional + 112 : magic == 0x10B ? optional + 96 : -1;
+            int entry = dirs + 4 * 8;           // IMAGE_DIRECTORY_ENTRY_SECURITY is the fifth
+            if (dirs < 0 || entry + 8 > length) { return 0; }
+            return Math.Max(0, BitConverter.ToInt32(head, entry + 4));
+        }
+
+        private static string SubjectName(string subject)
+        {
+            if (string.IsNullOrEmpty(subject)) { return ""; }
+            foreach (string part in subject.Split(','))
+            {
+                string p = part.Trim();
+                if (p.StartsWith("CN=", StringComparison.OrdinalIgnoreCase)) { return p.Substring(3).Trim('"'); }
+            }
+            return subject;
+        }
+
+        /// <summary>
+        /// The site a browser wrote into the file's download mark (the Zone.Identifier stream Windows uses for
+        /// "this came from the internet"), host only. An installed copy normally has none: Tempo's installer
+        /// and updater write the file themselves. Never throws.
+        /// </summary>
+        private static void ReadDownloadMark(string exe, IntegrityReport report)
+        {
+            try
+            {
+                // Asked first rather than read and caught: an installed copy has no mark, so the read threw a
+                // FileNotFoundException on every check of the normal case (scratchpad/firstchance found it — the
+                // only exception Tempo threw starting up and visiting every tab). File.Exists answers for a stream
+                // without throwing (measured on .NET 8: false before the stream is written, true after).
+                string mark = exe + ":Zone.Identifier";
+                if (!File.Exists(mark)) { return; }
+                string[] lines = File.ReadAllLines(mark);
+                string host = null;
+                foreach (string key in new[] { "HostUrl=", "ReferrerUrl=" })
+                {
+                    foreach (string line in lines)
+                    {
+                        if (!line.StartsWith(key, StringComparison.OrdinalIgnoreCase)) { continue; }
+                        if (Uri.TryCreate(line.Substring(key.Length).Trim(), UriKind.Absolute, out Uri u) &&
+                            (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp) && u.Host.Length > 0)
+                        {
+                            host = u.Host.ToLowerInvariant();
+                        }
+                        break;
+                    }
+                    if (host != null) { break; }
+                }
+                if (host == null) { return; }
+                report.DownloadedFrom = host;
+                report.DownloadedFromOfficial = IsOfficialHost(host);
+            }
+            catch { /* no mark: not downloaded by a browser, or copied since */ }
+        }
+
+        /// <summary>GitHub (where releases are published and served from) and the project's website.</summary>
+        internal static bool IsOfficialHost(string host)
+        {
+            if (string.IsNullOrEmpty(host)) { return false; }
+            host = host.ToLowerInvariant();
+            return host == "github.com" || host == "objects.githubusercontent.com" ||
+                   host == "release-assets.githubusercontent.com" || host == "codeload.github.com" ||
+                   host == "justcamop555-pixel.github.io";
         }
 
         /// <summary>
@@ -524,9 +983,35 @@ namespace AutoClicker.Utils
         public static IntegrityVerdict VerifyAgainstGitHub(Models.AppSettings settings,
                                                            string tagOverride = null)
         {
+            // A probe may call this on its own, without a run before it.
+            if (_report == null)
+            {
+                _report = new IntegrityReport
+                {
+                    CheckedUtc = DateTime.UtcNow,
+                    Version = CrashReporter.CurrentVersion,
+                    BuildId = BuildInfo.Id,
+                    Sha256 = CurrentHash,
+                    Verdict = Verdict,
+                    Summary = Summary,
+                };
+            }
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            IntegrityVerdict v = VerifyAgainstGitHubCore(settings, tagOverride, _report);
+            _report.OnlineMs = clock.ElapsedMilliseconds;
+            _report.OnlineCheckedUtc = DateTime.UtcNow;
+            _report.OnlineRetryAtUtc = OnlineRetryWanted ? OnlineRetryAtUtc : null;
+            return ApplyForeign(v);
+        }
+
+        private static IntegrityVerdict VerifyAgainstGitHubCore(Models.AppSettings settings, string tagOverride,
+                                                                IntegrityReport report)
+        {
             if (string.IsNullOrEmpty(CurrentHash))
             {
                 OnlineSummary = "nothing to compare yet";
+                report.Online = IntegrityLayerState.Skipped;
+                report.OnlineOutcome = IntegrityOnlineOutcome.NotAsked;
                 return Verdict;
             }
 
@@ -553,6 +1038,8 @@ namespace AutoClicker.Utils
                 ConfirmedByGitHub = false;
                 OfficialTag = null;
                 OnlineSummary = "not compared — this is a test build, not a published release";
+                report.Online = IntegrityLayerState.Skipped;
+                report.OnlineOutcome = IntegrityOnlineOutcome.TestBuildSkipped;
                 return Set(IntegrityVerdict.TestBuild,
                     "this is a test build (" + BuildInfo.Id +
                     "), so there is no published release to compare it against");
@@ -567,12 +1054,16 @@ namespace AutoClicker.Utils
                 ? TagFor(version)                               // e.g. v1.0.318
                 : tagOverride;
 
+            report.OnlineTag = tag;
             if (settings != null &&
                 string.Equals(settings.IntegrityVerifiedHash, CurrentHash, StringComparison.OrdinalIgnoreCase))
             {
                 ConfirmedByGitHub = true;
                 OfficialTag = tag;
                 OnlineSummary = "confirmed against GitHub on " + settings.IntegrityVerifiedUtc;
+                report.Online = IntegrityLayerState.Passed;
+                report.OnlineOutcome = IntegrityOnlineOutcome.ConfirmedEarlier;
+                report.OnlineConfirmed = settings.IntegrityVerifiedUtc;
                 return Set(IntegrityVerdict.Genuine,
                     "verified against the release published on GitHub");
             }
@@ -588,6 +1079,9 @@ namespace AutoClicker.Utils
                 OnlineRetryWanted = true;
                 OnlineRetryAtUtc = GitHubApi.QuietUntilUtc;
                 Logger.Warn("[Integrity] " + OnlineSummary + " — keeping the local result; will ask again later.");
+                report.Online = IntegrityLayerState.Warning;
+                report.OnlineOutcome = IntegrityOnlineOutcome.Unreachable;
+                report.OnlineError = error ?? "unknown";
                 return Verdict;                                  // offline ≠ tampered
             }
 
@@ -596,21 +1090,30 @@ namespace AutoClicker.Utils
                 ConfirmedByGitHub = false;
                 OfficialTag = null;
                 OnlineSummary = "GitHub has no release " + tag;
+                report.Online = IntegrityLayerState.Failed;
+                report.OnlineOutcome = IntegrityOnlineOutcome.NoSuchRelease;
                 return Set(IntegrityVerdict.UnknownRelease,
                     "no release named " + tag + " exists on GitHub, so nothing off this PC " +
                     "can vouch for this build");
             }
 
-            string published = PublishedExeDigest(release);
-            if (published == null)
+            List<string> publishedDigests = PublishedExeDigests(release);
+            if (publishedDigests.Count == 0)
             {
                 OnlineSummary = "release " + tag + " publishes no checksum for Tempo.exe";
                 Logger.Warn("[Integrity] " + OnlineSummary + " — keeping the local result.");
+                report.Online = IntegrityLayerState.Warning;
+                report.OnlineOutcome = IntegrityOnlineOutcome.NoChecksum;
                 return Verdict;
             }
 
-            if (string.Equals(published, CurrentHash, StringComparison.OrdinalIgnoreCase))
+            // Any of the release's programs: the bare Tempo.exe is the one the updater and the download page
+            // use, but a release that also carried a second .exe (a setup, a tool) used to be compared against
+            // whichever came first in GitHub's list — a confident, wrong "modified" for the real Tempo.exe.
+            if (publishedDigests.Exists(d => string.Equals(d, CurrentHash, StringComparison.OrdinalIgnoreCase)))
             {
+                report.Online = IntegrityLayerState.Passed;
+                report.OnlineOutcome = IntegrityOnlineOutcome.Confirmed;
                 ConfirmedByGitHub = true;
                 OfficialTag = tag;
                 if (settings != null)
@@ -626,6 +1129,7 @@ namespace AutoClicker.Utils
                     settings.IntegrityBaselineHash = CurrentHash;
                     settings.IntegrityBaselineUtc = settings.IntegrityVerifiedUtc;
                     ExpectedHash = CurrentHash;
+                    report.OnlineConfirmed = settings.IntegrityVerifiedUtc;
                 }
                 OnlineSummary = "matches the " + tag + " release on GitHub";
                 return Set(IntegrityVerdict.Genuine,
@@ -635,6 +1139,8 @@ namespace AutoClicker.Utils
             ConfirmedByGitHub = false;
             OfficialTag = null;
             OnlineSummary = "does NOT match the " + tag + " release on GitHub";
+            report.Online = IntegrityLayerState.Failed;
+            report.OnlineOutcome = IntegrityOnlineOutcome.Mismatch;
             return Set(IntegrityVerdict.Modified,
                 "this file claims to be " + version + ", but GitHub's " + tag +
                 " release is a different file — it was not built or published by the project");
@@ -646,18 +1152,22 @@ namespace AutoClicker.Utils
         /// </summary>
         private static string CheckUnpackedCopy(string exe, Scan scan, string exePathOverride, string unpackDirOverride)
         {
+            IntegrityReport r = _report ?? new IntegrityReport();
+            r.Unpacked = IntegrityLayerState.Skipped;
             string dir = unpackDirOverride;
             if (string.IsNullOrEmpty(dir))
             {
                 if (!string.IsNullOrEmpty(exePathOverride))
                 {
                     PayloadSummary = "not compared (checking a copy of the exe)";
+                    r.UnpackedNote = IntegrityUnpackedNote.CheckingACopy;
                     return null;
                 }
                 dir = RunningUnpackDirectory(exe);
                 if (dir == null)
                 {
                     PayloadSummary = "not a single-file run — nothing was unpacked";
+                    r.UnpackedNote = IntegrityUnpackedNote.NotSingleFile;
                     return null;
                 }
             }
@@ -668,12 +1178,17 @@ namespace AutoClicker.Utils
             {
                 PayloadSummary = "the bundle manifest could not be read (" + ex.Message + ")";
                 Logger.Warn("[Integrity] unpacked copy: " + PayloadSummary);
+                r.Unpacked = IntegrityLayerState.Warning;
+                r.UnpackedNote = IntegrityUnpackedNote.ManifestUnreadable;
+                r.UnpackedError = ex.Message;
                 return null;
             }
             if (manifest == null)
             {
                 PayloadSummary = Path.GetFileName(exe) + " carries no bundle manifest this check understands";
                 Logger.Warn("[Integrity] unpacked copy: " + PayloadSummary);
+                r.Unpacked = IntegrityLayerState.Warning;
+                r.UnpackedNote = IntegrityUnpackedNote.NoManifest;
                 return null;
             }
 
@@ -684,6 +1199,9 @@ namespace AutoClicker.Utils
             {
                 PayloadSummary = "the unpack folder is not named after this bundle (" + manifest.BundleId + "), so it was not compared";
                 Logger.Warn("[Integrity] unpacked copy: " + PayloadSummary);
+                r.Unpacked = IntegrityLayerState.Warning;
+                r.UnpackedNote = IntegrityUnpackedNote.FolderNotThisBundle;
+                r.UnpackDirectory = dir;
                 return null;
             }
 
@@ -692,10 +1210,22 @@ namespace AutoClicker.Utils
             {
                 PayloadSummary = "could not be compared (" + report.Error + ")";
                 Logger.Warn("[Integrity] unpacked copy: " + PayloadSummary);
+                r.Unpacked = IntegrityLayerState.Warning;
+                r.UnpackedNote = IntegrityUnpackedNote.CompareFailed;
+                r.UnpackedError = report.Error;
+                r.UnpackDirectory = dir;
                 return null;
             }
 
             UnpackDirectory = dir;
+            r.UnpackDirectory = dir;
+            r.UnpackedChecked = report.Checked;
+            r.UnpackedBytes = report.Bytes;
+            r.UnpackedMs = report.Milliseconds;
+            r.UnpackedChanged = new List<string>(report.Changed);
+            r.UnpackedAdded = new List<string>(report.Unexpected);
+            r.UnpackedMissing = new List<string>(report.Missing);
+            r.Unpacked = report.Tampered ? IntegrityLayerState.Failed : IntegrityLayerState.Passed;
             string cost = (report.Bytes / (1024 * 1024)) + " MB in " + report.Milliseconds + " ms";
             if (!report.Tampered)
             {
@@ -762,16 +1292,16 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
-        /// The SHA-256 GitHub holds for the release's bare Tempo.exe asset.
+        /// The SHA-256 digests GitHub holds for the release's .exe assets — the bare Tempo.exe first.
         ///
-        /// Prefers the exe over the zip: the exe is what actually runs, and it is also
-        /// what the in-app updater downloads. Falls back to nothing rather than
-        /// guessing — a comparison against the wrong asset would produce a confident,
-        /// wrong "modified".
+        /// Exes, not the zip: the exe is what actually runs, and it is also what the in-app updater
+        /// downloads. Empty rather than guessing — a comparison against the wrong asset would produce a
+        /// confident, wrong "modified".
         /// </summary>
-        private static string PublishedExeDigest(UpdateChecker.GitHubRelease release)
+        internal static List<string> PublishedExeDigests(UpdateChecker.GitHubRelease release)
         {
-            if (release == null || release.assets == null) { return null; }
+            var digests = new List<string>();
+            if (release == null || release.assets == null) { return digests; }
             foreach (UpdateChecker.GitHubAsset a in release.assets)
             {
                 if (a == null || string.IsNullOrEmpty(a.name) || string.IsNullOrEmpty(a.digest))
@@ -782,12 +1312,19 @@ namespace AutoClicker.Utils
 
                 string d = a.digest.Trim();
                 const string prefix = "sha256:";
-                if (d.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                if (!d.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { continue; }
+                d = d.Substring(prefix.Length).Trim();
+                if (d.Length != 64) { continue; }
+                if (string.Equals(a.name, DeploymentInfo.LegacyExeName, StringComparison.OrdinalIgnoreCase))
                 {
-                    return d.Substring(prefix.Length);
+                    digests.Insert(0, d);
+                }
+                else
+                {
+                    digests.Add(d);
                 }
             }
-            return null;
+            return digests;
         }
 
         /// <summary>Forgets the stored fingerprint so the next run records a fresh one.</summary>
@@ -814,8 +1351,14 @@ namespace AutoClicker.Utils
         {
             Verdict = v;
             Summary = summary;
+            if (_report != null)
+            {
+                _report.Verdict = v;
+                _report.Summary = summary ?? "";
+                Publish();
+            }
             if (v == IntegrityVerdict.Modified || v == IntegrityVerdict.Repackaged ||
-                v == IntegrityVerdict.UnpackedModified)
+                v == IntegrityVerdict.UnpackedModified || v == IntegrityVerdict.ForeignCode)
             {
                 Logger.Error("[Integrity] " + summary);
             }

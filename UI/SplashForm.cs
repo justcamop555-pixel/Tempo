@@ -27,6 +27,25 @@ namespace AutoClicker.UI
         private bool _fadingOut;
         private readonly string _versionText;
 
+        // The splash is drawn at 100% in a 468 x 344 design and magnified by the screen's scale.
+        //
+        // It used to be a 468 x 344-PIXEL window drawn in pixels, with point-sized fonts. On a 150%
+        // laptop the text came out half as big again inside the same 468 pixels: the tagline ran
+        // into both edges of the card, and a longer language had nowhere to go. Now the whole card
+        // grows with the screen, text and all (the fonts are 100% pixel sizes, so the transform
+        // scales them exactly once), and looks at 150% as it does at 100%.
+        private const int DesignWidth = 468, DesignHeight = 344;
+        private readonly float _scale = 1f;
+
+        /// <summary>A 100% size in screen pixels.</summary>
+        private int Px(float size96) => (int)Math.Round(size96 * _scale, MidpointRounding.AwayFromZero);
+
+        /// <summary>A Segoe UI font of <paramref name="points"/> at 100% — in pixels, so only the paint transform scales it.</summary>
+        private static Font DesignFont(float points, FontStyle style = FontStyle.Regular)
+        {
+            return new Font("Segoe UI", points * 96f / 72f, style, GraphicsUnit.Pixel);
+        }
+
         // Theme-aware palette, loaded once from the saved settings so the splash matches
         // the accent/theme the user has chosen (falls back to the brand violet/blue).
         private Color _bg = Color.FromArgb(17, 18, 22);
@@ -104,7 +123,9 @@ namespace AutoClicker.UI
             ShowInTaskbar = false;
             TopMost = true;
             DoubleBuffered = true;
-            Size = new Size(468, 344);
+            // Tempo is System-DPI-aware: this is the system DPI, known before the window exists.
+            _scale = Math.Max(1f, DeviceDpi / 96f);
+            Size = new Size(Px(DesignWidth), Px(DesignHeight));
             BackColor = _bg;
             Opacity = 1.0;
 
@@ -126,7 +147,7 @@ namespace AutoClicker.UI
             // Soft rounded corners for a less boxy look.
             try
             {
-                using (var path = RoundedPath(0, 0, Width, Height, 14))
+                using (var path = RoundedPath(0, 0, Width, Height, Px(14)))
                 {
                     Region = new Region(path);
                 }
@@ -218,40 +239,44 @@ namespace AutoClicker.UI
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
+            // Everything below is in the 100% design (W x H), magnified once here.
+            const int W = DesignWidth, H = DesignHeight;
+            g.ScaleTransform(_scale, _scale);
+
             // Soft accent-tinted radial wash behind everything, brightest up around the logo,
             // fading to the background — gives the splash depth instead of a flat panel.
             using (var glowPath = new GraphicsPath())
             {
-                var glowRect = new Rectangle(-Width / 2, -Height / 2, Width * 2, Height + 60);
+                var glowRect = new Rectangle(-W / 2, -H / 2, W * 2, H + 60);
                 glowPath.AddEllipse(glowRect);
                 using (var glow = new PathGradientBrush(glowPath))
                 {
-                    glow.CenterPoint = new PointF(Width / 2f, 64f);
+                    glow.CenterPoint = new PointF(W / 2f, 64f);
                     glow.CenterColor = Color.FromArgb(30, _accent);
                     glow.SurroundColors = new[] { Color.FromArgb(0, _accent) };
-                    g.FillRectangle(glow, 0, 0, Width, Height);
+                    g.FillRectangle(glow, 0, 0, W, H);
                 }
             }
 
             // Accent strip across the top.
             using (var strip = new LinearGradientBrush(
-                new Rectangle(0, 0, Width, 3), _accent, _accent2, LinearGradientMode.Horizontal))
+                new Rectangle(0, 0, W, 3), _accent, _accent2, LinearGradientMode.Horizontal))
             {
-                g.FillRectangle(strip, 0, 0, Width, 3);
+                g.FillRectangle(strip, 0, 0, W, 3);
             }
 
             // ── Brand row: logo tile (with breathing glow) + wordmark + version ──
             double breathe = 0.5 + 0.5 * Math.Sin(_phase * 1.6);
             const int logo = 52;
             int ly = 30;
-            using (var titleFont = new Font("Segoe UI", 25f, FontStyle.Bold))
-            using (var verFont = new Font("Segoe UI", 9.5f, FontStyle.Regular))
+            using (var titleFont = DesignFont(25f, FontStyle.Bold))
+            using (var verFont = DesignFont(9.5f))
             {
                 SizeF tsz = g.MeasureString("Tempo", titleFont);
                 SizeF vsz = string.IsNullOrEmpty(_versionText) ? SizeF.Empty : g.MeasureString(_versionText, verFont);
                 float gapLogo = 16f, gapVer = string.IsNullOrEmpty(_versionText) ? 0f : 8f;
                 float rowW = logo + gapLogo + tsz.Width + gapVer + vsz.Width;
-                float rowX = (Width - rowW) / 2f;
+                float rowX = (W - rowW) / 2f;
                 int lx = (int)rowX;
 
                 using (var gp = new GraphicsPath())
@@ -289,7 +314,7 @@ namespace AutoClicker.UI
             }
 
             // Tagline.
-            using (var tagFont = new Font("Segoe UI", 9.5f, FontStyle.Regular))
+            using (var tagFont = DesignFont(9.5f))
             using (var tagBrush = new SolidBrush(_subColor))
             {
                 // Translated at PAINT time, not when the string was declared.
@@ -303,13 +328,13 @@ namespace AutoClicker.UI
                 // fully translated for the second or more that anyone actually reads it.
                 string tag = Utils.Localization.T(Tagline);
                 SizeF sz = g.MeasureString(tag, tagFont);
-                g.DrawString(tag, tagFont, tagBrush, (Width - sz.Width) / 2f, 96f);
+                g.DrawString(tag, tagFont, tagBrush, (W - sz.Width) / 2f, 96f);
             }
 
             // Divider under the brand block.
             using (var dp = new Pen(_borderColor))
             {
-                g.DrawLine(dp, 40, 124, Width - 40, 124);
+                g.DrawLine(dp, 40, 124, W - 40, 124);
             }
 
             // ── Checklist: real startup stages, ticked off as the window builds ──
@@ -326,8 +351,8 @@ namespace AutoClicker.UI
             int listX = 74;
             int rowH = 25;
             int listY = 140;
-            using (var doneFont = new Font("Segoe UI", 9.75f, FontStyle.Regular))
-            using (var activeFont = new Font("Segoe UI", 9.75f, FontStyle.Bold))
+            using (var doneFont = DesignFont(9.75f))
+            using (var activeFont = DesignFont(9.75f, FontStyle.Bold))
             {
                 for (int i = 0; i < LoadingSteps.Length; i++)
                 {
@@ -384,7 +409,7 @@ namespace AutoClicker.UI
                         var sf = new StringFormat { LineAlignment = StringAlignment.Center };
                         // Translated per paint — see the note on the tagline above.
                         g.DrawString(Utils.Localization.T(LoadingSteps[i]), f, tb,
-                            new RectangleF(listX + 26, rowY, Width - listX - 40, rowH), sf);
+                            new RectangleF(listX + 26, rowY, W - listX - 40, rowH), sf);
 
                         // What this stage actually found, right-aligned and dimmed.
                         string det = i < StepDetail.Length ? StepDetail[i] : null;
@@ -398,7 +423,7 @@ namespace AutoClicker.UI
                                     Alignment = StringAlignment.Far
                                 };
                                 g.DrawString(det, doneFont, db,
-                                    new RectangleF(listX + 26, rowY, Width - listX - 46, rowH), rsf);
+                                    new RectangleF(listX + 26, rowY, W - listX - 46, rowH), rsf);
                                 rsf.Dispose();
                             }
                         }
@@ -407,8 +432,8 @@ namespace AutoClicker.UI
             }
 
             // ── Determinate progress bar + percentage ───────────────────────────
-            int barW = Width - 148, barH = 5;
-            int barX = 74, barY = Height - 40;
+            int barW = W - 148, barH = 5;
+            int barX = 74, barY = H - 40;
             using (var track = new SolidBrush(_trackColor))
             {
                 FillRoundedRect(g, track, barX, barY, barW, barH, 3);
@@ -422,17 +447,19 @@ namespace AutoClicker.UI
                     FillRoundedRect(g, fill, barX, barY, fillW, barH, 3);
                 }
             }
-            using (var pctFont = new Font("Segoe UI", 9f, FontStyle.Bold))
+            using (var pctFont = DesignFont(9f, FontStyle.Bold))
             using (var pctBrush = new SolidBrush(_subColor))
             {
                 string pct = (int)Math.Round(_progress * 100) + "%";
                 SizeF psz = g.MeasureString(pct, pctFont);
-                g.DrawString(pct, pctFont, pctBrush, Width - 74 + 12, barY - psz.Height / 2f + barH / 2f);
+                g.DrawString(pct, pctFont, pctBrush, W - 74 + 12, barY - psz.Height / 2f + barH / 2f);
             }
 
-            // Rounded border to match the rounded form region.
+            // Rounded border to match the rounded form region — in screen pixels, so it stays one
+            // crisp pixel on the region's edge at any scale.
+            g.ResetTransform();
             using (var border = new Pen(_borderColor))
-            using (var bpath = RoundedPath(0, 0, Width - 1, Height - 1, 14))
+            using (var bpath = RoundedPath(0, 0, Width - 1, Height - 1, Px(14)))
             {
                 g.DrawPath(border, bpath);
             }

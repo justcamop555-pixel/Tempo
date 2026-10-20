@@ -19,7 +19,7 @@ namespace AutoClicker.UI
     /// </summary>
     public sealed class NotificationHistoryForm : Form
     {
-        private readonly Theme _theme;
+        private Theme _theme;
         private readonly ListView _list;
         private readonly Label _summary;
         private readonly Label _previewHead;
@@ -175,6 +175,51 @@ namespace AutoClicker.UI
             UiFactory.ScaleToScreen(this);
         }
 
+        /// <summary>
+        /// The list's header and the scroll bars in the theme's dark or light style. They were Windows' light
+        /// ones in every theme — a white header strip over a dark list. Done once the children have handles
+        /// (a Form's own HandleCreated comes before theirs, and themed nothing).
+        /// </summary>
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            ApplyNativeTheme();
+        }
+
+        private void ApplyNativeTheme()
+        {
+            try { NativeChrome.ApplyAllScrollbarThemes(this, _theme.Background.GetBrightness() < 0.5f); }
+            catch { }
+        }
+
+        /// <summary>
+        /// Re-themes the open window. It had no way to be told: a theme picked while it was open left the
+        /// whole window — list, preview, buttons — in the colours it opened with.
+        /// </summary>
+        public void ApplyTheme(Theme theme)
+        {
+            if (theme == null || IsDisposed) { return; }
+            try
+            {
+                _theme = theme;
+                BackColor = theme.Background;
+                ForeColor = theme.Text;
+                ThemeManager.Apply(this, theme);
+                _picture.BackColor = theme.InputBackground;
+                ApplyNativeTheme();
+                // The rows and the summary carry meaning in their colour (missed, repeat): built again in the new one.
+                Reload();
+                Invalidate(true);
+            }
+            catch (Exception ex) { Logger.Swallow("NotificationHistoryForm.ApplyTheme", ex); }
+        }
+
+        /// <summary>Re-themes the history if it is open (the main window's theme change).</summary>
+        public static void ApplyThemeToOpen(Theme theme)
+        {
+            if (_open != null && !_open.IsDisposed) { _open.ApplyTheme(theme); }
+        }
+
         /// <summary>1 while a reload is already queued, so a burst of entries costs one rebuild.</summary>
         private int _reloadQueued;
 
@@ -227,7 +272,8 @@ namespace AutoClicker.UI
                     // leads the message so a long text can't push it out of sight.
                     if (times > 1) { message = "×" + times + "  " + message; }
 
-                    var row = new ListViewItem(e.WhenLocal.ToString("ddd HH:mm, d MMM"));
+                    // In the app's language: Windows' own put "Mon … Oct" in a Spanish window.
+                    var row = new ListViewItem(e.WhenLocal.ToString("ddd HH:mm, d MMM", Localization.DateCulture));
                     // The entry itself, so a selection survives a reload: Recent() copies the
                     // LIST, not the entries, so the same notification is the same object.
                     row.Tag = e;
@@ -301,7 +347,7 @@ namespace AutoClicker.UI
                 string status = e.How == NotificationHistory.Outcome.Missed ? Localization.T("missed")
                               : e.How == NotificationHistory.Outcome.Repeated ? Localization.T("repeat")
                               : Localization.T("shown");
-                _previewHead.Text = e.SourceLine + "  ·  " + e.WhenLocal.ToString("ddd HH:mm, d MMM") + "  ·  " + status;
+                _previewHead.Text = e.SourceLine + "  ·  " + e.WhenLocal.ToString("ddd HH:mm, d MMM", Localization.DateCulture) + "  ·  " + status;
                 _previewHead.ForeColor = e.How == NotificationHistory.Outcome.Missed ? _theme.WarningText : _theme.Text;
 
                 var sb = new System.Text.StringBuilder();

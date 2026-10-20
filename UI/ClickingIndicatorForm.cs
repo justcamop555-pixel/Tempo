@@ -29,7 +29,17 @@ namespace AutoClicker.UI
         // that the badge measures its own text.
         private readonly Font _titleFont = new Font("Segoe UI", 10f, FontStyle.Bold);
         private readonly Font _subFont = new Font("Segoe UI", 8.5f, FontStyle.Regular);
-        private Color _dotColor;
+
+        // The dot's (and the outline's) colour is a ROLE of the theme — the clicking badge's Success, the macro
+        // badge's Accent — so a theme change repaints it. It was the colour itself, taken from the theme the
+        // badge came up in, and kept through every theme change after: Nord's frost green round a Light badge.
+        // A colour that is no role of the theme is kept as given.
+        private enum DotRole { Success, Accent, Fixed }
+        private readonly DotRole _dotRole;
+        private readonly Color _dotFixed;
+        private Color DotColor => _dotRole == DotRole.Accent ? _theme.Accent
+                                : _dotRole == DotRole.Fixed ? _dotFixed
+                                : _theme.Success;
 
         // Layout the user chose in Settings \u2192 overlay "Customise\u2026".
         private int _corner;          // 0 top-centre,1 TL,2 TR,3 BL,4 BR,5 bottom-centre
@@ -46,7 +56,11 @@ namespace AutoClicker.UI
             _theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
             // Translated: the badge was the one English thing a Spanish Tempo put on screen while clicking.
             _title = !string.IsNullOrEmpty(title) ? title : Utils.Localization.T("Tempo — clicking");
-            _dotColor = dotColor.A == 0 ? _theme.Success : dotColor;
+            // Accent first: the macro badge asks for the accent, and in a palette whose accent IS its green it
+            // must stay the accent through the next theme change.
+            if (dotColor.A != 0 && dotColor.ToArgb() == _theme.Accent.ToArgb()) { _dotRole = DotRole.Accent; }
+            else if (dotColor.A == 0 || dotColor.ToArgb() == _theme.Success.ToArgb()) { _dotRole = DotRole.Success; }
+            else { _dotRole = DotRole.Fixed; _dotFixed = dotColor; }
 
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
@@ -506,7 +520,7 @@ namespace AutoClicker.UI
                 {
                     g.FillPath(fill, path);
                 }
-                using (var pen = new Pen(_dotColor.A == 0 ? _theme.Success : _dotColor, 2f * DeviceDpi / 96f))
+                using (var pen = new Pen(DotColor, 2f * DeviceDpi / 96f))
                 {
                     // Dashed while it can be dragged, like the caption windows in move mode.
                     if (_movable) { pen.DashStyle = DashStyle.Dash; }
@@ -517,7 +531,7 @@ namespace AutoClicker.UI
             // Pulsing status dot.
             int dotD = D(12);
             var dot = new Rectangle(D(14), (Height - dotD) / 2, dotD, dotD);
-            Color baseDot = _dotColor.A == 0 ? _theme.Success : _dotColor;
+            Color baseDot = DotColor;
             Color dotColor = _dotOn ? baseDot : Blend(baseDot, _theme.Surface, 0.55);
             using (var db = new SolidBrush(dotColor))
             {

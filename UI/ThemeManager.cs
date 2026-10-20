@@ -32,6 +32,65 @@ namespace AutoClicker.UI
         /// </summary>
         public const string PageTag = "page";
 
+        /// <summary>
+        /// Buttons that are their window's main action (<see cref="UiFactory.PrimaryButton"/>, the main window's
+        /// accent buttons). The pass gives every other button the neutral fill; these keep the accent.
+        ///
+        /// It gave THEM the neutral fill too. A dialog makes its primary button first and themes itself after,
+        /// so the accent was gone before the window opened — TextPromptForm's OK, the notification history's
+        /// Close, the Roblox client window's Close and a dozen more — while the dialogs that skipped the pass
+        /// kept theirs: the same button filled in one window and grey in the next. In the main window a theme
+        /// change greyed every one nobody coloured again afterwards (Multi-Point's Save).
+        /// </summary>
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Button, object>
+            _primaries = new System.Runtime.CompilerServices.ConditionalWeakTable<Button, object>();
+
+        private static readonly object PrimaryMark = new object();
+
+        /// <summary>Marks <paramref name="button"/> as a primary action: every theme pass fills it with the accent.</summary>
+        public static void MarkPrimary(Button button)
+        {
+            if (button != null) { _primaries.AddOrUpdate(button, PrimaryMark); }
+        }
+
+        /// <summary>Whether <paramref name="button"/> was marked as a primary action.</summary>
+        public static bool IsPrimary(Button button) => button != null && _primaries.TryGetValue(button, out _);
+
+        /// <summary>The primary look: accent fill, the readable ink on it, no border.</summary>
+        public static void StylePrimary(Button button, Theme theme)
+        {
+            if (button == null || theme == null) { return; }
+            button.FlatStyle = FlatStyle.Flat;
+            button.BackColor = theme.Accent;
+            button.ForeColor = theme.OnAccent;   // readable on ANY accent — see Theme.OnAccent
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = theme.AccentHover;
+        }
+
+        /// <summary>
+        /// A right-click menu in the theme: Tempo's menu renderer, the surface and the text colour. All three —
+        /// with any one missing the menu comes up as a light-grey Windows menu in the middle of a dark window,
+        /// which is how the Accounts, Macros, Multi-Point and session-history lists' menus opened in every theme.
+        /// The renderer it replaces is released (it owns a timer); one already in this palette is kept.
+        /// </summary>
+        public static void ThemeMenu(ContextMenuStrip menu, Theme theme)
+        {
+            if (menu == null || menu.IsDisposed || theme == null) { return; }
+            try
+            {
+                // The getter hands back the SHARED default renderer when none was set — never disposed.
+                ThemedMenuRenderer had = menu.RenderMode == ToolStripRenderMode.Custom ? menu.Renderer as ThemedMenuRenderer : null;
+                if (had == null || !ReferenceEquals(had.Theme, theme))
+                {
+                    menu.Renderer = new ThemedMenuRenderer(theme);
+                    had?.Dispose();
+                }
+                menu.BackColor = theme.Surface;
+                menu.ForeColor = theme.Text;
+            }
+            catch { /* a menu that refuses keeps its look; the rest of the pass goes on */ }
+        }
+
         public static void Apply(Control root, Theme theme)
         {
             if (root == null || theme == null)
@@ -49,6 +108,10 @@ namespace AutoClicker.UI
             }
 
             ApplyToControl(root, theme);
+            if (root.ContextMenuStrip != null)
+            {
+                ThemeMenu(root.ContextMenuStrip, theme);
+            }
 
             foreach (Control child in root.Controls)
             {
@@ -263,6 +326,10 @@ namespace AutoClicker.UI
                     form.ForeColor = theme.Text;
                     break;
 
+                case Button primary when IsPrimary(primary):
+                    StylePrimary(primary, theme);
+                    break;
+
                 case Button button:
                     button.FlatStyle = FlatStyle.Flat;
                     button.FlatAppearance.BorderColor = theme.Border;
@@ -275,7 +342,11 @@ namespace AutoClicker.UI
                 case TextBox textBox:
                     textBox.BackColor = theme.InputBackground;
                     textBox.ForeColor = theme.Text;
-                    textBox.BorderStyle = BorderStyle.FixedSingle;
+                    // Not the edit box inside a spinner — it is a TextBox too, and this walk reaches it. Given a
+                    // border, Windows drew its 1 px COLOR_WINDOWFRAME square (#646464) INSIDE the spinner's own
+                    // rounded outline, around the digits but not the arrows: the "[ 100 ]" every number box in
+                    // Tempo showed. The spinner draws its own frame.
+                    if (!(textBox.Parent is UpDownBase)) { textBox.BorderStyle = BorderStyle.FixedSingle; }
                     if (textBox is FlatTextBox flat)
                     {
                         flat.ApplyTheme(theme);   // its rounded border is painted in the theme

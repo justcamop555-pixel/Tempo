@@ -59,6 +59,24 @@ namespace AutoClicker.UI
         {
             _welcomeClicksOn = clicksOn;
             _welcomeKeysIn = keysIn;
+            // Background clicks are aimed on the click thread, by handle: the pad is the one Tempo window they are
+            // never sent through to what lies under it. Called from the form's OnHandleCreated, before its children
+            // have handles of their own — so the pad's is published once it exists.
+            PublishWelcomeHandle(clicksOn);
+            if (clicksOn != null && !clicksOn.IsHandleCreated) { clicksOn.HandleCreated += OnWelcomeHandleCreated; }
+        }
+
+        private static void OnWelcomeHandleCreated(object sender, EventArgs e)
+        {
+            var c = sender as Control;
+            if (c != null) { c.HandleCreated -= OnWelcomeHandleCreated; }
+            if (ReferenceEquals(c, _welcomeClicksOn)) { PublishWelcomeHandle(c); }
+        }
+
+        private static void PublishWelcomeHandle(Control c)
+        {
+            try { Engine.InputSimulator.WelcomeWindow = c != null && c.IsHandleCreated ? c.Handle : IntPtr.Zero; }
+            catch { Engine.InputSimulator.WelcomeWindow = IntPtr.Zero; }
         }
 
         /// <summary>Ends <see cref="WelcomeOwnInput"/> for that window.</summary>
@@ -68,6 +86,7 @@ namespace AutoClicker.UI
             {
                 _welcomeKeysIn = null;
                 _welcomeClicksOn = null;
+                Engine.InputSimulator.WelcomeWindow = IntPtr.Zero;
             }
         }
 

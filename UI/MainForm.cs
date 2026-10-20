@@ -946,6 +946,37 @@ namespace AutoClicker.UI
             catch (Exception ex) { Utils.Logger.Swallow("ForceForeground", ex); }
         }
 
+        /// <summary>
+        /// <see cref="ForceForeground"/> for another of Tempo's windows (the Accounts window): the foreground lock
+        /// refuses a plain Activate() there just as readily.
+        /// </summary>
+        private static void ForceForegroundOf(Form f)
+        {
+            try
+            {
+                if (f == null || f.IsDisposed || !f.IsHandleCreated || !f.Visible || f.WindowState == FormWindowState.Minimized)
+                {
+                    return;
+                }
+                IntPtr fg = GetForegroundWindow();
+                if (fg == f.Handle) { return; }
+                uint us = GetCurrentThreadId();
+                uint them = fg == IntPtr.Zero ? 0 : GetWindowThreadProcessId(fg, out _);
+                bool attached = them != 0 && them != us && AttachThreadInput(us, them, true);
+                try
+                {
+                    SetForegroundWindow(f.Handle);
+                    BringWindowToTop(f.Handle);
+                    f.Activate();
+                }
+                finally
+                {
+                    if (attached) { AttachThreadInput(us, them, false); }
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("ForceForegroundOf", ex); }
+        }
+
         private void OnCaptionButtonClicked(int index)
         {
             try
@@ -2420,6 +2451,9 @@ namespace AutoClicker.UI
             // while doing nothing. It refuses to target Tempo's own windows instead,
             // at the point where the message is posted (see SecondCursorController).
             Application.AddMessageFilter(_selfClickGuard);
+            // The clicker's background clicks are posted too, so the same setting is applied where they are aimed:
+            // a point one of Tempo's windows covers is clicked through to the window under it.
+            Engine.InputSimulator.SkipOwnWindows = () => _settings == null || _settings.IgnoreOwnWindowWhileRunning;
 
             StartMediaDetector();
             StartAudioDeviceWatcher();
@@ -3067,6 +3101,11 @@ namespace AutoClicker.UI
                     return;
                 }
                 _debugForm = new DebugForm(_theme, BuildDebugStats);
+                // Its "PC:" line reads the health monitor, which samples only while someone holds it — the clicker in
+                // a run, the Clicker tab on screen. Opened from any other tab, the reading went stale within 5 s and
+                // the line vanished from the second refresh on (scratchpad/debugdump caught it).
+                Utils.SystemHealthMonitor.Shared.Acquire("live-debug");
+                _debugForm.FormClosed += (s, e) => Utils.SystemHealthMonitor.Shared.Release("live-debug");
                 // What "Check layout" scans: every open Tempo window — this one, the detached
                 // Accounts window, any history or dialog that is up — plus the Accounts screens
                 // that exist but are not on screen.
@@ -3084,7 +3123,7 @@ namespace AutoClicker.UI
             }
             catch (Exception ex)
             {
-                Utils.Logger.Warn("Live debug window failed: " + ex.Message);
+                Utils.Logger.Warn("[Debug] the Live debug window failed to open: " + ex.Message);
             }
         }
 
@@ -3300,8 +3339,8 @@ namespace AutoClicker.UI
                 // Anti-freeze actively throttling the requested rate.
                 if (_engine != null && _engine.IsRunning && _engine.IsThrottling)
                 {
-                    issues.Add("⚠ Anti-freeze is throttling the click rate (CPU " +
-                               _engine.MeasuredCpuPercent.ToString("0") + "%). Real rate ≈ " +
+                    issues.Add("⚠ Anti-Freeze is " + (_engine.IsHolding ? "holding" : "slowing") + " the clicks — " +
+                               AntiFreezeDiagnosis() + ". Real rate ≈ " +
                                _engine.EffectiveClicksPerSecond.ToString("0.0") + " CPS.");
                 }
 
@@ -3425,6 +3464,10 @@ namespace AutoClicker.UI
                     // Roblox itself can't launch, or its client failed the signature check.
                     string robloxIssue = RobloxInstallIssue();
                     if (robloxIssue != null) { issues.Add(robloxIssue); }
+
+                    // Sign-in can't open the browser chosen for it, or any browser at all.
+                    string browserIssue = SignInBrowserIssue();
+                    if (browserIssue != null) { issues.Add(browserIssue); }
 
                     // Multi-instance switched on while the vault is open, but not actually able to work.
                     if (_settings != null && _settings.RobloxMultiInstance)
@@ -4464,7 +4507,30 @@ namespace AutoClicker.UI
                 sb.AppendLine();
                 // What the check compared that it used to skip: the unpacked files Tempo actually runs.
                 sb.Append("  Unpacked copy: ").Append(Utils.IntegrityCheck.PayloadSummary).AppendLine();
+                // And what Windows loaded from beside the exe, which is never Tempo's.
+                Utils.IntegrityReport ir = Utils.IntegrityCheck.LastReport;
+                if (ir != null && (ir.LoadedBeside.Count > 0 || ir.StrayBeside.Count > 0))
+                {
+                    sb.Append("  Beside the exe: ")
+                      .Append(ir.LoadedBeside.Count > 0 ? "LOADED " + string.Join(", ", ir.LoadedBeside) : "")
+                      .Append(ir.LoadedBeside.Count > 0 && ir.StrayBeside.Count > 0 ? " · " : "")
+                      .Append(ir.StrayBeside.Count > 0 ? "not loaded: " + string.Join(", ", ir.StrayBeside) : "")
+                      .AppendLine();
+                }
                 sb.Append("  Official ID: ").Append(Utils.IntegrityCheck.OfficialIdReportLine()).AppendLine();
+                if (Utils.BuildInfo.SourceText.Length > 0)
+                {
+                    sb.Append("  Source: ").Append(Utils.BuildInfo.SourceText).AppendLine();
+                }
+
+                // What Windows is giving Tempo, and what the PC looks like (Anti-Freeze reads the same).
+                sb.Append("  Power & speed: ").Append(AutoClicker.Engine.RunQos.Describe()).AppendLine();
+                Utils.HealthSnapshot hs = Utils.SystemHealthMonitor.Shared.Latest;
+                if (hs.IsFresh(Environment.TickCount64, 5000))
+                {
+                    sb.Append("  PC: ").Append(HealthLine(hs)).Append(" · commit ").Append(hs.CommitPercent.ToString("0")).Append("% · ")
+                      .Append(PowerLine(hs)).AppendLine();
+                }
 
                 // Backdrop image / GIF. Its cost is easy to miss: an animated wallpaper
                 // repaints the whole window and forces compositing, so when the UI feels
@@ -4670,7 +4736,7 @@ namespace AutoClicker.UI
                 // had no reader outside the engine.
                 if (_engine != null && _engine.IsRunning && _engine.IsThrottling)
                 {
-                    sb.Append("  ⚠ ANTI-FREEZE THROTTLING — clicks deliberately slowed to keep the system responsive");
+                    sb.Append("  ⚠ ANTI-FREEZE " + (_engine.IsHolding ? "HOLDING" : "THROTTLING") + " — " + AntiFreezeDiagnosis());
                 }
 
                 // Why the last run ended. The engine already distinguishes "reached its
@@ -4788,6 +4854,8 @@ namespace AutoClicker.UI
                 if (_accounts == null && !multiOn
                     && killer == Utils.RobloxSingletonKiller.KillerStatus.Off)
                 {
+                    // The Roblox update check works without the account manager, so its line is still due.
+                    if (_robloxRelease != null || _robloxCheckError != null) { AppendRobloxUpdateStats(sb); }
                     return;
                 }
 
@@ -4796,6 +4864,12 @@ namespace AutoClicker.UI
                 if (_accounts == null)
                 {
                     sb.Append("vault not loaded").AppendLine();
+                }
+                else if (_accounts.State == AutoClicker.Persistence.VaultState.NoVault)
+                {
+                    // Not "LOCKED": there is nothing to unlock yet, and saying so sent people looking for a password
+                    // they had never set.
+                    sb.Append("no vault yet (the account manager is on, but no master password has been set)").AppendLine();
                 }
                 else if (!unlocked)
                 {
@@ -4901,6 +4975,7 @@ namespace AutoClicker.UI
                     sb.Append(" · last launched: ").Append(_lastLaunchedAccountName);
                 }
                 sb.AppendLine();
+                AppendSignInBrowserStats(sb);
                 AppendRobloxInstallStats(sb);
             }
             catch (Exception ex)
@@ -6089,9 +6164,9 @@ namespace AutoClicker.UI
             { AutoSize = true, DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, ImageScaling = ToolStripItemImageScaling.None };
             // What Tempo itself is costing, and how long it has been up. Placed at the
             // far left of the stats cluster so the click counters keep their positions.
-            _statusCpu = new ToolStripStatusLabel(Utils.Localization.F("CPU {0:0.0}%", 0.0))
+            _statusCpu = new ToolStripStatusLabel(Utils.Localization.F("CPU {0:0.00}%", 0.0))
             { AutoSize = true, DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, ImageScaling = ToolStripItemImageScaling.None };
-            _statusRam = new ToolStripStatusLabel(Utils.Localization.F("RAM {0:N0} MB", 0))
+            _statusRam = new ToolStripStatusLabel(Utils.Localization.F("RAM {0:N2} MB", 0.0))
             { AutoSize = true, DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, ImageScaling = ToolStripItemImageScaling.None };
             _statusUptime = new ToolStripStatusLabel(Utils.Localization.T("Up") + " 0:00:00")
             { AutoSize = true, DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, ImageScaling = ToolStripItemImageScaling.None };
@@ -6176,6 +6251,7 @@ namespace AutoClicker.UI
                 WatchExternalLiveCaptions();
                 MaybeShowSoundNoteForTempoEngine();
                 MaybeRunScheduledUpdateCheck();
+                MaybeCheckRobloxUpdate();
                 MaybeStartDeferredApiServer();
                 MaybeShowDeferredUpdate();
                 // Released the moment the fullscreen app that was in the way closes.
@@ -6279,6 +6355,7 @@ namespace AutoClicker.UI
                     MinimumSize = new Size(0, 0);
                     FormBorderStyle = FormBorderStyle.None;
                     TopMost = true;
+                    SyncAccountsWindowTopMost();   // or the Accounts window would open under the full screen
                     Bounds = screen;
                     _isFullScreen = true;
 
@@ -6425,6 +6502,7 @@ namespace AutoClicker.UI
 
             // Restore the user's always-on-top preference precisely.
             try { if (_settings != null) { TopMost = _settings.AlwaysOnTop; } } catch { }
+            SyncAccountsWindowTopMost();
 
             try
             {
@@ -9012,7 +9090,7 @@ namespace AutoClicker.UI
                                 try { Persistence.SettingsManager.Save(_settings); } catch { }
                             }
 
-                            string when = latest.LastWriteTime.ToString("d MMM, HH:mm");
+                            string when = latest.LastWriteTime.ToString("d MMM, HH:mm", Utils.Localization.DateCulture);
                             string body = count == 1
                                 ? Utils.Localization.F(
                                     "Tempo hit an unexpected error on {0}. The report is saved on this PC — "
@@ -9648,6 +9726,49 @@ namespace AutoClicker.UI
         private bool _fittingStatusBar;
         // The CPU figure's own tip, before any set-aside figures are added to it.
         private string _cpuTipBase;
+        // The uptime's own tip, before the start time is added to it.
+        private string _uptimeTipBase;
+
+        // CPU, RAM and uptime drawn without their words ("9.59%" beside the chip icon, not "CPU 9.59%") because
+        // the bar is too narrow for every figure with them (FitStatusBarToWidth), and each figure's full text.
+        private bool _compactFigures;
+        private readonly System.Collections.Generic.Dictionary<ToolStripStatusLabel, string> _figureFull =
+            new System.Collections.Generic.Dictionary<ToolStripStatusLabel, string>();
+
+        /// <summary>Sets a resource figure from its full text ("CPU 9.59%"), shown whole or without its word.</summary>
+        private void SetResourceText(ToolStripStatusLabel label, string full)
+        {
+            if (label == null) { return; }
+            _figureFull[label] = full;
+            SetStatusText(label, _compactFigures ? CompactFigure(full) : full);
+        }
+
+        /// <summary>"CPU 9.59%" → "9.59%": everything before the first digit is the word (as the renderer finds it).</summary>
+        internal static string CompactFigure(string full)
+        {
+            if (string.IsNullOrEmpty(full)) { return full ?? ""; }
+            int cut = StatusStripRenderer.FigureLabelLength(full);
+            return cut > 0 ? full.Substring(cut).TrimStart() : full;
+        }
+
+        /// <summary>Puts the words on the three resource figures, or takes them off, and re-measures their widths.</summary>
+        private void SetCompactFigures(bool compact)
+        {
+            if (_compactFigures == compact) { return; }
+            _compactFigures = compact;
+            foreach (ToolStripStatusLabel l in new[] { _statusCpu, _statusRam, _statusUptime })
+            {
+                if (l == null) { continue; }
+                if (!_figureFull.TryGetValue(l, out string full)) { full = l.Text ?? ""; _figureFull[l] = full; }
+                string text = compact ? CompactFigure(full) : full;
+                if (!string.Equals(l.Text, text, StringComparison.Ordinal)) { l.Text = text; }
+                // Their widths only ever grow (SetStatusText) — not across this change, or the words' room would stay.
+                if (!l.AutoSize) { l.Width = l.GetPreferredSize(Size.Empty).Width; }
+            }
+            Utils.Logger.Info(compact
+                ? "[status] CPU, RAM and uptime show without their words — the bar is too narrow for them all with words."
+                : "[status] CPU, RAM and uptime show with their words again.");
+        }
 
         /// <summary>
         /// Makes the bar fit its width at the larger text. When the window is too narrow for every
@@ -9690,12 +9811,46 @@ namespace AutoClicker.UI
                 }
                 int room = avail - used;
                 // Show as many of the optional figures as leave the hint its room — most important last to go.
-                bool[] show = new bool[optional.Length];
-                for (int k = optional.Length - 1; k >= 0; k--)
+                bool[] Plan()
                 {
-                    int w = Need(optional[k]);
-                    if (room - w >= hintMin) { show[k] = true; room -= w; }
-                    else { break; }
+                    bool[] s = new bool[optional.Length];
+                    int left = room;
+                    for (int k = optional.Length - 1; k >= 0; k--)
+                    {
+                        int w = Need(optional[k]);
+                        if (left - w >= hintMin) { s[k] = true; left -= w; }
+                        else { break; }
+                    }
+                    return s;
+                }
+                bool[] show = Plan();
+                // Before a figure steps aside, its WORD does: each chip has its own icon (a chip, a memory stick,
+                // a clock), and the tooltips name them. The two-decimal figures (2026-10-18) were ~30 px wider,
+                // and at the usual 1020 px window that pushed the uptime off the bar. The words come back once
+                // there is room for every figure with them, and a little to spare (so it does not flip back and
+                // forth at the edge).
+                if (!_compactFigures && Array.IndexOf(show, false) >= 0)
+                {
+                    SetCompactFigures(true);
+                    show = Plan();
+                }
+                else if (_compactFigures)
+                {
+                    int extra = 0;
+                    foreach (ToolStripStatusLabel l in optional)
+                    {
+                        if (_figureFull.TryGetValue(l, out string full))
+                        {
+                            extra += TextRenderer.MeasureText(full, l.Font).Width - TextRenderer.MeasureText(l.Text ?? "", l.Font).Width;
+                        }
+                    }
+                    int needAll = 0;
+                    foreach (ToolStripItem i in optional) { needAll += Need(i); }
+                    if (room - needAll - extra >= hintMin + _statusStrip.LogicalToDeviceUnits(12))
+                    {
+                        SetCompactFigures(false);
+                        show = Plan();
+                    }
                 }
                 bool changed = false;
                 for (int k = 0; k < optional.Length; k++)
@@ -12868,19 +13023,21 @@ namespace AutoClicker.UI
                 System.IO.Directory.CreateDirectory(dir);
                 // Never over an earlier file. Named to the second, two saves in one second — Clear (which
                 // saves first) and then Stop — wrote the same name, and the second replaced the first.
-                string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                // The name is a fixed pattern (any region writes the same digits); the heading is in the
+                // app's language. It was English in every language, dated in Windows' own.
+                string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
                 string file = System.IO.Path.Combine(dir, "captions-" + stamp + ".txt");
                 for (int n = 2; System.IO.File.Exists(file); n++)
                 {
                     file = System.IO.Path.Combine(dir, "captions-" + stamp + "-" + n + ".txt");
                 }
                 var sb = new System.Text.StringBuilder();
-                sb.AppendLine("Tempo Live Captions transcript — " + DateTime.Now.ToString("f"));
+                sb.AppendLine(Localization.F("Tempo Live Captions transcript — {0}", DateTime.Now.ToString("f", Localization.DateCulture)));
                 sb.AppendLine(new string('-', 60));
                 for (int i = 0; i < _captionHistory.Count; i++)
                 {
                     DateTime t = i < _captionHistoryTimes.Count ? _captionHistoryTimes[i] : DateTime.Now;
-                    sb.AppendLine("[" + t.ToString("HH:mm:ss") + "]  " + _captionHistory[i]);
+                    sb.AppendLine("[" + t.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + "]  " + _captionHistory[i]);
                 }
                 System.IO.File.WriteAllText(file, sb.ToString());
                 Utils.Logger.Info("[Captions] transcript saved: " + file);
@@ -13420,6 +13577,7 @@ namespace AutoClicker.UI
 
             // Enable hold polling only in hold mode.
             _holdPollTimer.Enabled = holdMode;
+            if (!holdMode) { StopHoldKeyWatch(); }
 
             // Tell the splash what actually got bound (the last startup stage).
             try
@@ -13580,15 +13738,75 @@ namespace AutoClicker.UI
             }
         }
 
+        // Hold mode with a KEYBOARD trigger that is also the key the clicker presses — "hold E to press E", the
+        // obvious way to use it for a key. Windows' key state cannot tell Tempo's presses from a finger, so the
+        // first injected key-up read as letting go: the run stopped after one press and started again at the next
+        // auto-repeat, over and over — every restart a new run (counted in the statistics, logged, a start sound
+        // when that is on). While that configuration is set, the key's PHYSICAL state comes from a hook on its own
+        // thread, which sees injected presses for what they are. (A mouse trigger on the clicked button is refused
+        // instead: see HoldTriggerFightsClickButton.)
+        private KeyboardHookThread _holdKeyWatch;
+        private volatile int _holdWatchVk;
+        private volatile bool _holdKeyPhysicallyDown;
+
+        /// <summary>The trigger key to watch physically, or 0: the hold trigger, when the clicker presses that very key.</summary>
+        internal int HoldKeyNeedingWatch(HotkeyDefinition toggle)
+        {
+            if (toggle == null || !toggle.IsValid || toggle.IsMouse) { return 0; }
+            if (_buttonCombo == null || _buttonCombo.SelectedIndex != KeyTargetIndex || _selectedKeyVk == 0) { return 0; }
+            int vk = (int)toggle.Key;
+            return vk == _selectedKeyVk ? vk : 0;
+        }
+
+        /// <summary>Starts, keeps or stops the physical watch for <paramref name="vk"/> (0 = none wanted).</summary>
+        private void SyncHoldKeyWatch(int vk)
+        {
+            if (vk == 0) { StopHoldKeyWatch(); return; }
+            if (_holdKeyWatch != null && _holdKeyWatch.IsRunning && _holdWatchVk == vk) { return; }
+            StopHoldKeyWatch();
+            _holdWatchVk = vk;
+            // Before the clicker presses anything, Windows' state is the finger's.
+            _holdKeyPhysicallyDown = !_engine.IsRunning &&
+                (NativeMethods.GetAsyncKeyState(vk) & NativeMethods.KEY_PRESSED_MASK) != 0;
+            var watch = new KeyboardHookThread("Tempo hold-key watch");
+            watch.KeyEvent += (s, e) =>
+            {
+                if (!e.Injected && e.VirtualKey == _holdWatchVk) { _holdKeyPhysicallyDown = e.IsKeyDown; }
+            };
+            if (watch.Start())
+            {
+                _holdKeyWatch = watch;
+                Utils.Logger.Info("[Clicker] hold mode: the trigger is also the key being pressed — reading the real key, not Tempo's presses.");
+            }
+            else
+            {
+                watch.Dispose();
+                _holdWatchVk = 0;
+            }
+        }
+
+        private void StopHoldKeyWatch()
+        {
+            KeyboardHookThread watch = _holdKeyWatch;
+            _holdKeyWatch = null;
+            _holdWatchVk = 0;
+            if (watch != null)
+            {
+                try { watch.Dispose(); } catch (Exception ex) { Utils.Logger.Swallow("StopHoldKeyWatch", ex); }
+            }
+        }
+
         private void PollHoldKey()
         {
             if (_traySleepActive)
             {
+                StopHoldKeyWatch();
                 return; // asleep in the tray — the hold trigger is paused too
             }
             HotkeyDefinition toggle = _settings.HotkeyFor(HotkeyAction.ToggleStartStop);
             if (toggle == null || !toggle.IsValid)
             {
+                StopHoldKeyWatch();
                 return;
             }
 
@@ -13597,8 +13815,11 @@ namespace AutoClicker.UI
             int vk = toggle.IsMouse ? MouseButtonVk(toggle.MouseButton) : (int)toggle.Key;
             if (vk == 0)
             {
+                StopHoldKeyWatch();
                 return;
             }
+            // A mouse trigger never needs the key watch (the next lines refuse the one that would).
+            if (toggle.IsMouse) { StopHoldKeyWatch(); }
 
             // Refuse the one configuration that cannot work: holding a mouse button that
             // the clicker is also clicking.
@@ -13620,7 +13841,11 @@ namespace AutoClicker.UI
                 return;
             }
 
-            bool down = (NativeMethods.GetAsyncKeyState(vk) & NativeMethods.KEY_PRESSED_MASK) != 0;
+            int watchVk = HoldKeyNeedingWatch(toggle);
+            SyncHoldKeyWatch(watchVk);
+            bool down = watchVk != 0 && _holdKeyWatch != null
+                ? _holdKeyPhysicallyDown
+                : (NativeMethods.GetAsyncKeyState(vk) & NativeMethods.KEY_PRESSED_MASK) != 0;
 
             // Require the configured modifiers too, so e.g. "Shift + X1 (hold)"
             // only engages while Shift is also held.
@@ -13981,7 +14206,6 @@ namespace AutoClicker.UI
 
             _engine.AntiFreezeEnabled = _settings.AntiFreezeEnabled;
             _engine.MaxClicksPerSecond = _settings.MaxClicksPerSecond < 1 ? 1 : _settings.MaxClicksPerSecond;
-            _engine.CpuThresholdPercent = _settings.AntiFreezeCpuThreshold;
         }
 
         private void EmergencyStop()
@@ -14035,7 +14259,17 @@ namespace AutoClicker.UI
             string brief = null;
             try
             {
-                if (_recorder != null && _recorder.IsRecording)
+                // A run's own clicks landing on Tempo's window are dropped (SelfClickGuard): the run then seems to do
+                // nothing at all, and nothing said why. Said for as long as it goes on.
+                bool selfBlocked = _selfClickGuard != null
+                    && ((_engine != null && _engine.IsRunning && !_engine.IsPaused) || (_player != null && _player.IsPlaying))
+                    && (DateTime.UtcNow - _selfClickGuard.LastBlockedUtc).TotalMilliseconds < 1500;
+                if (selfBlocked)
+                {
+                    text = Localization.T("Tempo's own window is under the pointer — its clicks there are ignored");
+                    brief = Localization.T("Clicks on Tempo are ignored");
+                }
+                else if (_recorder != null && _recorder.IsRecording)
                 {
                     string rhk = "";
                     HotkeyDefinition rec = _settings != null ? _settings.HotkeyFor(HotkeyAction.ToggleRecordMacro) : null;
@@ -14237,7 +14471,9 @@ namespace AutoClicker.UI
                 bool first = _resourceNextSampleUtc == DateTime.MinValue;
                 _resourceNextSampleUtc = now.AddSeconds(1);
 
-                if (_uiCpuMonitor == null) { _uiCpuMonitor = new Utils.CpuMonitor(); }
+                // Precise: counted in CPU cycles, so the second decimal is measured, not made up (see
+                // CpuMonitor — process CPU time only moves in 15.625 ms ticks, ~0.1% of a 16-core PC).
+                if (_uiCpuMonitor == null) { _uiCpuMonitor = new Utils.CpuMonitor(precise: true); }
                 double cpu = _uiCpuMonitor.Sample();
                 // The first sample spans from construction to now — an arbitrary window
                 // that reads as a meaningless spike. Prime it and show it next second.
@@ -14245,37 +14481,48 @@ namespace AutoClicker.UI
                 // so a window just opened read "RAM 0 MB · Up 0:00:00" for its first second.)
                 if (!first)
                 {
-                    // One decimal, not a whole number. CpuMonitor reports a share of the
-                    // WHOLE machine (all cores), same basis as Task Manager — and Tempo idle
-                    // is well under 1% of that, so "{0:0}" displayed a flat 0% almost all the
-                    // time and the readout told you nothing. 0.8% is both honest and useful,
-                    // and it still reads sensibly at the other end (23.4% mid click-run).
-                    SetStatusText(_statusCpu, Utils.Localization.F("CPU {0:0.0}%", cpu));
+                    // Two decimals (the user asked for "0.00", 2026-10-18). CpuMonitor reports a share
+                    // of the WHOLE machine (all cores), same basis as Task Manager — and Tempo idle is
+                    // well under 1% of that: "{0:0}" showed a flat 0%, and one decimal still lumped
+                    // 0.35% and 0.44% together. It still reads sensibly mid click-run (23.41%).
+                    SetResourceText(_statusCpu, Utils.Localization.F("CPU {0:0.00}%", cpu));
                 }
                 // The PRIVATE working set: the figure Task Manager calls "Memory", so it matches what
                 // someone checking up on Tempo compares it with. This showed Environment.WorkingSet,
                 // under the same claim — but that counts the shared Windows and .NET libraries too,
-                // and read 157 MB beside Task Manager's 58 (see Utils.ProcessMemory).
+                // and read 157 MB beside Task Manager's 58 (see Utils.ProcessMemory). Two decimals of a
+                // megabyte, not a rounded whole one; the exact byte counts are on hover.
                 Utils.ProcessMemory.Reading mem = Utils.ProcessMemory.Read();
-                SetStatusText(_statusRam,
-                    Utils.Localization.F("RAM {0:N0} MB", Utils.ProcessMemory.Megabytes(mem.PrivateWorkingSet)));
+                SetResourceText(_statusRam,
+                    Utils.Localization.F("RAM {0:N2} MB", mem.PrivateWorkingSet / 1048576.0));
                 // The other figure is on hover, so the gap between the two is explained, not a mystery.
                 string ramTip = Utils.Localization.T("Memory Tempo itself is using.") + " "
                               + Utils.Localization.T("Task Manager shows the same figure.") + "\n"
+                              + Utils.Localization.F("Exactly {0:N0} bytes.", mem.PrivateWorkingSet) + "\n"
                               + Utils.Localization.F("With the Windows libraries it shares with other programs: {0:N0} MB.",
                                     Utils.ProcessMemory.Megabytes(mem.WorkingSet));
                 if (_statusRam.ToolTipText != ramTip) { _statusRam.ToolTipText = ramTip; }
 
                 TimeSpan up = now - _appStartedUtc;
-                SetStatusText(_statusUptime, Utils.Localization.T("Up") + " " +
+                SetResourceText(_statusUptime, Utils.Localization.T("Up") + " " +
                     ((int)up.TotalHours) + up.ToString("\\:mm\\:ss"));
+                // And exactly when that was, on hover (a tip repaints nothing).
+                if (_uptimeTipBase == null) { _uptimeTipBase = _statusUptime.ToolTipText ?? ""; }
+                DateTime startedLocal = _appStartedUtc.ToLocalTime();
+                string upTip = _uptimeTipBase + "\n" + Utils.Localization.F("Running since {0}.",
+                    startedLocal.ToString(startedLocal.Date == DateTime.Today ? "HH:mm:ss" : "yyyy-MM-dd HH:mm:ss",
+                                          System.Globalization.CultureInfo.InvariantCulture));
+                if (_statusUptime.ToolTipText != upTip) { _statusUptime.ToolTipText = upTip; }
 
                 // A narrow window sets RAM and uptime aside (FitStatusBarToWidth); the CPU figure's
                 // tip carries them then, so nothing is lost. Setting a tip repaints nothing.
                 if (_cpuTipBase == null) { _cpuTipBase = _statusCpu.ToolTipText ?? ""; }
-                string extra = (!_statusRam.Available ? _statusRam.Text : "")
+                // In full, words and all: a figure set aside may have been showing without its word.
+                string ramFull = _figureFull.TryGetValue(_statusRam, out string rf) ? rf : _statusRam.Text;
+                string upFull = _figureFull.TryGetValue(_statusUptime, out string uf) ? uf : _statusUptime.Text;
+                string extra = (!_statusRam.Available ? ramFull : "")
                              + (!_statusRam.Available && !_statusUptime.Available ? "   ·   " : "")
-                             + (!_statusUptime.Available ? _statusUptime.Text : "");
+                             + (!_statusUptime.Available ? upFull : "");
                 string tip = extra.Length > 0 ? _cpuTipBase + "\n\n" + extra : _cpuTipBase;
                 if (_statusCpu.ToolTipText != tip) { _statusCpu.ToolTipText = tip; }
             }
@@ -14429,6 +14676,7 @@ namespace AutoClicker.UI
             // the tray during a click run.
             bool windowShowing = Visible && WindowState != FormWindowState.Minimized;
             bool onStatsTab = windowShowing && _statsPage != null && _tabs != null && _tabs.SelectedTab == _statsPage;
+            UpdateClickerHealthHold(windowShowing);
             Point keepScroll = onStatsTab ? CaptureActiveScroll() : Point.Empty;
 
             // The status bar is visible on every tab, so always keep it current — but
@@ -14535,9 +14783,8 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
-        /// Refreshes the live anti-freeze "detection" readout in the Clicker tab:
-        /// measured CPU, the actual rate being issued, and whether protection is
-        /// currently throttling the clicker.
+        /// Refreshes the Anti-Freeze card's live lines: how Windows is powering the PC, the whole machine's
+        /// CPU/GPU/RAM, and what the protection is doing — watching, slowing down and why, or holding the clicks.
         /// </summary>
         private void UpdateAntiFreezeStatus()
         {
@@ -14559,36 +14806,147 @@ namespace AutoClicker.UI
                 }
             }
 
+            Utils.HealthSnapshot h = Utils.SystemHealthMonitor.Shared.Latest;
+            bool recent = h.IsFresh(Environment.TickCount64, 3000);
+            SetLineIfChanged(_antiFreezePowerLabel, recent ? PowerLine(h) : "", _theme.TextMuted);
+            SetLineIfChanged(_antiFreezeHealthLabel, recent ? HealthLine(h) : "", _theme.TextMuted);
+
+            string text;
+            Color colour;
             if (!_settings.AntiFreezeEnabled)
             {
-                _antiFreezeStatusLabel.Text = Localization.T("Detection: off — no rate limit");
-                _antiFreezeStatusLabel.ForeColor = _theme.TextMuted;
-                return;
+                text = Localization.T("Off — no rate limit");
+                colour = _theme.TextMuted;
             }
-
-            if (!_engine.IsRunning)
+            else if (!_engine.IsRunning)
             {
-                _antiFreezeStatusLabel.Text = Localization.F("Detection: idle  •  cap {0} CPS",
-                    _settings.MaxClicksPerSecond);
-                _antiFreezeStatusLabel.ForeColor = _theme.TextMuted;
-                return;
-            }
-
-            double cpu = _engine.MeasuredCpuPercent;
-            double cps = _engine.EffectiveClicksPerSecond;
-
-            if (_engine.IsThrottling)
-            {
-                _antiFreezeStatusLabel.Text = Localization.F(
-                    "⚠ Throttling — CPU {0:0}%  •  holding {1:0.0} CPS", cpu, cps);
-                _antiFreezeStatusLabel.ForeColor = _theme.WarningText;
+                text = Localization.T("Ready — watches the game while it clicks");
+                colour = _theme.TextMuted;
             }
             else
             {
-                _antiFreezeStatusLabel.Text = Localization.F(
-                    "✓ Protected — CPU {0:0}%  •  {1:0.0} CPS", cpu, cps);
-                _antiFreezeStatusLabel.ForeColor = _theme.SuccessText;
+                (text, colour) = AntiFreezeRunningLine(h, recent);
             }
+            SetLineIfChanged(_antiFreezeStatusLabel, text, colour);
+        }
+
+        /// <summary>Why Anti-Freeze is slowing down, for the diagnostics (English, like the rest of them).</summary>
+        private string AntiFreezeDiagnosis()
+        {
+            Utils.HealthSnapshot h = Utils.SystemHealthMonitor.Shared.Latest;
+            string app = h.HasTarget ? h.TargetName : "the app being clicked";
+            (Engine.AntiFreezeReason reason, double evidence) = _engine.Freeze;
+            string n = evidence.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+            switch (reason)
+            {
+                case Engine.AntiFreezeReason.TargetNotAnswering: return app + " is not responding";
+                case Engine.AntiFreezeReason.TargetSlow: return app + " answers in " + n + " ms";
+                case Engine.AntiFreezeReason.QueueFull: return app + "'s message queue is full (it is not reading its clicks)";
+                case Engine.AntiFreezeReason.CpuFull: return "the whole CPU is full (" + n + "%) and the app is slow to answer";
+                case Engine.AntiFreezeReason.MemoryFull: return "memory is nearly full (" + n + "% of RAM or commit)";
+                case Engine.AntiFreezeReason.Recovering: return "easing back to full speed";
+                default: return "to keep the system responsive";
+            }
+        }
+
+        /// <summary>What Anti-Freeze is doing during a run, in words, and its colour.</summary>
+        private (string Text, Color Colour) AntiFreezeRunningLine(Utils.HealthSnapshot h, bool recent)
+        {
+            double cps = _engine.EffectiveClicksPerSecond;
+            string app = recent && h.HasTarget ? h.TargetName : Localization.T("the app");
+            if (_engine.IsHolding)
+            {
+                return (Localization.F("⏸ Paused — {0} is not responding", app), _theme.WarningText);
+            }
+            // The number comes with the reason, from the reading that decided it: the latest reading can already
+            // be a newer, healthy one (or have no answer at all) while the rate is still coming back.
+            (Engine.AntiFreezeReason reason, double evidence) = _engine.Freeze;
+            switch (reason)
+            {
+                case Engine.AntiFreezeReason.TargetSlow:
+                    return (Localization.F("⚠ Slowed to {0:0} CPS — {1} answers in {2:0} ms", cps, app, evidence), _theme.WarningText);
+                case Engine.AntiFreezeReason.TargetNotAnswering:
+                    return (Localization.F("⚠ Slowed to {0:0} CPS — {1} is not responding", cps, app), _theme.WarningText);
+                case Engine.AntiFreezeReason.QueueFull:
+                    return (Localization.F("⚠ Slowed to {0:0} CPS — {1} is not reading its clicks", cps, app), _theme.WarningText);
+                case Engine.AntiFreezeReason.CpuFull:
+                    return (Localization.F("⚠ Slowed to {0:0} CPS — the CPU is full ({1:0}%)", cps, evidence), _theme.WarningText);
+                case Engine.AntiFreezeReason.MemoryFull:
+                    return (Localization.F("⚠ Slowed to {0:0} CPS — memory is {1:0}% full", cps, evidence), _theme.WarningText);
+                case Engine.AntiFreezeReason.Recovering:
+                    return (Localization.F("↗ Speeding back up — {0:0} CPS", cps), _theme.TextMuted);
+            }
+            if (recent && h.HasTarget && !double.IsNaN(h.TargetAnswerMs))
+            {
+                return (Localization.F("✓ Full speed — {0} answers in {1:0} ms", app, Math.Max(1, h.TargetAnswerMs)), _theme.SuccessText);
+            }
+            if (recent && h.TargetUnwatchable)
+            {
+                // An app running as administrator: Windows does not let a normal app ask it anything.
+                return (Localization.F("✓ {0:0} CPS — can't watch {1} (runs as administrator)", cps, app), _theme.SuccessText);
+            }
+            return (Localization.F("✓ Full speed — {0:0} CPS", cps), _theme.SuccessText);
+        }
+
+        /// <summary>"Plugged in · Balanced" / "Battery 64% · Energy saver" — how Windows is powering the PC.</summary>
+        private static string PowerLine(Utils.HealthSnapshot h)
+        {
+            string source = h.OnBattery
+                ? (h.BatteryPercent >= 0 ? Localization.F("Battery {0}%", h.BatteryPercent) : Localization.T("On battery"))
+                : Localization.T("Plugged in");
+            string mode = PowerModeName(h.Mode);
+            return mode.Length == 0 ? source : source + " · " + mode;
+        }
+
+        /// <summary>The power mode in the words Windows' own Settings uses.</summary>
+        internal static string PowerModeName(Utils.PowerMode mode)
+        {
+            switch (mode)
+            {
+                // "Battery saver" became "Energy saver" in Windows 11 24H2 (build 26100); 23H2 still says Battery saver.
+                case Utils.PowerMode.EnergySaver:
+                    return Localization.T(Environment.OSVersion.Version.Build >= 26100 ? "Energy saver" : "Battery saver");
+                case Utils.PowerMode.BestPowerEfficiency: return Localization.T("Best power efficiency");
+                case Utils.PowerMode.Balanced: return Localization.T("Balanced");
+                case Utils.PowerMode.HighPerformance: return Localization.T("High performance");
+                case Utils.PowerMode.BestPerformance: return Localization.T("Best performance");
+                case Utils.PowerMode.GameMode: return Localization.T("Game Mode");
+                case Utils.PowerMode.MixedReality: return Localization.T("Mixed reality");
+                default: return "";
+            }
+        }
+
+        /// <summary>"CPU 23% · GPU 41% · RAM 61%" — the whole PC, the parts Windows answered for.</summary>
+        private static string HealthLine(Utils.HealthSnapshot h)
+        {
+            var parts = new System.Collections.Generic.List<string>(3);
+            if (!double.IsNaN(h.CpuPercent)) { parts.Add(Localization.F("CPU {0:0}%", h.CpuPercent)); }
+            if (!double.IsNaN(h.GpuPercent)) { parts.Add(Localization.F("GPU {0:0}%", h.GpuPercent)); }
+            if (!double.IsNaN(h.MemoryLoadPercent)) { parts.Add(Localization.F("RAM {0:0}%", h.MemoryLoadPercent)); }
+            return string.Join("  ·  ", parts);
+        }
+
+        /// <summary>Assigns a label's text and colour only when they change (assigning the same text still repaints).</summary>
+        private static void SetLineIfChanged(Label label, string text, Color colour)
+        {
+            if (label == null) { return; }
+            if (!string.Equals(label.Text, text, StringComparison.Ordinal)) { label.Text = text; }
+            if (label.ForeColor != colour) { label.ForeColor = colour; }
+        }
+
+        private bool _clickerHealthHeld;
+
+        /// <summary>
+        /// The Clicker tab's live readings (power, CPU/GPU/RAM) are sampled only while it is on screen; a run
+        /// holds the monitor itself for Anti-Freeze.
+        /// </summary>
+        private void UpdateClickerHealthHold(bool windowShowing)
+        {
+            bool want = windowShowing && _tabs != null && _tabs.SelectedTab != null && _tabs.SelectedTab.Name == "clicker";
+            if (want == _clickerHealthHeld) { return; }
+            _clickerHealthHeld = want;
+            if (want) { Utils.SystemHealthMonitor.Shared.Acquire("clicker-tab"); }
+            else { Utils.SystemHealthMonitor.Shared.Release("clicker-tab"); }
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -14688,6 +15046,9 @@ namespace AutoClicker.UI
             {
                 HighlightActivePreset(_speedTrack.Value);
             }
+            // The Click Interval card's rate line is the other two-colour label: it took the accent and
+            // muted ink only when the interval changed, so after a theme change it kept the old ones.
+            UpdateIntervalHint();
 
             // Custom controls that don't go through ThemeManager.
             if (_tabs != null)
@@ -14728,6 +15089,19 @@ namespace AutoClicker.UI
             {
                 _macroIndicator.ApplyTheme(_theme);
             }
+            // The recording badge and the stand-ins the tray's "Move overlays" puts up were missing from this
+            // list: a theme picked while recording, or while placing them, left them in the old colours.
+            if (_recordIndicator != null && !_recordIndicator.IsDisposed)
+            {
+                _recordIndicator.ApplyTheme(_theme);
+            }
+            if (_clickingPreview != null && !_clickingPreview.IsDisposed) { _clickingPreview.ApplyTheme(_theme); }
+            if (_macroPreview != null && !_macroPreview.IsDisposed) { _macroPreview.ApplyTheme(_theme); }
+            if (_recordPreview != null && !_recordPreview.IsDisposed) { _recordPreview.ApplyTheme(_theme); }
+            // So was the notification history, a window that stays open beside this one, and the
+            // notification cards on screen (a reminder stays up until it is dismissed).
+            NotificationHistoryForm.ApplyThemeToOpen(_theme);
+            _notifications?.ApplyTheme();
             if (_captionOverlay != null && !_captionOverlay.IsDisposed)
             {
                 _captionOverlay.ApplyTheme(_theme);
@@ -15173,6 +15547,12 @@ HookSystemEvents();
                 try { RefreshAccountsGateTrust(); } catch (Exception ex) { Utils.Logger.Swallow("RefreshAccountsGateTrust", ex); }
                 // GitHub could not be asked: ask again later rather than at the next launch.
                 try { ScheduleIntegrityOnlineRetry(); } catch (Exception ex) { Utils.Logger.Swallow("ScheduleIntegrityOnlineRetry", ex); }
+                // Now the running program's hash is known, a checksum file beside it that names another file goes.
+                string knownHash = Utils.IntegrityCheck.CurrentHash;
+                if (!string.IsNullOrEmpty(knownHash))
+                {
+                    System.Threading.ThreadPool.QueueUserWorkItem(_ => Utils.InstallFolderTidy.RemoveStaleChecksums(knownHash));
+                }
 
                 // Persist unconditionally. The check may have recorded a new fingerprint,
                 // a GitHub confirmation, or both — and once the online layer can promote
@@ -15218,6 +15598,14 @@ HookSystemEvents();
                             + "so the code running is not the code Tempo.exe carries. Reinstalling does not fix this. "
                             + "Click here to repair: Tempo restarts and unpacks a clean copy.");
                         onActivate = OnRepairUnpackedCopy;
+                        break;
+                    case Utils.IntegrityVerdict.ForeignCode:
+                        title = Localization.T("Code that isn't Tempo's is running inside it");
+                        body = Localization.T(
+                            "Windows loaded program files into Tempo from the folder Tempo.exe is in. Tempo is a "
+                            + "single file and never puts any there. If you didn't, delete them and restart Tempo. "
+                            + "Click here to see where they are.");
+                        onActivate = ShowForeignFiles;
                         break;
                     case Utils.IntegrityVerdict.Damaged:
                         title = Localization.T("Tempo's program file is damaged");
@@ -15294,6 +15682,18 @@ HookSystemEvents();
                 return;
             }
             _systemEventsHooked = true;
+            // What the window was themed from. Unknown, the FIRST preference change Windows sent — it sends them
+            // for many reasons, a wallpaper, a taskbar setting — counted as a light/dark flip and re-themed every
+            // window for nothing.
+            try
+            {
+                _lastOsLight = Utils.SystemTheme.IsWindowsLight();
+                _lastOsLightKnown = true;
+                bool accentMatters = _settings != null && !_settings.CustomAccentEnabled &&
+                    (_settings.Theme == ThemeKind.Light || _settings.Theme == ThemeKind.Dark);
+                _lastOsAccentArgb = accentMatters ? Utils.SystemTheme.CurrentAccentArgb() : 0;
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("HookSystemEvents.seed", ex); }
             try
             {
                 Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
@@ -16255,6 +16655,11 @@ HookSystemEvents();
                     (_settings == null ? " NULL" : " loaded, remember=" + _settings.RememberWindowPosition +
                      ", saved " + _settings.WindowLeft + "," + _settings.WindowTop + " " +
                      _settings.WindowWidth + "x" + _settings.WindowHeight) + ".");
+                // Not remembered (the default) still has to FIT. The window is 1020 x 824 at 100%,
+                // 1530 x 1236 at 150% — taller than a 1080p laptop's 1008 px of desk at that scale,
+                // and nothing shrank it: only a remembered size was ever clamped. It opened with its
+                // bottom under the taskbar (the status bar, the sidebar's version, the last card).
+                FitIntoWorkArea(Screen.FromControl(this).WorkingArea);
                 return;
             }
 
@@ -16297,11 +16702,13 @@ HookSystemEvents();
             }
             else
             {
-                // Center on the screen the window is currently on (primary by default).
+                // Center on the screen the window is currently on (primary by default) — shrunk to
+                // fit it first: centred while taller than the screen, the title bar went off the top.
                 StartPosition = FormStartPosition.Manual;
                 Rectangle here = Screen.FromControl(this).WorkingArea;
-                int left = here.Left + (here.Width - Width) / 2;
-                int top = here.Top + (here.Height - Height) / 2;
+                FitIntoWorkArea(here);
+                int left = Math.Max(here.Left, here.Left + (here.Width - Width) / 2);
+                int top = Math.Max(here.Top, here.Top + (here.Height - Height) / 2);
                 Location = new Point(left, top);
                 // Say WHY, so "it forgot my position again" has an answer in the log
                 // instead of needing a debugger.
@@ -16309,6 +16716,27 @@ HookSystemEvents();
                                   " — remember=" + _settings.RememberWindowPosition +
                                   ", saved size " + _settings.WindowWidth + "x" + _settings.WindowHeight + ".");
             }
+        }
+
+        /// <summary>
+        /// Shrinks a window that is bigger than <paramref name="wa"/> to fit it, centred in it. A window
+        /// that already fits is left exactly where WinForms put it.
+        /// </summary>
+        private void FitIntoWorkArea(Rectangle wa)
+        {
+            if (wa.Width <= 0 || wa.Height <= 0 || WindowState != FormWindowState.Normal) { return; }
+            int w = Math.Min(Width, wa.Width), h = Math.Min(Height, wa.Height);
+            if (w == Width && h == Height) { return; }
+            // OnLoad clamps the minimum to the work area of the screen the window STARTED on; fitted to a
+            // smaller one, that minimum (1470 x 1050 at 150%) would hold the window bigger than its desk.
+            if (MinimumSize.Width > wa.Width || MinimumSize.Height > wa.Height)
+            {
+                MinimumSize = new Size(Math.Min(MinimumSize.Width, wa.Width), Math.Min(MinimumSize.Height, wa.Height));
+            }
+            Utils.Logger.Info("[window] " + Width + "x" + Height + " is bigger than the " + wa.Width + "x" + wa.Height +
+                              " work area (a laptop, or a high display scale) — opening at " + w + "x" + h + ".");
+            StartPosition = FormStartPosition.Manual;
+            Bounds = new Rectangle(wa.Left + (wa.Width - w) / 2, wa.Top + (wa.Height - h) / 2, w, h);
         }
 
         private bool _startMinimizedApplied;
@@ -16570,6 +16998,7 @@ HookSystemEvents();
             bool desired = _settings.AlwaysOnTop;
             TopMost = !desired;
             TopMost = desired;
+            SyncAccountsWindowTopMost();
         }
 
         /// <summary>
@@ -17333,6 +17762,7 @@ HookSystemEvents();
                 _compositeOffTimer?.Dispose();
                 _holdPollTimer?.Stop();
                 _holdPollTimer?.Dispose();
+                StopHoldKeyWatch();
                 _tips?.Dispose();
                 // Before anything else on shutdown: release W/A/S/D. If Tempo exits
                 // while the movement engine holds a key down, nothing is left to

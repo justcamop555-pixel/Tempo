@@ -167,6 +167,10 @@ namespace AutoClicker.Engine
         // Keys whose press ran a Tempo hotkey and was left out (see FiresHotkey).
         private readonly HashSet<int> _hotkeyKeysDown = new HashSet<int>();
 
+        // Keys held down whose press was left out and counted (a control key, a key typed into Tempo), so
+        // their auto-repeats are not counted again (see TakeReport).
+        private readonly HashSet<int> _leftOutHeld = new HashSet<int>();
+
         /// <summary>
         /// Settings ▸ "Hold back Windows shortcuts…" (MainForm's ShortcutGuard): Windows' own shortcuts are
         /// no part of a take — the Windows key and whatever is pressed with it, Alt+Tab and Alt+Esc
@@ -181,6 +185,35 @@ namespace AutoClicker.Engine
         private bool _winHeld;
 
         public bool IsRecording => _recording;
+
+        /// <summary>What the last take left out, and why it may have come out empty — for the message
+        /// the Macros tab shows instead of saving nothing in silence.</summary>
+        public sealed class TakeReport
+        {
+            /// <summary>Clicks, scrolls and key presses that went to Tempo's own windows.</summary>
+            public int OwnWindowInput;
+            /// <summary>Presses of Tempo's own hotkeys (they are instructions to Tempo, never steps).</summary>
+            public int HotkeyPresses;
+            /// <summary>Movement samples the take held before it was tidied.</summary>
+            public int MovementSteps;
+            /// <summary>How long that movement went on, first sample to last.</summary>
+            public long MovementMs;
+            /// <summary>The take was only movement, and kept it rather than trimming it to nothing.</summary>
+            public bool KeptMovementOnly;
+        }
+
+        /// <summary>The report on the take <see cref="Stop"/> last returned.</summary>
+        public TakeReport LastTake { get; private set; } = new TakeReport();
+
+        private int _ownWindowInput;
+        private int _hotkeyPresses;
+
+        /// <summary>
+        /// A take with no click, key or scroll keeps its movement when tidying would leave none, if
+        /// there is at least this much of it. A Record click straight into Stop moves the pointer for
+        /// well under a second; a test of "does it record my mouse?" goes on longer.
+        /// </summary>
+        internal const long KeepMovementOnlyMs = 1000;
 
         public event EventHandler<MacroAction> ActionRecorded;
 
@@ -213,6 +246,9 @@ namespace AutoClicker.Engine
             _firstRealStep = null;
             _lastRealStep = null;
             _ownClickMs = -1;
+            _ownWindowInput = 0;
+            _hotkeyPresses = 0;
+            _leftOutHeld.Clear();
             _keysDown.Clear();
             _hotkeyKeysDown.Clear();
             _shortcutKeysDown.Clear();
@@ -285,10 +321,24 @@ namespace AutoClicker.Engine
 
             int chord = 0;
             int trimmed = 0;
+            var report = new TakeReport { OwnWindowInput = _ownWindowInput, HotkeyPresses = _hotkeyPresses };
             lock (_appendLock)
             {
                 // 1. The modifiers of the hotkey that is stopping this recording.
                 chord = DropStopChord();
+
+                // A take of nothing but movement — "does it record my mouse?", the first thing anyone
+                // tries — is the user's input too. The trims below take away the pointer's trips to and
+                // from Tempo's Record and Stop buttons, and in a take that short the trips WERE the take:
+                // it came out with 0 steps and nothing was saved (the user's report, 2026-10-18; the log's
+                // "recording stopped (0 steps)"). So it is copied here, and kept if the trims leave no
+                // movement at all — when there is more than a moment of it.
+                if (_firstRealStep == null && _pendingMove && RecordMovements && !_camera) { FlushPendingMove(); }
+                report.MovementSteps = _macro.Actions.FindAll(s => IsMovement(s.Type)).Count;
+                report.MovementMs = MovementSpanMs(_macro.Actions);
+                List<MacroAction> movementOnly = _firstRealStep == null && report.MovementSteps > 0
+                    ? new List<MacroAction>(_macro.Actions)
+                    : null;
 
                 // 2. The end of the take. If it ended with a click on Tempo's own window, the
                 //    pointer's trip there is not part of it. Otherwise the pointer's final
@@ -300,6 +350,9 @@ namespace AutoClicker.Engine
                     carryMs += TrimPointerTail();
                     trimmed = before - _macro.Actions.Count;
                     _pendingMove = false;
+                    // The press that ended the take — the Stop button — is not "input that went to Tempo"
+                    // for the empty-take message: that is what stopping looks like.
+                    report.OwnWindowInput = Math.Max(0, report.OwnWindowInput - 1);
                 }
                 else
                 {
@@ -317,6 +370,18 @@ namespace AutoClicker.Engine
                 // after it. A take ends on its last action; the time is kept (carryMs) only
                 // for anything released below, which really was held until now.
                 carryMs += MergeDelaysAndTrimTrailing();
+
+                if (movementOnly != null && !_macro.Actions.Exists(s => IsMovement(s.Type)) &&
+                    report.MovementMs >= KeepMovementOnlyMs)
+                {
+                    // Its trips to and from the buttons are kept with it: without a click they move the
+                    // pointer and press nothing.
+                    _macro.Actions.Clear();
+                    _macro.Actions.AddRange(movementOnly);
+                    trimmed = 0;
+                    carryMs = MergeDelaysAndTrimTrailing();
+                    report.KeptMovementOnly = true;
+                }
 
                 // A camera take opens with a camera step, even one of no movement: playback
                 // takes its mode from the latest movement step, and a take that opened with a
@@ -368,11 +433,29 @@ namespace AutoClicker.Engine
             }
             _hook.Stop();
             _keyHook.Stop();
+            LastTake = report;
             Logger.Info($"[Macro] recording stopped ({(_macro?.StepCount ?? 0)} steps" +
                         (chord > 0 ? $"; left out the stop hotkey's {chord} modifier key(s)" : "") +
                         (trimmed > 0 ? $"; trimmed {trimmed} step(s) of the pointer travelling to or from Tempo's own window" : "") +
+                        (report.KeptMovementOnly ? $"; movement only ({report.MovementMs} ms), kept whole rather than trimmed to nothing" : "") +
+                        (report.OwnWindowInput > 0 ? $"; left out {report.OwnWindowInput} click(s)/key(s) on Tempo's own window" : "") +
+                        (report.HotkeyPresses > 0 ? $"; left out {report.HotkeyPresses} press(es) of Tempo's hotkeys" : "") +
                         ").");
             return _macro;
+        }
+
+        /// <summary>How long the movement in these steps went on: the waits from the first movement step to the last.</summary>
+        internal static long MovementSpanMs(List<MacroAction> actions)
+        {
+            int first = actions.FindIndex(s => IsMovement(s.Type));
+            int last = actions.FindLastIndex(s => IsMovement(s.Type));
+            if (first < 0 || last <= first) { return 0; }
+            long ms = 0;
+            for (int i = first; i < last; i++)
+            {
+                if (actions[i].Type == MacroActionType.Delay) { ms += actions[i].DelayMilliseconds; }
+            }
+            return ms;
         }
 
         private void OnKeyEvent(object sender, KeyboardHookEventArgs e)
@@ -401,6 +484,8 @@ namespace AutoClicker.Engine
             // emergency-stop hotkeys, plus their modifiers).
             if (ExcludedVirtualKeys.Contains(e.VirtualKey))
             {
+                if (e.IsKeyDown && !IsModifier(e.VirtualKey) && _leftOutHeld.Add(e.VirtualKey)) { _hotkeyPresses++; }
+                else if (!e.IsKeyDown) { _leftOutHeld.Remove(e.VirtualKey); }
                 return;
             }
 
@@ -413,7 +498,7 @@ namespace AutoClicker.Engine
             {
                 if (_hotkeyKeysDown.Contains(e.VirtualKey) || IsHotkeyPress(e.VirtualKey))
                 {
-                    _hotkeyKeysDown.Add(e.VirtualKey);
+                    if (_hotkeyKeysDown.Add(e.VirtualKey)) { _hotkeyPresses++; }
                     return;
                 }
             }
@@ -462,6 +547,7 @@ namespace AutoClicker.Engine
                     if (IsOwnWindowForeground())
                     {
                         _ownClickMs = now;
+                        if (_leftOutHeld.Add(e.VirtualKey)) { _ownWindowInput++; }   // once a press, not per repeat
                         return;
                     }
 
@@ -482,6 +568,7 @@ namespace AutoClicker.Engine
                     // started. It used to be recorded "so held keys are released on playback",
                     // but playback never pressed it: all it could release is a key the USER is
                     // holding while the macro runs.
+                    _leftOutHeld.Remove(e.VirtualKey);
                     if (!_keysDown.Remove(e.VirtualKey))
                     {
                         return;
@@ -582,10 +669,12 @@ namespace AutoClicker.Engine
                     if (IsOwnWindowAt(e.X, e.Y))
                     {
                         _ownClickMs = now;
+                        _ownWindowInput++;
                         return;
                     }
                     if (IsExcludedMouseHotkey(type.Value))
                     {
+                        _hotkeyPresses++;
                         return;
                     }
 
@@ -631,6 +720,7 @@ namespace AutoClicker.Engine
                 if (IsOwnWindowAt(e.X, e.Y))
                 {
                     _ownClickMs = now;
+                    _ownWindowInput++;
                     return;
                 }
 

@@ -23,16 +23,12 @@ namespace AutoClicker.Utils
     /// </summary>
     public static class CaptionCrashGuard
     {
-        private static string MarkerPath
-        {
-            get
-            {
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "AutoClicker");
-                return Path.Combine(dir, "caption-loading.marker");
-            }
-        }
+        /// <summary>
+        /// In Tempo's data folder (SettingsManager's — the same %LOCALAPPDATA%\AutoClicker), so a copy of Tempo
+        /// run against a scratch data folder cannot leave a marker that quarantines a model in the real one.
+        /// </summary>
+        private static string MarkerPath =>
+            Path.Combine(Persistence.SettingsManager.GetSettingsDirectory(), "caption-loading.marker");
 
         /// <summary>
         /// Records that <paramref name="modelKey"/> is about to be handed to the native

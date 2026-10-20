@@ -183,7 +183,8 @@ namespace AutoClicker.UI
         {
             var b = new Button
             {
-                Text = label,
+                // Looked up here, for every button: the labels went out in English in every language.
+                Text = Localization.T(label),
                 Location = new Point(x, y),
                 Size = new Size(w, 34),
                 FlatStyle = FlatStyle.Flat,

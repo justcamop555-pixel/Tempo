@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using AutoClicker.Models;
+using AutoClicker.Native;
 using AutoClicker.Utils;
 
 namespace AutoClicker.Engine
@@ -31,7 +32,6 @@ namespace AutoClicker.Engine
     {
         private readonly object _sync = new object();
         private readonly SessionStatistics _statistics;
-        private readonly RandomizationHelper _random = new RandomizationHelper();
         private readonly IntervalScheduler _scheduler = new IntervalScheduler();
 
         private Thread _worker;
@@ -61,6 +61,9 @@ namespace AutoClicker.Engine
         {
             public readonly int Generation;
             public readonly ManualResetEventSlim Stop;
+            // The run's own randomness and aim, touched only by its worker (see RandomizationHelper, CursorAnchor).
+            public readonly RandomizationHelper Random = new RandomizationHelper();
+            public readonly CursorAnchor Anchor = new CursorAnchor();
             public RunContext(int generation, ManualResetEventSlim stop) { Generation = generation; Stop = stop; }
         }
 
@@ -73,17 +76,40 @@ namespace AutoClicker.Engine
         private volatile int _lastPressClicks = 1;
 
         // ── Anti-freeze protection ────────────────────────────────────────────
-        private readonly CpuMonitor _cpuMonitor = new CpuMonitor();
-        private readonly Stopwatch _cpuSampleClock = new Stopwatch();
+        // What it watches is SystemHealthMonitor: whether the app being clicked still answers, the whole
+        // machine's CPU and memory, a background target's full message queue. What it does is here: slow the
+        // rate down, or hold the clicks while the app is not answering at all.
+        //
+        // It used to watch Tempo's OWN CPU use against "80% of the machine" (CpuThresholdPercent). One click
+        // thread is one core, about 6% of a 16-thread PC, so that could never happen: the panel read
+        // "✓ Protected — CPU 0%" while a game drowned in clicks, and the only protection was the fixed cap.
+        private readonly SystemHealthMonitor _health = SystemHealthMonitor.Shared;
+        private readonly Stopwatch _throttleClock = new Stopwatch();
         public bool AntiFreezeEnabled { get; set; } = true;
         public int MaxClicksPerSecond { get; set; } = 200;
+        /// <summary>From old settings files; Anti-Freeze no longer reads it (see above).</summary>
         public int CpuThresholdPercent { get; set; } = 80;
         private double _throttleFactor = 1.0;
-        private volatile float _measuredCpu;
         private volatile float _effectiveCps;
+        private volatile FreezeVerdict _verdict = FreezeVerdict.None;
+        private volatile bool _holding;
+        private long _lastSampleSeen;
+        private int _cpuFullStreak, _slowStreak;
 
-        /// <summary>Latest measured process CPU usage (0–100%).</summary>
-        public double MeasuredCpuPercent => _measuredCpu;
+        // The thresholds. A game drives the CPU to 100% legitimately, so a full CPU or memory counts only
+        // when the app being clicked is ALSO slow to answer (or there is none to ask).
+        internal const double SlowAnswerMs = 250, PromptAnswerMs = 100;
+        internal const double CpuFullPercent = 97, MemoryFullPercent = 95;
+        internal const double MaxThrottle = 16;
+
+        /// <summary>The whole machine's CPU use (0–100%) at the latest reading; 0 before there is one.</summary>
+        public double MeasuredCpuPercent
+        {
+            get { double c = _health.Latest.CpuPercent; return double.IsNaN(c) ? 0 : c; }
+        }
+
+        /// <summary>The latest reading of the machine and the app being clicked.</summary>
+        public HealthSnapshot Health => _health.Latest;
 
         /// <summary>
         /// The actual click rate the engine is currently issuing, in real CLICKS a second (a
@@ -91,11 +117,38 @@ namespace AutoClicker.Engine
         /// </summary>
         public double EffectiveClicksPerSecond => _effectiveCps;
 
-        /// <summary>True while anti-freeze is actively slowing the configured rate.</summary>
-        public bool IsThrottling => _throttleFactor > 1.05;
+        /// <summary>True while anti-freeze is actively slowing the configured rate, or holding the clicks.</summary>
+        public bool IsThrottling => _throttleFactor > 1.05 || _holding;
+
+        /// <summary>True while the clicks are held because the app being clicked is not answering.</summary>
+        public bool IsHolding => _holding;
+
+        /// <summary>Why Anti-Freeze is (or was last) slowing down.</summary>
+        public AntiFreezeReason FreezeReason => _verdict.Reason;
+
+        /// <summary>
+        /// Why, with the number behind it from the reading that decided it — the answer time in ms (TargetSlow),
+        /// the CPU % (CpuFull), the memory % (MemoryFull), NaN for the rest. One read, so the two always agree;
+        /// the latest reading may already be a newer one.
+        /// </summary>
+        public (AntiFreezeReason Reason, double Evidence) Freeze
+        {
+            get { FreezeVerdict v = _verdict; return (v.Reason, v.Evidence); }
+        }
+
+        private sealed class FreezeVerdict
+        {
+            public static readonly FreezeVerdict None = new FreezeVerdict(AntiFreezeReason.None, double.NaN);
+            public readonly AntiFreezeReason Reason;
+            public readonly double Evidence;
+            public FreezeVerdict(AntiFreezeReason reason, double evidence) { Reason = reason; Evidence = evidence; }
+        }
+
+        // Where the last click went, for SystemHealthMonitor to find the window being clicked.
+        private volatile int _lastX, _lastY;
+        private volatile bool _lastPointValid;
 
         // ── Multi-point traversal state ───────────────────────────────────────
-        private readonly Random _mpRandom = new Random();
         private volatile int _currentPointIndex = -1;
         private int _mpDirection = 1;
         private int _mpRepeatLeft = 0;
@@ -116,6 +169,28 @@ namespace AutoClicker.Engine
         public ClickEngine(SessionStatistics statistics)
         {
             _statistics = statistics ?? throw new ArgumentNullException(nameof(statistics));
+            _health.TargetWindow = CurrentTargetWindow;
+        }
+
+        /// <summary>
+        /// The window being clicked, asked on the health monitor's thread: the window under the last click
+        /// point, under the cursor for "click where the cursor is", the focused window for a keyboard key.
+        /// </summary>
+        private IntPtr CurrentTargetWindow()
+        {
+            ClickProfile p = _activeProfile;
+            if (!_running || p == null) { return IntPtr.Zero; }
+            if (p.Target == ClickTarget.Key) { return NativeMethods.GetForegroundWindow(); }
+            int x, y;
+            if (_lastPointValid) { x = _lastX; y = _lastY; }
+            // Before the first click: the fixed point — not the cursor, which is wherever the user's mouse is
+            // (a browser on the other screen was watched for the first half-second of a run).
+            else if (p.PositionMode == PositionMode.FixedPosition) { x = p.FixedX; y = p.FixedY; }
+            else if (!ScreenGeometry.TryGetCursorPosition(out x, out y)) { return IntPtr.Zero; }
+            // The window the click goes to — which, with Tempo's own window over the point and "ignore Tempo's own
+            // window" on, is the one under it (InputSimulator.ResolveWindowAt): watching Tempo instead read
+            // "✓ Full speed — Tempo answers in 1 ms" about a game that might be frozen.
+            return InputSimulator.TargetWindowAt(x, y);
         }
 
         public EngineState State
@@ -192,17 +267,29 @@ namespace AutoClicker.Engine
                 _runClock.Restart();
                 _resyncScheduler = false;
                 _throttleFactor = 1.0;
-                _measuredCpu = 0;
                 _effectiveCps = 0;
-                _cpuSampleClock.Restart();
+                _verdict = FreezeVerdict.None;
+                _holding = false;
+                _cpuFullStreak = _slowStreak = 0;
+                _lastSampleSeen = 0;
+                _lastPointValid = false;
+                _throttleClock.Restart();
                 _currentPointIndex = -1;
                 _mpDirection = 1;
                 _mpRepeatLeft = 0;
 
+                // Watched for the length of THIS run, under its own name: a stopped run's worker that ends
+                // late releases its own hold, never the new run's.
+                _health.Acquire(HealthOwner(run));
+
                 _worker = new Thread(() => WorkerLoop(run))
                 {
                     IsBackground = true,
-                    Name = "AutoClicker.Worker"
+                    Name = "AutoClicker.Worker",
+                    // Above the game's threads when it wakes, like Tempo's other timing threads (the key hook,
+                    // camera movement): it sleeps between clicks, so this costs the game nothing, and under a
+                    // CPU-bound game a Normal click thread waited behind it and the interval wobbled.
+                    Priority = ThreadPriority.AboveNormal
                 };
 
                 _statistics.BeginRun();
@@ -386,6 +473,8 @@ namespace AutoClicker.Engine
             }
             finally
             {
+                if (Volatile.Read(ref _runGeneration) == run.Generation) { _holding = false; }
+                _health.Release(HealthOwner(run));
                 if (!FinishRun(p, run))
                 {
                     // A newer run started after this one was stopped. The running flag, the
@@ -428,8 +517,10 @@ namespace AutoClicker.Engine
             // it was when they started, which is exactly what the mode avoids.
             try
             {
+                // Nor for a keyboard key: a key run never moves the cursor either, so the "restore"
+                // only dragged the mouse back to where it had been when the run began.
                 if (_cursorStartValid && p != null && p.RestoreCursorOnStop &&
-                    !p.BackgroundClick &&
+                    !p.BackgroundClick && p.Target != ClickTarget.Key &&
                     (p.PositionMode == PositionMode.FixedPosition ||
                      p.PositionMode == PositionMode.MultiPoint))
                 {
@@ -439,6 +530,23 @@ namespace AutoClicker.Engine
             catch (Exception ex)
             {
                 Logger.Warn("[Clicker] could not restore cursor position: " + ex.Message);
+            }
+
+            // "Click where the cursor is" with its position randomized leaves the cursor up to the jitter
+            // away from where the user put it: back there it goes — unless the user has taken the mouse
+            // since (CursorAnchor.TryHome).
+            try
+            {
+                if (p != null && p.Target != ClickTarget.Key && p.PositionMode == PositionMode.CurrentPosition &&
+                    p.RandomizePosition && ScreenGeometry.TryGetCursorPosition(out int cx, out int cy) &&
+                    run.Anchor.TryHome(cx, cy, out int hx, out int hy))
+                {
+                    InputSimulator.MoveTo(hx, hy);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Clicker] could not put the cursor back where it was aimed: " + ex.Message);
             }
 
             RunCompleted?.Invoke(this, EventArgs.Empty);
@@ -468,6 +576,12 @@ namespace AutoClicker.Engine
                 {
                     break;
                 }
+                // And while the app being clicked is not answering: clicks sent now only queue up behind
+                // whatever it is stuck on, and pour in at once when it wakes.
+                if (HoldWhileTargetNotAnswering(run))
+                {
+                    break;
+                }
                 if (_resyncScheduler)
                 {
                     _scheduler.Start();
@@ -489,6 +603,9 @@ namespace AutoClicker.Engine
                 double desired = p.ManualPreciseIntervalMs > 0.0
                     ? p.ManualPreciseIntervalMs
                     : interval;
+                // Randomized AFTER that choice: the precise interval used to replace the varied one, so
+                // "randomize interval" did nothing at all above 1000 CPS.
+                desired = Vary(p, run, desired);
                 double effInterval = ApplyAntiFreeze(desired);
 
                 // Wait the remaining time until the next scheduled slot rather than
@@ -530,6 +647,17 @@ namespace AutoClicker.Engine
                 for (int i = 0; i < burst && IsCurrent(run) && performed < max
                      && (durationMs == 0 || _runClock.ElapsedMilliseconds < durationMs); i++)
                 {
+                    if (HoldWhileTargetNotAnswering(run))
+                    {
+                        return;
+                    }
+                    if (_resyncScheduler)
+                    {
+                        // Held mid-burst: the rest of the burst starts afresh rather than catching up at once.
+                        _scheduler.Start();
+                        _resyncScheduler = false;
+                    }
+
                     long interval = PerformOneActuation(p, run);
                     performed++;
                     System.Threading.Interlocked.Increment(ref _runPerformed);
@@ -552,6 +680,7 @@ namespace AutoClicker.Engine
                         double desired = p.ManualPreciseIntervalMs > 0.0
                             ? p.ManualPreciseIntervalMs
                             : interval;
+                        desired = Vary(p, run, desired);
                         double effInterval = ApplyAntiFreeze(desired);
 
                         double wait = _scheduler.NextWait(effInterval);
@@ -569,11 +698,17 @@ namespace AutoClicker.Engine
 
                 // Pause between bursts (precise, but does not need drift tracking).
                 // When interval randomization is on, jitter this pause too so the
-                // gap between bursts isn't a fixed, detectable rhythm.
-                long burstPause = p.BurstPauseMilliseconds;
-                if (p.RandomizeInterval && burstPause > 0)
+                // gap between bursts isn't a fixed, detectable rhythm — by the same SHARE
+                // as the click gap (±20 ms on a 100 ms interval is ±200 ms on a 1 s pause),
+                // at most half the pause. It moved by the click's ±ms, so a 1 s pause
+                // between bursts of 50 ± 10 ms clicks came round every 990–1010 ms: the
+                // most regular beat in the whole run.
+                double burstPause = p.BurstPauseMilliseconds;
+                if (p.RandomizeInterval && burstPause > 0 && p.IntervalJitterMilliseconds > 0)
                 {
-                    burstPause = _random.JitterInterval(burstPause, p.IntervalJitterMilliseconds);
+                    double gap = Math.Max(1.0, p.GetBaseIntervalMilliseconds());
+                    double share = Math.Min(0.5, p.IntervalJitterMilliseconds / gap);
+                    burstPause = run.Random.JitterInterval(burstPause, burstPause * share, 0.5);
                 }
 
                 // The gap BETWEEN bursts is a click gap too, so it has to respect the
@@ -650,15 +785,12 @@ namespace AutoClicker.Engine
             int hold = p.ClickHoldMilliseconds;
 
             // When anti-pattern randomization is on, vary the per-click hold a little
-            // too, so held clicks aren't all exactly the same length. Bounded by the
-            // hold itself so it always stays positive.
-            if (p.RandomizeInterval && hold > 0)
+            // too, so held clicks aren't all exactly the same length — by up to half the
+            // hold, never below 1 ms, the average staying the hold set.
+            if (p.RandomizeInterval && hold > 1 && p.IntervalJitterMilliseconds > 0)
             {
-                int holdJitter = Math.Min(p.IntervalJitterMilliseconds, hold);
-                if (holdJitter > 0)
-                {
-                    hold = (int)_random.JitterInterval(hold, holdJitter);
-                }
+                double holdJitter = Math.Min(p.IntervalJitterMilliseconds, hold / 2.0);
+                hold = Math.Max(1, (int)Math.Round(run.Random.JitterInterval(hold, holdJitter, 1.0)));
             }
 
             // Keyboard-key mode: press a key instead of a mouse button. Reuses the same
@@ -679,8 +811,10 @@ namespace AutoClicker.Engine
                     {
                         InputSimulator.KeyDown(vk);
                         // On the run's stop signal, like the mouse holds: a stop mid-hold lets
-                        // the key go at once instead of up to 5 s later.
-                        run.Stop.Wait(hold);
+                        // the key go at once instead of up to 5 s later. And on the high-resolution
+                        // timer, like them: the event's own Wait follows the timer resolution, which
+                        // Windows 11 stops honouring while Tempo's window is hidden.
+                        PreciseWait.Wait(hold, run.Stop);
                         InputSimulator.KeyUp(vk);
                     }
                     else
@@ -692,25 +826,23 @@ namespace AutoClicker.Engine
                     ClickPerformed?.Invoke(this, EventArgs.Empty);
                 }
 
-                if (p.RandomizeInterval)
-                {
-                    interval = _random.JitterInterval(interval, p.IntervalJitterMilliseconds);
-                }
+                // The run loop randomizes it (Vary), once the interval to vary is known.
                 return interval;
             }
 
             if (p.PositionMode == PositionMode.MultiPoint)
             {
-                ClickPoint point = AdvanceMultiPoint(p);
+                ClickPoint point = AdvanceMultiPoint(p, run);
                 if (point != null)
                 {
                     int x = point.X;
                     int y = point.Y;
                     if (p.RandomizePosition)
                     {
-                        _random.JitterPosition(ref x, ref y, p.PositionJitterPixels);
+                        run.Random.JitterWithin(ref x, ref y, p.PositionJitterPixels, RootWindowAt);
                     }
 
+                    NoteClickPoint(x, y);
                     Actuate(true, x, y, point.Button, point.Style, hold, run.Stop, p.BackgroundClick);
                     style = point.Style;
                     actuatedButton = point.Button;
@@ -727,28 +859,35 @@ namespace AutoClicker.Engine
                 int y = p.FixedY;
                 if (p.RandomizePosition)
                 {
-                    _random.JitterPosition(ref x, ref y, p.PositionJitterPixels);
+                    run.Random.JitterWithin(ref x, ref y, p.PositionJitterPixels, RootWindowAt);
                 }
 
+                NoteClickPoint(x, y);
                 Actuate(true, x, y, button, style, hold, run.Stop, p.BackgroundClick);
             }
             else if (p.RandomizePosition)
             {
-                // Current position but with jitter applied around it: read the
-                // cursor, jitter, then issue a move + click.
+                // Current position but with jitter applied around it: around the spot the USER
+                // put the cursor (CursorAnchor), not where the last click left it — that walked the
+                // clicks off the target — then a move + click.
                 if (ScreenGeometry.TryGetCursorPosition(out int cx, out int cy))
                 {
-                    _random.JitterPosition(ref cx, ref cy, p.PositionJitterPixels);
-                    Actuate(true, cx, cy, button, style, hold, run.Stop);
+                    run.Anchor.Aim(cx, cy, out int ax, out int ay);
+                    run.Random.JitterWithin(ref ax, ref ay, p.PositionJitterPixels, RootWindowAt);
+                    run.Anchor.Clicked(ax, ay);
+                    NoteClickPoint(ax, ay);
+                    Actuate(true, ax, ay, button, style, hold, run.Stop);
                 }
                 else
                 {
+                    _lastPointValid = false;
                     Actuate(false, 0, 0, button, style, hold, run.Stop);
                 }
             }
             else
             {
-                // Pure "click where the cursor is" — no move event needed.
+                // Pure "click where the cursor is" — no move event needed (the health monitor reads the cursor).
+                _lastPointValid = false;
                 Actuate(false, 0, 0, button, style, hold, run.Stop);
             }
 
@@ -759,12 +898,72 @@ namespace AutoClicker.Engine
             _statistics.RecordClicks(clicks, actuatedButton);
             ClickPerformed?.Invoke(this, EventArgs.Empty);
 
-            if (p.RandomizeInterval)
-            {
-                interval = _random.JitterInterval(interval, p.IntervalJitterMilliseconds);
-            }
-
+            // The run loop randomizes it (Vary), once the interval to vary is known.
             return interval;
+        }
+
+        /// <summary>
+        /// <paramref name="interval"/> with the run's interval randomization: ± the jitter, symmetric so the average
+        /// is the speed set, and never below what the engine would wait anyway — half a millisecond, or the
+        /// Anti-Freeze cap's gap while it is on (RandomizationHelper.EffectiveJitter). Below that floor the
+        /// clamp turned the lower half of the spread into one fixed gap.
+        /// </summary>
+        private double Vary(ClickProfile p, RunContext run, double interval)
+        {
+            if (!p.RandomizeInterval || p.IntervalJitterMilliseconds <= 0) { return interval; }
+            return run.Random.JitterInterval(interval, p.IntervalJitterMilliseconds,
+                JitterFloor(AntiFreezeEnabled, MaxClicksPerSecond, _lastPressClicks));
+        }
+
+        /// <summary>
+        /// The least a randomized interval may come to: the engine's own floor (0.5 ms), or the gap the
+        /// Anti-Freeze cap allows a press of <paramref name="clicksPerPress"/> clicks while it is on. Shared with the
+        /// Clicker tab, so the range it shows is the range the engine uses.
+        /// </summary>
+        public static double JitterFloor(bool antiFreeze, int maxClicksPerSecond, int clicksPerPress)
+        {
+            double floor = 0.5;
+            if (antiFreeze)
+            {
+                int cap = maxClicksPerSecond < 1 ? 1 : maxClicksPerSecond;
+                floor = Math.Max(floor, 1000.0 * Math.Max(1, clicksPerPress) / cap);
+            }
+            return floor;
+        }
+
+        /// <summary>
+        /// The top-level window at a screen point — the window a randomized click must stay on
+        /// (RandomizationHelper.JitterWithin). A field so a test can stand in for the screen.
+        /// </summary>
+        internal static Func<int, int, IntPtr> RootWindowAt = (x, y) =>
+        {
+            IntPtr hwnd = NativeMethods.WindowFromPoint(new NativeMethods.POINT(x, y));
+            return hwnd == IntPtr.Zero ? IntPtr.Zero : NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+        };
+
+        /// <summary>
+        /// Changes the running run's anti-pattern settings — interval and position randomization, the hold — the
+        /// way <see cref="UpdateInterval"/> changes its interval. Returns false when nothing is running.
+        ///
+        /// Only the interval reached a running clicker: ticking "Randomize", pressing Humanize or changing the hold
+        /// mid-run did nothing until the next start, with the boxes saying otherwise.
+        /// </summary>
+        public bool UpdateHumanizing(bool randomizeInterval, int intervalJitterMs, bool randomizePosition, int positionJitterPx,
+                                     int holdMs)
+        {
+            lock (_sync)
+            {
+                if (!_running || _activeProfile == null)
+                {
+                    return false;
+                }
+                _activeProfile.RandomizeInterval = randomizeInterval;
+                _activeProfile.IntervalJitterMilliseconds = Math.Max(0, intervalJitterMs);
+                _activeProfile.RandomizePosition = randomizePosition;
+                _activeProfile.PositionJitterPixels = Math.Max(0, positionJitterPx);
+                _activeProfile.ClickHoldMilliseconds = Math.Max(0, holdMs);
+            }
+            return true;
         }
 
         /// <summary>
@@ -780,7 +979,7 @@ namespace AutoClicker.Engine
         private readonly System.Collections.Generic.List<int> _enabledPoints =
             new System.Collections.Generic.List<int>(16);
 
-        private ClickPoint AdvanceMultiPoint(ClickProfile p)
+        private ClickPoint AdvanceMultiPoint(ClickProfile p, RunContext run)
         {
             // Build the list of enabled point indices (into the reused buffer).
             var enabled = _enabledPoints;
@@ -825,7 +1024,7 @@ namespace AutoClicker.Engine
                     else
                     {
                         // Pick a different point than the current one.
-                        do { nextPos = _mpRandom.Next(enabled.Count); }
+                        do { nextPos = run.Random.Next(0, enabled.Count); }
                         while (nextPos == pos);
                     }
                     break;
@@ -918,11 +1117,10 @@ namespace AutoClicker.Engine
         }
 
         /// <summary>
-        /// Applies anti-freeze protection to a desired interval: enforces the
-        /// hard clicks-per-second cap and multiplies the interval by an adaptive
-        /// throttle factor that grows when this process's CPU usage exceeds the
-        /// configured threshold. Also publishes the live measured CPU and the
-        /// effective click rate for the UI. Returns the interval to actually wait.
+        /// Applies anti-freeze protection to a desired interval: enforces the hard clicks-per-second cap and
+        /// multiplies the interval by an adaptive factor that grows while the app being clicked falls behind or
+        /// the machine runs out of room (see <see cref="UpdateThrottle"/>). Publishes the effective click rate
+        /// for the UI. Returns the interval to actually wait.
         /// </summary>
         private double ApplyAntiFreeze(double interval)
         {
@@ -938,8 +1136,8 @@ namespace AutoClicker.Engine
 
             if (!AntiFreezeEnabled)
             {
-                _measuredCpu = 0;
                 _throttleFactor = 1.0;
+                _verdict = FreezeVerdict.None;
                 _effectiveCps = baseInterval > 0 ? (float)(perPress * 1000.0 / baseInterval) : 0f;
                 return baseInterval;
             }
@@ -953,7 +1151,7 @@ namespace AutoClicker.Engine
 
             double effective = Math.Max(baseInterval, minInterval);
 
-            // Sample CPU roughly every 250ms and adjust the throttle.
+            // Read the latest health reading every 250 ms or so and adjust the factor.
             UpdateThrottle();
 
             effective = effective * _throttleFactor;
@@ -965,29 +1163,143 @@ namespace AutoClicker.Engine
 
         private void UpdateThrottle()
         {
-            if (_cpuSampleClock.ElapsedMilliseconds < 250)
+            if (_throttleClock.ElapsedMilliseconds < 250)
             {
                 return;
             }
-            _cpuSampleClock.Restart();
+            _throttleClock.Restart();
 
-            double cpu = _cpuMonitor.Sample();
-            _measuredCpu = (float)cpu;
-
-            int threshold = CpuThresholdPercent < 10 ? 10 : CpuThresholdPercent;
-
-            if (cpu > threshold)
+            long now = Environment.TickCount64;
+            HealthSnapshot h = _health.Latest;
+            long queueFull = InputSimulator.LastQueueFullTick;
+            var d = Decide(h, now, queueFull != 0 && now - queueFull < 2000, _throttleFactor,
+                           ref _lastSampleSeen, ref _cpuFullStreak, ref _slowStreak);
+            _throttleFactor = d.Factor;
+            if (!_holding)
             {
-                // Over budget — back off (grow the interval). Cap the factor so a
-                // pegged CPU can't slow the clicker to a crawl indefinitely.
-                _throttleFactor = Math.Min(_throttleFactor * 1.35 + 0.05, 16.0);
-            }
-            else if (cpu < threshold - 15)
-            {
-                // Comfortable headroom — relax back toward full speed.
-                _throttleFactor = Math.Max(1.0, _throttleFactor * 0.80);
+                _verdict = d.Reason == AntiFreezeReason.None ? FreezeVerdict.None : new FreezeVerdict(d.Reason, Evidence(h, d.Reason));
             }
         }
+
+        /// <summary>The number behind a slowdown, read from the same reading <see cref="Decide"/> judged.</summary>
+        private static double Evidence(HealthSnapshot h, AntiFreezeReason reason)
+        {
+            switch (reason)
+            {
+                case AntiFreezeReason.TargetSlow: return h.TargetAnswerMs;
+                case AntiFreezeReason.CpuFull: return h.CpuPercent;
+                case AntiFreezeReason.MemoryFull:
+                    // Whichever of the two ran out (NaN when Windows had no answer for it).
+                    if (double.IsNaN(h.CommitPercent)) { return h.MemoryLoadPercent; }
+                    if (double.IsNaN(h.MemoryLoadPercent)) { return h.CommitPercent; }
+                    return Math.Max(h.MemoryLoadPercent, h.CommitPercent);
+                default: return double.NaN;
+            }
+        }
+
+        /// <summary>
+        /// One step of Anti-Freeze, as a pure function (the tests drive it with made-up readings). Grows the
+        /// factor ×1.35 per step while something is wrong — ×2 for a full message queue, the one signal that
+        /// clicks are already being lost — up to <see cref="MaxThrottle"/>; eases back ×0.85 once all is well.
+        /// Sustained conditions are counted in distinct readings, not in steps (a reading lasts two steps).
+        /// </summary>
+        internal static (double Factor, AntiFreezeReason Reason) Decide(HealthSnapshot h, long now, bool queueFull, double factor,
+                                                                        ref long lastSampleSeen, ref int cpuFullStreak, ref int slowStreak)
+        {
+            bool fresh = h != null && h.IsFresh(now);
+            if (fresh && h.TakenTick != lastSampleSeen)
+            {
+                lastSampleSeen = h.TakenTick;
+                cpuFullStreak = h.CpuPercent >= CpuFullPercent ? cpuFullStreak + 1 : 0;
+                slowStreak = h.TargetAnswerMs > SlowAnswerMs ? slowStreak + 1 : 0;
+            }
+            else if (!fresh)
+            {
+                cpuFullStreak = slowStreak = 0;
+            }
+
+            double grow = Math.Min(factor * 1.35 + 0.05, MaxThrottle);
+            if (queueFull)
+            {
+                return (Math.Min(factor * 2, MaxThrottle), AntiFreezeReason.QueueFull);
+            }
+            if (!fresh)
+            {
+                return (Math.Max(1.0, factor * 0.85), factor * 0.85 > 1.05 ? AntiFreezeReason.Recovering : AntiFreezeReason.None);
+            }
+            if (h.TargetNotAnswering)
+            {
+                return (grow, AntiFreezeReason.TargetNotAnswering);
+            }
+            if (slowStreak >= 2)
+            {
+                return (grow, AntiFreezeReason.TargetSlow);
+            }
+            // A full CPU or memory is only trouble when the app is not answering promptly (or cannot be asked):
+            // a CPU-bound game sits at 100% and answers in 16 ms.
+            bool answersPromptly = h.HasTarget && !h.TargetUnwatchable && h.TargetAnswerMs <= PromptAnswerMs;
+            if (!answersPromptly && cpuFullStreak >= 2)
+            {
+                return (grow, AntiFreezeReason.CpuFull);
+            }
+            if (!answersPromptly && (h.MemoryLoadPercent >= MemoryFullPercent || h.CommitPercent >= MemoryFullPercent))
+            {
+                return (grow, AntiFreezeReason.MemoryFull);
+            }
+            double relax = Math.Max(1.0, factor * 0.85);
+            return (relax, relax > 1.05 ? AntiFreezeReason.Recovering : AntiFreezeReason.None);
+        }
+
+        /// <summary>
+        /// Holds the clicks while the app being clicked is not answering at all (its window did not answer
+        /// within half a second, or Windows calls it "Not responding"). Returns true when the run should stop.
+        /// The schedule restarts afterwards, so the missed clicks are not fired off at once to catch up.
+        /// </summary>
+        private bool HoldWhileTargetNotAnswering(RunContext run)
+        {
+            if (!AntiFreezeEnabled)
+            {
+                return false;
+            }
+            bool held = false;
+            string who = "";
+            while (IsCurrent(run) && !_paused)
+            {
+                HealthSnapshot h = _health.Latest;
+                if (!(h.IsFresh(Environment.TickCount64) && h.TargetNotAnswering))
+                {
+                    break;
+                }
+                if (!held)
+                {
+                    held = true;
+                    who = h.TargetName;
+                    _holding = true;
+                    _verdict = new FreezeVerdict(AntiFreezeReason.TargetNotAnswering, double.NaN);
+                    Logger.Info("[Anti-Freeze] clicks held: " + who + " is not answering.");
+                }
+                if (run.Stop.Wait(100))
+                {
+                    break;
+                }
+            }
+            if (held)
+            {
+                _holding = false;
+                _resyncScheduler = true;
+                if (IsCurrent(run)) { Logger.Info("[Anti-Freeze] " + who + " answers again — clicking resumes."); }
+            }
+            return !IsCurrent(run);
+        }
+
+        private void NoteClickPoint(int x, int y)
+        {
+            _lastX = x;
+            _lastY = y;
+            _lastPointValid = true;
+        }
+
+        private static string HealthOwner(RunContext run) => "clicker#" + run.Generation;
 
         /// <summary>
         /// Blocks while the engine is paused, returning promptly if a stop is
@@ -1073,5 +1385,23 @@ namespace AutoClicker.Engine
             _stopSignal.Dispose();
             _disposed = true;
         }
+    }
+
+    /// <summary>Why Anti-Freeze is slowing the clicks down (or holding them).</summary>
+    public enum AntiFreezeReason
+    {
+        None,
+        /// <summary>Easing back to full speed after a slowdown.</summary>
+        Recovering,
+        /// <summary>The app being clicked takes long to answer.</summary>
+        TargetSlow,
+        /// <summary>It does not answer at all: the clicks are held.</summary>
+        TargetNotAnswering,
+        /// <summary>A background target's message queue is full: it is not reading its clicks.</summary>
+        QueueFull,
+        /// <summary>The whole machine's CPU is full, and the app is slow to answer.</summary>
+        CpuFull,
+        /// <summary>Memory is nearly full (RAM or commit), and the app is slow to answer.</summary>
+        MemoryFull,
     }
 }

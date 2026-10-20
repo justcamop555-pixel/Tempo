@@ -98,6 +98,9 @@ namespace AutoClicker.UI
                 return;
             }
 
+            // The same moments decide whether Tempo needs full speed from Windows.
+            UpdateRunQos();
+
             bool want = WantShortcutGuard();
             if (_shortcutGuard == null)
             {
@@ -116,6 +119,19 @@ namespace AutoClicker.UI
             {
                 _shortcutGuard.SetActive(want);
             }
+        }
+
+        /// <summary>
+        /// Full speed from Windows while anything runs — clicking, a macro playing or recording, camera
+        /// movement — and Windows' own power management otherwise (Engine.RunQos). A paused run is idle.
+        /// </summary>
+        private void UpdateRunQos()
+        {
+            bool running = (_engine != null && _engine.IsRunning && !_engine.IsPaused)
+                           || (_player != null && _player.IsPlaying)
+                           || _liveRecording
+                           || (_movement != null && _movement.IsRunning);
+            AutoClicker.Engine.RunQos.SetRunning(running);
         }
 
         private bool WantShortcutGuard()

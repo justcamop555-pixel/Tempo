@@ -212,6 +212,10 @@ namespace AutoClicker.UI
                         colour = theme.DangerText;
                         return Localization.T("✗ The copy of Tempo running from your TEMP folder was changed. "
                                               + "Open Settings and press Repair.");
+                    case Utils.IntegrityVerdict.ForeignCode:
+                        colour = theme.DangerText;
+                        return Localization.T("✗ Program files that are not Tempo's were loaded into it from its folder. "
+                                              + "Open Settings › Data & Backup › Details to see them.");
                     case Utils.IntegrityVerdict.Modified:
                     case Utils.IntegrityVerdict.Repackaged:
                     case Utils.IntegrityVerdict.UnknownRelease:

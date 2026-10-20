@@ -36,6 +36,13 @@ namespace AutoClicker.UI
             Size = new Size(168, 78);
         }
 
+        // Every offset below is a 100% number scaled by Px. They were plain pixels inside a card the
+        // window scales: on a 150% laptop the caption and value sat in the top half of a card half as
+        // tall again, the trend beside the caption was cut to its top half, and the shadow and corners
+        // shrank relative to the card.
+        private float DpiScale => DeviceDpi / 96f;
+        private int Px(float size96) => (int)Math.Round(size96 * DpiScale, MidpointRounding.AwayFromZero);
+
         public string Caption
         {
             get => _caption;
@@ -67,11 +74,11 @@ namespace AutoClicker.UI
             }
 
             // Reserve a few pixels at the bottom/right for a soft drop shadow.
-            var card = new Rectangle(1, 1, Width - 4, Height - 6);
-            const int radius = 12;
+            var card = new Rectangle(Px(1), Px(1), Width - Px(4), Height - Px(6));
+            int radius = Px(12);
 
             // 1) Soft drop shadow for depth.
-            using (var shadowPath = Rounded(new Rectangle(card.Left + 1, card.Top + 4, card.Width, card.Height), radius))
+            using (var shadowPath = Rounded(new Rectangle(card.Left + Px(1), card.Top + Px(4), card.Width, card.Height), radius))
             using (var sh = new SolidBrush(Color.FromArgb(38, 0, 0, 0)))
             {
                 g.FillPath(sh, shadowPath);
@@ -97,8 +104,8 @@ namespace AutoClicker.UI
             // 3) Rounded accent pill, with a little horizontal gradient.
             if (ShowAccent)
             {
-                var accentRect = new Rectangle(card.Left + 13, card.Top + 14, 26, 4);
-                using (var ap = Rounded(accentRect, 2))
+                var accentRect = new Rectangle(card.Left + Px(13), card.Top + Px(14), Px(26), Px(4));
+                using (var ap = Rounded(accentRect, Px(2)))
                 using (var ag = new LinearGradientBrush(accentRect, AccentBar, Lighten(AccentBar, 0.22), LinearGradientMode.Horizontal))
                 {
                     g.FillPath(ag, ap);
@@ -109,7 +116,7 @@ namespace AutoClicker.UI
             using (var capFont = new Font("Segoe UI", CaptionFontSize, FontStyle.Regular))
             {
                 string cap = _caption.ToUpperInvariant();
-                g.DrawString(cap, capFont, capBrush, CaptionX, CaptionY);
+                g.DrawString(cap, capFont, capBrush, Px(CaptionX), Px(CaptionY));
 
                 // The sublabel goes on the CAPTION row, right-aligned — not beside the
                 // value, where it used to live. The value is 18pt bold and a six-figure
@@ -120,9 +127,9 @@ namespace AutoClicker.UI
                 if (!string.IsNullOrEmpty(_sub))
                 {
                     float capW = g.MeasureString(cap, capFont).Width;
-                    float subLeft = 14 + capW + 6;
-                    float subWidth = Width - subLeft - 12;
-                    if (subWidth > 24)
+                    float subLeft = Px(14) + capW + Px(6);
+                    float subWidth = Width - subLeft - Px(12);
+                    if (subWidth > Px(24))
                     {
                         using (var subFont = new Font("Segoe UI", 8f, FontStyle.Regular))
                         using (var subBrush = new SolidBrush(CaptionColor))
@@ -133,8 +140,10 @@ namespace AutoClicker.UI
                                 FormatFlags = StringFormatFlags.NoWrap,
                                 Trimming = StringTrimming.EllipsisCharacter
                             };
+                            // As tall as its line at this DPI (14 px at 100%), so it is never cut across.
+                            float subH = Math.Max(Px(14), (float)Math.Ceiling(subFont.GetHeight(g)));
                             g.DrawString(_sub, subFont, subBrush,
-                                new RectangleF(subLeft, 23f, subWidth, 14f), fmt);
+                                new RectangleF(subLeft, Px(23), subWidth, subH), fmt);
                         }
                     }
                 }
@@ -143,7 +152,7 @@ namespace AutoClicker.UI
             using (var valBrush = new SolidBrush(ValueColor))
             using (var valFont = new Font("Segoe UI", 18f, FontStyle.Bold))
             {
-                g.DrawString(_value, valFont, valBrush, 12, 40);
+                g.DrawString(_value, valFont, valBrush, Px(12), Px(40));
             }
         }
 
@@ -167,9 +176,9 @@ namespace AutoClicker.UI
             // The card is drawn from x = 1 and 4 px narrower than the control (its shadow), with a
             // rounded border: the caption should end 8 px inside it. Painted pixels × u; the card's
             // width is already in the layout's units.
-            int x = (int)Math.Round(CaptionX * u);
-            var ink = new Rectangle(x, (int)Math.Round(CaptionY * u), (int)Math.Ceiling(size.Width * u), (int)Math.Ceiling(size.Height * u));
-            var room = Rectangle.FromLTRB(x, 0, Math.Max(x, Width - (int)Math.Ceiling(12 * u)), Height);
+            int x = (int)Math.Round(Px(CaptionX) * u);
+            var ink = new Rectangle(x, (int)Math.Round(Px(CaptionY) * u), (int)Math.Ceiling(size.Width * u), (int)Math.Ceiling(size.Height * u));
+            var room = Rectangle.FromLTRB(x, 0, Math.Max(x, Width - (int)Math.Ceiling(Px(12) * u)), Height);
             yield return new PaintedText(cap, ink, room);
         }
 

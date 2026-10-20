@@ -122,6 +122,9 @@ namespace AutoClicker.UI
             RoundedEdges = true;
         }
 
+        /// <summary>The palette this renderer paints with.</summary>
+        internal Theme Theme => _theme;
+
         private static TrayItemStyle StyleOf(ToolStripItem item)
         {
             return item?.Tag as TrayItemStyle;

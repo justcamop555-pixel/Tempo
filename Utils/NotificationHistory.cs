@@ -85,14 +85,18 @@ namespace AutoClicker.Utils
         /// <summary>For the tests: a scratch file instead of the user's history.</summary>
         internal static string PathForTest;
 
+        /// <summary>
+        /// In Tempo's data folder, with the settings — the same %LOCALAPPDATA%\AutoClicker as ever, but asked of
+        /// SettingsManager rather than spelled out again. Spelled out, it was the one data file a copy of Tempo
+        /// pointed at a scratch data folder still wrote to the user's own: test runs of the main window added
+        /// their warnings to the real history.
+        /// </summary>
         private static string PathOnDisk
         {
             get
             {
                 if (PathForTest != null) { return PathForTest; }
-                return Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "AutoClicker", "notification-history.tsv");
+                return Path.Combine(Persistence.SettingsManager.GetSettingsDirectory(), "notification-history.tsv");
             }
         }
 

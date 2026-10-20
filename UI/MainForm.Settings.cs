@@ -16,6 +16,7 @@ namespace AutoClicker.UI
         private CheckBox _openAtSignInCheck;
         private CheckBox _hideWhenClickingCheck;
         private CheckBox _checkUpdatesCheck;
+        private CheckBox _checkRobloxUpdatesCheck;
         private CheckBox _writeLogCheck;
         private CheckBox _showIndicatorCheck;
         private CheckBox _minimizeRecordingCheck;
@@ -26,7 +27,8 @@ namespace AutoClicker.UI
         private CheckBox _rememberTabCheck;
         private CheckBox _integrityCheck;
         private Label _integrityStatusLabel;
-        private Button _integrityTrustBtn;   // "Trust this copy" — or "Repair" when the unpacked copy was altered
+        private Button _integrityTrustBtn;   // "Trust this copy" — "Repair" for an altered unpacked copy, "Show files" for planted code
+        private Button _integrityDetailsBtn;
         private SmoothTrackBar _opacitySlider;
         private Label _opacityValueLabel;
         // NOTE: the separate header/footer backdrop pickers were replaced by the single
@@ -416,7 +418,8 @@ namespace AutoClicker.UI
             // ── Behaviour ──────────────────────────────────────────────────────
             // 256, not 228: one more row for the cursor trail, moved here from the
             // Macros tab where it never belonged. 284: and one for holding back Windows' shortcuts.
-            var behaviour = UiFactory.Group(Localization.T("Behaviour"), 12, 316, 696, 284, CardIcon.Gear);
+            // 312: and one for the Roblox update check.
+            var behaviour = UiFactory.Group(Localization.T("Behaviour"), 12, 316, 696, 312, CardIcon.Gear);
 
             _minimizeToTrayCheck = UiFactory.Check("Minimise to tray instead of closing", 16, 30);
             _startMinimizedCheck = UiFactory.Check("Start minimised to tray", 16, 58);
@@ -539,6 +542,18 @@ namespace AutoClicker.UI
             };
             behaviour.Controls.Add(_guardShortcutsCheck);
 
+            // Is a newer Roblox out (MainForm.RobloxUpdates)? Under Tempo's own update switch's card, a row of its own.
+            // Applies the moment it is ticked, like the other switches that decide what goes online.
+            _checkRobloxUpdatesCheck = UiFactory.Check("Check for Roblox updates", 16, 282);
+            _checkRobloxUpdatesCheck.AutoSize = true;
+            _checkRobloxUpdatesCheck.CheckedChanged += (s, e) =>
+            {
+                if (_suppressSettingsEvents || _settings == null) { return; }
+                _settings.CheckRobloxUpdates = _checkRobloxUpdatesCheck.Checked;
+                PersistNotificationSettings();   // shared "save settings now" helper
+            };
+            behaviour.Controls.Add(_checkRobloxUpdatesCheck);
+
             // (Live Captions controls moved to their own dedicated group below.)
 
             // ── Notifications ──────────────────────────────────────────────────
@@ -560,7 +575,9 @@ namespace AutoClicker.UI
             notify.Controls.Add(_customNotifyCheck);
 
             notify.Controls.Add(UiFactory.Label("Corner:", 416, 32));
-            _notifyCornerCombo = UiFactory.Combo(472, 28, 206,
+            // 25-55: centred on its row, and clear of the "Show (s)" box under it — at 28 the combo, 30 tall once
+            // it has its window, ran 2 px into that box.
+            _notifyCornerCombo = UiFactory.Combo(472, 25, 206,
                 Utils.Localization.T("Top-right"), Utils.Localization.T("Top-left"), Utils.Localization.T("Bottom-right"), Utils.Localization.T("Bottom-left"));
             _notifyCornerCombo.SelectedIndexChanged += (s, e) =>
             {
@@ -590,7 +607,7 @@ namespace AutoClicker.UI
             notify.Controls.Add(showLabel);
             // After its label, however wide that is. Text grows by more than the window does on a 150%
             // screen (glyphs round to whole pixels): "Anzeigen (s):" came out 112 px, 7 into the box at 486.
-            _notifyDurationNum = UiFactory.Numeric(Math.Max(486, LayoutRight(showLabel) + 4), 56, 56, 2, 20, 5);
+            _notifyDurationNum = UiFactory.Numeric(Math.Max(486, LayoutRight(showLabel) + 4), 57, 56, 2, 20, 5);
             _notifyDurationNum.ValueChanged += (s, e) =>
             {
                 if (_suppressSettingsEvents) { return; }
@@ -808,7 +825,9 @@ namespace AutoClicker.UI
             _captionModelStatus = UiFactory.Caption("", 16, 124);
             _captionModelStatus.AutoSize = false;
             _captionModelStatus.Width = 664;
-            _captionModelStatus.Height = 30;   // two lines — the model notes carry more detail now
+            // Two lines — the model notes carry more detail now. Two lines as they measure at this scale:
+            // a flat 30 was two 100% lines, and at 150% the second one (46 px of text in 45) was not drawn.
+            _captionModelStatus.Height = Math.Max(30, MeasureLayout("Ag\nAg", _captionModelStatus.Font).Height);
             captions.Controls.Add(_captionModelStatus);
 
             // Experimental: on-device face/mouth analysis to drive speaker labels.
@@ -826,7 +845,9 @@ namespace AutoClicker.UI
             // seemed to do nothing. The list draws each font in itself, and offers every installed text
             // font after the recommended ones (added the first time it opens, to keep the page quick).
             captions.Controls.Add(UiFactory.Label("Font:", 16, 188));
-            _captionFontCombo = UiFactory.Combo(150, 185, 200,
+            // 181-211, centred on its label: at 185 the combo (30 tall once it has its window) ended a pixel above
+            // the "Text size" box under it.
+            _captionFontCombo = UiFactory.Combo(150, 181, 200,
                 CaptionFontChoices());
             if (_captionFontCombo is FlatComboBox fontBox) { fontBox.ItemFont = CaptionFontPreview; }
             _captionFontCombo.DropDown += (sF, eF) => AddAllCaptionFonts();
@@ -834,7 +855,7 @@ namespace AutoClicker.UI
             captions.Controls.Add(_captionFontCombo);
 
             captions.Controls.Add(UiFactory.Label("Colour:", 380, 188));
-            _captionColorBtn = UiFactory.Button("Choose\u2026", 450, 184, 110, 26);
+            _captionColorBtn = UiFactory.Button("Choose\u2026", 450, 183, 110, 26);
             _captionColorBtn.Click += OnPickCaptionColor;
             captions.Controls.Add(_captionColorBtn);
 
@@ -1088,24 +1109,32 @@ namespace AutoClicker.UI
             _integrityTrustBtn.Click += OnTrustThisCopy;
             data.Controls.Add(_integrityTrustBtn);
 
-            _integrityStatusLabel = UiFactory.Caption("", 16, 190);
+            // The one sentence, with everything behind it a click away: the Details window lists each layer
+            // of the check, the file's hash and Official ID, and where it came from. The sentence is as tall
+            // as the longest one any verdict can produce in this language, so no verdict is ever cut short.
+            _integrityDetailsBtn = UiFactory.Button("Details…", 546, 190, 140, 28);
+            _integrityDetailsBtn.Click += (sD, eD) => ShowIntegrityDetails();
+            data.Controls.Add(_integrityDetailsBtn);
+
+            _integrityStatusLabel = UiFactory.Caption("", 16, 192);
             _integrityStatusLabel.AutoSize = false;
-            _integrityStatusLabel.Width = 664;
-            _integrityStatusLabel.Height = 32;
+            _integrityStatusLabel.Width = 520;
+            _integrityStatusLabel.Height = Math.Max(32, LongestIntegrityStatusHeight(_integrityStatusLabel.Font, 520));
             _integrityStatusLabel.ForeColor = _theme.TextMuted;
             data.Controls.Add(_integrityStatusLabel);
+            int afterIntegrity = Math.Max(_integrityStatusLabel.Bottom, _integrityDetailsBtn.Bottom) + 8;
 
             // ── Restore points ─────────────────────────────────────────────────
             // Tempo takes one by itself before a new version first touches the data. A backup nobody can
             // get back from is only a folder, so the way back sits right here beside "Back up all data".
-            var restoreBtn = UiFactory.Button("Restore points…", 16, 228, 170, 28);
+            var restoreBtn = UiFactory.Button("Restore points…", 16, Math.Max(228, afterIntegrity), 170, 28);
             // In the window's units (MeasureLayout): this is built before the window is scaled.
             FitButtonToText(restoreBtn, 170, 28);
             restoreBtn.Click += OnRestorePointsClicked;
             data.Controls.Add(restoreBtn);
 
             var restoreHint = UiFactory.Caption(
-                Localization.T("Tempo saves your data automatically before each update."), restoreBtn.Right + 10, 234);
+                Localization.T("Tempo saves your data automatically before each update."), restoreBtn.Right + 10, restoreBtn.Top + 6);
             restoreHint.ForeColor = _theme.TextMuted;
             restoreHint.AutoSize = false;
             restoreHint.Width = 680 - restoreHint.Left;
@@ -1193,9 +1222,12 @@ namespace AutoClicker.UI
                 410, 152);
             acctPlacementHint.AutoSize = false;
             acctPlacementHint.Width = 274;
-            acctPlacementHint.Height = 30;
+            // As tall as its words: 30 was two 100% lines, and at 150% (or in a longer language) the
+            // last line did not fit and was not drawn at all.
+            acctPlacementHint.Height = Math.Max(30, MeasureLayout(acctPlacementHint.Text, acctPlacementHint.Font,
+                                                                  acctPlacementHint.Width, TextFormatFlags.Default).Height);
             windowGroup.Controls.Add(acctPlacementHint);
-            windowGroup.Height = 196;
+            windowGroup.Height = Math.Max(196, acctPlacementHint.Bottom + 12);
 
             // ── Camera-relative movement ───────────────────────────────────────
             var movement = BuildMovementGroup();
@@ -1318,8 +1350,10 @@ namespace AutoClicker.UI
                 ? $"Tempo v{asmVer.Major}.{asmVer.Minor}.{asmVer.Build}"
                 : "Tempo";
             // Build ID beside the version: the version is shared by a test build and the
-            // release it came from, so on its own it cannot tell you which this is.
-            if (!Utils.BuildInfo.IsUnstamped) { verText += "   ·   build " + Utils.BuildInfo.Id; }
+            // release it came from, so on its own it cannot tell you which this is. With its badge:
+            // the bare ID left off the "TEST" every other screen shows, so this line — the last thing on
+            // Settings — looked the same for a test build and the release.
+            if (!Utils.BuildInfo.IsUnstamped) { verText += "   ·   " + Utils.BuildInfo.Short; }
             // True bottom of the page — the old y=724 had ended up BEHIND the cards
             // as the page grew over the releases. Set after construction: the factory looks its
             // text up as a phrase, and a version number is not one (it counted as untranslated).
@@ -1376,6 +1410,7 @@ namespace AutoClicker.UI
         private Label _privacyTitle, _privacyBody, _privacyLead, _versionLine, _buildStatus;
         private static readonly Color PrivacyBlue = Color.FromArgb(92, 168, 255);
         private static readonly Color PrivacyViolet = Color.FromArgb(178, 140, 255);
+        private static readonly Color PrivacyRose = Color.FromArgb(255, 122, 170);
         private readonly System.Collections.Generic.List<(Label Name, Label Text, Func<Theme, Color> Hue)> _privacyRows =
             new System.Collections.Generic.List<(Label, Label, Func<Theme, Color>)>();
 
@@ -1434,7 +1469,7 @@ namespace AutoClicker.UI
 
             // Name | what it does, when, and where it is switched off. The names column is as wide as the
             // widest name in this language, so the descriptions line up.
-            // Each name its own hue, the same in every theme: blue, green, amber, violet. The theme's accent
+            // Each name its own hue, the same in every theme: blue, green, rose, amber, violet. The theme's accent
             // was used at first, and Monokai's accent IS its green — three green names and an amber one.
             // RefreshPrivacyPanel fits each hue to the panel (Theme.Readable keeps the hue, moves lightness).
             var rows = new (string Name, string Text, Func<Theme, Color> Hue)[]
@@ -1446,6 +1481,11 @@ namespace AutoClicker.UI
                  Localization.T("Compares a new release with the copy GitHub published, once per version. "
                  + "Switch it off with “Check that Tempo hasn't been tampered with” in Data & Backup."),
                  t => t.SuccessText),
+                (Localization.T("Roblox update check"),
+                 Localization.T("Asks Roblox which client version it hands out and which it has uploaded since — what Roblox itself "
+                 + "reads — every two hours while Roblox is installed. Nothing about you or your accounts is sent. "
+                 + "Switch it off with “Check for Roblox updates” in Behaviour."),
+                 t => PrivacyRose),
                 (Localization.T("When you use them"),
                  Localization.T("Downloading a speech model (from Hugging Face), setting a logo from a web address, and the Roblox "
                  + "account manager, which signs in, checks sessions and launches games through Roblox."),
@@ -1681,6 +1721,7 @@ namespace AutoClicker.UI
                     _updateFreqCombo.SelectedIndex = Math.Max(0, Math.Min(2, _settings.UpdateCheckFrequency));
                     _updateFreqCombo.Enabled = _settings.CheckForUpdatesOnLaunch;
                 }
+                if (_checkRobloxUpdatesCheck != null) { _checkRobloxUpdatesCheck.Checked = _settings.CheckRobloxUpdates; }
                 _writeLogCheck.Checked = _settings.WriteLogFile;
                 _recordHistoryCheck.Checked = _settings.RecordSessionHistory;
                 _showIndicatorCheck.Checked = _settings.ShowClickingIndicator;
@@ -3434,6 +3475,7 @@ namespace AutoClicker.UI
             _settings.HideWhenClicking = _hideWhenClickingCheck.Checked;
             _settings.CheckForUpdatesOnLaunch = _checkUpdatesCheck.Checked;
             if (_updateFreqCombo != null) { _settings.UpdateCheckFrequency = Math.Max(0, _updateFreqCombo.SelectedIndex); }
+            if (_checkRobloxUpdatesCheck != null) { _settings.CheckRobloxUpdates = _checkRobloxUpdatesCheck.Checked; }
             _settings.WriteLogFile = _writeLogCheck.Checked;
             _settings.RecordSessionHistory = _recordHistoryCheck.Checked;
             _settings.ShowClickingIndicator = _showIndicatorCheck.Checked;
@@ -4079,6 +4121,7 @@ namespace AutoClicker.UI
             // Build ID, not just the version — a bug report against "1.0.319" is
             // ambiguous between the release and every test build cut from it.
             sb.AppendLine("Tempo            : " + version);
+            if (Utils.BuildInfo.SourceText.Length > 0) { sb.AppendLine("Source           : " + Utils.BuildInfo.SourceText); }
             sb.AppendLine("Official ID      : " + officialId);
             sb.AppendLine("Caption source   : " + source);
             sb.AppendLine("Tempo engine     : " + (engineRunning ? "running" : "not running"));
@@ -4249,13 +4292,17 @@ namespace AutoClicker.UI
         }
 
         /// <summary>Re-runs the tamper check on demand and shows the result.</summary>
-        private void OnRecheckIntegrity(object sender, EventArgs e)
+        private void OnRecheckIntegrity(object sender, EventArgs e) => RecheckIntegrity(null);
+
+        /// <summary>Re-runs the tamper check; <paramref name="then"/> runs on the UI thread once the result is shown.</summary>
+        private void RecheckIntegrity(Action then)
         {
             try
             {
                 if (_integrityStatusLabel != null)
                 {
                     _integrityStatusLabel.Text = Localization.T("Checking…");
+                    _integrityStatusLabel.ForeColor = _theme.TextMuted;
                 }
                 Utils.IntegrityCheck.RunInBackground(_settings, verdict =>
                 {
@@ -4269,6 +4316,7 @@ namespace AutoClicker.UI
                             // so the two can't disagree about what they found.
                             OnIntegrityResult(verdict);
                             RefreshIntegrityStatus();
+                            try { then?.Invoke(); } catch (Exception ex) { Logger.Swallow("RecheckIntegrity.then", ex); }
                         }));
                     }
                     catch (Exception ex) { Logger.Swallow("OnRecheckIntegrity.post", ex); }
@@ -4290,6 +4338,13 @@ namespace AutoClicker.UI
             if (Utils.IntegrityCheck.Verdict == Utils.IntegrityVerdict.UnpackedModified)
             {
                 OnRepairUnpackedCopy();
+                return;
+            }
+            // Nor is code planted beside the exe: trusting the exe would change nothing about it. The button
+            // shows where those files are instead.
+            if (Utils.IntegrityCheck.Verdict == Utils.IntegrityVerdict.ForeignCode)
+            {
+                ShowForeignFiles();
                 return;
             }
             try
@@ -4378,91 +4433,177 @@ namespace AutoClicker.UI
                     return;
                 }
 
-                // A whole translated sentence per verdict rather than a translated
-                // wrapper around IntegrityCheck.Summary. Summary is diagnostic English
-                // written for the log and Live Debug — formatting it into "✗ {0}" would
-                // have produced a label whose frame was Spanish and whose content was
-                // English, which reads worse than either.
-                string text;
-                Color colour = _theme.TextMuted;
-                // The program file by its real name: an install is TempoClicker.exe since the
-                // Discord rename, so "Tempo.exe is the file that was installed" named a file
-                // that is not there.
-                string exeName = System.IO.Path.GetFileName(Utils.DeploymentInfo.ExecutablePath);
-                if (string.IsNullOrEmpty(exeName)) { exeName = Utils.DeploymentInfo.LegacyExeName; }
-                switch (Utils.IntegrityCheck.Verdict)
-                {
-                    case Utils.IntegrityVerdict.Genuine:
-                        // The strongest thing Tempo can say, and worth saying distinctly:
-                        // this was checked against GitHub, not against a note this PC
-                        // wrote to itself. With the Official ID anyone can match on the release page.
-                        text = Utils.IntegrityCheck.OfficialId != null
-                            ? Localization.F("✓ Verified against GitHub's {0} release — Official ID {1}.",
-                                             Utils.IntegrityCheck.OfficialTag, Utils.IntegrityCheck.OfficialId)
-                            : Localization.T("✓ Verified against the release published on GitHub.");
-                        colour = _theme.Success;
-                        break;
-                    case Utils.IntegrityVerdict.UnknownRelease:
-                        text = Localization.T("⚠ No release with this version number exists on GitHub, "
-                            + "so nothing outside this PC can confirm the file. Normal for a build you "
-                            + "made yourself.");
-                        colour = _theme.Danger;
-                        break;
-                    case Utils.IntegrityVerdict.Ok:
-                    case Utils.IntegrityVerdict.Baselined:
-                        text = Localization.F("✓ {0} is the file that was installed.", exeName);
-                        colour = _theme.Success;
-                        break;
-                    case Utils.IntegrityVerdict.Modified:
-                        text = Localization.T("✗ This copy does not match the release published for its "
-                            + "version number. If you did not replace it yourself, reinstall from the "
-                            + "official download.");
-                        colour = _theme.Danger;
-                        break;
-                    case Utils.IntegrityVerdict.Damaged:
-                        text = Localization.F("✗ {0} is damaged — part of it is unreadable. "
-                            + "Reinstalling fixes it.", exeName);
-                        colour = _theme.Danger;
-                        break;
-                    case Utils.IntegrityVerdict.Repackaged:
-                        text = Localization.T("✗ This copy was packaged by someone else, "
-                            + "not the official Tempo build.");
-                        colour = _theme.Danger;
-                        break;
-                    case Utils.IntegrityVerdict.UnpackedModified:
-                        text = Localization.F("✗ {0} is intact, but the unpacked copy Tempo runs from was altered — "
-                            + "the code running is not what {0} carries. Press Repair to unpack a clean copy.", exeName);
-                        colour = _theme.Danger;
-                        break;
-                    case Utils.IntegrityVerdict.TestBuild:
-                        // Deliberately not green. A test build is not a problem, but it
-                        // has not been vouched for by anything either, and saying "✓" for
-                        // a file nothing outside this PC has confirmed would be the check
-                        // telling a comfortable lie.
-                        text = Localization.F(
-                            "⚠ This is a test build ({0}), not a published release — nothing "
-                            + "outside this PC has confirmed it. Install an official release if you "
-                            + "did not build this yourself.", Utils.BuildInfo.Id);
-                        colour = _theme.WarningText;
-                        break;
-                    case Utils.IntegrityVerdict.Unknown:
-                        text = Localization.T("Not checked yet.");
-                        break;
-                    default:
-                        text = Localization.T("Could not be checked right now.");
-                        break;
-                }
-                _integrityStatusLabel.Text = text;
+                _integrityStatusLabel.Text = IntegrityStatusText(Utils.IntegrityCheck.Verdict, out Color colour,
+                    Utils.IntegrityCheck.OfficialTag, Utils.IntegrityCheck.OfficialId);
                 _integrityStatusLabel.ForeColor = colour;
                 if (_integrityTrustBtn != null)
                 {
-                    // An altered unpacked copy is repaired, not trusted — the button offers what fixes it.
+                    // An altered unpacked copy is repaired, not trusted, and planted code is found and deleted —
+                    // the button offers what fixes each.
                     _integrityTrustBtn.Text = Utils.IntegrityCheck.Verdict == Utils.IntegrityVerdict.UnpackedModified
                         ? Localization.T("Repair")
-                        : Localization.T("Trust this copy");
+                        : Utils.IntegrityCheck.Verdict == Utils.IntegrityVerdict.ForeignCode
+                            ? Localization.T("Show files")
+                            : Localization.T("Trust this copy");
                 }
             }
             catch (Exception ex) { Logger.Swallow("RefreshIntegrityStatus", ex); }
+        }
+
+        /// <summary>
+        /// The Settings sentence for a verdict, and its colour — also the Details window's headline.
+        ///
+        /// A whole translated sentence per verdict rather than a translated wrapper around
+        /// IntegrityCheck.Summary. Summary is diagnostic English written for the log and Live Debug —
+        /// formatting it into "✗ {0}" would have produced a label whose frame was Spanish and whose content
+        /// was English, which reads worse than either.
+        /// </summary>
+        private string IntegrityStatusText(Utils.IntegrityVerdict verdict, out Color colour,
+                                           string officialTag, string officialId)
+        {
+            colour = _theme.TextMuted;
+            // The program file by its real name: an install is TempoClicker.exe since the
+            // Discord rename, so "Tempo.exe is the file that was installed" named a file
+            // that is not there.
+            string exeName = System.IO.Path.GetFileName(Utils.DeploymentInfo.ExecutablePath);
+            if (string.IsNullOrEmpty(exeName)) { exeName = Utils.DeploymentInfo.LegacyExeName; }
+            switch (verdict)
+            {
+                case Utils.IntegrityVerdict.Genuine:
+                    // The strongest thing Tempo can say, and worth saying distinctly:
+                    // this was checked against GitHub, not against a note this PC
+                    // wrote to itself. With the Official ID anyone can match on the release page.
+                    colour = _theme.Success;
+                    return officialId != null
+                        ? Localization.F("✓ Verified against GitHub's {0} release — Official ID {1}.", officialTag, officialId)
+                        : Localization.T("✓ Verified against the release published on GitHub.");
+                case Utils.IntegrityVerdict.UnknownRelease:
+                    colour = _theme.Danger;
+                    return Localization.T("⚠ No release with this version number exists on GitHub, "
+                        + "so nothing outside this PC can confirm the file. Normal for a build you "
+                        + "made yourself.");
+                case Utils.IntegrityVerdict.Ok:
+                case Utils.IntegrityVerdict.Baselined:
+                    colour = _theme.Success;
+                    return Localization.F("✓ {0} is the file that was installed.", exeName);
+                case Utils.IntegrityVerdict.Modified:
+                    colour = _theme.Danger;
+                    return Localization.T("✗ This copy does not match the release published for its "
+                        + "version number. If you did not replace it yourself, reinstall from the "
+                        + "official download.");
+                case Utils.IntegrityVerdict.Damaged:
+                    colour = _theme.Danger;
+                    return Localization.F("✗ {0} is damaged — part of it is unreadable. "
+                        + "Reinstalling fixes it.", exeName);
+                case Utils.IntegrityVerdict.Repackaged:
+                    colour = _theme.Danger;
+                    return Localization.T("✗ This copy was packaged by someone else, "
+                        + "not the official Tempo build.");
+                case Utils.IntegrityVerdict.UnpackedModified:
+                    colour = _theme.Danger;
+                    return Localization.F("✗ {0} is intact, but the unpacked copy Tempo runs from was altered — "
+                        + "the code running is not what {0} carries. Press Repair to unpack a clean copy.", exeName);
+                case Utils.IntegrityVerdict.ForeignCode:
+                    colour = _theme.Danger;
+                    return Localization.F("✗ Windows loaded program files into Tempo from the folder {0} is in, "
+                        + "and Tempo never puts any there. Press Show files, delete them, and restart Tempo.", exeName);
+                case Utils.IntegrityVerdict.TestBuild:
+                    // Deliberately not green. A test build is not a problem, but it
+                    // has not been vouched for by anything either, and saying "✓" for
+                    // a file nothing outside this PC has confirmed would be the check
+                    // telling a comfortable lie.
+                    colour = _theme.WarningText;
+                    return Localization.F(
+                        "⚠ This is a test build ({0}), not a published release — nothing "
+                        + "outside this PC has confirmed it. Install an official release if you "
+                        + "did not build this yourself.", Utils.BuildInfo.Id);
+                case Utils.IntegrityVerdict.Unknown:
+                    return Localization.T("Not checked yet.");
+                default:
+                    return Localization.T("Could not be checked right now.");
+            }
+        }
+
+        /// <summary>
+        /// The height the Settings sentence needs for the longest sentence any verdict produces in this
+        /// language, at <paramref name="width"/> in the page's build units. The verdict arrives seconds after
+        /// the page is built, so the label is sized for all of them rather than for the one on show then.
+        /// </summary>
+        private int LongestIntegrityStatusHeight(Font font, int width)
+        {
+            int tallest = 0;
+            try
+            {
+                foreach (Utils.IntegrityVerdict v in Enum.GetValues(typeof(Utils.IntegrityVerdict)))
+                {
+                    string text = IntegrityStatusText(v, out _, "v1.0.000", "CC21-FB7A-D6F3-8831");
+                    tallest = Math.Max(tallest, MeasureLayout(text, font, width, TextFormatFlags.Default).Height);
+                }
+                tallest = Math.Max(tallest, MeasureLayout(
+                    Localization.T("Off — Tempo will not notice if its program file is replaced."), font, width,
+                    TextFormatFlags.Default).Height);
+            }
+            catch (Exception ex) { Logger.Swallow("LongestIntegrityStatusHeight", ex); }
+            return tallest + 2;
+        }
+
+        /// <summary>The Details window: every layer of the last check, the file's facts, and a copy for bug reports.</summary>
+        private void ShowIntegrityDetails()
+        {
+            try
+            {
+                string headline;
+                Color colour;
+                bool enabled = _settings == null || _settings.IntegrityCheckEnabled;
+                if (!enabled)
+                {
+                    headline = Localization.T("Off — Tempo will not notice if its program file is replaced.");
+                    colour = _theme.TextMuted;
+                }
+                else
+                {
+                    headline = IntegrityStatusText(Utils.IntegrityCheck.Verdict, out colour,
+                        Utils.IntegrityCheck.OfficialTag, Utils.IntegrityCheck.OfficialId);
+                }
+                IntegrityDetailsForm.Outcome outcome;
+                using (var dlg = new IntegrityDetailsForm(_theme, Utils.IntegrityCheck.LastReport, headline, colour, enabled))
+                {
+                    dlg.ShowDialog(this);
+                    outcome = dlg.Result;
+                }
+                if (outcome == IntegrityDetailsForm.Outcome.CheckAgain)
+                {
+                    // Run it, then open the window again on the new findings.
+                    RecheckIntegrity(() => ShowIntegrityDetails());
+                }
+                else if (outcome == IntegrityDetailsForm.Outcome.ShowFiles)
+                {
+                    ShowForeignFiles();
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("ShowIntegrityDetails", ex); }
+        }
+
+        /// <summary>Opens Explorer on the first program file Windows loaded into Tempo from beside its exe.</summary>
+        private void ShowForeignFiles()
+        {
+            try
+            {
+                Utils.IntegrityReport r = Utils.IntegrityCheck.LastReport;
+                if (r == null || r.LoadedBeside.Count == 0) { return; }
+                string first = r.LoadedBeside[0];
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"),
+                    Arguments = "/select,\"" + first + "\"",
+                    UseShellExecute = false,
+                });
+                Logger.Info("[Integrity] showed the planted files to the user: " + string.Join(", ", r.LoadedBeside));
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Integrity] could not open Explorer on the planted files: " + ex.Message);
+            }
         }
 
         private void OnReportBug(object sender, EventArgs e)
@@ -4552,7 +4693,7 @@ namespace AutoClicker.UI
                     if (point == null) { return false; }
                     DialogResult go = MessageBox.Show(this,
                         Localization.F(RestoreConfirmText,
-                            point.SavedLocal.ToString("g", System.Globalization.CultureInfo.CurrentCulture)),
+                            point.SavedLocal.ToString("g", Localization.DateCulture)),
                         "Restore points", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
                     if (go != DialogResult.Yes) { return false; }
                     if (!DataSnapshots.ScheduleRestore(dataDir, id, out string err))
@@ -4583,7 +4724,7 @@ namespace AutoClicker.UI
                     Id = p.Id,
                     Cells = new[]
                     {
-                        p.SavedLocal.ToString("g", System.Globalization.CultureInfo.CurrentCulture),
+                        p.SavedLocal.ToString("g", Localization.DateCulture),
                         p.IsUndo ? Localization.T("Before a restore") : Localization.F("Tempo {0} started", p.Before),
                         p.Files.ToString(System.Globalization.CultureInfo.CurrentCulture)
                     }
@@ -4797,14 +4938,14 @@ namespace AutoClicker.UI
             // The program always goes — that is what uninstalling is. The data goes only if asked.
             if (Uninstaller.LaunchCleanupAndExitHelper(deleteData, true, out string err))
             {
-                try { _trayIcon?.Dispose(); } catch { }
-
-                // Same hard exit, same missing release. Settings are deliberately NOT
-                // saved here — the folder they live in is being deleted.
-                ReleaseHeldButtons();
-
-                Logger.Info("[shutdown] exiting for uninstall cleanup.");
-                Environment.Exit(0);
+                // The ORDINARY close, as for an update (CloseForHelper): the helper waits for this process,
+                // not for a time. This used to be Environment.Exit, which saves nothing — and the data is KEPT
+                // by default, so every change since the last save (the profile being edited, a macro, the
+                // statistics) was thrown away from data the user had just chosen to keep, for whenever they
+                // install Tempo again. When the data is being deleted, saving it first costs nothing: the
+                // helper removes the folder after the process has gone.
+                CloseForHelper(deleteData ? "Tempo and its data can be removed" : "Tempo can be removed (the data stays)",
+                               resumeCaptions: false);
             }
             else
             {
@@ -4953,6 +5094,7 @@ namespace AutoClicker.UI
             _settings.HideWhenClicking = _hideWhenClickingCheck.Checked;
             _settings.CheckForUpdatesOnLaunch = _checkUpdatesCheck.Checked;
             if (_updateFreqCombo != null) { _settings.UpdateCheckFrequency = Math.Max(0, _updateFreqCombo.SelectedIndex); }
+            if (_checkRobloxUpdatesCheck != null) { _settings.CheckRobloxUpdates = _checkRobloxUpdatesCheck.Checked; }
             _settings.WriteLogFile = _writeLogCheck.Checked;
             _settings.RecordSessionHistory = _recordHistoryCheck.Checked;
             _settings.ShowClickingIndicator = _showIndicatorCheck.Checked;

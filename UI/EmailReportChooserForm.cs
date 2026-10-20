@@ -142,6 +142,10 @@ namespace AutoClicker.UI
                 Location = new Point(44, 358),
                 Size = new Size(492, 32)
             };
+            // As tall as its words too: two lines at 150% are 50 px, and in its 48 the second one was not
+            // drawn ("…it is added to the text above so you can read it first" gone in every language).
+            int hintShift = Math.Max(0, UiFactory.Measure96(logHint.Text, Font, logHint.Width, TextFormatFlags.Default).Height + 2 - logHint.Height);
+            logHint.Height += hintShift;
             Controls.Add(logHint);
 
             var how = new Label
@@ -189,14 +193,17 @@ namespace AutoClicker.UI
             Controls.Add(cancel);
             CancelButton = cancel;
 
-            if (shift > 0)
+            if (shift > 0 || hintShift > 0)
             {
-                int below = _body.Top;
+                // Both from the positions as built: everything under the privacy note moves by its growth,
+                // and everything under the log hint by that one's as well.
+                int below = _body.Top, belowHint = how.Top;
                 foreach (Control c in Controls)
                 {
-                    if (c.Top >= below) { c.Top += shift; }
+                    int move = (c.Top >= below ? shift : 0) + (c.Top >= belowHint ? hintShift : 0);
+                    if (move > 0) { c.Top += move; }
                 }
-                ClientSize = new Size(ClientSize.Width, ClientSize.Height + shift);
+                ClientSize = new Size(ClientSize.Width, ClientSize.Height + shift + hintShift);
             }
 
             // Highlight and focus whichever channel was used last time, so a repeat

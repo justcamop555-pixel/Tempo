@@ -120,7 +120,8 @@ namespace AutoClicker.UI
             if (_nextAutoCheckUtc > soonest)
             {
                 Logger.Info("[Update] last checked " + FormatAgo((DateTime.UtcNow - _settings.LastUpdateCheckUtc.Value).TotalSeconds)
-                            + " ago; the next automatic check is due " + _nextAutoCheckUtc.ToLocalTime().ToString("d MMM HH:mm") + ".");
+                            + " ago; the next automatic check is due "
+                            + _nextAutoCheckUtc.ToLocalTime().ToString("d MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture) + ".");
             }
         }
 
@@ -632,7 +633,19 @@ namespace AutoClicker.UI
             if (IsWindowUp())
             {
                 dlg.ShowInTaskbar = false;
+                // Over the main window — and over the Accounts window too when that one is kept on top, or the dialog
+                // opened under it wherever the two overlap.
+                if (AccountsAreDetached && _accountsWindow.Visible && _accountsWindow.TopMost) { dlg.TopMost = true; }
                 return dlg.ShowDialog(this);
+            }
+            // The Accounts window open on its own with the main window in the tray: over it. Centred on the screen
+            // with no owner, the dialog could open UNDER that window when it is pinned on top — the notification
+            // clicked, and nothing seemed to happen.
+            if (AccountsAreDetached && _accountsWindow.Visible && _accountsWindow.WindowState != FormWindowState.Minimized)
+            {
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.ShowInTaskbar = false;
+                return dlg.ShowDialog(_accountsWindow);
             }
             dlg.StartPosition = FormStartPosition.CenterScreen;
             dlg.ShowInTaskbar = true;    // the only sign of Tempo on the taskbar while it waits
@@ -812,12 +825,14 @@ namespace AutoClicker.UI
         /// Both helpers used to be preceded by Environment.Exit, which runs none of that. The
         /// helper waits for the process, not for a time, so a proper close costs nothing.
         /// </summary>
-        private void CloseForHelper(string why)
+        /// <param name="resumeCaptions">False for an uninstall: there is no "other side" to come back on, and a
+        /// reinstall months later should not start captions by itself.</param>
+        private void CloseForHelper(string why, bool resumeCaptions = true)
         {
             try
             {
                 // Captions come back on the other side, exactly as after a restart.
-                if (_settings != null) { _settings.CaptionResumeAfterRestart = _captionsActive; }
+                if (_settings != null) { _settings.CaptionResumeAfterRestart = resumeCaptions && _captionsActive; }
             }
             catch { }
 

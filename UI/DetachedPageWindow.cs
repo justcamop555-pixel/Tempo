@@ -59,6 +59,34 @@ namespace AutoClicker.UI
         /// <summary>Raised when the always-on-top pin is toggled; the argument is the new state.</summary>
         public event EventHandler<bool> TopMostChanged;
 
+        private bool _pinned;
+        private bool _companionTopMost;
+
+        /// <summary>The window's own "Always on top" pin: what its button shows and what is saved.</summary>
+        public bool Pinned
+        {
+            get { return _pinned; }
+            set { _pinned = value; ApplyTopMost(); SyncPinLook(); }
+        }
+
+        /// <summary>
+        /// The main window is on top of everything ("Always on top", or full screen). This is a separate window,
+        /// so it used to open UNDER it — usually right under it, both centred on the screen — and clicking
+        /// Accounts seemed to do nothing at all. While the main window floats, so does this one; the pin is
+        /// untouched and comes back into force when the main window stops floating.
+        /// </summary>
+        public bool CompanionTopMost
+        {
+            get { return _companionTopMost; }
+            set { _companionTopMost = value; ApplyTopMost(); }
+        }
+
+        private void ApplyTopMost()
+        {
+            bool want = _pinned || _companionTopMost;
+            if (TopMost != want) { TopMost = want; }
+        }
+
         /// <summary>
         /// Raised after the window's size or position settles, so the caller can persist it.
         /// Not raised while minimised or maximised, where the bounds describe nothing useful.
@@ -115,9 +143,8 @@ namespace AutoClicker.UI
             _pinBtn = StripButton(Utils.Localization.T("Always on top"));
             _pinBtn.Click += (s, e) =>
             {
-                TopMost = !TopMost;
-                SyncPinLook();
-                TopMostChanged?.Invoke(this, TopMost);
+                Pinned = !Pinned;
+                TopMostChanged?.Invoke(this, Pinned);
             };
 
             _strip.Controls.Add(_pinBtn);
@@ -195,12 +222,14 @@ namespace AutoClicker.UI
             // OnAccent, not AccentText: one is the readable ink for text sitting ON the accent
             // fill, the other is the accent made readable against the PAGE. Using the second on
             // a filled button is how an accent-on-accent, unreadable pill happens.
-            _pinBtn.BackColor = TopMost ? _theme.Accent : _theme.Surface2;
-            _pinBtn.ForeColor = TopMost ? _theme.OnAccent : _theme.Text;
-            _pinBtn.FlatAppearance.BorderSize = TopMost ? 0 : 1;
+            // The pin, not TopMost: the window also floats while the main window does (CompanionTopMost), and
+            // the button must not claim the user pinned it.
+            _pinBtn.BackColor = _pinned ? _theme.Accent : _theme.Surface2;
+            _pinBtn.ForeColor = _pinned ? _theme.OnAccent : _theme.Text;
+            _pinBtn.FlatAppearance.BorderSize = _pinned ? 0 : 1;
             _pinBtn.FlatAppearance.BorderColor = _theme.Border;
             // Screen readers get the state too, not just the colour.
-            _pinBtn.AccessibleDescription = TopMost
+            _pinBtn.AccessibleDescription = _pinned
                 ? Utils.Localization.T("On")
                 : Utils.Localization.T("Off");
             _pinBtn.Invalidate();
@@ -456,30 +485,64 @@ namespace AutoClicker.UI
         /// Restores a remembered position, but only onto a monitor that is still there.
         /// A saved rectangle from a second screen that has since been unplugged would put the
         /// window somewhere nobody can reach it, so an off-screen one is dropped and the window
-        /// centres instead.
+        /// centres on <paramref name="home"/> instead — the working area of the screen the main
+        /// window (or the tray click) is on, where a window never placed goes too.
+        ///
+        /// And always INSIDE a working area, never larger than it. The first size is 820 × 720 at
+        /// 100% — 1025 × 900 at 125% — and a 1366 × 768 laptop has 728 px of desk: centred, the
+        /// window began above the top of the screen, its header strip and buttons with it ("clicked
+        /// Accounts and didn't get it"). A size saved on a big monitor came back as large on a laptop.
         /// </summary>
         // Not "RestoreBounds": that name is Form's own property (the normal-state rectangle of a
         // maximised window), and a method called the same silently hid it on this class.
-        public void RestoreSavedBounds(int left, int top, int width, int height)
+        public void RestoreSavedBounds(int left, int top, int width, int height, Rectangle home)
         {
-            if (width <= 0 || height <= 0) { return; }
-            if (width < MinimumSize.Width) { width = MinimumSize.Width; }
-            if (height < MinimumSize.Height) { height = MinimumSize.Height; }
-
-            var wanted = new Rectangle(left, top, width, height);
-            bool visible = false;
-            foreach (Screen sc in Screen.AllScreens)
+            Rectangle area = home;
+            Rectangle wanted;
+            if (width > 0 && height > 0)
             {
-                Rectangle overlap = Rectangle.Intersect(sc.WorkingArea, wanted);
-                // A sliver is not "reachable" — insist on enough of the title bar to grab.
-                if (overlap.Width >= 120 && overlap.Height >= 40) { visible = true; break; }
-            }
-            // Size, not ClientSize: these are the saved OUTER bounds. Assigning them as the client
-            // area grew the window by its frame and title bar every time this path ran.
-            if (!visible) { Size = new Size(width, height); return; }
+                if (width < MinimumSize.Width) { width = MinimumSize.Width; }
+                if (height < MinimumSize.Height) { height = MinimumSize.Height; }
+                wanted = new Rectangle(left, top, width, height);
 
+                // The screen that shows most of it, if one shows enough of it to grab: a sliver is not "reachable".
+                Screen best = null;
+                long bestArea = 0;
+                foreach (Screen sc in Screen.AllScreens)
+                {
+                    Rectangle overlap = Rectangle.Intersect(sc.WorkingArea, wanted);
+                    if (overlap.Width < 120 || overlap.Height < 40) { continue; }
+                    long a = (long)overlap.Width * overlap.Height;
+                    if (a > bestArea) { bestArea = a; best = sc; }
+                }
+                if (best != null) { area = best.WorkingArea; }
+                else { wanted = Centred(wanted.Size, home); }   // on a monitor that has gone: centre on home
+            }
+            else
+            {
+                wanted = Centred(Size, home);   // never placed: the first size, centred on home
+            }
+
+            if (area.Width <= 0 || area.Height <= 0) { area = Screen.PrimaryScreen.WorkingArea; }
+            // A minimum the desk cannot hold is brought down to it, or WinForms would grow the window back out.
+            if (MinimumSize.Width > area.Width || MinimumSize.Height > area.Height)
+            {
+                MinimumSize = new Size(Math.Min(MinimumSize.Width, area.Width), Math.Min(MinimumSize.Height, area.Height));
+            }
+            int w = Math.Min(wanted.Width, area.Width);
+            int h = Math.Min(wanted.Height, area.Height);
+            int x = Math.Max(area.Left, Math.Min(wanted.Left, area.Right - w));
+            int y = Math.Max(area.Top, Math.Min(wanted.Top, area.Bottom - h));
+            // Size, not ClientSize: these are OUTER bounds. Assigning them as the client area grew the window by its
+            // frame and title bar every time.
             StartPosition = FormStartPosition.Manual;
-            Bounds = wanted;
+            Bounds = new Rectangle(x, y, w, h);
+        }
+
+        private static Rectangle Centred(Size size, Rectangle area)
+        {
+            return new Rectangle(area.Left + (area.Width - size.Width) / 2, area.Top + (area.Height - size.Height) / 2,
+                                 size.Width, size.Height);
         }
 
         protected override void OnResizeEnd(EventArgs e)

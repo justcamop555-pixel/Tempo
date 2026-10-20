@@ -273,14 +273,17 @@ namespace AutoClicker.UI
 
             // ── Recent sessions ───────────────────────────────────────────────
             int histTitleY = weekdayChartY + _weekdayChart.Height + 14;
-            page.Controls.Add(UiFactory.Label(Utils.Localization.T("Recent sessions"), 16, histTitleY, FontStyle.Bold, 12f));
+            // One row, centred on the profile filter: a combo box is 30 px tall once it has its window, the text
+            // box 23 and the "Find:" caption 15, and all three used to share a Top — a step down the row, with the
+            // combo ending on the session list's first pixel. Everything here is centred on histTitleY + 13.
+            page.Controls.Add(UiFactory.Label(Utils.Localization.T("Recent sessions"), 16, histTitleY + 2, FontStyle.Bold, 12f));
 
             // Search + filter by profile.
-            page.Controls.Add(UiFactory.Caption("Find:", rightEdge - 448, histTitleY + 2));
+            page.Controls.Add(UiFactory.Caption("Find:", rightEdge - 448, histTitleY + 6));
             // Starts 40px further right (and gives that back off its own width, so the
             // profile filter beside it does not move): the label had 38px, which "Find:"
             // fits and every translation of it does not.
-            _historySearchBox = UiFactory.Text(rightEdge - 370, histTitleY - 2, 130);
+            _historySearchBox = UiFactory.Text(rightEdge - 370, histTitleY + 2, 130);
             _historySearchBox.TextChanged += (s, e) => { _historySearchText = _historySearchBox.Text; RefreshSessionHistory(); };
             page.Controls.Add(_historySearchBox);
 
@@ -293,7 +296,8 @@ namespace AutoClicker.UI
             _historyProfileFilter.SelectedIndexChanged += OnHistoryFilterChanged;
             page.Controls.Add(_historyProfileFilter);
 
-            int histY = histTitleY + 28;
+            // 6 px under the filter's real bottom (histTitleY + 28).
+            int histY = histTitleY + 34;
             _sessionHistoryList = new SessionHistoryListView
             {
                 Left = c0,
@@ -1006,7 +1010,9 @@ namespace AutoClicker.UI
                 weekTotal += totals[i];
                 if (totals[i] > peakDay) peakDay = totals[i];
                 DateTime d = today.AddDays(-(6 - i));
-                labels.Add(d.ToString("ddd", CultureInfo.CurrentCulture));
+                // The app's language, as the weekday chart and the busiest-day card beside it already were:
+                // this one alone said "Mon" under a Spanish chart that said "lun.".
+                labels.Add(d.ToString("ddd", Utils.Localization.DateCulture));
             }
             _dailyBarChart.SetValues(vals, labels);
             // F(), not string.Format(T(...)): F falls back to the English frame if a

@@ -223,6 +223,31 @@ namespace AutoClicker.Models
         /// <summary>A version the user chose to skip; the launch check won't nag about it.</summary>
         public string SkippedUpdateVersion { get; set; } = "";
 
+        /// <summary>
+        /// Ask Roblox, every couple of hours while Roblox is installed, whether it has released a newer client than the
+        /// one on this PC — and say so, with the choice of when to update. It asks the same public address Roblox's own
+        /// client asks; nothing about the user or their accounts goes with it.
+        /// </summary>
+        public bool CheckRobloxUpdates { get; set; } = true;
+
+        /// <summary>When Roblox's version list last answered (UTC) — the next automatic check counts from it.</summary>
+        public DateTime? LastRobloxCheckUtc { get; set; }
+
+        /// <summary>What that answer said: the released version and its folder…</summary>
+        public string RobloxReleaseVersion { get; set; } = "";
+        public string RobloxReleaseFolder { get; set; } = "";
+
+        /// <summary>…and a newer build Roblox had uploaded but not released ("" for none), with when it was uploaded.</summary>
+        public string RobloxUpcomingVersion { get; set; } = "";
+        public DateTime? RobloxUpcomingUtc { get; set; }
+
+        /// <summary>"Keep this version": the Roblox release the user chose not to be reminded about.</summary>
+        public string RobloxSkippedVersion { get; set; } = "";
+
+        /// <summary>"Later": the Roblox release to stay quiet about, and until when (UTC).</summary>
+        public string RobloxLaterVersion { get; set; } = "";
+        public DateTime? RobloxLaterUntilUtc { get; set; }
+
         /// <summary>Best clicks-per-second ever recorded in the CPS test.</summary>
         public double CpsTestBest { get; set; } = 0;
 
@@ -630,10 +655,9 @@ namespace AutoClicker.Models
 
         // ── Anti-freeze protection ────────────────────────────────────────────
         /// <summary>
-        /// When enabled, the engine never exceeds <see cref="MaxClicksPerSecond"/>
-        /// and adaptively backs off if this process's CPU usage climbs past
-        /// <see cref="AntiFreezeCpuThreshold"/>, preventing the system from being
-        /// frozen by an insane spam rate.
+        /// When enabled, the engine never exceeds <see cref="MaxClicksPerSecond"/>, slows down while the app
+        /// being clicked is slow to answer (or the PC's CPU or memory is full), and holds the clicks while it
+        /// does not answer at all (Engine.ClickEngine.Decide, Utils.SystemHealthMonitor).
         /// </summary>
         public bool AntiFreezeEnabled { get; set; } = true;
 
@@ -641,8 +665,8 @@ namespace AutoClicker.Models
         public int MaxClicksPerSecond { get; set; } = 200;
 
         /// <summary>
-        /// Process CPU usage (percent of the whole machine) above which the engine
-        /// throttles itself to keep the system responsive.
+        /// No longer read: a threshold on Tempo's OWN CPU use, which one click thread never reached on a
+        /// multi-core PC. Kept so settings files that carry it still load and save it unchanged.
         /// </summary>
         public int AntiFreezeCpuThreshold { get; set; } = 80;
 
@@ -736,10 +760,11 @@ namespace AutoClicker.Models
 
         /// <summary>
         /// Which browser opens for Roblox sign-in: "" = Automatic (pick the best installed), or a
-        /// specific one — "Chrome", "Edge", "Brave" or "Opera". Automatic prefers Chrome (no
-        /// sign-in/sync friction), then Edge, Brave, Opera. A chosen browser that isn't installed
-        /// falls back to Automatic. Only these Chromium browsers can be driven for the capture, so a
-        /// Firefox/Safari-only machine still gets the "install a supported browser" message.
+        /// specific one by its name — "Chrome", "Edge", "Brave", "Opera", "Opera GX", "Vivaldi", or any
+        /// other Chromium browser found on the PC (RealBrowser.DetectAll). Automatic prefers Chrome (no
+        /// sign-in/sync friction), then Edge, Brave, Opera, Opera GX, Vivaldi, then any other. A chosen
+        /// browser that isn't installed falls back to Automatic. Only Chromium browsers can be driven for
+        /// the capture, so a Firefox-only machine gets the "install a Chromium browser" message.
         /// </summary>
         public string LoginBrowser { get; set; } = "";
 
@@ -994,6 +1019,13 @@ namespace AutoClicker.Models
             LastKnownLatestVersion = local.LastKnownLatestVersion;
             LastUpdateCheckFailed = local.LastUpdateCheckFailed;
             LastCheckFoundUpdate = local.LastCheckFoundUpdate;
+            // Roblox's last answer, which is about the Roblox on THIS PC: another machine's would say its client is
+            // up to date, or not, whatever this one has.
+            LastRobloxCheckUtc = local.LastRobloxCheckUtc;
+            RobloxReleaseVersion = local.RobloxReleaseVersion;
+            RobloxReleaseFolder = local.RobloxReleaseFolder;
+            RobloxUpcomingVersion = local.RobloxUpcomingVersion;
+            RobloxUpcomingUtc = local.RobloxUpcomingUtc;
             WindowLeft = local.WindowLeft;
             WindowTop = local.WindowTop;
             WindowWidth = local.WindowWidth;
@@ -1089,6 +1121,10 @@ namespace AutoClicker.Models
             DiscordNameHintShown = s.DiscordNameHintShown;
             SpeakerLabelsNoticeShown = s.SpeakerLabelsNoticeShown;
             SkippedUpdateVersion = s.SkippedUpdateVersion;
+            // The answers given about Roblox updates: "keep this version" and "later".
+            RobloxSkippedVersion = s.RobloxSkippedVersion;
+            RobloxLaterVersion = s.RobloxLaterVersion;
+            RobloxLaterUntilUtc = s.RobloxLaterUntilUtc;
             LastBugReportChannel = s.LastBugReportChannel;
             LastProfileName = s.LastProfileName;
             LastTabIndex = s.LastTabIndex;

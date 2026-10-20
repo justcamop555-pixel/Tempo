@@ -255,12 +255,10 @@ namespace AutoClicker.Utils
                     try { File.Delete(oldNamed); } catch { }
                 }
 
-                string sha = sourceExe + ".sha256";
-                if (File.Exists(sha))
-                {
-                    try { File.Copy(sha, Path.Combine(targetDir, "Tempo.exe.sha256"), overwrite: true); }
-                    catch { /* the checksum is a convenience, not part of the install */ }
-                }
+                // No Tempo.exe.sha256 beside the installed copy any more. It described the DOWNLOAD — whose name
+                // the installed program does not even have — and in-app updates replace the program without
+                // touching it, so from the first update on it named a hash no file here had (on this project's
+                // PC: 1.0.322's checksum beside 1.0.324). The tamper check compares with GitHub's own digest.
 
                 r.InstalledExe = target;
 

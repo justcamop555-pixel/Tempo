@@ -25,7 +25,7 @@ namespace AutoClicker.UI
     /// </summary>
     public sealed class NotificationToastForm : Form
     {
-        private readonly Theme _theme;
+        private Theme _theme;
         private string _appName;
         private readonly string _title;
         private string _body;
@@ -60,25 +60,32 @@ namespace AutoClicker.UI
         private readonly Font _closeFont;
         private readonly Font _smallFont;      // a toast's progress bar: its title, status and value
 
-        // Geometry — a Windows 11-like card.
-        private const int CardWidth = 386;
-        private const int Pad = 18;            // was 16 — the text sat tight to the edges
-        private const int IconSize = 26;       // app icon
-        private const int CloseBox = 22;       // ✕ button (bigger hit target)
-        private const int CloseInset = 4;      // keeps ✕ off the rounded corner
-        private const int ProgressH = 2;       // slimmer — a timer, not a divider
-        private const int Radius = 11;
-        private const int HeroMaxH = 150;      // max height of the picture below the text
-        private const int LogoSize = 44;       // the picture beside the text (Windows draws it at 48)
-        private const int LogoGap = 12;
-        private const int BarH = 4;            // a toast's own progress bar
+        // Geometry — a Windows 11-like card, in 100% numbers multiplied out by S for the screen's scale.
+        //
+        // The card draws in raw screen pixels (AutoScaleMode.None, like the other overlays), and these
+        // were plain pixels: on a 150% laptop it stayed 386 px wide while every word in it grew half as
+        // big again — narrower than Windows' own pop-up beside it, the sender line cut short ("…Microsoft
+        // Ed…"), a 26 px icon beside 150% text. It now grows with the screen, as Windows' does.
+        private readonly float _k = 1f;
+        private int S(float size96) => (int)Math.Round(size96 * _k, MidpointRounding.AwayFromZero);
+        private int CardWidth => S(386);
+        private int Pad => S(18);              // was 16 — the text sat tight to the edges
+        private int IconSize => S(26);         // app icon
+        private int CloseBox => S(22);         // ✕ button (bigger hit target)
+        private int CloseInset => S(4);        // keeps ✕ off the rounded corner
+        private int ProgressH => S(2);         // slimmer — a timer, not a divider
+        private int Radius => S(11);
+        private int HeroMaxH => S(150);        // max height of the picture below the text
+        private int LogoSize => S(44);         // the picture beside the text (Windows draws it at 48)
+        private int LogoGap => S(12);
+        private int BarH => S(4);              // a toast's own progress bar
 
         // How much of the message shows. Collapsed, as Windows shows a toast (it allows the title two
         // lines and the text four); hovered for a moment, the card opens to all of it — a long chat
         // message or a web page's paragraph was cut at three lines with no way to read the rest.
         private const int TitleLines = 3, BodyLines = 4;
         private const int TitleLinesOpen = 8, BodyLinesOpen = 30;
-        private const int HeroMaxHOpen = 300;
+        private int HeroMaxHOpen => S(300);
         private const int OpenAfterMs = 350;   // hover intent: passing over the card does not open it
         private const int CloseAfterMs = 450;  // and leaving it for a moment does not snap it shut
         private bool _canOpen;                 // the collapsed card cuts something off
@@ -93,7 +100,8 @@ namespace AutoClicker.UI
             new System.Collections.Generic.List<Utils.NotificationExtras.ToastButton>();
         private Rectangle[] _buttonRects = new Rectangle[0];   // where they were last laid out
         private int _hotButton = -1;
-        private const int ButtonH = 30, ButtonGap = 8;
+        private int ButtonH => S(30);
+        private int ButtonGap => S(8);
 
         // Windows 11 rounds the card itself (smooth corners, a border in the theme's colour, like its own pop-ups);
         // before that, a region cuts the corners.
@@ -242,6 +250,8 @@ namespace AutoClicker.UI
             }
 
             AutoScaleMode = AutoScaleMode.None;   // raw screen pixels, like the other overlays
+            // ...scaled by hand (S): Tempo is System-DPI-aware, so this is the system DPI, known before the window exists.
+            _k = Math.Max(1f, DeviceDpi / 96f);
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             TopMost = true;
@@ -285,6 +295,19 @@ namespace AutoClicker.UI
                 cp.ExStyle |= WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
                 return cp;
             }
+        }
+
+        /// <summary>
+        /// Re-themes a card that is on screen. A card took its theme when it came up, so one kept until
+        /// dismissed (a reminder) stayed in the old colours after a theme change for as long as it was up.
+        /// Everything on it is painted from the theme, so a repaint is all it takes.
+        /// </summary>
+        public void ApplyTheme(Theme theme)
+        {
+            if (theme == null || IsDisposed) { return; }
+            _theme = theme;
+            BackColor = theme.Surface;
+            Invalidate();
         }
 
         /// <summary>Accent colour for this kind, from the active theme.</summary>
@@ -350,14 +373,14 @@ namespace AutoClicker.UI
         {
             var L = new CardLayout();
             var wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPadding;
-            int y = Pad + Math.Max(IconSize, _appFont.Height) + 8;   // under the header row
+            int y = Pad + Math.Max(IconSize, _appFont.Height) + S(8);   // under the header row
             int textLeft = Pad;
             if (_logo != null)
             {
-                L.Logo = new Rectangle(Pad, y + 2, LogoSize, LogoSize);
+                L.Logo = new Rectangle(Pad, y + S(2), LogoSize, LogoSize);
                 textLeft = Pad + LogoSize + LogoGap;
             }
-            int tw = Math.Max(40, Width - Pad - textLeft);
+            int tw = Math.Max(S(40), Width - Pad - textLeft);
 
             int titleFull = TextRenderer.MeasureText(g, _title, _titleFont, new Size(tw, 0), wrap).Height;
             L.Title = new Rectangle(textLeft, y, tw, Math.Min(titleFull, _titleFont.Height * (open ? TitleLinesOpen : TitleLines)));
@@ -365,7 +388,7 @@ namespace AutoClicker.UI
 
             if (!string.IsNullOrEmpty(_body))
             {
-                y += 5;   // was 3 — the body crowded the title
+                y += S(5);   // was 3 — the body crowded the title
                 int bodyFull = TextRenderer.MeasureText(g, _body, _bodyFont, new Size(tw, 0), wrap).Height;
                 L.Body = new Rectangle(textLeft, y, tw, Math.Min(bodyFull, _bodyFont.Height * (open ? bodyLinesOpen : BodyLines)));
                 y += L.Body.Height;
@@ -374,17 +397,17 @@ namespace AutoClicker.UI
             Utils.NotificationExtras.ProgressBar bar = _extras?.Progress;
             if (bar != null)
             {
-                y += 9;
+                y += S(9);
                 if (bar.Title.Length > 0)
                 {
                     L.BarTitle = new Rectangle(textLeft, y, tw, _smallFont.Height);
-                    y += _smallFont.Height + 3;
+                    y += _smallFont.Height + S(3);
                 }
                 L.Bar = new Rectangle(textLeft, y, tw, BarH);
                 y += BarH;
                 if (bar.Status.Length > 0 || bar.ValueLabel().Length > 0)
                 {
-                    y += 3;
+                    y += S(3);
                     L.BarText = new Rectangle(textLeft, y, tw, _smallFont.Height);
                     y += _smallFont.Height;
                 }
@@ -394,7 +417,7 @@ namespace AutoClicker.UI
             Size hero = HeroDrawSize(open ? HeroMaxHOpen : HeroMaxH);
             if (hero.Height > 0)
             {
-                y += 10;
+                y += S(10);
                 L.Hero = new Rectangle(Pad + (Width - Pad * 2 - hero.Width) / 2, y, hero.Width, hero.Height);
                 y += hero.Height;
             }
@@ -403,7 +426,7 @@ namespace AutoClicker.UI
             L.Buttons = new Rectangle[_buttons.Count];
             if (_buttons.Count > 0)
             {
-                y += 12;
+                y += S(12);
                 int full = Width - Pad * 2;
                 int w = (full - ButtonGap * (_buttons.Count - 1)) / _buttons.Count;
                 for (int i = 0; i < _buttons.Count; i++)
@@ -444,7 +467,7 @@ namespace AutoClicker.UI
         public int RestingX(Rectangle wa)
         {
             bool right = _corner == 0 || _corner == 2;
-            const int margin = 18;
+            int margin = S(18);
             return right ? wa.Right - Width - margin : wa.Left + margin;
         }
 
@@ -460,7 +483,7 @@ namespace AutoClicker.UI
             if (firstShow)
             {
                 bool right = _corner == 0 || _corner == 2;
-                _x = right ? x + 60 : x - 60;
+                _x = right ? x + S(60) : x - S(60);
                 _y = y;
                 try { Location = new Point((int)_x, (int)_y); } catch { }
             }
@@ -654,7 +677,7 @@ namespace AutoClicker.UI
             if (open)
             {
                 // Never taller than most of the screen it is on.
-                try { _openCap = Math.Max(240, Screen.FromControl(this).WorkingArea.Height * 4 / 5); } catch { }
+                try { _openCap = Math.Max(S(240), Screen.FromControl(this).WorkingArea.Height * 4 / 5); } catch { }
             }
             _open = open;
             ApplyHeight(MeasureHeight(open));
@@ -695,7 +718,7 @@ namespace AutoClicker.UI
         /// </summary>
         private Rectangle CloseHitRect =>
             ShowCloseButton
-                ? new Rectangle(Pad + CloseInset - 5, Pad - 2, CloseBox + 10, CloseBox + 10)
+                ? new Rectangle(Pad + CloseInset - S(5), Pad - S(2), CloseBox + S(10), CloseBox + S(10))
                 : Rectangle.Empty;
 
         /// <summary>
@@ -750,9 +773,11 @@ namespace AutoClicker.UI
             try
             {
                 var menu = new ContextMenuStrip { ShowImageMargin = false };
-                menu.Renderer = new ToolStripProfessionalRenderer();
-                menu.BackColor = _theme.Surface2;
-                menu.ForeColor = _theme.Text;
+                // Tempo's menu renderer, as every other menu has. The stock one hovered a row in the
+                // system's pale blue under the theme's text colour — light on light in a dark theme.
+                // Its renderer owns a timer, so it goes with the menu.
+                menu.Disposed += (s, e) => (menu.Renderer as ThemedMenuRenderer)?.Dispose();
+                ThemeManager.ThemeMenu(menu, _theme);
 
                 void AddMute(string name)
                 {
@@ -874,7 +899,7 @@ namespace AutoClicker.UI
                 case Phase.Out:
                 {
                     bool right = _corner == 0 || _corner == 2;
-                    double off = right ? _targetX + 80 : _targetX - 80;
+                    double off = right ? _targetX + S(80) : _targetX - S(80);
                     double t = (now - _phaseStartTick) / (double)SlideOutMs;
                     double k = EaseIn(t);
                     _x = _fromX + (off - _fromX) * k;
@@ -952,11 +977,11 @@ namespace AutoClicker.UI
                 if (_phase == Phase.Dwell && now - _lastBarPaintTick >= 50)
                 {
                     _lastBarPaintTick = now;
-                    if (!StaysUntilDismissed) { Invalidate(new Rectangle(0, Height - ProgressH - 6, Width, ProgressH + 6)); }
+                    if (!StaysUntilDismissed) { Invalidate(new Rectangle(0, Height - ProgressH - S(6), Width, ProgressH + S(6))); }
                     // A toast's own bar that cannot say how far along it is runs a moving stripe.
                     if (!_toastBarRect.IsEmpty && _extras?.Progress != null && _extras.Progress.Indeterminate)
                     {
-                        Invalidate(Rectangle.Inflate(_toastBarRect, 2, 2));
+                        Invalidate(Rectangle.Inflate(_toastBarRect, S(2), S(2)));
                     }
                 }
             }
@@ -995,7 +1020,7 @@ namespace AutoClicker.UI
             try
             {
                 bool showClose = ShowCloseButton;
-                int contentLeft = showClose ? Pad + CloseInset + CloseBox + 10 : Pad;
+                int contentLeft = showClose ? Pad + CloseInset + CloseBox + S(10) : Pad;
                 Invalidate(new Rectangle(contentLeft, Pad, IconSize, IconSize));
             }
             catch { }
@@ -1082,7 +1107,7 @@ namespace AutoClicker.UI
             // separates "dismiss" from "open" and gives the corner room to breathe.
             bool showClose = ShowCloseButton;
             int closeLeft = Pad + CloseInset;
-            int contentLeft = showClose ? closeLeft + CloseBox + 10 : Pad;
+            int contentLeft = showClose ? closeLeft + CloseBox + S(10) : Pad;
             var iconRect = new Rectangle(contentLeft, Pad, IconSize, IconSize);
 
             // For TEMPO'S OWN cards, draw whichever frame the logo is showing right now.
@@ -1105,7 +1130,7 @@ namespace AutoClicker.UI
             if (appIcon != null)
             {
                 // The DETECTED source-app icon, rounded to a squircle like Win11.
-                using (var clip = RoundedRect(iconRect, 6))
+                using (var clip = RoundedRect(iconRect, S(6)))
                 {
                     var saved = g.Save();
                     g.SetClip(clip, CombineMode.Intersect);
@@ -1119,19 +1144,19 @@ namespace AutoClicker.UI
                 // Fallback: a kind-tinted badge with a glyph.
                 using (var fill = new SolidBrush(Color.FromArgb(42, accent)))
                 {
-                    g.FillPath(fill, RoundedRect(iconRect, 6));
+                    g.FillPath(fill, RoundedRect(iconRect, S(6)));
                 }
-                using (var bp = new Pen(Color.FromArgb(150, accent), 1.2f))
+                using (var bp = new Pen(Color.FromArgb(150, accent), 1.2f * _k))
                 {
-                    g.DrawPath(bp, RoundedRect(iconRect, 6));
+                    g.DrawPath(bp, RoundedRect(iconRect, S(6)));
                 }
                 TextRenderer.DrawText(g, Glyph, _glyphFont, iconRect, accent,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             }
 
-            int nameLeft = contentLeft + IconSize + 10;
+            int nameLeft = contentLeft + IconSize + S(10);
             int nameWidth = Width - Pad - nameLeft;
-            var nameRect = new Rectangle(nameLeft, Pad, Math.Max(10, nameWidth), IconSize);
+            var nameRect = new Rectangle(nameLeft, Pad, Math.Max(S(10), nameWidth), IconSize);
             // The repeat marker rides on the small app line rather than the title: it is
             // metadata about the card, not part of what the message says.
             TextRenderer.DrawText(g, HeaderText(), _appFont, nameRect, _theme.TextMuted,
@@ -1146,7 +1171,7 @@ namespace AutoClicker.UI
             {
                 using (var hb = new SolidBrush(_theme.Surface2))
                 {
-                    g.FillPath(hb, RoundedRect(closeRect, 5));
+                    g.FillPath(hb, RoundedRect(closeRect, S(5)));
                 }
             }
             if (showClose)
@@ -1169,7 +1194,7 @@ namespace AutoClicker.UI
             if (_logo != null && !L.Logo.IsEmpty)
             {
                 bool round = _extras != null && _extras.LogoCircle;
-                using (var clip = round ? Circle(L.Logo) : RoundedRect(L.Logo, 8))
+                using (var clip = round ? Circle(L.Logo) : RoundedRect(L.Logo, S(8)))
                 {
                     var saved = g.Save();
                     g.SetClip(clip, CombineMode.Intersect);
@@ -1207,7 +1232,7 @@ namespace AutoClicker.UI
                     if (bar.Status.Length > 0)
                     {
                         TextRenderer.DrawText(g, bar.Status, _smallFont,
-                            new Rectangle(L.BarText.X, L.BarText.Y, Math.Max(10, L.BarText.Width - valueW - (valueW > 0 ? 12 : 0)), L.BarText.Height),
+                            new Rectangle(L.BarText.X, L.BarText.Y, Math.Max(S(10), L.BarText.Width - valueW - (valueW > 0 ? S(12) : 0)), L.BarText.Height),
                             _theme.TextMuted, line);
                     }
                 }
@@ -1217,7 +1242,7 @@ namespace AutoClicker.UI
             if (_hero != null && !L.Hero.IsEmpty)
             {
                 Rectangle heroRect = L.Hero;
-                using (var clip = RoundedRect(heroRect, 8))
+                using (var clip = RoundedRect(heroRect, S(8)))
                 {
                     var saved = g.Save();
                     g.SetClip(clip, CombineMode.Intersect);
@@ -1226,7 +1251,7 @@ namespace AutoClicker.UI
                 }
                 using (var hb = new Pen(Color.FromArgb(40, _theme.Text), 1))
                 {
-                    g.DrawPath(hb, RoundedRect(heroRect, 8));
+                    g.DrawPath(hb, RoundedRect(heroRect, S(8)));
                 }
             }
 
@@ -1236,14 +1261,14 @@ namespace AutoClicker.UI
             {
                 Rectangle r = _buttonRects[i];
                 bool hot = i == _hotButton;
-                using (var path = RoundedRect(r, 6))
+                using (var path = RoundedRect(r, S(6)))
                 using (var fill = new SolidBrush(hot ? Blend(_theme.Surface2, accent, 0.22) : _theme.Surface2))
                 using (var edge = new Pen(hot ? Color.FromArgb(160, accent) : _theme.Border, 1))
                 {
                     g.FillPath(fill, path);
                     g.DrawPath(edge, path);
                 }
-                TextRenderer.DrawText(g, _buttons[i].Text, _appFont, Rectangle.Inflate(r, -6, 0), _theme.Text,
+                TextRenderer.DrawText(g, _buttons[i].Text, _appFont, Rectangle.Inflate(r, -S(6), 0), _theme.Text,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding
                     | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             }
@@ -1256,7 +1281,7 @@ namespace AutoClicker.UI
             int barW = StaysUntilDismissed ? 0 : (int)((Width - Pad * 2) * frac);
             if (barW > 2)
             {
-                var barRect = new Rectangle(Pad, Height - ProgressH - 3, barW, ProgressH);
+                var barRect = new Rectangle(Pad, Height - ProgressH - S(3), barW, ProgressH);
                 using (var track = new SolidBrush(Color.FromArgb(38, accent)))
                 {
                     // A faint full-width track behind it shows how much time has gone.
@@ -1298,7 +1323,7 @@ namespace AutoClicker.UI
         /// <summary>A toast's own progress bar: filled to its value, or a moving stripe when it cannot say.</summary>
         private void DrawToastBar(Graphics g, Utils.NotificationExtras.ProgressBar bar, Rectangle r, Color accent)
         {
-            if (r.Width < 8) { return; }
+            if (r.Width < S(8)) { return; }
             using (var track = new SolidBrush(Color.FromArgb(46, accent)))
             using (var path = RoundedRect(r, BarH / 2f))
             {

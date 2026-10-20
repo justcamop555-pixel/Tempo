@@ -141,6 +141,49 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
+        /// The commit this build was made from ("58f72bf"); empty when it was not stamped from a git checkout
+        /// (an older build, a dotnet build). The build ID says WHEN a build was made; this says WHAT went in.
+        /// </summary>
+        public static string SourceCommit => s_source.Value.Commit;
+
+        /// <summary>
+        /// The working tree held changes that commit does not have — a test build of work in progress, which
+        /// is exactly the build that must never be mistaken for the commit's own.
+        /// </summary>
+        public static bool SourceChanged => s_source.Value.Changed;
+
+        /// <summary>"58f72bf" or "58f72bf + local changes"; empty when unknown. For reports, in English.</summary>
+        public static string SourceText
+        {
+            get
+            {
+                string c = SourceCommit;
+                if (c.Length == 0) { return ""; }
+                return SourceChanged ? c + " + local changes" : c;
+            }
+        }
+
+        // stamp-build.ps1 writes [assembly: AssemblyMetadata("TempoSource", "58f72bf+")] into the generated half:
+        // an attribute rather than a constant, so a generated file from before it existed still compiles.
+        private static readonly Lazy<(string Commit, bool Changed)> s_source = new Lazy<(string, bool)>(ReadSource);
+
+        private static (string, bool) ReadSource()
+        {
+            try
+            {
+                foreach (object a in typeof(BuildInfo).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false))
+                {
+                    var m = (System.Reflection.AssemblyMetadataAttribute)a;
+                    if (m.Key != "TempoSource" || string.IsNullOrWhiteSpace(m.Value)) { continue; }
+                    string v = m.Value.Trim();
+                    return (v.TrimEnd('+'), v.EndsWith("+", StringComparison.Ordinal));
+                }
+            }
+            catch { /* no metadata to read: no source */ }
+            return ("", false);
+        }
+
+        /// <summary>
         /// Build time spelled out — "2026-09-02 20:55 UTC". The ID already encodes this,
         /// so it is only for the one place that has room to be unambiguous to a reader
         /// who does not know the ID's format: the About box.

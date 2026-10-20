@@ -43,8 +43,10 @@ UI/AccountDialog.cs
 UI/AccountListView.cs
 UI/MainForm.Accounts.cs
 UI/MainForm.MultiInstance.cs
+UI/MainForm.RobloxUpdates.cs
 UI/RobloxClientDialog.cs
 UI/RobloxLoginForm.cs
+UI/RobloxUpdateForm.cs
 Utils/AccountApiServer.cs
 Utils/PrivateServerRef.cs
 Utils/RealBrowserLogin.cs
@@ -53,6 +55,7 @@ Utils/RobloxClients.cs
 Utils/RobloxInstall.cs
 Utils/RobloxLauncher.cs
 Utils/RobloxSingletonKiller.cs
+Utils/RobloxUpdates.cs
 
 # Design scratch — working files, not a deliverable.
 design/

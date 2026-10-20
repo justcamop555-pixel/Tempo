@@ -103,16 +103,18 @@ namespace AutoClicker.UI
             Controls.Add(_timeout);
 
             Controls.Add(UiFactory.Label("If it fails:", 268, 88));
-            _onFailure = new ComboBox
+            // Tempo's flat combo, drawn in the theme: the stock flat one framed itself in the system's white
+            // with a light-grey arrow button in a dark theme. 30 px tall (the stock one was 23), so 3 px higher
+            // to stay level with its label.
+            var onFailure = new FlatComboBox
             {
                 Left = 356,
-                Top = 84,
+                Top = 81,
                 Width = 172,
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = theme.InputBackground,
-                ForeColor = theme.Text,
-                FlatStyle = FlatStyle.Flat
             };
+            onFailure.ApplyTheme(theme);
+            _onFailure = onFailure;
             _onFailure.Items.Add(Utils.Localization.T("Stop the macro"));
             _onFailure.Items.Add(Utils.Localization.T("Carry on playing"));
             _onFailure.SelectedIndex =

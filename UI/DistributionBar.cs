@@ -20,6 +20,12 @@ namespace AutoClicker.UI
         public Color TextColor { get; set; } = Color.FromArgb(232, 236, 246);
         public Color MutedColor { get; set; } = Color.FromArgb(132, 142, 168);
 
+        // 100% sizes scaled by Px: the bar, its corners, the legend's row and its swatches. They were
+        // plain pixels in a control the window scales, so on a 150% laptop the bar was a thin strip at
+        // the top of its space with the legend crowded up under it.
+        private float DpiScale => DeviceDpi / 96f;
+        private int Px(float size96) => (int)Math.Round(size96 * DpiScale, MidpointRounding.AwayFromZero);
+
         public DistributionBar()
         {
             SetStyle(
@@ -65,9 +71,9 @@ namespace AutoClicker.UI
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
             long total = _left + _right + _middle;
-            var barRect = new Rectangle(0, 0, Width - 1, 22);
+            var barRect = new Rectangle(0, 0, Width - 1, Px(22));
 
-            using (var path = Rounded(barRect, 8))
+            using (var path = Rounded(barRect, Px(8)))
             {
                 using (var track = new SolidBrush(TrackColor))
                 {
@@ -105,7 +111,7 @@ namespace AutoClicker.UI
             // Legend. Laid out in one pass so it can be COMPACTED if it doesn't fit:
             // with lifetime-sized numbers ("Left 10,876,670 (100%)") three entries ran
             // past the right edge and the last one was clipped mid-word.
-            int ly = 34;
+            int ly = barRect.Bottom + Px(12);   // 34 at 100%
             using (var font = new Font("Segoe UI", 8.5f, FontStyle.Regular))
             {
                 var entries = new[]
@@ -147,13 +153,13 @@ namespace AutoClicker.UI
             return label;
         }
 
-        private static int LegendWidth(Graphics g, Font font, string text)
+        private int LegendWidth(Graphics g, Font font, string text)
         {
             // TextRenderer, matching the draw call — MeasureString uses different metrics
             // and its own padding, so measuring with one and drawing with the other is
             // what let the entries creep into each other.
-            return 14 + TextRenderer.MeasureText(g, text, font, new Size(int.MaxValue, int.MaxValue),
-                                                 LegendFlags).Width + 18;
+            return Px(14) + TextRenderer.MeasureText(g, text, font, new Size(int.MaxValue, int.MaxValue),
+                                                     LegendFlags).Width + Px(18);
         }
 
         private const TextFormatFlags LegendFlags =
@@ -177,14 +183,14 @@ namespace AutoClicker.UI
         private float DrawLegend(Graphics g, Font font, float x, int y, Color color, string text)
         {
             // Rounded swatch: a square chip next to rounded bar segments looked unfinished.
-            var chip = new Rectangle((int)x, y + 2, 10, 10);
+            var chip = new Rectangle((int)x, y + Px(2), Px(10), Px(10));
             using (var sw = new SolidBrush(color))
-            using (var path = Rounded(chip, 3))
+            using (var path = Rounded(chip, Px(3)))
             {
                 g.FillPath(sw, path);
             }
 
-            TextRenderer.DrawText(g, text, font, new Point((int)x + 14, y - 1), TextColor, LegendFlags);
+            TextRenderer.DrawText(g, text, font, new Point((int)x + Px(14), y - Px(1)), TextColor, LegendFlags);
             return x + LegendWidth(g, font, text);
         }
 

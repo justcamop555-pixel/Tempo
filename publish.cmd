@@ -636,28 +636,29 @@ if exist "%ROOT%install.cmd"   copy /y "%ROOT%install.cmd"   "%OUTDIR%\install.c
 if exist "%ROOT%uninstall.cmd" copy /y "%ROOT%uninstall.cmd" "%OUTDIR%\uninstall.cmd" >nul
 
 REM A tiny read-me that ships inside the setup zip, for people who unzip first
-REM and wonder what to do.
+REM and wonder what to do. It used to say that a portable Tempo keeps its data in a
+REM "Data" folder beside the exe (it never has: %LOCALAPPDATA%\AutoClicker) and to
+REM keep a "runtimes" folder beside it (no release has had one since Tempo became one
+REM file) - and install.cmd copied it into the install folder, where it stayed.
 (
   echo Tempo %VER%  -  two ways to run
   echo --------------------------------------
-  echo Keep all of these files together in one folder.
+  echo Tempo.exe is the whole program: one file, with the speech engine inside.
   echo.
-  echo PORTABLE ^(no install^):
-  echo   Just double-click Tempo.exe. It runs in place and keeps its settings,
-  echo   profiles and macros in a "Data" folder right here, so you can move the
-  echo   whole folder ^(USB stick, another PC^) and it works anywhere.
+  echo RUN IT WITHOUT INSTALLING:
+  echo   Double-click Tempo.exe. Your settings, profiles and macros are saved in
+  echo   %%LOCALAPPDATA%%\AutoClicker, so they carry over if you install it later.
   echo.
-  echo INSTALLED ^(Start Menu + clean uninstall^):
-  echo   Double-click install.cmd ^(no administrator rights needed^), then launch
-  echo   Tempo from the Start Menu. Uninstall later from Settings ^> Apps, or with
-  echo   uninstall.cmd.
-  echo.
-  echo Either way, keep the "runtimes" folder next to Tempo.exe
-  echo ^(it holds the offline speech-caption engine^).
+  echo INSTALL IT ^(Start Menu, Settings ^> Apps, clean uninstall^):
+  echo   Double-click install.cmd ^(no administrator rights needed^), or open
+  echo   Tempo.exe and press "Install Tempo on this PC" in its Settings.
+  echo   Uninstall later from Settings ^> Apps.
   echo.
   echo Windows may warn "Unknown publisher" because the app is not
   echo code-signed. Choose "More info" then "Run anyway". You can verify
   echo the download with:  certutil -hashfile Tempo.exe SHA256
+  echo and compare it with Tempo.exe.sha256, or with the SHA-256 that GitHub
+  echo lists for Tempo.exe on the release page.
 ) > "%OUTDIR%\INSTALL-README.txt"
 echo        Wrote INSTALL-README.txt into the bundle.
 
@@ -811,8 +812,8 @@ echo           that downloads and installs in place; without it they only get a
 echo           download-page link. Both files are now in %STAGE% next to the zip.
 echo         - %VER%.zip  - for brand-new users. Serves both ways:
 echo           INSTALLED ^(unzip, run install.cmd: shortcuts + uninstall entry, no
-echo           admin^) or PORTABLE ^(unzip anywhere, run Tempo.exe; keep the runtimes
-echo           folder beside it^). Either way, settings live in your local AppData
+echo           admin^) or PORTABLE ^(unzip anywhere, run Tempo.exe - it is one
+echo           file^). Either way, settings live in your local AppData
 echo           ^(the AutoClicker folder^), not beside the exe.
 if defined NOTESOUT echo      3. Paste !NOTESOUT! as the release description
 echo      4. No .NET install needed for users either way

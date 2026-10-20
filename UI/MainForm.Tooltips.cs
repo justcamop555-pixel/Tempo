@@ -134,10 +134,10 @@ namespace AutoClicker.UI
 
             // ── Clicker: randomization ──────────────────────────────────────────
             T(_randIntervalCheck, "Vary the delay between clicks by a random amount.");
-            T(_intervalJitterNum, "Maximum random variation added to / removed from the delay (ms).");
+            T(_intervalJitterNum, "Maximum random variation added to / removed from the delay (ms) — never more than the delay allows, so the average speed stays what you set. The hold and the pause between bursts vary with it.");
             T(_randPosCheck, "Nudge each click by a small random offset.");
-            T(_posJitterNum, "Maximum random position offset in pixels.");
-            T(_humanizeBtn, "Turn on both randomizers with sensible values for less robotic clicking.");
+            T(_posJitterNum, "Maximum random distance from the point, in pixels. Clicks stay on the window under the point.");
+            T(_humanizeBtn, "Varies the delay and the position a little and holds each click for a natural moment where it was instant, so the clicking looks less robotic. Press again to turn it off.");
 
             // ── Clicker: action + manual speed ──────────────────────────────────
             T(_startBtn, "Start clicking (or use your Start/Stop hotkey).");
@@ -160,8 +160,14 @@ namespace AutoClicker.UI
             }
             T(_antiFreezeCheck, "Safety limiter that stops Tempo clicking so fast it freezes your PC. Recommended on.");
             T(_maxCpsNum, "Hard ceiling on clicks per second — the engine never clicks faster than this even if the slider asks for more.");
-            T(_cpuThresholdNum, "When Tempo's own CPU use passes this %, it automatically slows down to keep the system responsive.");
-            T(_antiFreezeStatusLabel, "Live status of the anti-freeze limiter: off, watching, or actively throttling.");
+            T(_antiFreezeStatusLabel, "While it clicks, Anti-Freeze asks the app you are clicking for an answer twice a second. "
+                + "If it stops answering, the clicks wait for it; if it answers slowly, or the PC's CPU or memory is full, "
+                + "the rate drops and comes back as things recover. The Max CPS cap always applies.");
+            T(_antiFreezePowerLabel, "How Windows is powering this PC. On battery and in the efficiency modes Windows runs apps "
+                + "it thinks are in the background on slower cores; while Tempo clicks or plays a macro it asks Windows for full "
+                + "speed, and gives it back when it stops.");
+            T(_antiFreezeHealthLabel, "The whole PC, counted the way Task Manager counts it: the CPU across every core, the "
+                + "busiest part of the GPU, and the memory in use.");
 
             // ── Multi-Point ─────────────────────────────────────────────────────
             T(_pointOrderCombo, "The order the engine visits enabled points each cycle:\n" +
@@ -280,11 +286,12 @@ namespace AutoClicker.UI
             T(_updateFreqCombo, "How often the automatic check may run: every launch, at most once a day, or at most once a week. While Tempo stays open it checks again at the same pace (twice a day for 'Every launch'). Only applies while the box beside it is ticked.");
             T(_startupDelayNum, "When Windows launches Tempo at sign-in, wait this many extra seconds before its background update check — so it doesn't fight other startup apps for the network. Has no effect when you open Tempo yourself.");
             T(_checkUpdatesCheck, "Quietly check GitHub for a newer version when Tempo starts, and again while it stays open. A check that fails is tried again a few minutes later.");
+            T(_checkRobloxUpdatesCheck, "Every two hours while Roblox is installed, ask Roblox which version it hands out — the same public address Roblox itself asks — and tell you when yours is behind, so you choose when to update. Nothing about you or your accounts is sent.");
             // Where the log is and how big it is now — refreshed whenever the switch changes.
             RefreshLogTip();
             T(_showIndicatorCheck, "Shows a small click-through badge while the clicker runs or a macro plays, so you can tell Tempo is working even when its window is hidden. Customise… sets where it sits and what it shows. The recording badge always shows.");
-            T(_minimizeRecordingCheck, "When you start recording or playing a macro, minimise Tempo so it isn't in the way. Stop with the Record/Stop or Emergency-stop hotkey; the window returns automatically.");
-            T(_ignoreOwnWindowCheck, "Stops a run from clicking or typing into Tempo itself if the cursor is left over this window — it would otherwise tick boxes, switch tabs and hit buttons at full speed. Your own clicks and keys always work, so Stop is never blocked. This also covers the clicker, which never minimises. Turn off only if you deliberately automate Tempo's own interface.");
+            T(_minimizeRecordingCheck, "When you start recording or playing a macro, minimise Tempo — and the Accounts window when it's open on its own — so they aren't in the way. Only when a Record/Stop or Emergency-stop hotkey is bound, so you can always finish. They come back by themselves afterwards, unless the macro was started by a hotkey from inside another app: then Tempo stays out of the way.");
+            T(_ignoreOwnWindowCheck, "Stops a run from clicking or typing into Tempo itself if the cursor is left over one of its windows — it would otherwise tick boxes, switch tabs and hit buttons at full speed. Clicks made without moving your cursor go through Tempo's windows to the app underneath. Your own clicks and keys always work, so Stop is never blocked. Turn off only if you deliberately automate Tempo's own interface.");
             T(_guardShortcutsCheck, "While the clicker runs or a macro plays or records, the Windows key and its shortcuts (Start, Win+D, Win+G, Win+Tab…), Ctrl+Esc and the Sticky Keys and Filter Keys pop-ups are held back, so a stray press can't pull the game out of focus mid-run. Tempo's own keybinds always work, and recordings leave these shortcuts out. Never held back: Alt+Tab and Ctrl+Shift+Esc, so there is always a way out — nor Ctrl+Alt+Del and Win+L, which Windows keeps for itself. Not while the clicker uses \"Click without moving my cursor\": you are using the PC then.");
             // Its copies on the Clicker and Macros tabs explain the same thing, in the same words.
             foreach (Control copy in new Control[] { _clickerGuardCheck, _macroGuardCheck })

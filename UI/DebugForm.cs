@@ -224,13 +224,14 @@ namespace AutoClicker.UI
                 ForeColor = theme.Text;
                 ThemeManager.Apply(this, theme);
 
-                // ThemeManager doesn't know about RichTextBox, and these two carry the
-                // panes' own surface colour.
+                // ThemeManager doesn't know about RichTextBox. The stats and the legend carry the panes'
+                // surface colour; the event log is the input colour it is built with — this set it to the
+                // surface, so the log changed colour at the first theme change and never matched a fresh window.
                 if (_stats != null) { _stats.BackColor = theme.Surface; _stats.ForeColor = theme.Text; }
-                if (_log != null) { _log.BackColor = theme.Surface; _log.ForeColor = theme.Text; }
+                if (_log != null) { _log.BackColor = theme.InputBackground; _log.ForeColor = theme.Text; }
                 if (_legend != null) { _legend.BackColor = theme.Surface; _legend.ForeColor = theme.TextMuted; }
                 if (_splitter != null) { _splitter.BackColor = theme.Border; }
-                if (_sectionPicker != null) { _sectionPicker.BackColor = theme.InputBackground; _sectionPicker.ForeColor = theme.Text; }
+                _sectionPicker?.ApplyTheme(theme);
 
                 ApplyTitleBarTheme();
                 try { NativeChrome.ApplyAllScrollbarThemes(this, theme.Background.GetBrightness() < 0.5f); }
@@ -333,6 +334,9 @@ namespace AutoClicker.UI
             // off the right edge, and at the window's minimum width three controls sat outside it in
             // English too — 27 faults across six languages, measured by scratchpad/debugfit. The
             // strip's height follows whatever the wrap needs (FitControlStrip).
+            // Tagged as a surface so a theme change repaints it. Untagged, ThemeManager left it in the colour
+            // it was built with, and gave every label and box on it the PAGE colour (it walked past the strip
+            // to the window): after a switch the strip stayed in the old theme with new-theme boxes on it.
             var bottom = new FlowLayoutPanel
             {
                 Dock = DockStyle.Bottom,
@@ -340,7 +344,8 @@ namespace AutoClicker.UI
                 FlowDirection = FlowDirection.LeftToRight,
                 WrapContents = true,
                 Padding = new Padding(6, 3, 6, 3),
-                BackColor = theme.Surface
+                BackColor = theme.Surface,
+                Tag = "surface"
             };
             _controlStrip = bottom;
             bottom.Layout += (s, e) => FitControlStrip();
@@ -516,14 +521,15 @@ namespace AutoClicker.UI
 
             // Jump the stats to a section: the headings of the report as it stands ("Health",
             // "Captions", "Speakers", "Accounts", …), refreshed as sections come and go.
-            _sectionPicker = new ComboBox
+            // Tempo's own flat combo, drawn in the theme. The stock flat ComboBox framed itself in the system's
+            // white and put a light-grey arrow button on the strip in every dark theme.
+            _sectionPicker = new FlatComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                FlatStyle = FlatStyle.Flat,
                 Width = 170,
-                Margin = new Padding(4, 6, 10, 4),
-                BackColor = theme.InputBackground, ForeColor = theme.Text,
+                Margin = new Padding(4, 3, 10, 3),
             };
+            _sectionPicker.ApplyTheme(theme);
             _sectionPicker.Items.Add(Utils.Localization.T("Go to section…"));
             _sectionPicker.SelectedIndex = 0;
             // This window is not scaled by WinForms (its strips flow), so its numbers are the screen's
@@ -777,7 +783,7 @@ namespace AutoClicker.UI
         private int _userStatsHeight;
         private static int s_rememberedStatsHeight;
 
-        private readonly ComboBox _sectionPicker;
+        private readonly FlatComboBox _sectionPicker;
         private string _sectionKey = "";          // the headings the picker lists, joined
 
         /// <summary>
@@ -1205,6 +1211,9 @@ namespace AutoClicker.UI
                 // what you open this window to check — rendered uncoloured.
                 ["Macros"] = LineKind.Clicker,
                 ["2nd cursor"] = LineKind.Clicker,
+                // [Anti-Freeze] is the click engine holding its clicks while the window it clicks stops answering,
+                // and letting them go again — a run's own story, so it reads in the clicker's colour.
+                ["Anti-Freeze"] = LineKind.Clicker,
 
                 // Script steps run a whole external process, with failure modes nothing
                 // else here has — no interpreter, a timeout, a non-zero exit.
@@ -1269,6 +1278,8 @@ namespace AutoClicker.UI
                 // with what was running. It sits with [perf]: the same question, how long things take.
                 ["stall"] = LineKind.System,
                 ["Debug"] = LineKind.System,
+                // [Log] is the log file itself being switched back on from Settings.
+                ["Log"] = LineKind.System,
                 // [Data] is restore points: the copy taken when a new build first starts, and a
                 // scheduled restore. It belongs with [Store] — "where did my data go" again.
                 ["Data"] = LineKind.System,

@@ -155,6 +155,17 @@ namespace AutoClicker
                     return;
                 }
 
+                // Not for a single-file build — every release. Its native libraries are unpacked into TEMP
+                // with the rest of it and loaded from there by full path; nothing of Tempo's ever sits in a
+                // runtimes folder beside the exe. A folder of that name there was put there by someone else
+                // (install.cmd used to copy one along from wherever the download was unzipped), and adding it
+                // to Windows' DLL search path would let any library in it answer for one Tempo asks for.
+                string baseDir = (AppContext.BaseDirectory ?? "").TrimEnd('\\', '/');
+                if (baseDir.Length > 0 && !string.Equals(baseDir, dir.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
                 Architecture arch = RuntimeInformation.ProcessArchitecture;
                 string rid = arch == Architecture.X86 ? "win-x86"
                            : arch == Architecture.Arm64 ? "win-arm64"
@@ -467,6 +478,11 @@ namespace AutoClicker
             System.Threading.ThreadPool.QueueUserWorkItem(
                 _ => Utils.UninstallScriptRefresh.Run());
 
+            // And what earlier installs left in the install folder that only misleads now (an out-of-date
+            // setup note, an install stopped half-way). Same rules: off-thread, the installed copy only.
+            System.Threading.ThreadPool.QueueUserWorkItem(
+                _ => Utils.InstallFolderTidy.RunAtStartup());
+
             // Shortcuts, pins and the sign-in entry still aimed at the installed copy's old name (see the
             // rename above; install.cmd renames by installing the new name) move to this file.
             Utils.DeploymentInfo.RepointLeftoversOfOldNameInBackground();
@@ -523,28 +539,27 @@ namespace AutoClicker
                 return;
             }
 
-            // Hold a fine system timer resolution for the whole session so timed
-            // waits in the click engine and macro player are accurate. Restored
-            // automatically on exit.
-            using (new AutoClicker.Engine.TimerResolution(1))
+            // No 1 ms timer resolution for the whole session any more: a run holds it while it runs
+            // (Engine.RunQos, with full speed from Windows), and the clicker's and macro player's waits
+            // are on the high-resolution kernel timer, which never needed it. Held for Tempo's whole
+            // life it kept a laptop's timer firing a thousand times a second with Tempo idle in the tray.
+            try
             {
-                try
+                using (var form = new MainForm())
                 {
-                    using (var form = new MainForm())
-                    {
-                        Application.Run(form);
-                    }
+                    Application.Run(form);
                 }
-                catch (Exception ex)
-                {
-                    Logger.Error("Fatal error while running the application.", ex);
-                    ShowCrashReport(ex, "main loop / fatal", true);
-                }
-                finally
-                {
-                    Logger.Info("[shutdown] Tempo exiting.");
-                    ReleaseMutex();
-                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Fatal error while running the application.", ex);
+                ShowCrashReport(ex, "main loop / fatal", true);
+            }
+            finally
+            {
+                try { AutoClicker.Engine.RunQos.SetRunning(false); } catch { }
+                Logger.Info("[shutdown] Tempo exiting.");
+                ReleaseMutex();
             }
 
             // A helper is waiting for this PROCESS to end before it touches Tempo.exe (the updater's
@@ -676,15 +691,49 @@ namespace AutoClicker
 
         /// <summary>
         /// Waits for the outgoing instance to release the single-instance mutex during a
-        /// restart, then takes ownership. Returns true once we own it. A generous timeout
-        /// covers a slow shutdown; if the old instance died without releasing, the mutex
-        /// is abandoned — which still hands ownership to us.
+        /// restart, then takes ownership. Returns true once we own it. If the old instance died
+        /// without releasing, the mutex is abandoned — which still hands ownership to us.
+        ///
+        /// Twelve seconds, and then for as long as the outgoing Tempo is still shutting down (up to
+        /// two minutes in all). Twelve seconds used to be the whole wait: a shutdown that took longer —
+        /// a laptop saving everything while captions unloaded their model, an antivirus scanning
+        /// the files being written — made this copy give up, show "Tempo is already running" about
+        /// a Tempo that was closing, and exit; a moment later the old one finished, and the restart
+        /// had ended with no Tempo at all.
         /// </summary>
         private static bool WaitForRestartHandover()
         {
+            return WaitForHandover(_singleInstanceMutex, OtherTempoAlive, TimeSpan.FromSeconds(12), TimeSpan.FromMinutes(2));
+        }
+
+        /// <summary>The wait itself, and its test seam: any mutex, any "is the old copy still there?".</summary>
+        internal static bool WaitForHandover(Mutex mutex, Func<bool> outgoingAlive, TimeSpan first, TimeSpan cap)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                return _singleInstanceMutex.WaitOne(TimeSpan.FromSeconds(12));
+                if (mutex.WaitOne(first)) { return true; }
+                bool logged = false;
+                while (clock.Elapsed < cap)
+                {
+                    bool alive;
+                    try { alive = outgoingAlive == null || outgoingAlive(); }
+                    catch { alive = true; }
+                    if (!alive)
+                    {
+                        // Gone without a word: one last short wait for the release it made on its way out.
+                        return mutex.WaitOne(TimeSpan.FromSeconds(1));
+                    }
+                    if (!logged)
+                    {
+                        logged = true;
+                        Logger.Info("[Restart] the old copy is still closing after " + (int)clock.Elapsed.TotalSeconds +
+                                    " s — waiting for it.");
+                    }
+                    if (mutex.WaitOne(TimeSpan.FromSeconds(1))) { return true; }
+                }
+                Logger.Warn("[Restart] the old copy has not closed after " + (int)clock.Elapsed.TotalSeconds + " s.");
+                return false;
             }
             catch (AbandonedMutexException)
             {
@@ -694,6 +743,28 @@ namespace AutoClicker
             {
                 return false;
             }
+        }
+
+        /// <summary>Whether another Tempo process — under either name — is still running.</summary>
+        private static bool OtherTempoAlive()
+        {
+            int me = Environment.ProcessId;
+            foreach (string name in new[] { "TempoClicker", "Tempo" })
+            {
+                System.Diagnostics.Process[] found;
+                try { found = System.Diagnostics.Process.GetProcessesByName(name); }
+                catch { continue; }
+                bool other = false;
+                foreach (var p in found)
+                {
+                    using (p)
+                    {
+                        if (p.Id != me) { other = true; }
+                    }
+                }
+                if (other) { return true; }
+            }
+            return false;
         }
 
         /// <summary>

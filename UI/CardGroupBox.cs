@@ -128,7 +128,7 @@ namespace AutoClicker.UI
                     {
                         g.FillPath(chipFill, chipPath);
                     }
-                    DrawGlyph(g, Icon, mark, _accent);
+                    DrawGlyph(g, Icon, mark, _accent, Px(4));
                 }
                 using (var tb = new SolidBrush(_title))
                 {
@@ -173,19 +173,31 @@ namespace AutoClicker.UI
             float th = Font.GetHeight(g);
             // Painting, the card is its real size in pixels; the layout check can decide for itself in
             // the window's units (see PaintedTexts) and say so here.
-            bool badge = withBadge ?? (Icon != CardIcon.None && 43f + TitleTextWidth(g) <= Width - 8);
+            bool badge = withBadge ?? (Icon != CardIcon.None && BadgeRowWidth + TitleTextWidth(g) <= Width - Px(8));
             if (!badge)
             {
-                mark = new Rectangle(12, 5, 3, 14);
-                text = new PointF(22f, 5f + (14f - th) / 2f);
+                mark = new Rectangle(Px(12), Px(5), Px(3), Px(14));
+                text = new PointF(Px(22), mark.Top + (mark.Height - th) / 2f);
             }
             else
             {
-                mark = new Rectangle(12, 4, 22, 22);
-                text = new PointF(mark.Right + 9f, mark.Top + (mark.Height - th) / 2f);
+                // 20 px from 3 down. It was 22 from 4, and a card's first row starts 24 down, so the badge's last
+                // two pixels sat on it: the Repeat card's "Until stopped" touched the icon, Anti-Freeze's tick box
+                // nearly so — under a layout check that let anything less than 3 px of cover pass.
+                mark = new Rectangle(Px(12), Px(3), Px(20), Px(20));
+                text = new PointF(mark.Right + Px(9), mark.Top + (mark.Height - th) / 2f);
             }
             return badge;
         }
+
+        /// <summary>The badge, its margin and the gap before the title's words, in pixels.</summary>
+        private int BadgeRowWidth => Px(12) + Px(20) + Px(9);
+
+        /// <summary>
+        /// The title row's numbers are pixels at 100%, scaled with the screen like everything WinForms lays out
+        /// around it: at 150% the badge stayed 22 px beside 1.5× words, 12 px in where the card's content starts 24.
+        /// </summary>
+        private int Px(float v) => (int)Math.Round(v * DeviceDpi / 96f);
 
         /// <summary>
         /// The title row — badge or bar, then the letter-spaced words — for the layout checks. Nothing
@@ -198,14 +210,14 @@ namespace AutoClicker.UI
             if (title.Length == 0 || g == null) { yield break; }
             float u = unitsPerPixel > 0f ? unitsPerPixel : 1f;
             // The badge (or bar) and the title are painted in pixels; the card's width is a layout number.
-            int badgeRoom = (int)Math.Ceiling((43f + TitleTextWidth(g)) * u);
-            bool badge = Icon != CardIcon.None && badgeRoom <= Width - (int)Math.Ceiling(8 * u);
+            int badgeRoom = (int)Math.Ceiling((BadgeRowWidth + TitleTextWidth(g)) * u);
+            bool badge = Icon != CardIcon.None && badgeRoom <= Width - (int)Math.Ceiling(Px(8) * u);
             TitleGeometry(g, out Rectangle mark, out PointF at, badge);
             float th = Font.GetHeight(g);
             float right = at.X + TitleTextWidth(g);
             var ink = Rectangle.FromLTRB((int)(mark.Left * u), (int)Math.Floor(Math.Min(mark.Top, at.Y) * u),
                                          (int)Math.Ceiling(right * u), (int)Math.Ceiling(Math.Max(mark.Bottom, at.Y + th) * u));
-            var room = Rectangle.FromLTRB(ink.Left, 0, Math.Max(ink.Left, Width - (int)Math.Ceiling(8 * u)), ink.Bottom + 2);
+            var room = Rectangle.FromLTRB(ink.Left, 0, Math.Max(ink.Left, Width - (int)Math.Ceiling(Px(8) * u)), ink.Bottom + 2);
             yield return new PaintedText(title, ink, room);
         }
 
@@ -244,12 +256,13 @@ namespace AutoClicker.UI
         // Minimal, crisp line glyphs drawn inside the given chip rectangle. Shared with IconChip, so
         // a glyph means the same thing on a card's title and beside a line of text. The padding and
         // the stroke follow the chip's size (5 px and 1.6 px on the title's 22 px chip).
-        internal static void DrawGlyph(Graphics g, CardIcon icon, Rectangle chip, Color color)
+        internal static void DrawGlyph(Graphics g, CardIcon icon, Rectangle chip, Color color, int insetPx = -1)
         {
             var prev = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            // Inner drawing area, padded inside the chip.
-            int inset = Math.Max(5, (int)Math.Round(chip.Width * 5 / 22f));
+            // Inner drawing area, padded inside the chip (a card's title passes its own, so its 20 px badge keeps
+            // the 12 px glyph the 22 px one had).
+            int inset = insetPx >= 0 ? insetPx : Math.Max(5, (int)Math.Round(chip.Width * 5 / 22f));
             var r = Rectangle.Inflate(chip, -inset, -inset);
             using (var pen = new Pen(color, Math.Max(1.6f, chip.Width * 1.6f / 22f)))
             using (var br = new SolidBrush(color))

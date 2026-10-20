@@ -35,10 +35,23 @@ namespace AutoClicker.UI
 
         // Anti-freeze controls
         private CheckBox _antiFreezeCheck;
+        private Label _antiFreezePowerLabel;
+        private Label _antiFreezeHealthLabel;
         private NumericUpDown _maxCpsNum;
-        private NumericUpDown _cpuThresholdNum;
         private Label _antiFreezeStatusLabel;
         private bool _suppressAntiFreeze;
+
+        /// <summary>One line of the Anti-Freeze card: fixed width, one line, the rest of a long text on hover.</summary>
+        private Label AntiFreezeLine(int x, int y, int width)
+        {
+            Label l = UiFactory.Label("", x, y, FontStyle.Regular, 9f);
+            l.AutoSize = false;
+            l.Width = width;
+            l.Height = 16;
+            l.AutoEllipsis = true;
+            l.ForeColor = _theme.TextMuted;
+            return l;
+        }
 
         private void BuildClickerTab()
         {
@@ -46,7 +59,9 @@ namespace AutoClicker.UI
             page.Name = "clicker";   // stable key for LastTabKey
 
             // ── Profile bar ───────────────────────────────────────────────────
-            var profileLabel = UiFactory.Label(Localization.T("Profile:"), 12, 16, FontStyle.Bold);
+            // The profile row is centred on its combo box (12-42 once it has its window): the label and the four
+            // buttons sat 3 px higher, on the 23 px height WinForms reports before the box exists.
+            var profileLabel = UiFactory.Label(Localization.T("Profile:"), 12, 19, FontStyle.Bold);
             profileLabel.Text = profileLabel.Text.Replace(":", string.Empty).ToUpperInvariant();
             _profileCombo = UiFactory.Combo(70, 12, 220);
             // Editable + autocomplete so you can type to search/jump to a profile by name.
@@ -59,17 +74,17 @@ namespace AutoClicker.UI
             _profileCombo.AutoCompleteSource = AutoCompleteSource.ListItems;
             _profileCombo.SelectedIndexChanged += OnProfileSelected;
 
-            _newProfileBtn = UiFactory.Button(Localization.T("New"), 300, 10, 78, 28);
+            _newProfileBtn = UiFactory.Button(Localization.T("New"), 300, 13, 78, 28);
             _newProfileBtn.Click += OnNewProfile;
             StyleAccentButton(_newProfileBtn);
             SetGlyph(_newProfileBtn, ActionGlyph.Plus);
-            _saveProfileBtn = UiFactory.Button(Localization.T("Save"), 384, 10, 80, 28);
+            _saveProfileBtn = UiFactory.Button(Localization.T("Save"), 384, 13, 80, 28);
             _saveProfileBtn.Click += OnSaveProfile;
             SetGlyph(_saveProfileBtn, ActionGlyph.Save);
-            _duplicateProfileBtn = UiFactory.Button(Localization.T("Duplicate"), 470, 10, 104, 28);
+            _duplicateProfileBtn = UiFactory.Button(Localization.T("Duplicate"), 470, 13, 104, 28);
             _duplicateProfileBtn.Click += OnDuplicateProfile;
             SetGlyph(_duplicateProfileBtn, ActionGlyph.Copy);
-            _deleteProfileBtn = UiFactory.Button(Localization.T("Delete"), 580, 10, 86, 28);
+            _deleteProfileBtn = UiFactory.Button(Localization.T("Delete"), 580, 13, 86, 28);
             _deleteProfileBtn.Click += OnDeleteProfile;
             StyleDangerButton(_deleteProfileBtn);
             SetGlyph(_deleteProfileBtn, ActionGlyph.Trash);
@@ -177,21 +192,24 @@ namespace AutoClicker.UI
                 modeCaption.Left = b2.Left;
             }
 
-            clickGroup.Controls.Add(UiFactory.Caption("Hold each click (ms)", 16, 80));
-            _holdMsNum = UiFactory.Numeric(170, 78, 70, 0, 5000, 0);
-            _holdMsNum.ValueChanged += (s, e) => UpdateIntervalHint();
+            // 2 px lower than it was: the combo boxes above are 30 px tall once they have their window (46-76),
+            // and "Set key…" at 77 sat a pixel under the Mode box.
+            clickGroup.Controls.Add(UiFactory.Caption("Hold each click (ms)", 16, 82));
+            _holdMsNum = UiFactory.Numeric(170, 80, 70, 0, 5000, 0);
+            _holdMsNum.ValueChanged += (s, e) => { UpdateIntervalHint(); PushHumanizingToEngine(); };
             clickGroup.Controls.Add(_holdMsNum);
 
             // Shown/enabled only when the Button dropdown is set to "Keyboard key": pick
             // which key to auto-press. Sits on the same row as Hold (which applies to keys
-            // too — a non-zero hold holds the key down each press).
-            _setKeyBtn = UiFactory.Button("⌨ Set key…", 246, 77, 74, 28);
+            // too — a non-zero hold holds the key down each press). 26 tall, centred on the spinner.
+            _setKeyBtn = UiFactory.Button("⌨ Set key…", 246, 79, 74, 26);
             _setKeyBtn.Click += OnSetAutoPressKey;
             _setKeyBtn.Enabled = false;
             clickGroup.Controls.Add(_setKeyBtn);
 
             // ── Position group ─────────────────────────────────────────────────
-            var positionGroup = UiFactory.Group(Localization.T("Click Position"), 12, 200, 360, 172, CardIcon.Target);
+            // Ends at 376 like the right-hand column beside it (Repeat + Burst).
+            var positionGroup = UiFactory.Group(Localization.T("Click Position"), 12, 200, 360, 176, CardIcon.Target);
 
             _posCurrentRadio = UiFactory.Radio("Current cursor position", 16, 26, true);
             _posCurrentRadio.CheckedChanged += OnPositionModeChanged;
@@ -220,29 +238,31 @@ namespace AutoClicker.UI
             positionGroup.Controls.Add(_restoreCursorCheck);
 
             // ── Repeat group ───────────────────────────────────────────────────
-            var repeatGroup = UiFactory.Group(Localization.T("Repeat"), 384, 200, 324, 102, CardIcon.Repeat);
+            // Rows 26 apart: a spinner is 23 px tall, and at 24 apart the two sat a pixel from each other —
+            // their outlines read as one thick line.
+            var repeatGroup = UiFactory.Group(Localization.T("Repeat"), 384, 200, 324, 106, CardIcon.Repeat);
             _repeatUntilRadio = UiFactory.Radio("Until stopped", 16, 24, true);
             _repeatUntilRadio.CheckedChanged += OnRepeatModeChanged;
-            _repeatCountRadio = UiFactory.Radio("Fixed count:", 16, 48);
+            _repeatCountRadio = UiFactory.Radio("Fixed count:", 16, 50);
             _repeatCountRadio.CheckedChanged += OnRepeatModeChanged;
-            _repeatCountNum = UiFactory.Numeric(130, 45, 110, 1, 100000000, 100);
-            _repeatDurationRadio = UiFactory.Radio("For (seconds):", 16, 72);
+            _repeatCountNum = UiFactory.Numeric(130, 47, 110, 1, 100000000, 100);
+            _repeatDurationRadio = UiFactory.Radio("For (seconds):", 16, 76);
             _repeatDurationRadio.CheckedChanged += OnRepeatModeChanged;
-            _repeatDurationNum = UiFactory.Numeric(130, 69, 110, 1, 86400, 60);
+            _repeatDurationNum = UiFactory.Numeric(130, 73, 110, 1, 86400, 60);
             repeatGroup.Controls.Add(_repeatUntilRadio);
             repeatGroup.Controls.Add(_repeatCountRadio);
             repeatGroup.Controls.Add(_repeatCountNum);
             repeatGroup.Controls.Add(_repeatDurationRadio);
             repeatGroup.Controls.Add(_repeatDurationNum);
 
-            _repeatCountEstLabel = UiFactory.Caption("", 246, 48);
+            _repeatCountEstLabel = UiFactory.Caption("", 246, 50);
             _repeatCountEstLabel.AutoSize = false;
             _repeatCountEstLabel.Width = 74;
             _repeatCountEstLabel.Height = 16;
             _repeatCountEstLabel.ForeColor = _theme.TextMuted;
             repeatGroup.Controls.Add(_repeatCountEstLabel);
 
-            _repeatDurationEstLabel = UiFactory.Caption("", 246, 72);
+            _repeatDurationEstLabel = UiFactory.Caption("", 246, 76);
             _repeatDurationEstLabel.AutoSize = false;
             _repeatDurationEstLabel.Width = 74;
             _repeatDurationEstLabel.Height = 16;
@@ -266,30 +286,31 @@ namespace AutoClicker.UI
             // Single aligned row: each label sits to the LEFT of its field on the same
             // baseline. The previous layout stacked a caption at y=24 over a field at
             // y=36 inside a 66px card, so the labels were clipped under the spinners.
-            _burstGroup = UiFactory.Group(Localization.T("Burst Settings"), 384, 310, 324, 66, CardIcon.Bolt);
-            _burstGroup.Controls.Add(UiFactory.Caption("Clicks per burst", 14, 37));
-            _burstSizeNum = UiFactory.Numeric(112, 33, 58, 1, 100000, 10);
+            // 4 px lower and 4 shorter than it was, for the Repeat card's taller rows; it still ends at 376.
+            _burstGroup = UiFactory.Group(Localization.T("Burst Settings"), 384, 314, 324, 62, CardIcon.Bolt);
+            _burstGroup.Controls.Add(UiFactory.Caption("Clicks per burst", 14, 35));
+            _burstSizeNum = UiFactory.Numeric(112, 31, 58, 1, 100000, 10);
             _burstSizeNum.ValueChanged += (s, e) => UpdateIntervalHint();
             _burstGroup.Controls.Add(_burstSizeNum);
-            _burstGroup.Controls.Add(UiFactory.Caption("Pause (ms)", 180, 37));
-            _burstPauseNum = UiFactory.Numeric(246, 33, 64, 0, 3600000, 1000);
+            _burstGroup.Controls.Add(UiFactory.Caption("Pause (ms)", 180, 35));
+            _burstPauseNum = UiFactory.Numeric(246, 31, 64, 0, 3600000, 1000);
             _burstPauseNum.ValueChanged += (s, e) => UpdateIntervalHint();
             _burstGroup.Controls.Add(_burstPauseNum);
 
             // ── Randomization group ────────────────────────────────────────────
             var randGroup = UiFactory.Group(Localization.T("Randomization (anti-pattern)"), 12, 382, 696, 72, CardIcon.Wave);
             _randIntervalCheck = UiFactory.Check("Randomize interval  ±", 16, 30);
-            _randIntervalCheck.CheckedChanged += (s, e) => { _intervalJitterNum.Enabled = _randIntervalCheck.Checked; UpdateIntervalHint(); SyncHumanizeButtonFromState(); };
+            _randIntervalCheck.CheckedChanged += (s, e) => { UpdateRandomizeControlsEnabled(); UpdateIntervalHint(); SyncHumanizeButtonFromState(); PushHumanizingToEngine(); };
             _intervalJitterNum = UiFactory.Numeric(180, 28, 80, 0, 100000, 0);
             _intervalJitterNum.Enabled = false;
-            _intervalJitterNum.ValueChanged += (s, e) => { UpdateIntervalHint(); SyncHumanizeButtonFromState(); };
+            _intervalJitterNum.ValueChanged += (s, e) => { UpdateIntervalHint(); SyncHumanizeButtonFromState(); PushHumanizingToEngine(); };
             randGroup.Controls.Add(UiFactory.Caption("ms", 264, 32));
 
             _randPosCheck = UiFactory.Check("Randomize position  ±", 320, 30);
-            _randPosCheck.CheckedChanged += (s, e) => { _posJitterNum.Enabled = _randPosCheck.Checked; SyncHumanizeButtonFromState(); };
+            _randPosCheck.CheckedChanged += (s, e) => { UpdateRandomizeControlsEnabled(); SyncHumanizeButtonFromState(); PushHumanizingToEngine(); };
             _posJitterNum = UiFactory.Numeric(490, 28, 80, 0, 1000, 0);
             _posJitterNum.Enabled = false;
-            _posJitterNum.ValueChanged += (s, e) => SyncHumanizeButtonFromState();
+            _posJitterNum.ValueChanged += (s, e) => { SyncHumanizeButtonFromState(); PushHumanizingToEngine(); };
             randGroup.Controls.Add(UiFactory.Caption("px", 574, 32));
 
             randGroup.Controls.Add(_randIntervalCheck);
@@ -375,7 +396,8 @@ namespace AutoClicker.UI
             _cpsTestBtn.Click += (s, e) => OpenCpsTest();
 
             // ── Manual speed (quick adjust slider) ─────────────────────────────
-            var speedGroup = UiFactory.Group(Localization.T("Manual Speed"), 12, 532, 360, 198, CardIcon.Gauge);
+            // 220 tall to end level with the right-hand column (Anti-Freeze grew a row for its power line).
+            var speedGroup = UiFactory.Group(Localization.T("Manual Speed"), 12, 532, 360, 220, CardIcon.Gauge);
 
             _speedLabel = new SpeedTargetLabel
             {
@@ -461,7 +483,7 @@ namespace AutoClicker.UI
             speedGroup.Controls.Add(_exactCpsSetBtn);
 
             // ── Anti-freeze protection ─────────────────────────────────────────
-            var afGroup = UiFactory.Group(Localization.T("Anti-Freeze Protection"), 384, 532, 324, 128, CardIcon.Shield);
+            var afGroup = UiFactory.Group(Localization.T("Anti-Freeze Protection"), 384, 532, 324, 150, CardIcon.Shield);
 
             _antiFreezeCheck = UiFactory.Check("Enabled (prevents system freeze)", 16, 24, true);
             _antiFreezeCheck.CheckedChanged += (s, e) => OnAntiFreezeChanged();
@@ -472,23 +494,26 @@ namespace AutoClicker.UI
             _maxCpsNum.ValueChanged += (s, e) => OnAntiFreezeChanged();
             afGroup.Controls.Add(_maxCpsNum);
 
-            afGroup.Controls.Add(UiFactory.Caption("CPU %", 160, 50));
-            _cpuThresholdNum = UiFactory.Numeric(214, 46, 70, 10, 99, 80);
-            _cpuThresholdNum.ValueChanged += (s, e) => OnAntiFreezeChanged();
-            afGroup.Controls.Add(_cpuThresholdNum);
-
-            _antiFreezeStatusLabel = UiFactory.Label("Detection: idle", 16, 74, FontStyle.Regular, 9f);
-            _antiFreezeStatusLabel.AutoSize = false;
-            _antiFreezeStatusLabel.Width = 296;
-            _antiFreezeStatusLabel.Height = 16;
-            _antiFreezeStatusLabel.ForeColor = _theme.TextMuted;
+            // The "CPU %" box beside Max CPS is gone: it set a threshold on Tempo's OWN CPU use, which one click
+            // thread never comes near on a multi-core PC; Anti-Freeze now watches the app being clicked and the
+            // whole machine instead (SystemHealthMonitor).
+            _antiFreezeStatusLabel = AntiFreezeLine(16, 74, 296);
             afGroup.Controls.Add(_antiFreezeStatusLabel);
+
+            // How Windows is powering the PC — a row of its own: beside Max CPS (152 px) it lost the part that
+            // matters ("Plugged in · Best perform…" at 150%, and every "Battery 64% · Best power efficiency").
+            _antiFreezePowerLabel = AntiFreezeLine(16, 96, 296);
+            afGroup.Controls.Add(_antiFreezePowerLabel);
+
+            // The whole PC, as Task Manager counts it.
+            _antiFreezeHealthLabel = AntiFreezeLine(16, 118, 296);
+            afGroup.Controls.Add(_antiFreezeHealthLabel);
 
             // ── Windows shortcuts ──────────────────────────────────────────────
             // Settings ▸ Behaviour's "Hold back Windows shortcuts…", here where a run is started
             // (the same setting: SetGuardWindowsShortcuts). In the right-hand column's gap under
             // Anti-Freeze, its bottom level with Manual Speed's.
-            var guardGroup = UiFactory.Group(Localization.T("Windows Shortcuts"), 384, 668, 324, 62, CardIcon.Keyboard);
+            var guardGroup = UiFactory.Group(Localization.T("Windows Shortcuts"), 384, 690, 324, 62, CardIcon.Keyboard);
             _clickerGuardCheck = MakeGuardShortcutsCheck(16, 28, "Clicker tab");
             guardGroup.Controls.Add(_clickerGuardCheck);
 
@@ -587,23 +612,53 @@ namespace AutoClicker.UI
                 _intervalJitterNum.Value = 0;
                 _randPosCheck.Checked = false;
                 _posJitterNum.Value = 0;
+                // The press length it gave, taken back — unless it has been changed by hand since.
+                if (_humanizeHold > 0 && (int)_holdMsNum.Value == _humanizeHold) { _holdMsNum.Value = 0; }
+                _humanizeHold = 0;
             }
             else
             {
-                long ms = GetUiIntervalMs();
-                int intervalJitter = (int)Math.Max(5, Math.Round(ms * 0.2));
+                HumanizeValues(GetUiIntervalMs(), ClicksPerPressUi(), out int intervalJitter, out int press);
 
-                _randIntervalCheck.Checked = true;
-                _intervalJitterNum.Enabled = true;
+                _randIntervalCheck.Checked = intervalJitter > 0;
+                _intervalJitterNum.Enabled = intervalJitter > 0;
                 _intervalJitterNum.Value = Math.Min(_intervalJitterNum.Maximum, intervalJitter);
 
-                _randPosCheck.Checked = true;
-                _posJitterNum.Enabled = true;
-                _posJitterNum.Value = Math.Min(_posJitterNum.Maximum, 2);
+                // A key press has no position to vary.
+                bool keyMode = _buttonCombo != null && _buttonCombo.SelectedIndex == KeyTargetIndex;
+                _randPosCheck.Checked = !keyMode;
+                _posJitterNum.Enabled = !keyMode;
+                _posJitterNum.Value = keyMode ? 0 : Math.Min(_posJitterNum.Maximum, 2);
+
+                // A natural press length, only where the click was instant: down and up in the same
+                // millisecond is the most robotic thing an auto-clicker does — a hand holds a click for
+                // tens of milliseconds. A hold set by hand is left as it is.
+                if (_holdMsNum.Value == 0 && press > 0)
+                {
+                    _holdMsNum.Value = press;
+                    _humanizeHold = press;
+                }
             }
 
             UpdateHumanizeButton();
             UpdateIntervalHint();
+        }
+
+        /// <summary>The press length Humanize gave (to take back when it is turned off), 0 = none.</summary>
+        private int _humanizeHold;
+
+        /// <summary>
+        /// What Humanize sets for an interval of <paramref name="ms"/>: the delay varied by a fifth of itself — but
+        /// never by more than the delay allows (it used to be at least ±5 ms, so at 1–4 ms it was larger than the
+        /// delay itself) — and a press held for about a third of the gap, at most 80 ms, shared between the clicks
+        /// of a double click; none under 3 ms, where a hold would only cost speed.
+        /// </summary>
+        internal static void HumanizeValues(long ms, int clicksPerPress, out int intervalJitter, out int press)
+        {
+            intervalJitter = ms <= 1 ? 0 : (int)Math.Max(1, Math.Min(ms - 1, Math.Round(ms * 0.2)));
+            int perPress = Math.Max(1, clicksPerPress);
+            press = (int)Math.Min(80, Math.Round(ms * 0.3 / perPress));
+            if (press < 3) { press = 0; }
         }
 
         /// <summary>
@@ -646,11 +701,46 @@ namespace AutoClicker.UI
         /// </summary>
         private void SyncHumanizeButtonFromState()
         {
+            // Position randomization counts only where there is a position: a key press has none.
+            bool keyMode = _buttonCombo != null && _buttonCombo.SelectedIndex == KeyTargetIndex;
             bool anyRandom =
                 (_randIntervalCheck != null && _randIntervalCheck.Checked && _intervalJitterNum != null && _intervalJitterNum.Value > 0) ||
-                (_randPosCheck != null && _randPosCheck.Checked && _posJitterNum != null && _posJitterNum.Value > 0);
+                (!keyMode && _randPosCheck != null && _randPosCheck.Checked && _posJitterNum != null && _posJitterNum.Value > 0);
             _humanizeLevel = anyRandom ? 1 : 0;
             UpdateHumanizeButton();
+        }
+
+        /// <summary>
+        /// Each jitter box usable while its tick is on — and position randomization greyed for a keyboard key,
+        /// which has no position: ticked there it changed nothing, while Humanize counted it as on.
+        /// </summary>
+        private void UpdateRandomizeControlsEnabled()
+        {
+            if (_randIntervalCheck == null || _intervalJitterNum == null || _randPosCheck == null || _posJitterNum == null)
+            {
+                return;
+            }
+            bool keyMode = _buttonCombo != null && _buttonCombo.SelectedIndex == KeyTargetIndex;
+            _intervalJitterNum.Enabled = _randIntervalCheck.Checked;
+            _randPosCheck.Enabled = !keyMode;
+            _posJitterNum.Enabled = !keyMode && _randPosCheck.Checked;
+        }
+
+        /// <summary>
+        /// The anti-pattern settings and the hold, into a running clicker (ClickEngine.UpdateHumanizing), as the
+        /// interval fields have always reached it — a profile switched to mid-run included, for the same reason
+        /// (see OnIntervalFieldChanged). Only the interval did: a tick of "Randomize", Humanize or a new hold did
+        /// nothing until the next start, while the boxes said they were on.
+        /// </summary>
+        private void PushHumanizingToEngine()
+        {
+            if (_engine == null || !_engine.IsRunning || _randIntervalCheck == null || _intervalJitterNum == null ||
+                _randPosCheck == null || _posJitterNum == null || _holdMsNum == null)
+            {
+                return;
+            }
+            _engine.UpdateHumanizing(_randIntervalCheck.Checked, (int)_intervalJitterNum.Value,
+                                     _randPosCheck.Checked, (int)_posJitterNum.Value, (int)_holdMsNum.Value);
         }
 
         private void OnIntervalFieldChanged(object sender, EventArgs e)
@@ -735,16 +825,22 @@ namespace AutoClicker.UI
 
                 bool rand = _randIntervalCheck != null && _randIntervalCheck.Checked;
                 long jitter = (_intervalJitterNum != null) ? (long)_intervalJitterNum.Value : 0;
+                // The spread the engine really uses: never past its floor (half a millisecond, or the
+                // Anti-Freeze cap's gap), so the average stays the speed set. This line showed the jitter as
+                // typed, "1–5,000 CPS" for 1 ± 5 ms, while the engine clamped two clicks in five to 1 ms.
+                double floor = Engine.ClickEngine.JitterFloor(_settings != null && _settings.AntiFreezeEnabled,
+                    _settings != null ? _settings.MaxClicksPerSecond : 200, styleFactor);
+                double eff = rand ? Engine.RandomizationHelper.EffectiveJitter(ms, jitter, floor) : 0;
 
-                if (rand && jitter > 0)
+                if (eff > 0)
                 {
-                    long lo = Math.Max(1, ms - jitter);
-                    long hi = ms + jitter;
+                    double lo = ms - eff;
+                    double hi = ms + eff;
                     double cpsHi = 1000.0 / lo * styleFactor;   // shortest delay = fastest
                     double cpsLo = 1000.0 / hi * styleFactor;   // longest delay = slowest
                     // Numbers and units only — nothing here to translate.
                     lead = "≈ " + cpsLo.ToString("0.0") + "–" + cpsHi.ToString("0.0") + " CPS";
-                    detail = Sep + ms.ToString("N0") + " ± " + jitter.ToString("N0") + " ms";
+                    detail = Sep + ms.ToString("N0") + " ± " + eff.ToString("#,0.#") + " ms";
                     claimedCps = cpsHi;                          // the cap bites at the top
                 }
                 else if (cps >= 1)
@@ -1165,17 +1261,16 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
-        /// Styles a button as a filled accent "primary" action (New, Humanize, Set):
-        /// accent fill, white text, no border. Must be re-applied after a theme switch
-        /// because ThemeManager resets every Button to the neutral surface colour.
+        /// Styles a button as a filled accent "primary" action (New, Set, Multi-Point's Save):
+        /// accent fill, readable text, no border — and marks it, so every theme pass keeps it
+        /// that way. Unmarked, ThemeManager reset it to the neutral surface colour, and a theme
+        /// change greyed each one not coloured again afterwards (Multi-Point's Save).
         /// </summary>
         private void StyleAccentButton(Button b)
         {
             if (b == null) return;
-            b.BackColor = _theme.Accent;
-            b.ForeColor = _theme.OnAccent;   // readable on ANY accent - see Theme.OnAccent
-            b.FlatAppearance.BorderSize = 0;
-            b.FlatAppearance.MouseOverBackColor = _theme.AccentHover;
+            ThemeManager.MarkPrimary(b);
+            ThemeManager.StylePrimary(b, _theme);
         }
 
         /// <summary>Sets the little icon drawn before an action button's label.</summary>
@@ -1372,7 +1467,6 @@ namespace AutoClicker.UI
                     _notifyFinishCheck.Checked = _settings.NotifyOnRepeatFinish;
                 }
                 _maxCpsNum.Value = Clamp(_settings.MaxClicksPerSecond, 1, 2000);
-                _cpuThresholdNum.Value = Clamp(_settings.AntiFreezeCpuThreshold, 10, 99);
             }
             finally
             {
@@ -1396,7 +1490,6 @@ namespace AutoClicker.UI
 
             _settings.AntiFreezeEnabled = _antiFreezeCheck.Checked;
             _settings.MaxClicksPerSecond = (int)_maxCpsNum.Value;
-            _settings.AntiFreezeCpuThreshold = (int)_cpuThresholdNum.Value;
 
             // Everything that quotes the cap: the rate line's "max N", the Target label, the
             // repeat estimates and the Multi-Point cycle time (UpdateIntervalHint does the last
@@ -1416,7 +1509,6 @@ namespace AutoClicker.UI
         {
             bool on = _antiFreezeCheck.Checked;
             _maxCpsNum.Enabled = on;
-            _cpuThresholdNum.Enabled = on;
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -1469,6 +1561,9 @@ namespace AutoClicker.UI
                     : "");
             }
             RefreshSelfPressedKeyNotice();
+            UpdateRandomizeControlsEnabled();
+            UpdateRestoreCursorEnabled();
+            SyncHumanizeButtonFromState();
         }
 
         /// <summary>Carries the "this key is also a hotkey" warning on the Set-key button.</summary>
@@ -1765,10 +1860,13 @@ namespace AutoClicker.UI
             UpdatePositionControlsEnabled();
             UpdateRepeatControlsEnabled();
             UpdateBurstGroupEnabled();
+            UpdateRandomizeControlsEnabled();
             _lastLoadedPreciseMs = p.ManualPreciseIntervalMs > 0.0 ? p.ManualPreciseIntervalMs : 0.0;
             SyncSpeedSliderFromInterval();
             UpdateIntervalHint();
+            _humanizeHold = 0;               // the loaded hold is the profile's, not one Humanize gave
             SyncHumanizeButtonFromState();   // reflect the loaded randomizer state
+            PushHumanizingToEngine();        // a switch mid-run: the new profile's, as its interval already is
 
             // This load IS the new baseline — nothing is unsaved right now. (Not for a draft
             // coming back over its saved profile: that one is unsaved, and the UI tick says so.)
@@ -2161,6 +2259,8 @@ namespace AutoClicker.UI
             var g = UiFactory.Group(Localization.T("Background Clicking"), 12, 938, 360, 136, CardIcon.Cursor);
 
             _backgroundClickCheck = UiFactory.Check("Click without moving my cursor", 16, 28);
+            // A background click never moves the cursor, so there is nothing to restore.
+            _backgroundClickCheck.CheckedChanged += (s, e) => UpdateRestoreCursorEnabled();
             g.Controls.Add(_backgroundClickCheck);
 
             var note = UiFactory.Caption(
@@ -2944,6 +3044,21 @@ namespace AutoClicker.UI
                     _backgroundClickNote.ForeColor = _theme.WarningText;
                 }
             }
+            UpdateRestoreCursorEnabled();
+        }
+
+        /// <summary>
+        /// "Restore cursor position when stopped" usable only where a run moves the cursor to a target: a fixed or
+        /// multi-point target clicked with the real pointer. "Where the cursor is", a background click and a
+        /// keyboard key never move it (the engine reads the option only for the first two modes, and not in the
+        /// background), so the tick there did nothing — while looking set.
+        /// </summary>
+        private void UpdateRestoreCursorEnabled()
+        {
+            if (_restoreCursorCheck == null || _posFixedRadio == null || _posMultiRadio == null) { return; }
+            bool keyMode = _buttonCombo != null && _buttonCombo.SelectedIndex == KeyTargetIndex;
+            bool background = _backgroundClickCheck != null && _backgroundClickCheck.Checked;
+            _restoreCursorCheck.Enabled = (_posFixedRadio.Checked || _posMultiRadio.Checked) && !background && !keyMode;
         }
 
         private void UpdateRepeatControlsEnabled()

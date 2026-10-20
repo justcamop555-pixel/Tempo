@@ -323,7 +323,10 @@ namespace AutoClicker.Engine
                 System.Threading.Thread.Sleep(milliseconds);
                 return false;
             }
-            try { return cancel.Wait(milliseconds); }
+            // On the high-resolution timer (PreciseWait), not the event's own Wait: that one is rounded to the
+            // timer resolution, and Windows 11 stops honouring Tempo's 1 ms request while its window is hidden
+            // or minimized — so the same 5 ms hold came out 5 ms with Tempo on screen and ~15.6 ms from the tray.
+            try { return PreciseWait.Wait(milliseconds, cancel); }
             catch (ObjectDisposedException) { return true; }
         }
 
@@ -505,21 +508,80 @@ namespace AutoClicker.Engine
             {
                 // A move first so hover-aware controls register the pointer, then the
                 // down/up pair. wParam on the down carries the "button held" flag.
-                NativeMethods.PostMessage(hwnd, (uint)NativeMethods.WM_MOUSEMOVE, IntPtr.Zero, lParam);
-                NativeMethods.PostMessage(hwnd, i == 1 ? secondPress : downMsg, (IntPtr)mk, lParam);
+                Post(hwnd, (uint)NativeMethods.WM_MOUSEMOVE, IntPtr.Zero, lParam);
+                Post(hwnd, i == 1 ? secondPress : downMsg, (IntPtr)mk, lParam);
                 bool cancelled = holdMilliseconds > 0 && HoldFor(holdMilliseconds, cancel);
                 // The UP goes out even when a stop cut the hold short: the window must never be
                 // left believing the button is still down.
-                NativeMethods.PostMessage(hwnd, upMsg, IntPtr.Zero, lParam);
+                Post(hwnd, upMsg, IntPtr.Zero, lParam);
                 if (cancelled) { break; }
             }
             return true;
         }
 
+        private const int ERROR_NOT_ENOUGH_QUOTA = 1816;
+        private static long _queueFullTick;
+        private static long _queueFullLoggedTick;
+
+        /// <summary>
+        /// When a background click last found the window's message queue full (Environment.TickCount64; 0 =
+        /// never). Read by Anti-Freeze.
+        /// </summary>
+        public static long LastQueueFullTick => System.Threading.Interlocked.Read(ref _queueFullTick);
+
+        /// <summary>
+        /// PostMessage, minding the answer. A window's queue holds 10,000 posted messages; a window that
+        /// stops reading them (busy, loading, hung) fills it at three messages a click, and from then on
+        /// every post fails. The results were ignored, so Tempo kept "clicking" into a full queue — the
+        /// window chewed through thousands of stale clicks long after Stop — and nothing said so.
+        /// </summary>
+        private static void Post(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam)
+        {
+            if (NativeMethods.PostMessage(hwnd, msg, wParam, lParam)) { return; }
+            if (Marshal.GetLastWin32Error() != ERROR_NOT_ENOUGH_QUOTA) { return; }
+            long now = Environment.TickCount64;
+            System.Threading.Interlocked.Exchange(ref _queueFullTick, now);
+            if (now - System.Threading.Interlocked.Read(ref _queueFullLoggedTick) > 10000)
+            {
+                System.Threading.Interlocked.Exchange(ref _queueFullLoggedTick, now);
+                Logger.Warn("[Clicker] the target window's message queue is full (10,000 messages) — it is not keeping up "
+                            + "with background clicks; Anti-Freeze slows down, and clicks are lost until it catches up.");
+            }
+        }
+
+        /// <summary>
+        /// "Ignore Tempo's own window while clicking or playing a macro" (AppSettings.IgnoreOwnWindowWhileRunning),
+        /// read live on the click thread; set by MainForm. While it holds, a background click at a point one of
+        /// Tempo's own windows covers goes to the window underneath it — the one the point was picked on.
+        ///
+        /// OFF until MainForm says otherwise: a process without Tempo's window (the test harnesses) clicks its own
+        /// windows on purpose, and looking through them would send those clicks to whatever lies beneath.
+        /// </summary>
+        public static Func<bool> SkipOwnWindows { get; set; } = () => false;
+
+        /// <summary>
+        /// A window of Tempo's own that takes its clicks on purpose — the CPS test's pad, there to measure the clicker
+        /// (SelfClickGuard.WelcomeOwnInput keeps it). Never looked through. A handle, so the click thread can read it.
+        /// </summary>
+        public static IntPtr WelcomeWindow;
+
+        /// <summary>
+        /// The window a background click at this screen point is posted to — what Anti-Freeze watches, so it
+        /// watches the window that is really being clicked.
+        /// </summary>
+        public static IntPtr TargetWindowAt(int x, int y) => ResolveWindowAt(x, y);
+
         /// <summary>
         /// Finds the window that should receive a click at a screen point: the
         /// top-level window under it, then the deepest visible, non-transparent child
         /// at that spot (so a click lands on the actual control, not just the frame).
+        ///
+        /// Background clicks are POSTED, and the guard that keeps a run off Tempo's own interface
+        /// (SelfClickGuard) can only recognise INJECTED input by its signature — a posted message carries
+        /// none. So with Tempo's window over the point (dragged there, or the point picked with Tempo on top),
+        /// every background click went into Tempo's own controls: ticking boxes, switching tabs, and at
+        /// 60 a second something like Delete profile soon enough. Tempo's own windows are now looked
+        /// through instead, to the window the point was picked on.
         /// </summary>
         private static IntPtr ResolveWindowAt(int x, int y)
         {
@@ -528,6 +590,16 @@ namespace AutoClicker.Engine
             if (hwnd == IntPtr.Zero)
             {
                 return IntPtr.Zero;
+            }
+            bool skipOwn;
+            try { skipOwn = SkipOwnWindows?.Invoke() ?? false; } catch { skipOwn = false; }
+            if (skipOwn && IsOwnWindow(hwnd) && !IsWelcome(hwnd))
+            {
+                hwnd = TopLevelUnderOwnAt(x, y);
+                if (hwnd == IntPtr.Zero)
+                {
+                    return IntPtr.Zero;
+                }
             }
 
             // Descend into child controls at the point (a few levels is plenty; guards
@@ -547,6 +619,62 @@ namespace AutoClicker.Engine
             }
             return hwnd;
         }
+
+        private static readonly uint OwnProcessId = (uint)Environment.ProcessId;
+
+        private static bool IsOwnWindow(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) { return false; }
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            return pid == OwnProcessId;
+        }
+
+        private static bool IsWelcome(IntPtr hwnd)
+        {
+            IntPtr welcome = WelcomeWindow;
+            return welcome != IntPtr.Zero && (hwnd == welcome || IsChild(welcome, hwnd));
+        }
+
+        [DllImport("user32.dll")] private static extern bool IsChild(IntPtr parent, IntPtr hWnd);
+
+        /// <summary>
+        /// The window under the point once Tempo's own are taken away: the first top-level window, top of the
+        /// z-order down, that is not Tempo's and that WindowFromPoint itself would stop at there — shown, not
+        /// minimised, enabled, not click-through (WS_EX_TRANSPARENT, the overlays every app floats), not cloaked
+        /// (a hidden Store-app frame, a window on another virtual desktop), and covering the point.
+        /// </summary>
+        private static IntPtr TopLevelUnderOwnAt(int x, int y)
+        {
+            int guard = 0;
+            for (IntPtr h = GetTopWindow(IntPtr.Zero); h != IntPtr.Zero && guard < 4096; h = GetWindow(h, GW_HWNDNEXT), guard++)
+            {
+                if (!IsWindowVisible(h) || IsIconic(h) || !IsWindowEnabled(h) || IsOwnWindow(h)) { continue; }
+                long ex = GetWindowLongPtr(h, GWL_EXSTYLE).ToInt64();
+                if ((ex & WS_EX_TRANSPARENT) != 0) { continue; }
+                if (DwmGetWindowAttribute(h, DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0) { continue; }
+                if (!GetWindowRect(h, out RECT r) || x < r.Left || x >= r.Right || y < r.Top || y >= r.Bottom) { continue; }
+                return h;
+            }
+            return IntPtr.Zero;
+        }
+
+        private const uint GW_HWNDNEXT = 2;
+        private const int GWL_EXSTYLE = -20;
+        private const long WS_EX_TRANSPARENT = 0x00000020;
+        private const int DWMWA_CLOAKED = 14;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+
+        [DllImport("user32.dll")] private static extern IntPtr GetTopWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int index);
+        [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out int value, int size);
 
         private static void ButtonMessages(MouseButtonType button, out uint down, out uint up, out int mk)
         {

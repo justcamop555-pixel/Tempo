@@ -118,6 +118,22 @@ namespace AutoClicker.UI
         }
 
         /// <summary>
+        /// Gives the cards on screen the current theme (the main window's theme change). New cards take it
+        /// when they come up; the ones already up — a reminder can stay until dismissed — kept the old one.
+        /// UI thread.
+        /// </summary>
+        public void ApplyTheme()
+        {
+            Theme now;
+            try { now = _theme(); } catch { return; }
+            foreach (NotificationToastForm card in _active.ToArray())
+            {
+                try { card.ApplyTheme(now); }
+                catch (Exception ex) { Utils.Logger.Swallow("NotificationCenter.ApplyTheme", ex); }
+            }
+        }
+
+        /// <summary>
         /// Shows a notification card. Safe to call from any thread. Newest cards appear
         /// nearest the chosen corner and push older ones away. <paramref name="onShown"/> runs
         /// once the message is really on screen — as its own card, or counted "×N" on the card
@@ -527,7 +543,10 @@ namespace AutoClicker.UI
             var wa = TargetWorkArea();
             int corner = _corner();
             bool top = corner == 0 || corner == 1;
-            const int margin = 18, gap = 14;   // a touch more breathing room between cards
+            // A touch more breathing room between cards — 18 and 14 at 100%, grown with the screen like the
+            // cards themselves (they draw in raw pixels and scale their own numbers; see NotificationToastForm).
+            float k = _active.Count > 0 ? Math.Max(1f, _active[0].DeviceDpi / 96f) : 1f;
+            int margin = (int)Math.Round(18 * k), gap = (int)Math.Round(14 * k);
 
             // Iterate newest → oldest so the newest is nearest the corner.
             int edge = top ? wa.Top + margin : wa.Bottom - margin;

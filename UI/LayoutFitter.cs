@@ -161,6 +161,9 @@ namespace AutoClicker.UI
                                           ": " + rep.ItemsCut + " cut off, " + rep.ItemsExamined + " examined.");
                         Utils.Logger.Info("[layout] ampersand check for " + Utils.Localization.Current +
                                           ": " + rep.Ampersands + " hiding an \"&\", " + rep.AmpExamined + " examined.");
+                        Utils.Logger.Info("[layout] spacing check for " + Utils.Localization.Current +
+                                          ": " + rep.TooClose + " too close, " + rep.Misaligned + " not lined up, " +
+                                          rep.SpacingCompared + " pairs compared.");
                         if (rep.IconsDropped > 0)
                         {
                             Utils.Logger.Info("[layout] icon check for " + Utils.Localization.Current + ": " +
@@ -349,7 +352,13 @@ namespace AutoClicker.UI
             public int ItemsCut, ItemsExamined;
             /// <summary>Text whose "&amp;" the control draws as a keyboard-shortcut underline instead of showing it.</summary>
             public int Ampersands, AmpExamined;
-            public int Faults => Overlaps + Clipped + Overflows + Sideways + EnglishText + TextCut + ItemsCut + Ampersands;
+            /// <summary>
+            /// Framed boxes (fields, lists, buttons, cards) touching or all but touching, and fields side by side in a
+            /// row that do not line up — see CountSpacing.
+            /// </summary>
+            public int TooClose, Misaligned, SpacingCompared;
+            public int Faults => Overlaps + Clipped + Overflows + Sideways + EnglishText + TextCut + ItemsCut + Ampersands +
+                                 TooClose + Misaligned;
         }
 
         /// <summary>Every check over every root, summed. Counts and logs; moves nothing.</summary>
@@ -394,6 +403,9 @@ namespace AutoClicker.UI
             rep.ItemsExamined += _itemsExamined;
             rep.Ampersands += CountHiddenAmpersands(r);
             rep.AmpExamined += _ampExamined;
+            rep.TooClose += CountSpacing(r);
+            rep.Misaligned += _misaligned;
+            rep.SpacingCompared += _spacingCompared;
             rep.Windows++;
         }
 
@@ -485,7 +497,8 @@ namespace AutoClicker.UI
                               " clipped button(s), " + rep.Overflows + " out of bounds, " + rep.Sideways +
                               " scrolling sideways, " + rep.EnglishText + " showing untranslated English, " +
                               rep.TextCut + " with text cut off, " + rep.ItemsCut + " list item(s) or column title(s) cut off, " +
-                              rep.Ampersands + " hiding an \"&\" — " +
+                              rep.Ampersands + " hiding an \"&\", " + rep.TooClose + " too close, " +
+                              rep.Misaligned + " not lined up — " +
                               rep.PairsCompared + " pairs, " + rep.OverflowExamined + " controls, " +
                               rep.TextExamined + " texts, " + rep.CutExamined + " fixed boxes and " +
                               rep.ItemsExamined + " list items examined.");
@@ -1154,10 +1167,15 @@ namespace AutoClicker.UI
         /// Whether <paramref name="l"/>'s words run past its box: <paramref name="need"/> is the
         /// size they take wrapped at its width, <paramref name="room"/> the box.
         ///
-        /// A little over the height is not "cut": a single line's box includes blank leading
+        /// A little over the height is not "cut" for ONE line: its box includes blank leading
         /// above the letters and room for descenders below them, and a big-font status word
         /// ("IDLE", 47 px of line in a 42 px box) loses none of its ink. More than ~15% of a
         /// line starts clipping letters; a whole line missing is the usual case.
+        ///
+        /// Wrapped onto two lines or more there is no allowance at all: a label draws its LAST
+        /// line only when every pixel of it fits (TextBoxControl), so 1 px short drops the whole
+        /// line. The 15% let exactly that through — the Roblox Accounts hint at 150% was 46 px of
+        /// text in a 45 px box, and "stay open while Tempo is minimised." was simply not there.
         /// </summary>
         private static bool TextCut(Label l, out Size need, out Size room) => TextCut(l, l.Text, out need, out room);
 
@@ -1179,8 +1197,11 @@ namespace AutoClicker.UI
             }
             catch { return false; }
             const int Tolerance = 2;      // rounding
-            return need.Width > room.Width + Tolerance
-                || need.Height - room.Height > Math.Max(Tolerance, line * 15 / 100);
+            if (need.Width > room.Width + Tolerance) { return true; }
+            bool wraps = line > 0 && need.Height >= line * 2 - Tolerance;
+            return wraps
+                ? need.Height > room.Height
+                : need.Height - room.Height > Math.Max(Tolerance, line * 15 / 100);
         }
 
         /// <summary>How many fixed text boxes the start-up pass made taller, or ended with "…".</summary>
@@ -1292,7 +1313,9 @@ namespace AutoClicker.UI
                             if (child.Width <= 0 || child.Height <= 0 || !IsCollidable(child) || IsOverlay(child)) { continue; }
                             _paintedCompared++;
                             Rectangle hit = Rectangle.Intersect(CollisionBounds(child), p.Ink);
-                            if (hit.Width < MinCoverPx || hit.Height < MinCoverPx) { continue; }
+                            // Any depth of cover counts once it runs along the text: a card's first row reaching
+                            // 2 px into the title's badge passed the old 3 x 3 test, and touched the icon on screen.
+                            if (hit.Width < MinCoverPx || hit.Height < 1) { continue; }
                             _paintedCovered++;
                             Utils.Logger.Warn("[layout] STILL OVERLAPPING in \"" + where + "\": \"" + Name(child) + "\"@" +
                                               child.Left + "," + child.Top + " sits on \"" + Shorten(p.Text) + "\", painted by the " +
@@ -1304,6 +1327,131 @@ namespace AutoClicker.UI
             catch (Exception ex) { Utils.Logger.Swallow("LayoutFitter.CountPaintedText", ex); }
             finally { g?.Dispose(); }
             return cut;
+        }
+
+        /// <summary>What the last CountSpacing compared, and how many rows it found not lined up.</summary>
+        private static int _spacingCompared, _misaligned;
+
+        /// <summary>
+        /// Framed boxes that touch, and fields side by side that do not line up.
+        ///
+        /// The overlap check forgives anything under 6 px — right for text, whose box is wider than its ink — so two
+        /// framed controls could sit edge to edge, or a pixel apart, in a layout every language called clean: the
+        /// Statistics tab's profile filter ended on the first pixel of the session list under it (its real height
+        /// is 30, not the 23 WinForms reports before it has a window). And two fields in one row with the same Top,
+        /// a 23 px text box beside a 30 px combo box, read as a step. Returns how many touch; how many rows do not
+        /// line up is left in _misaligned.
+        /// </summary>
+        private static int CountSpacing(Control root)
+        {
+            const int MinGapPx = 2;        // closer than this, two frames read as one thick line
+            const int MinSharePx = 6;      // ...along an edge they share at least this much of
+            const int OverlapPx = 6;       // from here on it is an overlap, which CountOverlaps reports
+            const int RowGapPx = 24;       // side by side: no further apart than this to be one row
+            const int CentreSlackPx = 2;   // centres may differ this much (odd heights, rounding)
+            int close = 0;
+            _spacingCompared = 0;
+            _misaligned = 0;
+            // Under a simulated DPI (the harnesses' fake 150%) WinForms scales the layout and the buttons, while text
+            // boxes, spinners and combo boxes keep the heights their font has on the REAL screen: every field a third
+            // too short, a world no screen shows, which reads as rows out of line everywhere. Measured only where the
+            // two agree — at 100%, and on a real 125% or 150% screen.
+            if (SimulatedDpi(root)) { return 0; }
+            try
+            {
+                foreach (Control container in Containers(root))
+                {
+                    var kids = new List<Control>();
+                    foreach (Control c in container.Controls)
+                    {
+                        if (c.Width > 0 && c.Height > 0 && c.Dock == DockStyle.None && IsFramed(c) && !IsOverlay(c)) { kids.Add(c); }
+                    }
+                    var boxes = new Rectangle[kids.Count];
+                    for (int i = 0; i < kids.Count; i++) { boxes[i] = LaidOutBounds(kids[i]); }
+
+                    for (int i = 0; i < kids.Count; i++)
+                    {
+                        for (int k = i + 1; k < kids.Count; k++)
+                        {
+                            Rectangle a = boxes[i], b = boxes[k];
+                            _spacingCompared++;
+                            int acrossShared = Math.Min(a.Right, b.Right) - Math.Max(a.Left, b.Left);
+                            int downShared = Math.Min(a.Bottom, b.Bottom) - Math.Max(a.Top, b.Top);
+                            string where = Shorten(container.Text);
+
+                            // One above the other: a gap under 2 px, or an overlap too shallow for CountOverlaps.
+                            if (acrossShared >= MinSharePx && downShared > -MinGapPx && downShared < OverlapPx)
+                            {
+                                close++;
+                                Utils.Logger.Warn("[layout] TOO CLOSE in \"" + where + "\": \"" + Name(kids[i]) + "\"@" + kids[i].Left + "," +
+                                                  kids[i].Top + " and \"" + Name(kids[k]) + "\"@" + kids[k].Left + "," + kids[k].Top + " — " +
+                                                  (downShared > 0 ? "overlapping by " + downShared + " px" : -downShared + " px apart") +
+                                                  ", one above the other.");
+                                continue;
+                            }
+                            if (downShared <= 0) { continue; }
+
+                            // Side by side.
+                            int gap = -acrossShared;
+                            if (downShared >= MinSharePx && gap > -OverlapPx && gap < MinGapPx)
+                            {
+                                close++;
+                                Utils.Logger.Warn("[layout] TOO CLOSE in \"" + where + "\": \"" + Name(kids[i]) + "\"@" + kids[i].Left + "," +
+                                                  kids[i].Top + " and \"" + Name(kids[k]) + "\"@" + kids[k].Left + "," + kids[k].Top + " — " +
+                                                  (gap < 0 ? "overlapping by " + (-gap) + " px" : gap + " px apart") + ", side by side.");
+                                continue;
+                            }
+                            // One row only when they share three quarters of the shorter one's height: a field with its
+                            // caption above it, beside a button row (Keybinds' "Interval step"), is a column of its own.
+                            if (gap < 0 || gap > RowGapPx || downShared * 4 < Math.Min(a.Height, b.Height) * 3) { continue; }
+                            if (!IsRowField(kids[i]) || !IsRowField(kids[k])) { continue; }
+                            // Twice the centres, to stay in whole pixels.
+                            int centres = Math.Abs((a.Top + a.Bottom) - (b.Top + b.Bottom));
+                            if (centres <= CentreSlackPx * 2) { continue; }
+                            _misaligned++;
+                            Utils.Logger.Warn("[layout] MISALIGNED in \"" + where + "\": \"" + Name(kids[i]) + "\"@" + kids[i].Left + "," +
+                                              kids[i].Top + " (" + a.Height + " px tall) and \"" + Name(kids[k]) + "\"@" + kids[k].Left + "," +
+                                              kids[k].Top + " (" + b.Height + " px) side by side, their middles " +
+                                              (centres / 2f).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " px apart.");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("LayoutFitter.CountSpacing", ex); }
+            return close;
+        }
+
+        /// <summary>
+        /// A control that draws a frame or a filled shape to its edges — a field, a list, a button, a card — so that
+        /// another one touching it reads as one thick line. Text, tick boxes, sliders and plain panels have no edge
+        /// to touch.
+        /// </summary>
+        private static bool IsFramed(Control c)
+        {
+            if (c is CheckBox || c is RadioButton) { return false; }
+            return c is TextBoxBase || c is UpDownBase || c is ComboBox || c is ListView || c is ListBox ||
+                   c is ButtonBase || c is GroupBox;
+        }
+
+        /// <summary>True when WinForms has been told a DPI the screen does not have (a test's fake 150%).</summary>
+        private static bool SimulatedDpi(Control root)
+        {
+            try
+            {
+                using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
+                {
+                    return Math.Abs(g.DpiY - root.DeviceDpi) > 1f;
+                }
+            }
+            catch { return false; }
+        }
+
+        /// <summary>A one-line field or a button: what a row of controls is lined up by.</summary>
+        private static bool IsRowField(Control c)
+        {
+            if (c is TextBoxBase t) { return !t.Multiline; }
+            if (c is CheckBox || c is RadioButton) { return false; }
+            return c is UpDownBase || c is ComboBox || c is ButtonBase;
         }
 
         /// <summary>How many combo-box choices and column titles the last CountCutItems measured.</summary>

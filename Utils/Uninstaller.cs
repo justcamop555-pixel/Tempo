@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Windows.Forms;
@@ -603,20 +604,31 @@ namespace AutoClicker.Utils
                 string scriptPath = Path.Combine(Path.GetTempPath(),
                     "tempo_uninstall_" + Guid.NewGuid().ToString("N") + ".bat");
 
+                // Tempo's own install folder holds nothing but Tempo, so its leftovers can go too: a staged
+                // update, an install interrupted half-way, the program under its other name, backups of it.
+                // A portable copy's folder may be Downloads, where only the names Tempo ships are touched.
+                bool ownFolder = deleteExe && DeploymentInfo.IsInstalled;
+                // And the unpacked copies in TEMP — 270 MB per build, which nothing removed once Tempo was
+                // gone (BundleCleanup runs when Tempo starts, and an uninstalled Tempo never starts again).
+                List<string> unpacked = deleteExe ? UnpackRootsToRemove(exe) : new List<string>();
+
                 File.WriteAllText(scriptPath, CleanupScript);
 
                 var psi = new ProcessStartInfo
                 {
-                    FileName = "cmd.exe",
-                    Arguments = CleanupArguments(scriptPath, dataDir, exe, pid, logsDir, keepData: !deleteData),
+                    FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                    Arguments = CleanupArguments(scriptPath, dataDir, exe, pid, logsDir, !deleteData, ownFolder, unpacked),
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    WorkingDirectory = Path.GetTempPath()
                 };
 
                 Process.Start(psi);
                 Logger.Info("[Uninstall] cleanup helper launched (program " + (deleteExe ? "removed" : "kept")
-                            + ", data " + (deleteData ? "DELETED" : "kept") + ").");
+                            + ", data " + (deleteData ? "DELETED" : "kept")
+                            + (ownFolder ? ", install folder tidied" : "")
+                            + (unpacked.Count > 0 ? ", unpacked copies " + string.Join(", ", unpacked) : "") + ").");
                 return true;
             }
             catch (Exception ex)
@@ -627,17 +639,76 @@ namespace AutoClicker.Utils
             }
         }
 
-        /// <summary>The command line that runs <see cref="CleanupScript"/>. Also the harness's way in.</summary>
+        /// <summary>
+        /// The command line that runs <see cref="CleanupScript"/>. Also the harness's way in.
+        /// <paramref name="ownFolder"/>: the exe sits in Tempo's own install folder, so Tempo's other leftovers
+        /// there go too. <paramref name="unpackRoots"/>: at most three %TEMP%\.net\&lt;name&gt; folders to remove
+        /// (see <see cref="UnpackRootsToRemove"/>).
+        /// </summary>
         internal static string CleanupArguments(string scriptPath, string dataDir, string exe, int pid,
-                                                string logsDir, bool keepData)
+                                                string logsDir, bool keepData, bool ownFolder,
+                                                System.Collections.Generic.IList<string> unpackRoots)
         {
-            return "/c \"\"" + scriptPath + "\" \"" + (dataDir ?? "") + "\" \"" + (exe ?? "") + "\" " + pid
-                   + " \"" + (logsDir ?? "") + "\" " + (keepData ? "1" : "0") + "\"";
+            var sb = new System.Text.StringBuilder();
+            sb.Append("/c \"\"").Append(scriptPath).Append("\" \"").Append(dataDir ?? "").Append("\" \"")
+              .Append(exe ?? "").Append("\" ").Append(pid).Append(" \"").Append(logsDir ?? "").Append("\" ")
+              .Append(keepData ? "1" : "0").Append(' ').Append(ownFolder ? "1" : "0");
+            for (int i = 0; i < 3; i++)
+            {
+                string root = unpackRoots != null && i < unpackRoots.Count ? unpackRoots[i] : "";
+                sb.Append(" \"").Append(root ?? "").Append('"');
+            }
+            sb.Append('"');
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// The %TEMP%\.net folders the .NET host unpacked Tempo into, to remove once the program is gone: the one
+        /// named after the exe being uninstalled, and the two Tempo's own names use (TempoClicker for an install,
+        /// Tempo for a download). Only existing DIRECT children of %TEMP%\.net — never TEMP or .net itself, which
+        /// other single-file programs share. Another copy of Tempo left on the PC simply unpacks itself again on
+        /// its next start, as after any update.
+        /// </summary>
+        internal static List<string> UnpackRootsToRemove(string exe)
+        {
+            var roots = new List<string>();
+            try
+            {
+                string net = Path.GetFullPath(Path.Combine(Path.GetTempPath(), ".net")).TrimEnd('\\');
+                var names = new List<string>();
+                try
+                {
+                    string own = Path.GetFileNameWithoutExtension(exe ?? "");
+                    if (!string.IsNullOrWhiteSpace(own)) { names.Add(own); }
+                }
+                catch { }
+                names.Add(Path.GetFileNameWithoutExtension(DeploymentInfo.InstalledExeName));
+                names.Add(Path.GetFileNameWithoutExtension(DeploymentInfo.LegacyExeName));
+                foreach (string n in names)
+                {
+                    if (n.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || n == "." || n == "..") { continue; }
+                    string root = Path.GetFullPath(Path.Combine(net, n)).TrimEnd('\\');
+                    if (!string.Equals(Path.GetDirectoryName(root), net, StringComparison.OrdinalIgnoreCase)) { continue; }
+                    if (!Directory.Exists(root)) { continue; }
+                    if (roots.Exists(r => string.Equals(r, root, StringComparison.OrdinalIgnoreCase))) { continue; }
+                    roots.Add(root);
+                    if (roots.Count == 3) { break; }
+                }
+            }
+            catch { }
+            return roots;
         }
 
         /// <summary>
         /// The cleanup script. Arguments: data folder, exe ("" = keep the program), PID to wait for, logs
-        /// folder, and 1 to keep the data.
+        /// folder, 1 to keep the data, 1 when the exe sits in Tempo's own install folder, then up to three
+        /// unpack folders in %TEMP%\.net to remove with the program ("" for none).
+        ///
+        /// In Tempo's own install folder it also removes what Tempo itself leaves there — a staged update
+        /// (.update), an install stopped half-way (.installing), the program under its other name, backups
+        /// of it (.bak, .old), checksums and the uninstall script's staging copy — so the folder can go.
+        /// Before, any of those kept the folder (a 105 MB Tempo.exe.bak did, on this project's own PC) and
+        /// the unpacked copies in TEMP (270 MB a build) stayed for good.
         ///
         /// Written without delayed expansion, so a folder name containing "!" is used as it is instead of
         /// being mangled; with no labels inside parenthesised blocks, so every retry is a plain goto; and with
@@ -660,6 +731,10 @@ namespace AutoClicker.Utils
             "set \"PID=%~3\"\r\n" +
             "set \"LOGS=%~4\"\r\n" +
             "set \"KEEP=%~5\"\r\n" +
+            "set \"OWN=%~6\"\r\n" +
+            "set \"NET1=%~7\"\r\n" +
+            "set \"NET2=%~8\"\r\n" +
+            "set \"NET3=%~9\"\r\n" +
             "set /a w=0\r\n" +
             ":wait\r\n" +
             "\"%SystemRoot%\\System32\\tasklist.exe\" /fi \"PID eq %PID%\" 2>nul | \"%SystemRoot%\\System32\\find.exe\" \"%PID%\" >nul\r\n" +
@@ -687,11 +762,43 @@ namespace AutoClicker.Utils
             "\"%SystemRoot%\\System32\\PING.EXE\" -n 2 127.0.0.1 >nul\r\n" +
             "goto delexe\r\n" +
             ":tidy\r\n" +
+            "del /q \"%EXE%.update\" >nul 2>&1\r\n" +
             "del /q \"%~dp2Tempo.exe.sha256\" >nul 2>&1\r\n" +
             "del /q \"%~dp2INSTALL-README.txt\" >nul 2>&1\r\n" +
             "del /q \"%~dp2install.cmd\" >nul 2>&1\r\n" +
             "del /q \"%~dp2uninstall.cmd\" >nul 2>&1\r\n" +
             "if exist \"%~dp2runtimes\" rmdir /s /q \"%~dp2runtimes\" >nul 2>&1\r\n" +
+            "if not \"%OWN%\"==\"1\" goto unpacked\r\n" +
+            "del /q \"%~dp2Tempo.exe\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2TempoClicker.exe\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2Tempo.exe.update\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2TempoClicker.exe.update\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2Tempo.exe.installing\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2TempoClicker.exe.installing\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2Tempo.exe.bak\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2TempoClicker.exe.bak\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2Tempo.exe.old\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2TempoClicker.exe.old\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2TempoClicker.exe.sha256\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2uninstall.cmd.new\" >nul 2>&1\r\n" +
+            "del /q \"%~dp2.tempo_write_test_*\" >nul 2>&1\r\n" +
+            ":unpacked\r\n" +
+            "set /a u=0\r\n" +
+            ":delnet\r\n" +
+            "if not \"%NET1%\"==\"\" if exist \"%NET1%\" rmdir /s /q \"%NET1%\" >nul 2>&1\r\n" +
+            "if not \"%NET2%\"==\"\" if exist \"%NET2%\" rmdir /s /q \"%NET2%\" >nul 2>&1\r\n" +
+            "if not \"%NET3%\"==\"\" if exist \"%NET3%\" rmdir /s /q \"%NET3%\" >nul 2>&1\r\n" +
+            "set \"LEFT=\"\r\n" +
+            "if not \"%NET1%\"==\"\" if exist \"%NET1%\" set \"LEFT=1\"\r\n" +
+            "if not \"%NET2%\"==\"\" if exist \"%NET2%\" set \"LEFT=1\"\r\n" +
+            "if not \"%NET3%\"==\"\" if exist \"%NET3%\" set \"LEFT=1\"\r\n" +
+            "if not defined LEFT goto netdone\r\n" +
+            "set /a u+=1\r\n" +
+            "if %u% geq 5 goto netdone\r\n" +
+            "\"%SystemRoot%\\System32\\PING.EXE\" -n 2 127.0.0.1 >nul\r\n" +
+            "goto delnet\r\n" +
+            ":netdone\r\n" +
+            "if not \"%NET1%\"==\"\" rd \"%NET1%\\..\" >nul 2>&1\r\n" +
             "rd \"%~dp2.\" >nul 2>&1\r\n" +
             ":done\r\n" +
             "del /q \"%~f0\" >nul 2>&1\r\n";

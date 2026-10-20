@@ -109,7 +109,8 @@ namespace AutoClicker.UI
             // ── Filter row ────────────────────────────────────────────────────
             int row = 62;
 
-            _profileSearch = UiFactory.Text(16, row, 210);
+            // 3 px down: centred on the 30 px combo boxes beside it (a text box is 23).
+            _profileSearch = UiFactory.Text(16, row + 3, 210);
             _profileSearch.PlaceholderText = Localization.T("Search profiles…");
             _profileSearch.AccessibleName = Localization.T("Search profiles");
             _profileSearch.TextChanged += OnProfileFilterChanged;
@@ -1419,7 +1420,7 @@ namespace AutoClicker.UI
                         ProfileCategoryName(p.Category),
                         p.LastUsedUtc == DateTime.MinValue
                             ? Localization.T("never")
-                            : p.LastUsedUtc.ToLocalTime().ToString("g")
+                            : p.LastUsedUtc.ToLocalTime().ToString("g", Localization.DateCulture)
                     }
                 });
             }

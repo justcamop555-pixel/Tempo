@@ -2,6 +2,122 @@
 
 All notable changes to Tempo. Newest first. Per-release notes are also in the `release-notes/` folder and on the [Releases page](https://github.com/justcamop555-pixel/Tempo/releases).
 
+### 1.0.325
+
+- **Anti-Freeze watches the app being clicked.** It used to compare Tempo's OWN CPU use with 80%. One click thread never comes near that on a multi-core PC, so in practice Anti-Freeze was only its speed cap. Now, twice a second, it asks the window under the click whether it still answers, with the same quiet message Windows uses to decide that a program is "not responding".
+  - **A slow app gets slower clicks, and an app that doesn't answer gets none.** While the app is slow to answer, the clicker slows down. While it doesn't answer at all, the clicks are held until it does. After 5 seconds Windows covers a frozen program with a stand-in window that drops every click, and Tempo recognises that too.
+  - **A full PC counts only when the app is slow too.** Games often run the CPU at 100%, so a busy CPU or nearly full memory alone never slows the clicker.
+  - **The card shows the PC:** the CPU across every core, the busiest part of the GPU and the memory in use, as Task Manager counts them, and how Windows is powering the PC ("Plugged in · Best performance", "Battery 64% · Best power efficiency"). The "CPU %" box is gone; settings files that carry its value still load.
+  - **Full speed while something runs.** On battery and in the power-saving modes ("Energy saver" on recent Windows 11, "Battery saver" before it), Windows runs apps it thinks are in the background on slower cores and lets their timers drift. While the clicker, a macro, a recording or camera-relative movement runs, Tempo asks Windows for full speed and a 1 ms timer. It gives both back when it stops, and a paused run counts as stopped.
+- **Background clicks look through Tempo's own windows.** With "Ignore Tempo's own window while clicking or playing a macro" on (the default), a background click aimed at a spot that one of Tempo's windows covers now goes to the app underneath, and Anti-Freeze watches that app. Before, it went to Tempo's window and was ignored there. The CPS test pad still takes Tempo's clicks. A real click on Tempo's own window is still ignored, and the status bar now says so while it happens.
+- **The randomizer reworked (the Randomization card and Humanize).**
+  - **No more drift in "where the cursor is" mode.** With position randomization on, each click was spread around the place the previous click left the cursor. That is a random walk: about 40 px away from the start after 1,000 clicks at ±3 px, 138 px after 20,000. Clicks now spread around the spot where you put the cursor. Moving the mouse yourself moves the spot. When the run ends, the cursor goes back to it, unless you moved it.
+  - **Jitter keeps the speed you set.** A jitter larger than the interval was cut off at 1 ms on one side only, so 3 ± 10 ms averaged 4.01 ms and 38.6% of the gaps were exactly 1 ms. The jitter is now limited so that no gap goes below 0.5 ms (or the Anti-Freeze cap's gap). It goes equally both ways, so the average is the speed you set.
+    - The rate line shows that real ± range. It showed "1–5,000 CPS" for 1 ± 5 ms.
+    - Above 1,000 CPS, where Tempo picks a precise interval, the jitter was thrown away. It applies there now too.
+  - **A round spread that stays in its window.** X and Y were randomized separately, which made a square that reached 1.4 times the set radius in its corners. Clicks now fall in a circle, most of them near the middle. A spread near a window's edge could click the app next door. Each spot is now checked to be on the same window and on screen; when it isn't, the click lands on the spot itself.
+  - **Burst pauses vary with the clicks.** A pause between bursts moved by ± the jitter in milliseconds, so a 1-second pause varied by only ±10 ms. It now varies by the same share as the clicks, up to half. A press length varies by at most half of itself.
+  - **Changes apply to a run in progress:** randomize on or off, jitter, spread and press length, as the interval already did. Loading another profile applies its values as well.
+  - **Each run has its own randomness.** All runs shared one random generator, which is not safe when a stopping run and the next one overlap.
+  - **Humanize fits the speed.** It added at least ±5 ms, even at 1–4 ms. It now adds:
+    - about 20% of the interval, never the whole interval;
+    - ±2 px of spread, except in key mode;
+    - a natural press length when none is set: 30% of the interval, at most 80 ms, and none under 3 ms.
+    - Turning Humanize off puts the press length back only if you haven't changed it since.
+  - **Greyed out where it can't apply.** Position randomization does nothing in key mode. "Restore cursor position when stopped" applies only when the clicker moves the real cursor.
+  - **Fixed: "Restore cursor position" moved the mouse after a keyboard run.** A key run never moves the cursor, but its end still "restored" it, and the mouse jumped back to where it was at the start.
+  - **Three tooltips explain what the jitter and Humanize do,** in all six languages. German now says "Salve" for a burst everywhere. The card said "Burst" while the Mode menu said "Salve".
+- **Fixed: Hold mode stopped and started constantly when the trigger was the key being pressed** ("hold E to press E"). Windows reports a key Tempo presses the same way as one you press. So every key-up Tempo sent looked like you letting go, and the clicker stopped and restarted at the key's repeat rate, starting a new run each time. In that setup Tempo now watches the key on your keyboard itself.
+- **Roblox update alerts.**
+  - **What Tempo asks.** Every 2 hours while Roblox is installed, Tempo asks Roblox which client it has released. It uses the same public address Roblox's own client asks, and nothing about you or your accounts goes with it. It also reads Roblox's public deploy log for a newer build that has been uploaded but not released yet.
+  - **The choices.** When the released client is newer than the one on this PC, a card offers **Update now**, **Later** (24 hours) or **Keep this version**. Roblox updates itself through its tray process and turns away old clients after a while (error 280), so Tempo can't keep an old version for you. "Keep this version" means no reminders until a release newer than that one.
+  - **Update now** runs Roblox's own updater, after checking that Roblox signed it. For the Microsoft Store version, it opens the Store's updates page. It asks first if a Roblox window is open.
+  - **Launchers such as Bloxstrap** get one notice, and Tempo never runs Roblox's installer over them, which would take the Roblox links back from the launcher.
+  - **Where it shows.** The notice clears by itself once Roblox has updated. The Accounts row's "Update Roblox…" button, the Roblox client window's "Updates" section and Live debug show the state. Settings › Behaviour › "Check for Roblox updates" turns it off, and the privacy panel lists it.
+- **Sign in with any Chromium browser.** The sign-in browser picker knew four browsers by name and path: Chrome, Edge, Brave and Opera.
+  - **Every installed browser is found:** the ones Windows lists as browsers, the ones registered as apps, and the usual install folders. That covers Opera GX and Air, Vivaldi, Yandex, Chromium, Thorium, and the Beta, Dev and Canary channels of Chrome and Edge.
+  - **Judged by its files, not its name,** so any Chromium browser can sign in.
+  - **Firefox-based browsers** (Firefox, LibreWolf, Waterfox, Floorp, Zen) are listed as "can't be used for sign-in", and picking one says why.
+  - Windows' default browser is marked, and a saved choice of Chrome, Edge, Brave or Opera stays as it was.
+  - Live debug lists the browsers found, and warns when the chosen one has been uninstalled.
+- **Fixed: Roblox wouldn't launch after it updated itself.** Roblox deletes the old version's folder when it updates, but on one PC its roblox-player: links still named the deleted program. Tempo saw that, said "Roblox is only partly installed" and refused every launch, while Roblox was running. It also put "Get Roblox" where the game preview goes. Tempo now starts the installed client directly in that case, with the link it was given. It doesn't rewrite Roblox's registry entries, so the website's Play button stays broken until Roblox registers its links again.
+- **The Accounts window opens where you can see it.** With Accounts in its own window, three things hid it:
+  - With "Always on top" or full screen, the main window floated and the Accounts window opened under it. It now floats with the main window.
+  - Its first size was taller than a laptop's screen (1025×900 at 125%), and a size saved on a big monitor came back just as big. It now always fits on a screen.
+  - From the tray, Windows refused to bring it in front of the app you were using. It now comes to the front.
+  - If opening it fails half-way, the accounts stay on the tab.
+- **Fixed for laptops at 125% and 150%.** On a 1920×1080 laptop at 150%, several screens Tempo draws itself kept 100% sizes while their text grew to 150%. Every one of those sizes now scales with the screen; at 100%, nothing moved by a pixel.
+  - The saved macros list wrote names over cut-off details.
+  - The splash screen's tagline touched both edges of its card.
+  - The statistics charts, stat cards and notification cards ran their text into each other.
+  - **The window fits the screen on first start.** Unless "Remember window position" was on, nothing fitted a 150% window to the screen. It came up bigger than a laptop's screen, with its title bar above the top edge.
+  - **Two texts were cut off at 150% in every language:** the Live Captions model note and the bug-report chooser's log hint. Both have room now. Tempo's own layout check missed them, because it let a wrapped text lose its last line.
+- **Spacing: the "UI noclip" fixes.**
+  - **Spinners looked like "[ 100 ]".** Every number box drew a second, square frame around its digits, inside its own outline. That frame is gone, and the digits sit in the middle of the box, 5 px from its edge.
+  - **17 places where controls touched or didn't line up,** in every language:
+    - the profile row's buttons;
+    - Mode and "Set key…";
+    - the Repeat spinners;
+    - the search boxes beside their filters (Profiles, Macros, Statistics, and Keybinds' quick-play pickers);
+    - the Macros columns;
+    - the Statistics filter sitting on its list;
+    - the notification corner and caption font settings.
+    - The layout check Tempo runs at start-up now looks for these too.
+  - **Card titles** no longer crowd the row under them, at 100% or 150%.
+  - **The CPS chart uses round steps** (1, 2 or 5 × 10ⁿ). Its four fixed quarters printed 0.75 as "0.8" and 0.25 as "0.3", and its current value sat on the zero line.
+- **A theme change reaches every window.**
+  - **Windows that never changed theme while open:** the notification history, on-screen notification cards, the recording badge and the three "Move overlays" stand-ins. They change with it now, and so does the clicking badge's dot.
+  - **Main buttons wear the accent colour in every window.** Changing the theme painted every button neutral, so about 15 dialogs lost their accent button and Multi-Point's Save turned grey. Save Settings, Save Keybinds, ▶ Play, Start captions, Download model and New profile are accent buttons now as well.
+  - **Right-click menus** of the Accounts, Macros, Multi-Point and session-history lists, and of the notification cards, were plain light menus. They follow the theme.
+  - **Live debug** kept the old colours on its control strip. Its log came back in the wrong colour after a theme change.
+  - **Three plain Windows drop-downs follow the theme:** Live debug's "Go to section…", Accounts' "Auto-lock when idle" and a script step's "If it fails".
+  - **The white line along the top of the status bar is gone.** Windows drew it over the accent line in every theme.
+  - **The rate line under the interval** kept the old theme's colours until the interval changed.
+  - **"Match Windows"** re-themed everything at the first unrelated system change after start.
+- **Dates in Tempo's language.** Several screens used Windows' language for dates and day names. A Spanish Tempo on English Windows showed "Mon 10:42, 19 Oct" in the notification history and "Mon Tue…" under the statistics week chart, while the weekday chart beside it said "lun.".
+  - Every date now follows Tempo's language. When Windows is in the same language, Windows' own date order and clock are kept.
+  - That covers the notification history, macros, profiles, accounts, the crash card, restore points, the Roblox client window and the week chart.
+  - The saved captions transcript's heading was in English in every language, and so were the crash report window's buttons. Both are translated.
+- **Tamper check: more details, and a new warning.**
+  - **Settings › Data & Backup › Details…** shows what the check looked at and the result of each of its six checks. "Copy details" copies it in English for a bug report, and "Check again" runs it again. It shows:
+    - the verdict, when the check last ran and how long it took;
+    - the file's path, size and date, its full SHA-256 and Official ID;
+    - its version, build and signature;
+    - the website the browser's download mark names.
+  - **New warning: program files that aren't Tempo's, loaded into it from its folder.** Windows can load a DLL from a program's own folder in place of a system one. Tempo now checks what is loaded and warns, with a "Show files" button. Unused DLLs beside an installed copy get a warning of their own.
+  - **A real hole closed.** At every start, Tempo asked Windows for the speech engine's library by name, so Windows searched Tempo's folder, the working folder and every folder on the PATH, and loaded the first match. The real library is loaded by its full path, so that search never found it; all it could ever load was somebody else's file. Tempo now checks only its own unpack folder. It also no longer adds a "runtimes" folder beside the exe to the library search.
+  - When a check stopped early, the card used to keep showing the previous file's hash.
+- **install.cmd copies only Tempo.**
+  - **What it copied:** every DLL and "runtimes" folder beside the download. In Downloads, those are other programs' files, which Windows would load into Tempo first. It also copied a checksum and a readme that went stale with the first update.
+  - **Now:** it copies only TempoClicker.exe and uninstall.cmd, and removes those leftovers from an existing install.
+  - The readme in the zip is rewritten, because it named the wrong data folder.
+  - In-app installs no longer copy the checksum either, and Tempo tidies the readme and a stale checksum out of its install folder.
+- **Restart after an update no longer leaves you with no Tempo.** The new copy waited 12 seconds for the old one to close, then said "already running" and quit. It now waits for as long as the old copy is still closing, up to 2 minutes.
+- **Uninstall keeps your latest changes.** The in-app uninstall ended Tempo abruptly, even when you chose to keep your data, so a profile being edited, new macros and the latest statistics were lost. It now closes Tempo the ordinary way.
+  - **Tempo's own leftovers are removed from its folder:** old copies and update files. On one PC, a 105 MB backup kept the folder.
+  - **Its unpacked files in Temp are removed too.** That is about 270 MB per version, which nothing removed once Tempo was gone.
+- **Short macro recordings are kept or explained.** A quick test take often saved nothing, and all you saw was a grey "Nothing was recorded.". A take is left empty when:
+  - you typed while Tempo was still in front (left out on purpose, or the Alt+Tab away from Tempo would play in every loop);
+  - you clicked on Tempo's own window;
+  - it was only movement, which the start and end trims took away whole.
+  - Now a take with at least a second of movement is kept. An empty take says why (typed into Tempo, only hotkeys, too short), with the setting that would help.
+- **Minimise during macros, fixed both ways.**
+  - It now minimises the Accounts window too.
+  - It minimises only what's on screen, so the end of a macro no longer pops up a Tempo that was in the tray or minimised.
+  - After a recording, Tempo comes back in front.
+  - After playback started by a hotkey from another app, Tempo stays down instead of jumping over the game after every macro.
+- **Exact status bar figures.**
+  - **CPU to two decimals,** read from processor cycles. Windows counts a process's time in 15.6 ms steps, so the second decimal used to be made up.
+  - **RAM to 0.01 MB,** with the exact bytes in its tip.
+  - **The time Tempo started,** in the uptime tip.
+- **Live debug fixes.**
+  - The "PC: CPU …" line vanished after the first refresh. It stays while the window is open.
+  - The "[Anti-Freeze]" and "[Log]" lines have their colours.
+  - "vault LOCKED" with no vault at all now says "no vault yet".
+  - New lines for the sign-in browser and Roblox updates.
+- **Every build names its source code.** About's version tooltip and its new "Copy details", crash reports, the Settings diagnostics and Live debug's report all say which source code a build was made from, so a report says exactly which code it's about.
+- **Message boxes no longer leak.** Each one left two fonts behind, which add up for a program that stays open for days.
+
 ### 1.0.324
 
 - **The CPS test shows the details of each run.** A panel beside the pad charts your clicks in each second of the test, with your average as a dashed line, and lists your speed, your best second (the most clicks in any one-second stretch, wherever it started), how even your rhythm was, the fastest, average and slowest gaps between clicks, and whether you kept your speed (the second half against the first). Under it, this session's tries, newest first, with a ★ on a new best.

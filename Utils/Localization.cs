@@ -38,9 +38,15 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
-        /// The .NET culture matching the current app language, used for formatting
-        /// dates (weekday/month names) so charts and date labels follow the chosen
-        /// language rather than the operating system locale.
+        /// The culture every date on screen is written in — weekday and month names, the order of day and
+        /// month, the clock — so dates follow the chosen language rather than the operating system's.
+        ///
+        /// Windows' own regional settings when they are in the app's language (a Spanish Tempo on a Mexican
+        /// Windows writes Mexico's dates, an English one on a US Windows month-first with AM/PM), the language
+        /// itself otherwise. Many screens wrote dates in the SYSTEM's culture instead: a Spanish Tempo on an
+        /// English Windows showed "Mon 10:42, 19 Oct" in the notification history and English weekdays under
+        /// one statistics chart while the chart beside it said "lun." — an English Tempo on a German Windows
+        /// the reverse.
         /// </summary>
         public static System.Globalization.CultureInfo DateCulture
         {
@@ -48,17 +54,33 @@ namespace AutoClicker.Utils
             {
                 try
                 {
-                    switch (Current)
+                    string want = LanguageCode(Current);
+                    System.Globalization.CultureInfo system = System.Globalization.CultureInfo.CurrentCulture;
+                    if (string.Equals(system.TwoLetterISOLanguageName, want, StringComparison.OrdinalIgnoreCase))
                     {
-                        case Language.Spanish: return System.Globalization.CultureInfo.GetCultureInfo("es");
-                        case Language.French: return System.Globalization.CultureInfo.GetCultureInfo("fr");
-                        case Language.German: return System.Globalization.CultureInfo.GetCultureInfo("de");
-                        case Language.Italian: return System.Globalization.CultureInfo.GetCultureInfo("it");
-                        case Language.Portuguese: return System.Globalization.CultureInfo.GetCultureInfo("pt");
+                        return system;
+                    }
+                    if (Current != Language.English)
+                    {
+                        return System.Globalization.CultureInfo.GetCultureInfo(want);
                     }
                 }
                 catch { /* fall through to invariant if the culture isn't available */ }
                 return System.Globalization.CultureInfo.InvariantCulture;
+            }
+        }
+
+        /// <summary>The two-letter ISO code of one of Tempo's languages.</summary>
+        private static string LanguageCode(Language language)
+        {
+            switch (language)
+            {
+                case Language.Spanish: return "es";
+                case Language.French: return "fr";
+                case Language.German: return "de";
+                case Language.Italian: return "it";
+                case Language.Portuguese: return "pt";
+                default: return "en";
             }
         }
 
@@ -1768,6 +1790,16 @@ namespace AutoClicker.Utils
             { "The session for this account is in your encrypted vault. This screen is just its label — no passwords or cookies are shown or entered here.", "La sesión de esta cuenta está en tu bóveda cifrada. Esta pantalla es solo su etiqueta — aquí no se muestran ni se introducen contraseñas ni cookies." },
             { "Opening a private browser window…", "Abriendo una ventana de navegador privada…" },
             { "No supported browser was found. Install Google Chrome, Microsoft Edge, Brave or Opera and try again (Firefox and Safari can't be used for sign-in capture).", "No se encontró ningún navegador compatible. Instala Google Chrome, Microsoft Edge, Brave u Opera e inténtalo de nuevo (Firefox y Safari no sirven para capturar el inicio de sesión)." },
+            // The sign-in browser picker, now every browser on the PC (RealBrowser.DetectAll).
+            { "No browser Tempo can use for sign-in was found. Install a Chromium browser — Google Chrome, Microsoft Edge, Brave, Opera or Vivaldi — and try again. Firefox can't be used for sign-in.",
+              "No se encontró ningún navegador que Tempo pueda usar para iniciar sesión. Instala un navegador Chromium —Google Chrome, Microsoft Edge, Brave, Opera o Vivaldi— e inténtalo de nuevo. Firefox no sirve para iniciar sesión." },
+            { "Automatic ({0})", "Automático ({0})" },
+            { "{0} (default)", "{0} (predeterminado)" },
+            { "{0} — can't be used for sign-in", "{0}: no sirve para iniciar sesión" },
+            { "Which browser Roblox sign-in opens in — always a private window of its own. Found on this PC: {0}.",
+              "En qué navegador se abre el inicio de sesión de Roblox: siempre en una ventana privada propia. Encontrados en este PC: {0}." },
+            { "{0} can't be used for Roblox sign-in. Tempo reads the sign-in back through the developer connection that Chromium browsers have (Chrome, Edge, Brave, Opera, Vivaldi…), and {0} doesn't have one. Pick one of those, or Automatic.",
+              "{0} no sirve para iniciar sesión en Roblox. Tempo lee el inicio de sesión a través de la conexión de desarrollador que tienen los navegadores Chromium (Chrome, Edge, Brave, Opera, Vivaldi…), y {0} no la tiene. Elige uno de esos, o Automático." },
             { "Tempo couldn't open a browser window for sign-in.", "Tempo no pudo abrir una ventana de navegador para iniciar sesión." },
             { "Signed in and this hasn't closed? Make sure you finished in the browser window, then click “I've logged in — save”.", "¿Ya iniciaste sesión y esto no se ha cerrado? Asegúrate de terminar en la ventana del navegador y luego pulsa «Ya inicié sesión — guardar»." },
             { "The browser window was closed before sign-in finished. Click Cancel, then try again.", "La ventana del navegador se cerró antes de terminar el inicio de sesión. Pulsa Cancelar y vuelve a intentarlo." },
@@ -1890,6 +1922,65 @@ namespace AutoClicker.Utils
             { "Roblox: official client{0} detected.", "Roblox: cliente oficial{0} detectado." },
             { "Roblox: official client{0} (Microsoft Store).", "Roblox: cliente oficial{0} (Microsoft Store)." },
             { "Roblox: official client{0} (opens through {1}).", "Roblox: cliente oficial{0} (se abre con {1})." },
+            { "Roblox: official client{0}. Its links still name a version Roblox deleted, so Tempo starts it directly.",
+              "Roblox: cliente oficial{0}. Sus enlaces aún apuntan a una versión que Roblox borró, así que Tempo lo inicia directamente." },
+            { "a version Roblox has deleted — Tempo starts the installed client directly",
+              "una versión que Roblox borró: Tempo inicia directamente el cliente instalado" },
+            // Roblox updates (MainForm.RobloxUpdates, RobloxUpdateForm, the Roblox client window's "Updates").
+            { "Roblox update available", "Actualización de Roblox disponible" },
+            { "Roblox {0} is out", "Ya salió Roblox {0}" },
+            { "uploaded {0}", "subida el {0}" },
+            { "“Update now” starts Roblox's own updater, the same one Roblox runs by itself.",
+              "“Actualizar ahora” abre el actualizador del propio Roblox, el mismo que Roblox ejecuta por su cuenta." },
+            { "The Microsoft Store keeps this copy of Roblox up to date: “Open Microsoft Store” shows its updates.",
+              "Microsoft Store mantiene actualizada esta copia de Roblox: “Abrir Microsoft Store” muestra sus actualizaciones." },
+            { "Open Microsoft Store", "Abrir Microsoft Store" },
+            { "{0} installs it by itself the next time it starts a game, so there is nothing to do here.",
+              "{0} la instala por su cuenta la próxima vez que inicie un juego, así que aquí no hay nada que hacer." },
+            { "Roblox's own updater isn't beside the client, so “Open download page” gets the new version from roblox.com.",
+              "El actualizador del propio Roblox no está junto al cliente, así que “Abrir página de descargas” obtiene la nueva versión de roblox.com." },
+            { "“Later” reminds you tomorrow. “Keep this version” stops these reminders until the next Roblox version.",
+              "“Más tarde” te lo recuerda mañana. “Mantener esta versión” detiene estos avisos hasta la próxima versión de Roblox." },
+            { "Keep this version", "Mantener esta versión" },
+            { "Roblox also updates itself in the background, and after a while games stop letting an older version join (error 280).",
+              "Roblox también se actualiza solo en segundo plano y, pasado un tiempo, los juegos dejan de admitir versiones antiguas (error 280)." },
+            { "⚠ Roblox is open. Its updater may close it, so finish your game first.",
+              "⚠ Roblox está abierto. Su actualizador puede cerrarlo, así que termina tu partida primero." },
+            { "Roblox {0} is out — {1} installs it the next time it starts a game.",
+              "Ya salió Roblox {0}: {1} la instala la próxima vez que inicie un juego." },
+            { "Roblox {0} is out — you have {1}.", "Ya salió Roblox {0}; tú tienes la {1}." },
+            { "Roblox is already up to date ({0}).", "Roblox ya está actualizado ({0})." },
+            { "Roblox's updater is already running.", "El actualizador de Roblox ya se está ejecutando." },
+            { "Roblox is open. Its updater may close it, so finish your game first.\n\nUpdate Roblox now anyway?",
+              "Roblox está abierto. Su actualizador puede cerrarlo, así que termina tu partida primero.\n\n¿Actualizar Roblox ahora de todos modos?" },
+            { "Roblox's updater didn't start ({0}), so its download page opens instead.",
+              "El actualizador de Roblox no se inició ({0}), así que se abre su página de descargas." },
+            { "Roblox {0} is out — you have {1}. Click to choose when to update.",
+              "Ya salió Roblox {0}; tú tienes la {1}. Haz clic para elegir cuándo actualizar." },
+            { "Update Roblox…", "Actualizar Roblox…" },
+            { "Updates", "Actualizaciones" },
+            { "Checks are off: switch them on with “Check for Roblox updates” in Behaviour.",
+              "Las comprobaciones están desactivadas: actívalas con “Buscar actualizaciones de Roblox” en Comportamiento." },
+            { "Check for Roblox updates", "Buscar actualizaciones de Roblox" },
+            { "couldn't reach Roblox: {0}", "no se pudo contactar con Roblox: {0}" },
+            { "Released", "Publicada" },
+            { "This PC", "Este PC" },
+            { "you chose to keep this version: no reminders until a newer Roblox",
+              "elegiste mantener esta versión: sin avisos hasta un Roblox más reciente" },
+            { "reminding you again after {0}", "te lo recordará de nuevo después del {0}" },
+            { "Coming", "Próxima" },
+            { "uploaded {0}, not released yet", "subida el {0}, aún sin publicar" },
+            { "Last check", "Última comprobación" },
+            { "up to date", "actualizado" },
+            { "update available", "actualización disponible" },
+            { "newer than the release — a test build, or a rollout that reached this PC first",
+              "más reciente que la publicada: una versión de prueba o un despliegue que llegó antes a este PC" },
+            { "can't be compared", "no se puede comparar" },
+            { "Every two hours while Roblox is installed, ask Roblox which version it hands out — the same public address Roblox itself asks — and tell you when yours is behind, so you choose when to update. Nothing about you or your accounts is sent.",
+              "Cada dos horas, mientras Roblox esté instalado, pregunta a Roblox qué versión entrega —la misma dirección pública que consulta el propio Roblox— y te avisa cuando la tuya se queda atrás, para que elijas cuándo actualizar. No se envía nada sobre ti ni tus cuentas." },
+            { "Roblox update check", "Actualizaciones de Roblox" },
+            { "Asks Roblox which client version it hands out and which it has uploaded since — what Roblox itself reads — every two hours while Roblox is installed. Nothing about you or your accounts is sent. Switch it off with “Check for Roblox updates” in Behaviour.",
+              "Pregunta a Roblox qué versión del cliente entrega y cuál ha subido desde entonces —lo mismo que consulta el propio Roblox— cada dos horas mientras Roblox esté instalado. No se envía nada sobre ti ni tus cuentas. Se desactiva con “Buscar actualizaciones de Roblox” en Comportamiento." },
             { "⚠ The client's signing certificate is out of date — check this PC's clock.", "⚠ El certificado de firma del cliente está caducado: revisa el reloj de este PC." },
             { "⚠ This PC doesn't trust the certificate the client is signed with.", "⚠ Este PC no confía en el certificado con el que está firmado el cliente." },
             { "The signature check couldn't run on this PC — nothing is known either way.", "La comprobación de firma no se pudo ejecutar en este PC: no se sabe nada al respecto." },
@@ -2115,6 +2206,16 @@ namespace AutoClicker.Utils
             { "The session for this account is in your encrypted vault. This screen is just its label — no passwords or cookies are shown or entered here.", "La session de ce compte est dans votre coffre chiffré. Cet écran n'est que son libellé — aucun mot de passe ni cookie n'y est affiché ou saisi." },
             { "Opening a private browser window…", "Ouverture d'une fenêtre de navigateur privée…" },
             { "No supported browser was found. Install Google Chrome, Microsoft Edge, Brave or Opera and try again (Firefox and Safari can't be used for sign-in capture).", "Aucun navigateur compatible trouvé. Installez Google Chrome, Microsoft Edge, Brave ou Opera puis réessayez (Firefox et Safari ne peuvent pas servir à la capture de connexion)." },
+            // The sign-in browser picker, now every browser on the PC (RealBrowser.DetectAll).
+            { "No browser Tempo can use for sign-in was found. Install a Chromium browser — Google Chrome, Microsoft Edge, Brave, Opera or Vivaldi — and try again. Firefox can't be used for sign-in.",
+              "Aucun navigateur utilisable par Tempo pour la connexion n'a été trouvé. Installez un navigateur Chromium — Google Chrome, Microsoft Edge, Brave, Opera ou Vivaldi — puis réessayez. Firefox ne peut pas servir à la connexion." },
+            { "Automatic ({0})", "Automatique ({0})" },
+            { "{0} (default)", "{0} (par défaut)" },
+            { "{0} — can't be used for sign-in", "{0} — inutilisable pour la connexion" },
+            { "Which browser Roblox sign-in opens in — always a private window of its own. Found on this PC: {0}.",
+              "Le navigateur dans lequel s'ouvre la connexion à Roblox — toujours dans sa propre fenêtre privée. Trouvés sur ce PC : {0}." },
+            { "{0} can't be used for Roblox sign-in. Tempo reads the sign-in back through the developer connection that Chromium browsers have (Chrome, Edge, Brave, Opera, Vivaldi…), and {0} doesn't have one. Pick one of those, or Automatic.",
+              "{0} ne peut pas servir à la connexion à Roblox. Tempo relit la connexion par la liaison développeur des navigateurs Chromium (Chrome, Edge, Brave, Opera, Vivaldi…), et {0} n'en a pas. Choisissez l'un d'eux, ou Automatique." },
             { "Tempo couldn't open a browser window for sign-in.", "Tempo n'a pas pu ouvrir de fenêtre de navigateur pour la connexion." },
             { "Signed in and this hasn't closed? Make sure you finished in the browser window, then click “I've logged in — save”.", "Connecté mais cette fenêtre ne s'est pas fermée ? Assurez-vous d'avoir terminé dans la fenêtre du navigateur, puis cliquez sur « Je me suis connecté — enregistrer »." },
             { "The browser window was closed before sign-in finished. Click Cancel, then try again.", "La fenêtre du navigateur a été fermée avant la fin de la connexion. Cliquez sur Annuler, puis réessayez." },
@@ -2237,6 +2338,65 @@ namespace AutoClicker.Utils
             { "Roblox: official client{0} detected.", "Roblox : client officiel{0} détecté." },
             { "Roblox: official client{0} (Microsoft Store).", "Roblox : client officiel{0} (Microsoft Store)." },
             { "Roblox: official client{0} (opens through {1}).", "Roblox : client officiel{0} (s’ouvre via {1})." },
+            { "Roblox: official client{0}. Its links still name a version Roblox deleted, so Tempo starts it directly.",
+              "Roblox : client officiel{0}. Ses liens pointent encore vers une version que Roblox a supprimée, donc Tempo le lance directement." },
+            { "a version Roblox has deleted — Tempo starts the installed client directly",
+              "une version que Roblox a supprimée — Tempo lance directement le client installé" },
+            // Roblox updates (MainForm.RobloxUpdates, RobloxUpdateForm, the Roblox client window's "Updates").
+            { "Roblox update available", "Mise à jour de Roblox disponible" },
+            { "Roblox {0} is out", "Roblox {0} est sorti" },
+            { "uploaded {0}", "mise en ligne le {0}" },
+            { "“Update now” starts Roblox's own updater, the same one Roblox runs by itself.",
+              "« Mettre à jour maintenant » lance le programme de mise à jour de Roblox lui-même, celui que Roblox exécute tout seul." },
+            { "The Microsoft Store keeps this copy of Roblox up to date: “Open Microsoft Store” shows its updates.",
+              "Le Microsoft Store tient cette copie de Roblox à jour : « Ouvrir le Microsoft Store » affiche ses mises à jour." },
+            { "Open Microsoft Store", "Ouvrir le Microsoft Store" },
+            { "{0} installs it by itself the next time it starts a game, so there is nothing to do here.",
+              "{0} l'installe tout seul la prochaine fois qu'il lance un jeu : il n'y a rien à faire ici." },
+            { "Roblox's own updater isn't beside the client, so “Open download page” gets the new version from roblox.com.",
+              "Le programme de mise à jour de Roblox n'est pas à côté du client : « Ouvrir la page de téléchargement » récupère la nouvelle version sur roblox.com." },
+            { "“Later” reminds you tomorrow. “Keep this version” stops these reminders until the next Roblox version.",
+              "« Plus tard » vous le rappelle demain. « Garder cette version » arrête ces rappels jusqu'à la prochaine version de Roblox." },
+            { "Keep this version", "Garder cette version" },
+            { "Roblox also updates itself in the background, and after a while games stop letting an older version join (error 280).",
+              "Roblox se met aussi à jour tout seul en arrière-plan, et au bout d'un moment les jeux refusent les anciennes versions (erreur 280)." },
+            { "⚠ Roblox is open. Its updater may close it, so finish your game first.",
+              "⚠ Roblox est ouvert. Sa mise à jour peut le fermer : terminez d'abord votre partie." },
+            { "Roblox {0} is out — {1} installs it the next time it starts a game.",
+              "Roblox {0} est sorti — {1} l'installe la prochaine fois qu'il lance un jeu." },
+            { "Roblox {0} is out — you have {1}.", "Roblox {0} est sorti — vous avez la {1}." },
+            { "Roblox is already up to date ({0}).", "Roblox est déjà à jour ({0})." },
+            { "Roblox's updater is already running.", "La mise à jour de Roblox est déjà en cours." },
+            { "Roblox is open. Its updater may close it, so finish your game first.\n\nUpdate Roblox now anyway?",
+              "Roblox est ouvert. Sa mise à jour peut le fermer : terminez d'abord votre partie.\n\nMettre à jour Roblox maintenant quand même ?" },
+            { "Roblox's updater didn't start ({0}), so its download page opens instead.",
+              "La mise à jour de Roblox n'a pas démarré ({0}) : sa page de téléchargement s'ouvre à la place." },
+            { "Roblox {0} is out — you have {1}. Click to choose when to update.",
+              "Roblox {0} est sorti — vous avez la {1}. Cliquez pour choisir quand mettre à jour." },
+            { "Update Roblox…", "Mettre à jour Roblox…" },
+            { "Updates", "Mises à jour" },
+            { "Checks are off: switch them on with “Check for Roblox updates” in Behaviour.",
+              "Les vérifications sont désactivées : activez-les avec « Vérifier les mises à jour de Roblox » dans Comportement." },
+            { "Check for Roblox updates", "Vérifier les mises à jour de Roblox" },
+            { "couldn't reach Roblox: {0}", "impossible de joindre Roblox : {0}" },
+            { "Released", "Publiée" },
+            { "This PC", "Ce PC" },
+            { "you chose to keep this version: no reminders until a newer Roblox",
+              "vous avez choisi de garder cette version : pas de rappel jusqu'à un Roblox plus récent" },
+            { "reminding you again after {0}", "nouveau rappel après le {0}" },
+            { "Coming", "À venir" },
+            { "uploaded {0}, not released yet", "mise en ligne le {0}, pas encore publiée" },
+            { "Last check", "Dernière vérification" },
+            { "up to date", "à jour" },
+            { "update available", "mise à jour disponible" },
+            { "newer than the release — a test build, or a rollout that reached this PC first",
+              "plus récente que la version publiée — une version de test, ou un déploiement arrivé d'abord sur ce PC" },
+            { "can't be compared", "impossible à comparer" },
+            { "Every two hours while Roblox is installed, ask Roblox which version it hands out — the same public address Roblox itself asks — and tell you when yours is behind, so you choose when to update. Nothing about you or your accounts is sent.",
+              "Toutes les deux heures, tant que Roblox est installé, demande à Roblox quelle version il distribue — la même adresse publique que Roblox interroge lui-même — et vous prévient quand la vôtre est en retard, pour que vous choisissiez quand mettre à jour. Rien sur vous ou vos comptes n'est envoyé." },
+            { "Roblox update check", "Mises à jour de Roblox" },
+            { "Asks Roblox which client version it hands out and which it has uploaded since — what Roblox itself reads — every two hours while Roblox is installed. Nothing about you or your accounts is sent. Switch it off with “Check for Roblox updates” in Behaviour.",
+              "Demande à Roblox quelle version du client il distribue et laquelle il a mise en ligne depuis — ce que Roblox lit lui-même — toutes les deux heures tant que Roblox est installé. Rien sur vous ou vos comptes n'est envoyé. Désactivez-la avec « Vérifier les mises à jour de Roblox » dans Comportement." },
             { "⚠ The client's signing certificate is out of date — check this PC's clock.", "⚠ Le certificat de signature du client est périmé — vérifiez l’horloge de ce PC." },
             { "⚠ This PC doesn't trust the certificate the client is signed with.", "⚠ Ce PC n’approuve pas le certificat qui signe le client." },
             { "The signature check couldn't run on this PC — nothing is known either way.", "La vérification de signature n’a pas pu s’exécuter sur ce PC — rien n’est connu." },
@@ -2461,6 +2621,16 @@ namespace AutoClicker.Utils
             { "The session for this account is in your encrypted vault. This screen is just its label — no passwords or cookies are shown or entered here.", "Die Sitzung dieses Kontos liegt in deinem verschlüsselten Tresor. Dieser Bildschirm ist nur seine Bezeichnung — hier werden keine Passwörter oder Cookies angezeigt oder eingegeben." },
             { "Opening a private browser window…", "Privates Browserfenster wird geöffnet…" },
             { "No supported browser was found. Install Google Chrome, Microsoft Edge, Brave or Opera and try again (Firefox and Safari can't be used for sign-in capture).", "Kein unterstützter Browser gefunden. Installiere Google Chrome, Microsoft Edge, Brave oder Opera und versuche es erneut (Firefox und Safari eignen sich nicht zur Anmeldeerfassung)." },
+            // The sign-in browser picker, now every browser on the PC (RealBrowser.DetectAll).
+            { "No browser Tempo can use for sign-in was found. Install a Chromium browser — Google Chrome, Microsoft Edge, Brave, Opera or Vivaldi — and try again. Firefox can't be used for sign-in.",
+              "Kein Browser gefunden, den Tempo für die Anmeldung nutzen kann. Installiere einen Chromium-Browser – Google Chrome, Microsoft Edge, Brave, Opera oder Vivaldi – und versuche es erneut. Firefox eignet sich nicht für die Anmeldung." },
+            { "Automatic ({0})", "Automatisch ({0})" },
+            { "{0} (default)", "{0} (Standard)" },
+            { "{0} — can't be used for sign-in", "{0} – nicht für die Anmeldung nutzbar" },
+            { "Which browser Roblox sign-in opens in — always a private window of its own. Found on this PC: {0}.",
+              "In welchem Browser die Roblox-Anmeldung öffnet – immer in einem eigenen privaten Fenster. Auf diesem PC gefunden: {0}." },
+            { "{0} can't be used for Roblox sign-in. Tempo reads the sign-in back through the developer connection that Chromium browsers have (Chrome, Edge, Brave, Opera, Vivaldi…), and {0} doesn't have one. Pick one of those, or Automatic.",
+              "{0} eignet sich nicht für die Roblox-Anmeldung. Tempo liest die Anmeldung über die Entwicklerverbindung der Chromium-Browser (Chrome, Edge, Brave, Opera, Vivaldi…) zurück, und {0} hat keine. Wähle einen davon oder Automatisch." },
             { "Tempo couldn't open a browser window for sign-in.", "Tempo konnte kein Browserfenster zum Anmelden öffnen." },
             { "Signed in and this hasn't closed? Make sure you finished in the browser window, then click “I've logged in — save”.", "Angemeldet, aber dies hat sich nicht geschlossen? Stelle sicher, dass du im Browserfenster fertig bist, und klicke dann auf „Ich bin angemeldet — speichern“." },
             { "The browser window was closed before sign-in finished. Click Cancel, then try again.", "Das Browserfenster wurde geschlossen, bevor die Anmeldung abgeschlossen war. Klicke auf Abbrechen und versuche es erneut." },
@@ -2583,6 +2753,65 @@ namespace AutoClicker.Utils
             { "Roblox: official client{0} detected.", "Roblox: offizieller Client{0} erkannt." },
             { "Roblox: official client{0} (Microsoft Store).", "Roblox: offizieller Client{0} (Microsoft Store)." },
             { "Roblox: official client{0} (opens through {1}).", "Roblox: offizieller Client{0} (öffnet über {1})." },
+            { "Roblox: official client{0}. Its links still name a version Roblox deleted, so Tempo starts it directly.",
+              "Roblox: offizieller Client{0}. Seine Links nennen noch eine Version, die Roblox gelöscht hat, daher startet Tempo ihn direkt." },
+            { "a version Roblox has deleted — Tempo starts the installed client directly",
+              "eine Version, die Roblox gelöscht hat – Tempo startet den installierten Client direkt" },
+            // Roblox updates (MainForm.RobloxUpdates, RobloxUpdateForm, the Roblox client window's "Updates").
+            { "Roblox update available", "Roblox-Update verfügbar" },
+            { "Roblox {0} is out", "Roblox {0} ist da" },
+            { "uploaded {0}", "hochgeladen am {0}" },
+            { "“Update now” starts Roblox's own updater, the same one Roblox runs by itself.",
+              "„Jetzt aktualisieren“ startet Roblox' eigenes Update-Programm – dasselbe, das Roblox von selbst ausführt." },
+            { "The Microsoft Store keeps this copy of Roblox up to date: “Open Microsoft Store” shows its updates.",
+              "Der Microsoft Store hält diese Roblox-Kopie aktuell: „Microsoft Store öffnen“ zeigt seine Updates." },
+            { "Open Microsoft Store", "Microsoft Store öffnen" },
+            { "{0} installs it by itself the next time it starts a game, so there is nothing to do here.",
+              "{0} installiert sie von selbst, wenn es das nächste Mal ein Spiel startet – hier ist nichts zu tun." },
+            { "Roblox's own updater isn't beside the client, so “Open download page” gets the new version from roblox.com.",
+              "Roblox' eigenes Update-Programm liegt nicht neben dem Client, darum holt „Download-Seite öffnen“ die neue Version von roblox.com." },
+            { "“Later” reminds you tomorrow. “Keep this version” stops these reminders until the next Roblox version.",
+              "„Später“ erinnert dich morgen wieder. „Diese Version behalten“ beendet diese Erinnerungen bis zur nächsten Roblox-Version." },
+            { "Keep this version", "Diese Version behalten" },
+            { "Roblox also updates itself in the background, and after a while games stop letting an older version join (error 280).",
+              "Roblox aktualisiert sich außerdem selbst im Hintergrund, und nach einer Weile lassen Spiele ältere Versionen nicht mehr beitreten (Fehler 280)." },
+            { "⚠ Roblox is open. Its updater may close it, so finish your game first.",
+              "⚠ Roblox ist geöffnet. Sein Update-Programm kann es schließen – beende zuerst dein Spiel." },
+            { "Roblox {0} is out — {1} installs it the next time it starts a game.",
+              "Roblox {0} ist da – {1} installiert sie beim nächsten Spielstart." },
+            { "Roblox {0} is out — you have {1}.", "Roblox {0} ist da – du hast {1}." },
+            { "Roblox is already up to date ({0}).", "Roblox ist schon aktuell ({0})." },
+            { "Roblox's updater is already running.", "Das Update-Programm von Roblox läuft bereits." },
+            { "Roblox is open. Its updater may close it, so finish your game first.\n\nUpdate Roblox now anyway?",
+              "Roblox ist geöffnet. Sein Update-Programm kann es schließen – beende zuerst dein Spiel.\n\nRoblox trotzdem jetzt aktualisieren?" },
+            { "Roblox's updater didn't start ({0}), so its download page opens instead.",
+              "Das Update-Programm von Roblox ist nicht gestartet ({0}), darum öffnet sich stattdessen die Download-Seite." },
+            { "Roblox {0} is out — you have {1}. Click to choose when to update.",
+              "Roblox {0} ist da – du hast {1}. Klicke, um zu wählen, wann aktualisiert wird." },
+            { "Update Roblox…", "Roblox aktualisieren…" },
+            { "Updates", "Updates" },
+            { "Checks are off: switch them on with “Check for Roblox updates” in Behaviour.",
+              "Die Prüfungen sind aus: Einschalten mit „Nach Roblox-Updates suchen“ unter Verhalten." },
+            { "Check for Roblox updates", "Nach Roblox-Updates suchen" },
+            { "couldn't reach Roblox: {0}", "Roblox war nicht erreichbar: {0}" },
+            { "Released", "Veröffentlicht" },
+            { "This PC", "Dieser PC" },
+            { "you chose to keep this version: no reminders until a newer Roblox",
+              "du behältst diese Version: keine Erinnerungen bis zu einem neueren Roblox" },
+            { "reminding you again after {0}", "neue Erinnerung nach {0}" },
+            { "Coming", "Kommt bald" },
+            { "uploaded {0}, not released yet", "hochgeladen am {0}, noch nicht veröffentlicht" },
+            { "Last check", "Zuletzt geprüft" },
+            { "up to date", "aktuell" },
+            { "update available", "Update verfügbar" },
+            { "newer than the release — a test build, or a rollout that reached this PC first",
+              "neuer als die veröffentlichte – ein Test-Build oder ein Rollout, der diesen PC zuerst erreicht hat" },
+            { "can't be compared", "nicht vergleichbar" },
+            { "Every two hours while Roblox is installed, ask Roblox which version it hands out — the same public address Roblox itself asks — and tell you when yours is behind, so you choose when to update. Nothing about you or your accounts is sent.",
+              "Fragt alle zwei Stunden, solange Roblox installiert ist, welche Version Roblox ausliefert – dieselbe öffentliche Adresse, die Roblox selbst abfragt – und sagt dir, wenn deine zurückliegt, damit du wählst, wann aktualisiert wird. Über dich oder deine Konten wird nichts gesendet." },
+            { "Roblox update check", "Roblox-Update-Prüfung" },
+            { "Asks Roblox which client version it hands out and which it has uploaded since — what Roblox itself reads — every two hours while Roblox is installed. Nothing about you or your accounts is sent. Switch it off with “Check for Roblox updates” in Behaviour.",
+              "Fragt Roblox alle zwei Stunden, solange Roblox installiert ist, welche Client-Version es ausliefert und welche es seither hochgeladen hat – dasselbe, was Roblox selbst liest. Über dich oder deine Konten wird nichts gesendet. Abschalten mit „Nach Roblox-Updates suchen“ unter Verhalten." },
             { "⚠ The client's signing certificate is out of date — check this PC's clock.", "⚠ Das Signaturzertifikat des Clients ist abgelaufen — prüfe die Uhr dieses PCs." },
             { "⚠ This PC doesn't trust the certificate the client is signed with.", "⚠ Dieser PC vertraut dem Zertifikat des Clients nicht." },
             { "The signature check couldn't run on this PC — nothing is known either way.", "Die Signaturprüfung konnte auf diesem PC nicht laufen — es ist nichts bekannt." },
@@ -2809,6 +3038,16 @@ namespace AutoClicker.Utils
             { "The session for this account is in your encrypted vault. This screen is just its label — no passwords or cookies are shown or entered here.", "La sessione di questo account è nella tua cassaforte cifrata. Questa schermata è solo la sua etichetta — qui non vengono mostrate né inserite password o cookie." },
             { "Opening a private browser window…", "Apertura di una finestra del browser privata…" },
             { "No supported browser was found. Install Google Chrome, Microsoft Edge, Brave or Opera and try again (Firefox and Safari can't be used for sign-in capture).", "Nessun browser compatibile trovato. Installa Google Chrome, Microsoft Edge, Brave o Opera e riprova (Firefox e Safari non possono essere usati per la cattura dell'accesso)." },
+            // The sign-in browser picker, now every browser on the PC (RealBrowser.DetectAll).
+            { "No browser Tempo can use for sign-in was found. Install a Chromium browser — Google Chrome, Microsoft Edge, Brave, Opera or Vivaldi — and try again. Firefox can't be used for sign-in.",
+              "Nessun browser utilizzabile da Tempo per l'accesso è stato trovato. Installa un browser Chromium — Google Chrome, Microsoft Edge, Brave, Opera o Vivaldi — e riprova. Firefox non può essere usato per l'accesso." },
+            { "Automatic ({0})", "Automatico ({0})" },
+            { "{0} (default)", "{0} (predefinito)" },
+            { "{0} — can't be used for sign-in", "{0} — non utilizzabile per l'accesso" },
+            { "Which browser Roblox sign-in opens in — always a private window of its own. Found on this PC: {0}.",
+              "Il browser in cui si apre l'accesso a Roblox — sempre in una finestra privata tutta sua. Trovati su questo PC: {0}." },
+            { "{0} can't be used for Roblox sign-in. Tempo reads the sign-in back through the developer connection that Chromium browsers have (Chrome, Edge, Brave, Opera, Vivaldi…), and {0} doesn't have one. Pick one of those, or Automatic.",
+              "{0} non può essere usato per l'accesso a Roblox. Tempo rilegge l'accesso tramite la connessione per sviluppatori dei browser Chromium (Chrome, Edge, Brave, Opera, Vivaldi…), e {0} non ce l'ha. Scegline uno, oppure Automatico." },
             { "Tempo couldn't open a browser window for sign-in.", "Tempo non è riuscito ad aprire una finestra del browser per l'accesso." },
             { "Signed in and this hasn't closed? Make sure you finished in the browser window, then click “I've logged in — save”.", "Hai già effettuato l'accesso e questa finestra non si è chiusa? Assicurati di aver finito nella finestra del browser, poi premi «Ho effettuato l'accesso — salva»." },
             { "The browser window was closed before sign-in finished. Click Cancel, then try again.", "La finestra del browser è stata chiusa prima di completare l'accesso. Premi Annulla e riprova." },
@@ -2931,6 +3170,65 @@ namespace AutoClicker.Utils
             { "Roblox: official client{0} detected.", "Roblox: client ufficiale{0} rilevato." },
             { "Roblox: official client{0} (Microsoft Store).", "Roblox: client ufficiale{0} (Microsoft Store)." },
             { "Roblox: official client{0} (opens through {1}).", "Roblox: client ufficiale{0} (si apre tramite {1})." },
+            { "Roblox: official client{0}. Its links still name a version Roblox deleted, so Tempo starts it directly.",
+              "Roblox: client ufficiale{0}. I suoi link puntano ancora a una versione che Roblox ha eliminato, quindi Tempo lo avvia direttamente." },
+            { "a version Roblox has deleted — Tempo starts the installed client directly",
+              "una versione che Roblox ha eliminato — Tempo avvia direttamente il client installato" },
+            // Roblox updates (MainForm.RobloxUpdates, RobloxUpdateForm, the Roblox client window's "Updates").
+            { "Roblox update available", "Aggiornamento di Roblox disponibile" },
+            { "Roblox {0} is out", "È uscito Roblox {0}" },
+            { "uploaded {0}", "caricata il {0}" },
+            { "“Update now” starts Roblox's own updater, the same one Roblox runs by itself.",
+              "«Aggiorna ora» avvia il programma di aggiornamento di Roblox, lo stesso che Roblox esegue da solo." },
+            { "The Microsoft Store keeps this copy of Roblox up to date: “Open Microsoft Store” shows its updates.",
+              "Microsoft Store mantiene aggiornata questa copia di Roblox: «Apri Microsoft Store» mostra i suoi aggiornamenti." },
+            { "Open Microsoft Store", "Apri Microsoft Store" },
+            { "{0} installs it by itself the next time it starts a game, so there is nothing to do here.",
+              "{0} la installa da solo la prossima volta che avvia un gioco, quindi qui non c'è niente da fare." },
+            { "Roblox's own updater isn't beside the client, so “Open download page” gets the new version from roblox.com.",
+              "Il programma di aggiornamento di Roblox non è accanto al client, quindi «Apri la pagina di download» prende la nuova versione da roblox.com." },
+            { "“Later” reminds you tomorrow. “Keep this version” stops these reminders until the next Roblox version.",
+              "«Più tardi» te lo ricorda domani. «Mantieni questa versione» ferma questi promemoria fino alla prossima versione di Roblox." },
+            { "Keep this version", "Mantieni questa versione" },
+            { "Roblox also updates itself in the background, and after a while games stop letting an older version join (error 280).",
+              "Roblox si aggiorna anche da solo in background e, dopo un po', i giochi non accettano più le versioni vecchie (errore 280)." },
+            { "⚠ Roblox is open. Its updater may close it, so finish your game first.",
+              "⚠ Roblox è aperto. Il suo aggiornamento può chiuderlo, quindi finisci prima la partita." },
+            { "Roblox {0} is out — {1} installs it the next time it starts a game.",
+              "È uscito Roblox {0}: {1} lo installa la prossima volta che avvia un gioco." },
+            { "Roblox {0} is out — you have {1}.", "È uscito Roblox {0}: tu hai la {1}." },
+            { "Roblox is already up to date ({0}).", "Roblox è già aggiornato ({0})." },
+            { "Roblox's updater is already running.", "L'aggiornamento di Roblox è già in corso." },
+            { "Roblox is open. Its updater may close it, so finish your game first.\n\nUpdate Roblox now anyway?",
+              "Roblox è aperto. Il suo aggiornamento può chiuderlo, quindi finisci prima la partita.\n\nAggiornare Roblox ora comunque?" },
+            { "Roblox's updater didn't start ({0}), so its download page opens instead.",
+              "L'aggiornamento di Roblox non è partito ({0}), quindi si apre la sua pagina di download." },
+            { "Roblox {0} is out — you have {1}. Click to choose when to update.",
+              "È uscito Roblox {0}: tu hai la {1}. Clicca per scegliere quando aggiornare." },
+            { "Update Roblox…", "Aggiorna Roblox…" },
+            { "Updates", "Aggiornamenti" },
+            { "Checks are off: switch them on with “Check for Roblox updates” in Behaviour.",
+              "I controlli sono disattivati: attivali con «Controlla aggiornamenti di Roblox» in Comportamento." },
+            { "Check for Roblox updates", "Controlla aggiornamenti di Roblox" },
+            { "couldn't reach Roblox: {0}", "impossibile raggiungere Roblox: {0}" },
+            { "Released", "Pubblicata" },
+            { "This PC", "Questo PC" },
+            { "you chose to keep this version: no reminders until a newer Roblox",
+              "hai scelto di mantenere questa versione: nessun promemoria fino a un Roblox più recente" },
+            { "reminding you again after {0}", "nuovo promemoria dopo il {0}" },
+            { "Coming", "In arrivo" },
+            { "uploaded {0}, not released yet", "caricata il {0}, non ancora pubblicata" },
+            { "Last check", "Ultimo controllo" },
+            { "up to date", "aggiornato" },
+            { "update available", "aggiornamento disponibile" },
+            { "newer than the release — a test build, or a rollout that reached this PC first",
+              "più recente di quella pubblicata: una build di prova o un rilascio arrivato prima su questo PC" },
+            { "can't be compared", "non confrontabile" },
+            { "Every two hours while Roblox is installed, ask Roblox which version it hands out — the same public address Roblox itself asks — and tell you when yours is behind, so you choose when to update. Nothing about you or your accounts is sent.",
+              "Ogni due ore, finché Roblox è installato, chiede a Roblox quale versione distribuisce — lo stesso indirizzo pubblico che interroga Roblox stesso — e ti avvisa quando la tua è indietro, così scegli quando aggiornare. Non viene inviato nulla su di te o sui tuoi account." },
+            { "Roblox update check", "Aggiornamenti di Roblox" },
+            { "Asks Roblox which client version it hands out and which it has uploaded since — what Roblox itself reads — every two hours while Roblox is installed. Nothing about you or your accounts is sent. Switch it off with “Check for Roblox updates” in Behaviour.",
+              "Chiede a Roblox quale versione del client distribuisce e quale ha caricato da allora — ciò che legge Roblox stesso — ogni due ore finché Roblox è installato. Non viene inviato nulla su di te o sui tuoi account. Si disattiva con «Controlla aggiornamenti di Roblox» in Comportamento." },
             { "⚠ The client's signing certificate is out of date — check this PC's clock.", "⚠ Il certificato di firma del client è scaduto: controlla l’orologio di questo PC." },
             { "⚠ This PC doesn't trust the certificate the client is signed with.", "⚠ Questo PC non considera attendibile il certificato con cui è firmato il client." },
             { "The signature check couldn't run on this PC — nothing is known either way.", "Il controllo della firma non è stato eseguito su questo PC: non si sa nulla." },
@@ -3155,6 +3453,16 @@ namespace AutoClicker.Utils
             { "The session for this account is in your encrypted vault. This screen is just its label — no passwords or cookies are shown or entered here.", "A sessão desta conta está no seu cofre criptografado. Esta tela é só o rótulo dela — aqui não se mostram nem se digitam senhas ou cookies." },
             { "Opening a private browser window…", "Abrindo uma janela de navegador privada…" },
             { "No supported browser was found. Install Google Chrome, Microsoft Edge, Brave or Opera and try again (Firefox and Safari can't be used for sign-in capture).", "Nenhum navegador compatível encontrado. Instale o Google Chrome, Microsoft Edge, Brave ou Opera e tente de novo (Firefox e Safari não servem para capturar o login)." },
+            // The sign-in browser picker, now every browser on the PC (RealBrowser.DetectAll).
+            { "No browser Tempo can use for sign-in was found. Install a Chromium browser — Google Chrome, Microsoft Edge, Brave, Opera or Vivaldi — and try again. Firefox can't be used for sign-in.",
+              "Nenhum navegador que o Tempo possa usar para o login foi encontrado. Instale um navegador Chromium — Google Chrome, Microsoft Edge, Brave, Opera ou Vivaldi — e tente de novo. O Firefox não serve para o login." },
+            { "Automatic ({0})", "Automático ({0})" },
+            { "{0} (default)", "{0} (padrão)" },
+            { "{0} — can't be used for sign-in", "{0} — não serve para o login" },
+            { "Which browser Roblox sign-in opens in — always a private window of its own. Found on this PC: {0}.",
+              "Em qual navegador o login do Roblox abre — sempre numa janela privada própria. Encontrados neste PC: {0}." },
+            { "{0} can't be used for Roblox sign-in. Tempo reads the sign-in back through the developer connection that Chromium browsers have (Chrome, Edge, Brave, Opera, Vivaldi…), and {0} doesn't have one. Pick one of those, or Automatic.",
+              "{0} não serve para o login no Roblox. O Tempo lê o login de volta pela conexão de desenvolvedor que os navegadores Chromium têm (Chrome, Edge, Brave, Opera, Vivaldi…), e {0} não tem uma. Escolha um deles, ou Automático." },
             { "Tempo couldn't open a browser window for sign-in.", "O Tempo não conseguiu abrir uma janela de navegador para o login." },
             { "Signed in and this hasn't closed? Make sure you finished in the browser window, then click “I've logged in — save”.", "Já entrou e isto não fechou? Confira se terminou na janela do navegador e clique em “Entrei — salvar”." },
             { "The browser window was closed before sign-in finished. Click Cancel, then try again.", "A janela do navegador foi fechada antes de concluir o login. Clique em Cancelar e tente de novo." },
@@ -3277,6 +3585,65 @@ namespace AutoClicker.Utils
             { "Roblox: official client{0} detected.", "Roblox: cliente oficial{0} detetado." },
             { "Roblox: official client{0} (Microsoft Store).", "Roblox: cliente oficial{0} (Microsoft Store)." },
             { "Roblox: official client{0} (opens through {1}).", "Roblox: cliente oficial{0} (abre através de {1})." },
+            { "Roblox: official client{0}. Its links still name a version Roblox deleted, so Tempo starts it directly.",
+              "Roblox: cliente oficial{0}. Os links dele ainda apontam para uma versão que o Roblox apagou, por isso o Tempo inicia-o diretamente." },
+            { "a version Roblox has deleted — Tempo starts the installed client directly",
+              "uma versão que o Roblox apagou — o Tempo inicia diretamente o cliente instalado" },
+            // Roblox updates (MainForm.RobloxUpdates, RobloxUpdateForm, the Roblox client window's "Updates").
+            { "Roblox update available", "Atualização do Roblox disponível" },
+            { "Roblox {0} is out", "Saiu o Roblox {0}" },
+            { "uploaded {0}", "enviada em {0}" },
+            { "“Update now” starts Roblox's own updater, the same one Roblox runs by itself.",
+              "“Atualizar agora” abre o atualizador do próprio Roblox, o mesmo que o Roblox executa sozinho." },
+            { "The Microsoft Store keeps this copy of Roblox up to date: “Open Microsoft Store” shows its updates.",
+              "A Microsoft Store mantém esta cópia do Roblox atualizada: “Abrir a Microsoft Store” mostra as atualizações dela." },
+            { "Open Microsoft Store", "Abrir a Microsoft Store" },
+            { "{0} installs it by itself the next time it starts a game, so there is nothing to do here.",
+              "O {0} instala por conta própria na próxima vez que iniciar um jogo, então não há nada a fazer aqui." },
+            { "Roblox's own updater isn't beside the client, so “Open download page” gets the new version from roblox.com.",
+              "O atualizador do próprio Roblox não está ao lado do cliente, então “Abrir página de download” baixa a nova versão de roblox.com." },
+            { "“Later” reminds you tomorrow. “Keep this version” stops these reminders until the next Roblox version.",
+              "“Mais tarde” lembra você amanhã. “Manter esta versão” para estes lembretes até a próxima versão do Roblox." },
+            { "Keep this version", "Manter esta versão" },
+            { "Roblox also updates itself in the background, and after a while games stop letting an older version join (error 280).",
+              "O Roblox também se atualiza sozinho em segundo plano e, depois de um tempo, os jogos deixam de aceitar versões antigas (erro 280)." },
+            { "⚠ Roblox is open. Its updater may close it, so finish your game first.",
+              "⚠ O Roblox está aberto. O atualizador pode fechá-lo, então termine sua partida primeiro." },
+            { "Roblox {0} is out — {1} installs it the next time it starts a game.",
+              "Saiu o Roblox {0} — o {1} instala na próxima vez que iniciar um jogo." },
+            { "Roblox {0} is out — you have {1}.", "Saiu o Roblox {0} — você tem a {1}." },
+            { "Roblox is already up to date ({0}).", "O Roblox já está atualizado ({0})." },
+            { "Roblox's updater is already running.", "O atualizador do Roblox já está em execução." },
+            { "Roblox is open. Its updater may close it, so finish your game first.\n\nUpdate Roblox now anyway?",
+              "O Roblox está aberto. O atualizador pode fechá-lo, então termine sua partida primeiro.\n\nAtualizar o Roblox agora mesmo assim?" },
+            { "Roblox's updater didn't start ({0}), so its download page opens instead.",
+              "O atualizador do Roblox não iniciou ({0}), então a página de download abre no lugar." },
+            { "Roblox {0} is out — you have {1}. Click to choose when to update.",
+              "Saiu o Roblox {0} — você tem a {1}. Clique para escolher quando atualizar." },
+            { "Update Roblox…", "Atualizar o Roblox…" },
+            { "Updates", "Atualizações" },
+            { "Checks are off: switch them on with “Check for Roblox updates” in Behaviour.",
+              "As verificações estão desligadas: ligue com “Verificar atualizações do Roblox” em Comportamento." },
+            { "Check for Roblox updates", "Verificar atualizações do Roblox" },
+            { "couldn't reach Roblox: {0}", "não foi possível falar com o Roblox: {0}" },
+            { "Released", "Lançada" },
+            { "This PC", "Este PC" },
+            { "you chose to keep this version: no reminders until a newer Roblox",
+              "você escolheu manter esta versão: sem lembretes até um Roblox mais novo" },
+            { "reminding you again after {0}", "novo lembrete depois de {0}" },
+            { "Coming", "A caminho" },
+            { "uploaded {0}, not released yet", "enviada em {0}, ainda não lançada" },
+            { "Last check", "Última verificação" },
+            { "up to date", "atualizado" },
+            { "update available", "atualização disponível" },
+            { "newer than the release — a test build, or a rollout that reached this PC first",
+              "mais nova que a lançada — uma versão de teste ou uma distribuição que chegou primeiro a este PC" },
+            { "can't be compared", "não dá para comparar" },
+            { "Every two hours while Roblox is installed, ask Roblox which version it hands out — the same public address Roblox itself asks — and tell you when yours is behind, so you choose when to update. Nothing about you or your accounts is sent.",
+              "A cada duas horas, enquanto o Roblox estiver instalado, pergunta ao Roblox qual versão ele distribui — o mesmo endereço público que o próprio Roblox consulta — e avisa quando a sua ficar para trás, para você escolher quando atualizar. Nada sobre você ou suas contas é enviado." },
+            { "Roblox update check", "Atualizações do Roblox" },
+            { "Asks Roblox which client version it hands out and which it has uploaded since — what Roblox itself reads — every two hours while Roblox is installed. Nothing about you or your accounts is sent. Switch it off with “Check for Roblox updates” in Behaviour.",
+              "Pergunta ao Roblox qual versão do cliente ele distribui e qual enviou desde então — o mesmo que o próprio Roblox lê — a cada duas horas enquanto o Roblox estiver instalado. Nada sobre você ou suas contas é enviado. Desligue com “Verificar atualizações do Roblox” em Comportamento." },
             { "⚠ The client's signing certificate is out of date — check this PC's clock.", "⚠ O certificado de assinatura do cliente expirou — verifique o relógio deste PC." },
             { "⚠ This PC doesn't trust the certificate the client is signed with.", "⚠ Este PC não confia no certificado com que o cliente está assinado." },
             { "The signature check couldn't run on this PC — nothing is known either way.", "A verificação da assinatura não pôde ser executada neste PC — nada se sabe." },
@@ -3778,6 +4145,172 @@ namespace AutoClicker.Utils
             ["Interval: {0} ms"] = "Intervalo: {0} ms",
             ["Measured: {0} °/count. Press {1} in the game to check it: Tempo turns one full circle with this value."] = "Medido: {0} °/conteo. Pulsa {1} en el juego para comprobarlo: Tempo da una vuelta completa con este valor.",
             ["New best — retry"] = "Nuevo récord — reintentar",
+            // Anti-Freeze, watching the app and the PC (2026-10)
+            ["Off — no rate limit"] = "Desactivado — sin límite de velocidad",
+            ["Ready — watches the game while it clicks"] = "Listo — vigila el juego mientras hace clic",
+            ["the app"] = "la aplicación",
+            ["⏸ Paused — {0} is not responding"] = "⏸ En pausa — {0} no responde",
+            ["⚠ Slowed to {0:0} CPS — {1} answers in {2:0} ms"] = "⚠ Reducido a {0:0} CPS — {1} responde en {2:0} ms",
+            ["⚠ Slowed to {0:0} CPS — {1} is not responding"] = "⚠ Reducido a {0:0} CPS — {1} no responde",
+            ["⚠ Slowed to {0:0} CPS — {1} is not reading its clicks"] = "⚠ Reducido a {0:0} CPS — {1} no está leyendo sus clics",
+            ["⚠ Slowed to {0:0} CPS — the CPU is full ({1:0}%)"] = "⚠ Reducido a {0:0} CPS — la CPU está al máximo ({1:0}%)",
+            ["⚠ Slowed to {0:0} CPS — memory is {1:0}% full"] = "⚠ Reducido a {0:0} CPS — la memoria está al {1:0}%",
+            ["↗ Speeding back up — {0:0} CPS"] = "↗ Recuperando velocidad — {0:0} CPS",
+            ["✓ Full speed — {0} answers in {1:0} ms"] = "✓ A toda velocidad — {0} responde en {1:0} ms",
+            ["✓ {0:0} CPS — can't watch {1} (runs as administrator)"] = "✓ {0:0} CPS — no puede vigilar {1} (se ejecuta como administrador)",
+            ["✓ Full speed — {0:0} CPS"] = "✓ A toda velocidad — {0:0} CPS",
+            ["Battery {0}%"] = "Batería {0}%",
+            ["On battery"] = "Con batería",
+            ["Plugged in"] = "Enchufado",
+            ["Energy saver"] = "Ahorro de energía",
+            ["Battery saver"] = "Ahorro de batería",
+            ["Best power efficiency"] = "Máxima eficiencia energética",
+            ["Balanced"] = "Equilibrado",
+            ["High performance"] = "Alto rendimiento",
+            ["Best performance"] = "Máximo rendimiento",
+            ["Game Mode"] = "Modo de juego",
+            ["Mixed reality"] = "Realidad mixta",
+            ["CPU {0:0}%"] = "CPU {0:0}%",
+            ["GPU {0:0}%"] = "GPU {0:0}%",
+            ["RAM {0:0}%"] = "RAM {0:0}%",
+            ["While it clicks, Anti-Freeze asks the app you are clicking for an answer twice a second. If it stops answering, the clicks wait for it; if it answers slowly, or the PC's CPU or memory is full, the rate drops and comes back as things recover. The Max CPS cap always applies."] =
+                "Mientras hace clic, la protección anticongelación pide una respuesta a la aplicación en la que haces clic dos veces por segundo. Si deja de responder, los clics la esperan; si responde despacio, o la CPU o la memoria del PC están al máximo, la velocidad baja y vuelve cuando todo se recupera. El límite de CPS máx. se aplica siempre.",
+            ["How Windows is powering this PC. On battery and in the efficiency modes Windows runs apps it thinks are in the background on slower cores; while Tempo clicks or plays a macro it asks Windows for full speed, and gives it back when it stops."] =
+                "Cómo alimenta Windows este PC. Con batería y en los modos de eficiencia, Windows ejecuta en núcleos más lentos las aplicaciones que cree en segundo plano; mientras Tempo hace clic o reproduce una macro, pide a Windows toda la velocidad y la devuelve al terminar.",
+            ["The whole PC, counted the way Task Manager counts it: the CPU across every core, the busiest part of the GPU, and the memory in use."] =
+                "Todo el PC, contado como lo cuenta el Administrador de tareas: la CPU en todos los núcleos, la parte más ocupada de la GPU y la memoria en uso.",
+            // About: the build, as text (2026-10)
+            ["Copy details"] = "Copiar detalles",
+            ["Copied ✓"] = "Copiado ✓",
+            ["Copies the version, build, Official ID, Windows and display — paste it into a bug report."] =
+                "Copia la versión, la compilación, el ID oficial, Windows y la pantalla — pégalo en un informe de error.",
+            ["Built from commit {0}."] = "Compilado a partir del commit {0}.",
+            ["Built from commit {0}, plus changes that were not committed yet."] = "Compilado a partir del commit {0}, más cambios que aún no se habían confirmado.",
+            // The crash report's buttons (they were never looked up).
+            ["Report on GitHub"] = "Informar en GitHub",
+            ["Email report"] = "Enviar por correo",
+            ["Open report"] = "Abrir informe",
+            // The tamper check's Details window (IntegrityDetailsForm) and the code-beside-the-exe verdict.
+            ["Tamper check details"] = "Detalles de la comprobación de integridad",
+            ["SHA-256"] = "SHA-256",
+            ["Official ID"] = "ID oficial",
+            ["Downloaded"] = "Descarga",
+            ["Identity"] = "Identidad",
+            ["Program file"] = "Archivo del programa",
+            ["Unpacked copy"] = "Copia desempaquetada",
+            ["Beside the exe"] = "Junto al exe",
+            ["This PC's record"] = "Registro de este PC",
+            ["GitHub"] = "GitHub",
+            ["This file"] = "Este archivo",
+            ["Checks"] = "Comprobaciones",
+            ["Check again"] = "Comprobar de nuevo",
+            ["Open release page"] = "Abrir página de la versión",
+            ["Show files"] = "Mostrar archivos",
+            ["{0} s"] = "{0} s",
+            ["Not checked."] = "No comprobado.",
+            ["Not compared."] = "No comparado.",
+            ["Not asked."] = "No consultado.",
+            ["test build"] = "compilación de prueba",
+            ["release build"] = "versión publicada",
+            ["Folder: {0}"] = "Carpeta: {0}",
+            ["changed {0}"] = "modificado el {0}",
+            ["changed: {0}"] = "modificados: {0}",
+            ["{0} · build {1}"] = "{0} · compilación {1}",
+            ["{0} bytes ({1} MB)"] = "{0} bytes ({1} MB)",
+            ["Last checked {0} · took {1}"] = "Última comprobación: {0} · tardó {1}",
+            ["None — this is a test build."] = "Ninguno: es una compilación de prueba.",
+            ["None — this copy failed its check."] = "Ninguno: esta copia no superó la comprobación.",
+            ["Not yet — GitHub has not confirmed this file."] = "Aún no: GitHub no ha confirmado este archivo.",
+            ["Stamped as an official Tempo build."] = "Marcado como compilación oficial de Tempo.",
+            ["Not stamped as an official Tempo build."] = "No está marcado como compilación oficial de Tempo.",
+            ["Not a valid Windows program."] = "No es un programa de Windows válido.",
+            ["The speech libraries it carries are missing."] = "Faltan las bibliotecas de voz que lleva dentro.",
+            ["Could not be read right now."] = "No se pudo leer ahora.",
+            ["Could not be compared right now."] = "No se pudo comparar ahora.",
+            ["Could not read the list of files inside the program."] = "No se pudo leer la lista de archivos que hay dentro del programa.",
+            ["Not a single-file build — nothing was unpacked."] = "No es una compilación de un solo archivo: no se desempaquetó nada.",
+            ["Nothing was loaded into Tempo from its own folder."] = "No se cargó nada en Tempo desde su propia carpeta.",
+            ["Not checked for this kind of build."] = "No se comprueba en este tipo de compilación.",
+            ["Not asked — a test build is not a published release."] = "No consultado: una compilación de prueba no es una versión publicada.",
+            ["GitHub has no release {0}."] = "GitHub no tiene ninguna versión {0}.",
+            ["Not before {0}."] = "No antes de {0}.",
+            ["added, never shipped: {0}"] = "añadidos, nunca incluidos: {0}",
+            ["Code that isn't Tempo's is running inside it"] = "Código que no es de Tempo se está ejecutando dentro de él",
+            ["The check has not run yet. Press Check again to run it now."] =
+                "La comprobación aún no se ha ejecutado. Pulsa Comprobar de nuevo para ejecutarla ahora.",
+            ["The tamper check is turned off, so nothing was checked. Turn it on in Settings › Data & Backup."] =
+                "La comprobación de integridad está desactivada, así que no se comprobó nada. Actívala en Ajustes › Datos y copia de seguridad.",
+            ["{0} — matches GitHub's {1} release. Anyone can check it: it is the start of the SHA-256 GitHub lists for Tempo.exe."] =
+                "{0}: coincide con la versión {1} de GitHub. Cualquiera puede comprobarlo: es el inicio del SHA-256 que GitHub muestra para Tempo.exe.",
+            ["Not signed. Tempo's releases are not code-signed, which is why Windows may say \"Unknown publisher\"."] =
+                "Sin firmar. Las versiones de Tempo no tienen firma de código; por eso Windows puede decir \"Editor desconocido\".",
+            ["Signed by {0}. Tempo's releases are not signed, so someone signed this copy themselves."] =
+                "Firmado por {0}. Las versiones de Tempo no se firman, así que alguien firmó esta copia por su cuenta.",
+            ["No download mark — installed or updated by Tempo itself, or copied here."] =
+                "Sin marca de descarga: instalado o actualizado por el propio Tempo, o copiado aquí.",
+            ["From {0} — one of Tempo's official sites."] = "Desde {0}: uno de los sitios oficiales de Tempo.",
+            ["From {0} — not one of Tempo's sites. Get Tempo from its GitHub releases page."] =
+                "Desde {0}: no es un sitio de Tempo. Descarga Tempo desde su página de versiones en GitHub.",
+            ["A valid Windows program · {0}% empty bytes · the speech libraries are inside."] =
+                "Un programa de Windows válido · {0}% de bytes vacíos · las bibliotecas de voz están dentro.",
+            ["{0}% of it is empty bytes — it is truncated or corrupted."] = "El {0}% son bytes vacíos: está truncado o dañado.",
+            ["{0} files match {1} ({2} MB, {3})."] = "{0} archivos coinciden con {1} ({2} MB, {3}).",
+            ["{0} missing — Windows' .NET host puts them back on the next start."] =
+                "Faltan {0}: el host .NET de Windows los repone en el próximo inicio.",
+            ["Altered — {0}. Press Repair in Settings to unpack a clean copy."] =
+                "Alterada: {0}. Pulsa Reparar en Ajustes para desempaquetar una copia limpia.",
+            ["The unpack folder is not this build's, so it was not compared."] =
+                "La carpeta desempaquetada no es de esta compilación, así que no se comparó.",
+            ["Windows loaded these into Tempo from its folder: {0}. Tempo never puts files there — if you didn't, delete them and restart Tempo."] =
+                "Windows cargó estos archivos en Tempo desde su carpeta: {0}. Tempo nunca pone archivos ahí; si no fuiste tú, bórralos y reinicia Tempo.",
+            ["Nothing loaded, but these are not Tempo's: {0}"] = "No se cargó nada, pero estos no son de Tempo: {0}",
+            ["Matches the fingerprint this PC recorded on {0}."] = "Coincide con la huella que este PC registró el {0}.",
+            ["First run of this version here — its fingerprint was recorded now."] =
+                "Primera ejecución de esta versión aquí: su huella se acaba de registrar.",
+            ["Updated from {0} — the fingerprint was recorded again."] = "Actualizado desde {0}: la huella se registró de nuevo.",
+            ["Not the file recorded on {0}, though the version number is the same."] =
+                "No es el archivo registrado el {0}, aunque el número de versión es el mismo.",
+            ["A test build is rebuilt on every publish, so its bytes change under the same version."] =
+                "Una compilación de prueba se recompila en cada publicación, así que sus bytes cambian con la misma versión.",
+            ["Matches the {0} release published on GitHub."] = "Coincide con la versión {0} publicada en GitHub.",
+            ["Matches the {0} release (confirmed on {1} — the same file is not asked about twice)."] =
+                "Coincide con la versión {0} (confirmado el {1}; no se consulta dos veces por el mismo archivo).",
+            ["The {0} release lists no checksum for Tempo.exe."] = "La versión {0} no incluye ninguna suma de comprobación para Tempo.exe.",
+            ["Does NOT match the {0} release published on GitHub."] = "NO coincide con la versión {0} publicada en GitHub.",
+            ["Could not reach GitHub. Tempo asks again by itself."] =
+                "No se pudo contactar con GitHub. Tempo volverá a intentarlo por sí solo.",
+            ["✗ Windows loaded program files into Tempo from the folder {0} is in, and Tempo never puts any there. Press Show files, delete them, and restart Tempo."] =
+                "✗ Windows cargó en Tempo archivos de programa desde la carpeta donde está {0}, y Tempo nunca pone ninguno ahí. Pulsa Mostrar archivos, bórralos y reinicia Tempo.",
+            ["Windows loaded program files into Tempo from the folder Tempo.exe is in. Tempo is a single file and never puts any there. If you didn't, delete them and restart Tempo. Click here to see where they are."] =
+                "Windows cargó en Tempo archivos de programa desde la carpeta donde está Tempo.exe. Tempo es un solo archivo y nunca pone ninguno ahí. Si no fuiste tú, bórralos y reinicia Tempo. Haz clic aquí para ver dónde están.",
+            ["✗ Program files that are not Tempo's were loaded into it from its folder. Open Settings › Data & Backup › Details to see them."] =
+                "✗ Se cargaron en Tempo archivos de programa que no son suyos desde su carpeta. Abre Ajustes › Datos y copia de seguridad › Detalles para verlos.",
+            // The status bar's exact figures, and the empty-take explanation on the Macros tab.
+            ["CPU {0:0.00}%"] = "CPU {0:0.00}%",
+            ["RAM {0:N2} MB"] = "RAM {0:N2} MB",
+            ["Exactly {0:N0} bytes."] = "Exactamente {0:N0} bytes.",
+            ["Running since {0}."] = "En marcha desde {0}.",
+            ["Nothing was saved: the {0} click(s) and key press(es) in this take went to Tempo's own window. A macro leaves those out, because played back they would land on whatever is there by then.\n\nPress Record, then switch to the app you want to automate and do the steps there."] =
+                "No se guardó nada: los {0} clics y pulsaciones de teclas de esta grabación fueron a la ventana de Tempo. Una macro los deja fuera, porque al reproducirla caerían sobre lo que haya ahí en ese momento.\n\nPulsa Grabar, cambia a la aplicación que quieres automatizar y haz los pasos allí.",
+            ["Tip: give Record a hotkey and turn on \"Minimise window during macro record & playback\" in Settings — Tempo then steps out of the way the moment recording starts."] =
+                "Consejo: asigna una tecla a Grabar y activa \"Minimizar la ventana durante la grabación & reproducción de macros\" en Ajustes; así Tempo se aparta en cuanto empieza la grabación.",
+            ["Nothing was saved: the only keys pressed were Tempo's own hotkeys, and those are never part of a macro."] =
+                "No se guardó nada: las únicas teclas pulsadas fueron teclas de Tempo, y esas nunca forman parte de una macro.",
+            ["Nothing was saved: the take was only the pointer moving to and from Tempo's buttons ({0}). Record at least one click, key press or scroll — or a second or more of movement."] =
+                "No se guardó nada: la grabación fue solo el puntero yendo y viniendo de los botones de Tempo ({0}). Graba al menos un clic, una tecla o un desplazamiento, o un segundo o más de movimiento.",
+            ["Nothing was saved: no click, key press or mouse movement reached Tempo while it was recording."] =
+                "No se guardó nada: ningún clic, tecla ni movimiento del ratón llegó a Tempo mientras grababa.",
+            ["\"Capture mouse movement\" or \"Capture keyboard\" is off on the Macros tab — turn on what you want recorded."] =
+                "\"Capturar movimiento del ratón\" o \"Capturar teclado\" está desactivado en la pestaña Macros: activa lo que quieras grabar.",
+            // A run's clicks landing on Tempo's own window (the status bar).
+            ["Tempo's own window is under the pointer — its clicks there are ignored"] =
+                "La ventana de Tempo está bajo el puntero: sus clics ahí se ignoran",
+            ["Clicks on Tempo are ignored"] = "Los clics sobre Tempo se ignoran",
+            ["When you start recording or playing a macro, minimise Tempo — and the Accounts window when it's open on its own — so they aren't in the way. Only when a Record/Stop or Emergency-stop hotkey is bound, so you can always finish. They come back by themselves afterwards, unless the macro was started by a hotkey from inside another app: then Tempo stays out of the way."] =
+                "Al empezar a grabar o reproducir una macro, minimiza Tempo —y la ventana de Cuentas cuando está abierta por separado— para que no estorben. Solo si hay asignada una tecla rápida de grabar/parar o de parada de emergencia, para que siempre puedas terminar. Vuelven solas al acabar, salvo si la macro se inició con una tecla rápida desde otra aplicación: entonces Tempo sigue fuera de la vista.",
+            ["Stops a run from clicking or typing into Tempo itself if the cursor is left over one of its windows — it would otherwise tick boxes, switch tabs and hit buttons at full speed. Clicks made without moving your cursor go through Tempo's windows to the app underneath. Your own clicks and keys always work, so Stop is never blocked. Turn off only if you deliberately automate Tempo's own interface."] =
+                "Impide que una ejecución haga clic o escriba en el propio Tempo si el cursor queda sobre una de sus ventanas; si no, marcaría casillas, cambiaría de pestaña y pulsaría botones a toda velocidad. Los clics sin mover el cursor atraviesan las ventanas de Tempo y llegan a la aplicación de debajo. Tus propios clics y teclas siempre funcionan, así que Detener nunca se bloquea. Desactívalo solo si automatizas a propósito la interfaz de Tempo.",
+            ["Continue"] = "Continuar",
             // CPS test: the details beside the pad, and the best for each input and length.
             ["Time's up!"] = "¡Tiempo!",
             ["Speed"] = "Velocidad",
@@ -4403,6 +4936,7 @@ namespace AutoClicker.Utils
             ["Auto-start for videos && games"] = "Inicio automático para vídeos && juegos",
             ["Background image"] = "Imagen de fondo",
             ["Caption transcript saved to"] = "Transcripción de subtítulos guardada en",
+            ["Tempo Live Captions transcript — {0}"] = "Transcripción de Subtítulos en directo de Tempo — {0}",
             ["Captions"] = "Subtítulos",
             ["Captions run entirely on this PC — audio never leaves it."] = "Los subtítulos funcionan por completo en este PC: el audio nunca sale de él.",
             ["Captions started for"] = "Subtítulos iniciados para",
@@ -5090,6 +5624,9 @@ namespace AutoClicker.Utils
             ["Move the selected point earlier in the order."] = "Adelanta el punto seleccionado en el orden.",
             ["Move the selected point later in the order."] = "Retrasa el punto seleccionado en el orden.",
             ["Nudge each click by a small random offset."] = "Desplaza cada clic con un pequeño desvío aleatorio.",
+            ["Maximum random variation added to / removed from the delay (ms) — never more than the delay allows, so the average speed stays what you set. The hold and the pause between bursts vary with it."] = "Variación aleatoria máxima que se suma o se resta al retardo (ms): nunca más de lo que el retardo permite, así la velocidad media sigue siendo la que fijaste. El tiempo que se mantiene cada clic y la pausa entre ráfagas varían con ella.",
+            ["Maximum random distance from the point, in pixels. Clicks stay on the window under the point."] = "Distancia aleatoria máxima desde el punto, en píxeles. Los clics se quedan en la ventana que hay bajo el punto.",
+            ["Varies the delay and the position a little and holds each click for a natural moment where it was instant, so the clicking looks less robotic. Press again to turn it off."] = "Varía un poco el retardo y la posición y mantiene cada clic un instante natural donde era instantáneo, para que el clic parezca menos robótico. Vuelve a pulsarlo para desactivarlo.",
             ["Open the clicks-per-second test."] = "Abre la prueba de clics por segundo.",
             ["Pause in milliseconds between bursts (Burst mode)."] = "Pausa en milisegundos entre ráfagas (modo Ráfaga).",
             ["Pick a custom accent colour."] = "Elige un color de acento personalizado.",
@@ -5296,6 +5833,172 @@ namespace AutoClicker.Utils
             ["Interval: {0} ms"] = "Intervalle : {0} ms",
             ["Measured: {0} °/count. Press {1} in the game to check it: Tempo turns one full circle with this value."] = "Mesuré : {0} °/impulsion. Appuyez sur {1} dans le jeu pour vérifier : Tempo fait un tour complet avec cette valeur.",
             ["New best — retry"] = "Nouveau record — réessayer",
+            // Anti-Freeze, watching the app and the PC (2026-10)
+            ["Off — no rate limit"] = "Désactivée — aucune limite de vitesse",
+            ["Ready — watches the game while it clicks"] = "Prête — surveille le jeu pendant qu'elle clique",
+            ["the app"] = "l'application",
+            ["⏸ Paused — {0} is not responding"] = "⏸ En pause — {0} ne répond pas",
+            ["⚠ Slowed to {0:0} CPS — {1} answers in {2:0} ms"] = "⚠ Ralenti à {0:0} CPS — {1} répond en {2:0} ms",
+            ["⚠ Slowed to {0:0} CPS — {1} is not responding"] = "⚠ Ralenti à {0:0} CPS — {1} ne répond pas",
+            ["⚠ Slowed to {0:0} CPS — {1} is not reading its clicks"] = "⚠ Ralenti à {0:0} CPS — {1} ne lit pas ses clics",
+            ["⚠ Slowed to {0:0} CPS — the CPU is full ({1:0}%)"] = "⚠ Ralenti à {0:0} CPS — le processeur est saturé ({1:0} %)",
+            ["⚠ Slowed to {0:0} CPS — memory is {1:0}% full"] = "⚠ Ralenti à {0:0} CPS — la mémoire est pleine à {1:0} %",
+            ["↗ Speeding back up — {0:0} CPS"] = "↗ Retour à pleine vitesse — {0:0} CPS",
+            ["✓ Full speed — {0} answers in {1:0} ms"] = "✓ Pleine vitesse — {0} répond en {1:0} ms",
+            ["✓ {0:0} CPS — can't watch {1} (runs as administrator)"] = "✓ {0:0} CPS — impossible de surveiller {1} (lancé en administrateur)",
+            ["✓ Full speed — {0:0} CPS"] = "✓ Pleine vitesse — {0:0} CPS",
+            ["Battery {0}%"] = "Batterie {0} %",
+            ["On battery"] = "Sur batterie",
+            ["Plugged in"] = "Branché",
+            ["Energy saver"] = "Économiseur d'énergie",
+            ["Battery saver"] = "Économiseur de batterie",
+            ["Best power efficiency"] = "Efficacité énergétique optimale",
+            ["Balanced"] = "Équilibré",
+            ["High performance"] = "Performances élevées",
+            ["Best performance"] = "Performances optimales",
+            ["Game Mode"] = "Mode Jeu",
+            ["Mixed reality"] = "Réalité mixte",
+            ["CPU {0:0}%"] = "CPU {0:0} %",
+            ["GPU {0:0}%"] = "GPU {0:0} %",
+            ["RAM {0:0}%"] = "RAM {0:0} %",
+            ["While it clicks, Anti-Freeze asks the app you are clicking for an answer twice a second. If it stops answering, the clicks wait for it; if it answers slowly, or the PC's CPU or memory is full, the rate drops and comes back as things recover. The Max CPS cap always applies."] =
+                "Pendant qu'elle clique, la protection anti-gel demande une réponse à l'application que vous cliquez deux fois par seconde. Si elle ne répond plus, les clics l'attendent ; si elle répond lentement, ou si le processeur ou la mémoire du PC sont saturés, la vitesse baisse puis remonte quand tout se rétablit. La limite CPS max s'applique toujours.",
+            ["How Windows is powering this PC. On battery and in the efficiency modes Windows runs apps it thinks are in the background on slower cores; while Tempo clicks or plays a macro it asks Windows for full speed, and gives it back when it stops."] =
+                "Comment Windows alimente ce PC. Sur batterie et dans les modes d'efficacité, Windows fait tourner sur des cœurs plus lents les applications qu'il croit en arrière-plan ; pendant que Tempo clique ou joue une macro, il demande à Windows toute la vitesse, et la rend à l'arrêt.",
+            ["The whole PC, counted the way Task Manager counts it: the CPU across every core, the busiest part of the GPU, and the memory in use."] =
+                "Tout le PC, compté comme le compte le Gestionnaire des tâches : le processeur sur tous les cœurs, la partie la plus occupée du GPU et la mémoire utilisée.",
+            // About: the build, as text (2026-10)
+            ["Copy details"] = "Copier les détails",
+            ["Copied ✓"] = "Copié ✓",
+            ["Copies the version, build, Official ID, Windows and display — paste it into a bug report."] =
+                "Copie la version, le build, l'ID officiel, Windows et l'écran — collez-les dans un rapport de bug.",
+            ["Built from commit {0}."] = "Compilé à partir du commit {0}.",
+            ["Built from commit {0}, plus changes that were not committed yet."] = "Compilé à partir du commit {0}, avec des modifications pas encore validées.",
+            // The crash report's buttons (they were never looked up).
+            ["Report on GitHub"] = "Signaler sur GitHub",
+            ["Email report"] = "Envoyer par e-mail",
+            ["Open report"] = "Ouvrir le rapport",
+            // The tamper check's Details window (IntegrityDetailsForm) and the code-beside-the-exe verdict.
+            ["Tamper check details"] = "Détails de la vérification d'intégrité",
+            ["SHA-256"] = "SHA-256",
+            ["Official ID"] = "ID officiel",
+            ["Downloaded"] = "Téléchargement",
+            ["Identity"] = "Identité",
+            ["Program file"] = "Fichier du programme",
+            ["Unpacked copy"] = "Copie décompressée",
+            ["Beside the exe"] = "À côté de l'exe",
+            ["This PC's record"] = "Empreinte de ce PC",
+            ["GitHub"] = "GitHub",
+            ["This file"] = "Ce fichier",
+            ["Checks"] = "Vérifications",
+            ["Check again"] = "Vérifier à nouveau",
+            ["Open release page"] = "Ouvrir la page de la version",
+            ["Show files"] = "Afficher les fichiers",
+            ["{0} s"] = "{0} s",
+            ["Not checked."] = "Non vérifié.",
+            ["Not compared."] = "Non comparé.",
+            ["Not asked."] = "Non demandé.",
+            ["test build"] = "version de test",
+            ["release build"] = "version publiée",
+            ["Folder: {0}"] = "Dossier : {0}",
+            ["changed {0}"] = "modifié le {0}",
+            ["changed: {0}"] = "modifiés : {0}",
+            ["{0} · build {1}"] = "{0} · build {1}",
+            ["{0} bytes ({1} MB)"] = "{0} octets ({1} Mo)",
+            ["Last checked {0} · took {1}"] = "Dernière vérification : {0} · durée {1}",
+            ["None — this is a test build."] = "Aucun : c'est une version de test.",
+            ["None — this copy failed its check."] = "Aucun : cette copie a échoué à la vérification.",
+            ["Not yet — GitHub has not confirmed this file."] = "Pas encore : GitHub n'a pas confirmé ce fichier.",
+            ["Stamped as an official Tempo build."] = "Marqué comme version officielle de Tempo.",
+            ["Not stamped as an official Tempo build."] = "Pas marqué comme version officielle de Tempo.",
+            ["Not a valid Windows program."] = "Ce n'est pas un programme Windows valide.",
+            ["The speech libraries it carries are missing."] = "Les bibliothèques vocales qu'il contient sont absentes.",
+            ["Could not be read right now."] = "Lecture impossible pour l'instant.",
+            ["Could not be compared right now."] = "Comparaison impossible pour l'instant.",
+            ["Could not read the list of files inside the program."] = "Impossible de lire la liste des fichiers contenus dans le programme.",
+            ["Not a single-file build — nothing was unpacked."] = "Pas une version en un seul fichier : rien n'a été décompressé.",
+            ["Nothing was loaded into Tempo from its own folder."] = "Rien n'a été chargé dans Tempo depuis son propre dossier.",
+            ["Not checked for this kind of build."] = "Non vérifié pour ce type de version.",
+            ["Not asked — a test build is not a published release."] = "Non demandé : une version de test n'est pas une version publiée.",
+            ["GitHub has no release {0}."] = "GitHub n'a aucune version {0}.",
+            ["Not before {0}."] = "Pas avant {0}.",
+            ["added, never shipped: {0}"] = "ajoutés, jamais livrés : {0}",
+            ["Code that isn't Tempo's is running inside it"] = "Du code qui n'est pas celui de Tempo s'exécute à l'intérieur",
+            ["The check has not run yet. Press Check again to run it now."] =
+                "La vérification n'a pas encore été faite. Appuyez sur Vérifier à nouveau pour la lancer maintenant.",
+            ["The tamper check is turned off, so nothing was checked. Turn it on in Settings › Data & Backup."] =
+                "La vérification d'intégrité est désactivée, donc rien n'a été vérifié. Activez-la dans Paramètres › Données et sauvegarde.",
+            ["{0} — matches GitHub's {1} release. Anyone can check it: it is the start of the SHA-256 GitHub lists for Tempo.exe."] =
+                "{0} : correspond à la version {1} de GitHub. Tout le monde peut le vérifier : c'est le début du SHA-256 que GitHub indique pour Tempo.exe.",
+            ["Not signed. Tempo's releases are not code-signed, which is why Windows may say \"Unknown publisher\"."] =
+                "Non signé. Les versions de Tempo ne sont pas signées, c'est pourquoi Windows peut indiquer « Éditeur inconnu ».",
+            ["Signed by {0}. Tempo's releases are not signed, so someone signed this copy themselves."] =
+                "Signé par {0}. Les versions de Tempo ne sont pas signées : quelqu'un a signé cette copie lui-même.",
+            ["No download mark — installed or updated by Tempo itself, or copied here."] =
+                "Aucune marque de téléchargement : installé ou mis à jour par Tempo lui-même, ou copié ici.",
+            ["From {0} — one of Tempo's official sites."] = "Depuis {0} : l'un des sites officiels de Tempo.",
+            ["From {0} — not one of Tempo's sites. Get Tempo from its GitHub releases page."] =
+                "Depuis {0} : ce n'est pas un site de Tempo. Téléchargez Tempo depuis sa page des versions sur GitHub.",
+            ["A valid Windows program · {0}% empty bytes · the speech libraries are inside."] =
+                "Un programme Windows valide · {0} % d'octets vides · les bibliothèques vocales sont à l'intérieur.",
+            ["{0}% of it is empty bytes — it is truncated or corrupted."] = "{0} % du fichier sont des octets vides : il est tronqué ou corrompu.",
+            ["{0} files match {1} ({2} MB, {3})."] = "{0} fichiers correspondent à {1} ({2} Mo, {3}).",
+            ["{0} missing — Windows' .NET host puts them back on the next start."] =
+                "{0} manquants : l'hôte .NET de Windows les remet au prochain démarrage.",
+            ["Altered — {0}. Press Repair in Settings to unpack a clean copy."] =
+                "Altérée : {0}. Appuyez sur Réparer dans les paramètres pour décompresser une copie propre.",
+            ["The unpack folder is not this build's, so it was not compared."] =
+                "Le dossier décompressé n'est pas celui de cette version, il n'a donc pas été comparé.",
+            ["Windows loaded these into Tempo from its folder: {0}. Tempo never puts files there — if you didn't, delete them and restart Tempo."] =
+                "Windows a chargé ces fichiers dans Tempo depuis son dossier : {0}. Tempo n'y met jamais de fichiers ; si ce n'est pas vous, supprimez-les et redémarrez Tempo.",
+            ["Nothing loaded, but these are not Tempo's: {0}"] = "Rien n'a été chargé, mais ceux-ci ne sont pas à Tempo : {0}",
+            ["Matches the fingerprint this PC recorded on {0}."] = "Correspond à l'empreinte enregistrée par ce PC le {0}.",
+            ["First run of this version here — its fingerprint was recorded now."] =
+                "Premier lancement de cette version ici : son empreinte vient d'être enregistrée.",
+            ["Updated from {0} — the fingerprint was recorded again."] = "Mis à jour depuis {0} : l'empreinte a été enregistrée à nouveau.",
+            ["Not the file recorded on {0}, though the version number is the same."] =
+                "Ce n'est pas le fichier enregistré le {0}, bien que le numéro de version soit le même.",
+            ["A test build is rebuilt on every publish, so its bytes change under the same version."] =
+                "Une version de test est recompilée à chaque publication, ses octets changent donc sous le même numéro de version.",
+            ["Matches the {0} release published on GitHub."] = "Correspond à la version {0} publiée sur GitHub.",
+            ["Matches the {0} release (confirmed on {1} — the same file is not asked about twice)."] =
+                "Correspond à la version {0} (confirmé le {1} ; le même fichier n'est pas redemandé).",
+            ["The {0} release lists no checksum for Tempo.exe."] = "La version {0} n'indique aucune somme de contrôle pour Tempo.exe.",
+            ["Does NOT match the {0} release published on GitHub."] = "Ne correspond PAS à la version {0} publiée sur GitHub.",
+            ["Could not reach GitHub. Tempo asks again by itself."] =
+                "Impossible de joindre GitHub. Tempo réessaiera de lui-même.",
+            ["✗ Windows loaded program files into Tempo from the folder {0} is in, and Tempo never puts any there. Press Show files, delete them, and restart Tempo."] =
+                "✗ Windows a chargé dans Tempo des fichiers de programme depuis le dossier de {0}, où Tempo n'en met jamais. Appuyez sur Afficher les fichiers, supprimez-les et redémarrez Tempo.",
+            ["Windows loaded program files into Tempo from the folder Tempo.exe is in. Tempo is a single file and never puts any there. If you didn't, delete them and restart Tempo. Click here to see where they are."] =
+                "Windows a chargé dans Tempo des fichiers de programme depuis le dossier de Tempo.exe. Tempo est un seul fichier et n'y en met jamais. Si ce n'est pas vous, supprimez-les et redémarrez Tempo. Cliquez ici pour voir où ils sont.",
+            ["✗ Program files that are not Tempo's were loaded into it from its folder. Open Settings › Data & Backup › Details to see them."] =
+                "✗ Des fichiers de programme qui ne sont pas à Tempo ont été chargés depuis son dossier. Ouvrez Paramètres › Données et sauvegarde › Détails pour les voir.",
+            // The status bar's exact figures, and the empty-take explanation on the Macros tab.
+            ["CPU {0:0.00}%"] = "CPU {0:0.00} %",
+            ["RAM {0:N2} MB"] = "RAM {0:N2} Mo",
+            ["Exactly {0:N0} bytes."] = "Exactement {0:N0} octets.",
+            ["Running since {0}."] = "En cours depuis {0}.",
+            ["Nothing was saved: the {0} click(s) and key press(es) in this take went to Tempo's own window. A macro leaves those out, because played back they would land on whatever is there by then.\n\nPress Record, then switch to the app you want to automate and do the steps there."] =
+                "Rien n'a été enregistré : les {0} clics et frappes de cette prise sont allés à la fenêtre de Tempo. Une macro les laisse de côté, car à la lecture ils tomberaient sur ce qui se trouve là à ce moment-là.\n\nAppuyez sur Enregistrer, passez à l'application à automatiser et faites-y les étapes.",
+            ["Tip: give Record a hotkey and turn on \"Minimise window during macro record & playback\" in Settings — Tempo then steps out of the way the moment recording starts."] =
+                "Astuce : attribuez une touche à Enregistrer et activez « Réduire la fenêtre pendant l'enregistrement & la lecture de macros » dans les paramètres — Tempo s'écarte alors dès que l'enregistrement commence.",
+            ["Nothing was saved: the only keys pressed were Tempo's own hotkeys, and those are never part of a macro."] =
+                "Rien n'a été enregistré : les seules touches pressées étaient des touches de Tempo, qui ne font jamais partie d'une macro.",
+            ["Nothing was saved: the take was only the pointer moving to and from Tempo's buttons ({0}). Record at least one click, key press or scroll — or a second or more of movement."] =
+                "Rien n'a été enregistré : la prise n'était que le pointeur allant et venant des boutons de Tempo ({0}). Enregistrez au moins un clic, une touche ou un défilement — ou une seconde de mouvement ou plus.",
+            ["Nothing was saved: no click, key press or mouse movement reached Tempo while it was recording."] =
+                "Rien n'a été enregistré : aucun clic, aucune touche ni aucun mouvement de souris n'est parvenu à Tempo pendant l'enregistrement.",
+            ["\"Capture mouse movement\" or \"Capture keyboard\" is off on the Macros tab — turn on what you want recorded."] =
+                "« Capturer le mouvement de la souris » ou « Capturer le clavier » est désactivé dans l'onglet Macros — activez ce que vous voulez enregistrer.",
+            // A run's clicks landing on Tempo's own window (the status bar).
+            ["Tempo's own window is under the pointer — its clicks there are ignored"] =
+                "La fenêtre de Tempo est sous le pointeur : ses clics y sont ignorés",
+            ["Clicks on Tempo are ignored"] = "Les clics sur Tempo sont ignorés",
+            ["When you start recording or playing a macro, minimise Tempo — and the Accounts window when it's open on its own — so they aren't in the way. Only when a Record/Stop or Emergency-stop hotkey is bound, so you can always finish. They come back by themselves afterwards, unless the macro was started by a hotkey from inside another app: then Tempo stays out of the way."] =
+                "Au démarrage de l'enregistrement ou de la lecture d'une macro, réduit Tempo — et la fenêtre Comptes quand elle est ouverte à part — pour qu'ils ne gênent pas. Seulement si un raccourci Enregistrer/Arrêter ou Arrêt d'urgence est défini, pour que vous puissiez toujours terminer. Ils reviennent d'eux-mêmes ensuite, sauf si la macro a été lancée par un raccourci depuis une autre application : Tempo reste alors à l'écart.",
+            ["Stops a run from clicking or typing into Tempo itself if the cursor is left over one of its windows — it would otherwise tick boxes, switch tabs and hit buttons at full speed. Clicks made without moving your cursor go through Tempo's windows to the app underneath. Your own clicks and keys always work, so Stop is never blocked. Turn off only if you deliberately automate Tempo's own interface."] =
+                "Empêche une exécution de cliquer ou de taper dans Tempo lui-même si le curseur reste sur l'une de ses fenêtres — sinon elle cocherait des cases, changerait d'onglet et appuierait sur des boutons à pleine vitesse. Les clics faits sans déplacer votre curseur traversent les fenêtres de Tempo jusqu'à l'application en dessous. Vos propres clics et touches fonctionnent toujours, Arrêter n'est donc jamais bloqué. À désactiver seulement si vous automatisez volontairement l'interface de Tempo.",
+            ["Continue"] = "Continuer",
             // CPS test: the details beside the pad, and the best for each input and length.
             ["Time's up!"] = "Temps écoulé !",
             ["Speed"] = "Vitesse",
@@ -5942,6 +6645,7 @@ namespace AutoClicker.Utils
             ["Auto-start for videos && games"] = "Démarrage automatique pour les vidéos && les jeux",
             ["Background image"] = "Image d'arrière-plan",
             ["Caption transcript saved to"] = "Transcription des sous-titres enregistrée dans",
+            ["Tempo Live Captions transcript — {0}"] = "Transcription des Sous-titres en direct de Tempo — {0}",
             ["Captions"] = "Sous-titres",
             ["Captions run entirely on this PC — audio never leaves it."] = "Les sous-titres fonctionnent entièrement sur ce PC : l'audio n'en sort jamais.",
             ["Captions started for"] = "Sous-titres démarrés pour",
@@ -6626,6 +7330,9 @@ namespace AutoClicker.Utils
             ["Move the selected point earlier in the order."] = "Avance le point sélectionné dans l'ordre.",
             ["Move the selected point later in the order."] = "Recule le point sélectionné dans l'ordre.",
             ["Nudge each click by a small random offset."] = "Décale chaque clic d'un petit écart aléatoire.",
+            ["Maximum random variation added to / removed from the delay (ms) — never more than the delay allows, so the average speed stays what you set. The hold and the pause between bursts vary with it."] = "Variation aléatoire maximale ajoutée au ou retirée du délai (ms) — jamais plus que le délai ne le permet, pour que la vitesse moyenne reste celle que vous avez choisie. Le maintien du clic et la pause entre les rafales varient avec elle.",
+            ["Maximum random distance from the point, in pixels. Clicks stay on the window under the point."] = "Distance aléatoire maximale par rapport au point, en pixels. Les clics restent sur la fenêtre située sous le point.",
+            ["Varies the delay and the position a little and holds each click for a natural moment where it was instant, so the clicking looks less robotic. Press again to turn it off."] = "Fait un peu varier le délai et la position, et maintient chaque clic un instant naturel là où il était instantané, pour un clic moins robotique. Appuyez à nouveau pour le désactiver.",
             ["Open the clicks-per-second test."] = "Ouvre le test de clics par seconde.",
             ["Pause in milliseconds between bursts (Burst mode)."] = "Pause en millisecondes entre les rafales (mode Rafale).",
             ["Pick a custom accent colour."] = "Choisissez une couleur d'accentuation personnalisée.",
@@ -6832,6 +7539,172 @@ namespace AutoClicker.Utils
             ["Interval: {0} ms"] = "Intervall: {0} ms",
             ["Measured: {0} °/count. Press {1} in the game to check it: Tempo turns one full circle with this value."] = "Gemessen: {0} °/Schritt. Drücke {1} im Spiel, um es zu prüfen: Tempo dreht mit diesem Wert eine volle Umdrehung.",
             ["New best — retry"] = "Neuer Bestwert — nochmal",
+            // Anti-Freeze, watching the app and the PC (2026-10)
+            ["Off — no rate limit"] = "Aus — keine Ratenbegrenzung",
+            ["Ready — watches the game while it clicks"] = "Bereit — überwacht das Spiel beim Klicken",
+            ["the app"] = "die App",
+            ["⏸ Paused — {0} is not responding"] = "⏸ Pausiert — {0} reagiert nicht",
+            ["⚠ Slowed to {0:0} CPS — {1} answers in {2:0} ms"] = "⚠ Gedrosselt auf {0:0} CPS — {1} antwortet in {2:0} ms",
+            ["⚠ Slowed to {0:0} CPS — {1} is not responding"] = "⚠ Gedrosselt auf {0:0} CPS — {1} reagiert nicht",
+            ["⚠ Slowed to {0:0} CPS — {1} is not reading its clicks"] = "⚠ Gedrosselt auf {0:0} CPS — {1} liest die Klicks nicht",
+            ["⚠ Slowed to {0:0} CPS — the CPU is full ({1:0}%)"] = "⚠ Gedrosselt auf {0:0} CPS — die CPU ist ausgelastet ({1:0} %)",
+            ["⚠ Slowed to {0:0} CPS — memory is {1:0}% full"] = "⚠ Gedrosselt auf {0:0} CPS — der Speicher ist zu {1:0} % voll",
+            ["↗ Speeding back up — {0:0} CPS"] = "↗ Wieder schneller — {0:0} CPS",
+            ["✓ Full speed — {0} answers in {1:0} ms"] = "✓ Volle Geschwindigkeit — {0} antwortet in {1:0} ms",
+            ["✓ {0:0} CPS — can't watch {1} (runs as administrator)"] = "✓ {0:0} CPS — {1} läuft als Administrator, keine Überwachung",
+            ["✓ Full speed — {0:0} CPS"] = "✓ Volle Geschwindigkeit — {0:0} CPS",
+            ["Battery {0}%"] = "Akku {0} %",
+            ["On battery"] = "Akkubetrieb",
+            ["Plugged in"] = "Am Netz",
+            ["Energy saver"] = "Energiesparmodus",
+            ["Battery saver"] = "Stromsparmodus",
+            ["Best power efficiency"] = "Beste Energieeffizienz",
+            ["Balanced"] = "Ausbalanciert",
+            ["High performance"] = "Höchstleistung",
+            ["Best performance"] = "Beste Leistung",
+            ["Game Mode"] = "Spielmodus",
+            ["Mixed reality"] = "Mixed Reality",
+            ["CPU {0:0}%"] = "CPU {0:0} %",
+            ["GPU {0:0}%"] = "GPU {0:0} %",
+            ["RAM {0:0}%"] = "RAM {0:0} %",
+            ["While it clicks, Anti-Freeze asks the app you are clicking for an answer twice a second. If it stops answering, the clicks wait for it; if it answers slowly, or the PC's CPU or memory is full, the rate drops and comes back as things recover. The Max CPS cap always applies."] =
+                "Während er klickt, fragt der Einfrierschutz die App, die du anklickst, zweimal pro Sekunde nach einer Antwort. Antwortet sie nicht mehr, warten die Klicks auf sie; antwortet sie langsam oder sind CPU oder Arbeitsspeicher des PCs voll, sinkt die Rate und steigt wieder, sobald sich alles erholt. Die Grenze Max. CPS gilt immer.",
+            ["How Windows is powering this PC. On battery and in the efficiency modes Windows runs apps it thinks are in the background on slower cores; while Tempo clicks or plays a macro it asks Windows for full speed, and gives it back when it stops."] =
+                "Wie Windows diesen PC mit Strom versorgt. Im Akkubetrieb und in den Effizienzmodi lässt Windows Apps, die es im Hintergrund vermutet, auf langsameren Kernen laufen; während Tempo klickt oder ein Makro abspielt, bittet es Windows um volle Geschwindigkeit und gibt sie beim Stoppen zurück.",
+            ["The whole PC, counted the way Task Manager counts it: the CPU across every core, the busiest part of the GPU, and the memory in use."] =
+                "Der ganze PC, gezählt wie im Task-Manager: die CPU über alle Kerne, der am stärksten ausgelastete Teil der GPU und der belegte Arbeitsspeicher.",
+            // About: the build, as text (2026-10)
+            ["Copy details"] = "Details kopieren",
+            ["Copied ✓"] = "Kopiert ✓",
+            ["Copies the version, build, Official ID, Windows and display — paste it into a bug report."] =
+                "Kopiert Version, Build, offizielle ID, Windows und Anzeige — füge es in einen Fehlerbericht ein.",
+            ["Built from commit {0}."] = "Aus Commit {0} gebaut.",
+            ["Built from commit {0}, plus changes that were not committed yet."] = "Aus Commit {0} gebaut, dazu Änderungen, die noch nicht committet waren.",
+            // The crash report's buttons (they were never looked up).
+            ["Report on GitHub"] = "Auf GitHub melden",
+            ["Email report"] = "Per E-Mail senden",
+            ["Open report"] = "Bericht öffnen",
+            // The tamper check's Details window (IntegrityDetailsForm) and the code-beside-the-exe verdict.
+            ["Tamper check details"] = "Details der Manipulationsprüfung",
+            ["SHA-256"] = "SHA-256",
+            ["Official ID"] = "Offizielle ID",
+            ["Downloaded"] = "Download",
+            ["Identity"] = "Identität",
+            ["Program file"] = "Programmdatei",
+            ["Unpacked copy"] = "Entpackte Kopie",
+            ["Beside the exe"] = "Neben der Exe",
+            ["This PC's record"] = "Eintrag dieses PCs",
+            ["GitHub"] = "GitHub",
+            ["This file"] = "Diese Datei",
+            ["Checks"] = "Prüfungen",
+            ["Check again"] = "Erneut prüfen",
+            ["Open release page"] = "Release-Seite öffnen",
+            ["Show files"] = "Dateien zeigen",
+            ["{0} s"] = "{0} s",
+            ["Not checked."] = "Nicht geprüft.",
+            ["Not compared."] = "Nicht verglichen.",
+            ["Not asked."] = "Nicht gefragt.",
+            ["test build"] = "Testbuild",
+            ["release build"] = "Release-Build",
+            ["Folder: {0}"] = "Ordner: {0}",
+            ["changed {0}"] = "geändert {0}",
+            ["changed: {0}"] = "geändert: {0}",
+            ["{0} · build {1}"] = "{0} · Build {1}",
+            ["{0} bytes ({1} MB)"] = "{0} Bytes ({1} MB)",
+            ["Last checked {0} · took {1}"] = "Zuletzt geprüft {0} · dauerte {1}",
+            ["None — this is a test build."] = "Keine – das ist ein Testbuild.",
+            ["None — this copy failed its check."] = "Keine – diese Kopie hat die Prüfung nicht bestanden.",
+            ["Not yet — GitHub has not confirmed this file."] = "Noch nicht – GitHub hat diese Datei nicht bestätigt.",
+            ["Stamped as an official Tempo build."] = "Als offizieller Tempo-Build gekennzeichnet.",
+            ["Not stamped as an official Tempo build."] = "Nicht als offizieller Tempo-Build gekennzeichnet.",
+            ["Not a valid Windows program."] = "Kein gültiges Windows-Programm.",
+            ["The speech libraries it carries are missing."] = "Die enthaltenen Sprachbibliotheken fehlen.",
+            ["Could not be read right now."] = "Konnte gerade nicht gelesen werden.",
+            ["Could not be compared right now."] = "Konnte gerade nicht verglichen werden.",
+            ["Could not read the list of files inside the program."] = "Die Liste der Dateien im Programm konnte nicht gelesen werden.",
+            ["Not a single-file build — nothing was unpacked."] = "Kein Einzeldatei-Build – nichts wurde entpackt.",
+            ["Nothing was loaded into Tempo from its own folder."] = "Aus Tempos eigenem Ordner wurde nichts in Tempo geladen.",
+            ["Not checked for this kind of build."] = "Wird bei dieser Art von Build nicht geprüft.",
+            ["Not asked — a test build is not a published release."] = "Nicht gefragt – ein Testbuild ist kein veröffentlichtes Release.",
+            ["GitHub has no release {0}."] = "GitHub hat kein Release {0}.",
+            ["Not before {0}."] = "Nicht vor {0}.",
+            ["added, never shipped: {0}"] = "hinzugefügt, nie ausgeliefert: {0}",
+            ["Code that isn't Tempo's is running inside it"] = "In Tempo läuft Code, der nicht von Tempo ist",
+            ["The check has not run yet. Press Check again to run it now."] =
+                "Die Prüfung ist noch nicht gelaufen. Drücke „Erneut prüfen“, um sie jetzt auszuführen.",
+            ["The tamper check is turned off, so nothing was checked. Turn it on in Settings › Data & Backup."] =
+                "Die Manipulationsprüfung ist aus, daher wurde nichts geprüft. Schalte sie unter Einstellungen › Daten & Sicherung ein.",
+            ["{0} — matches GitHub's {1} release. Anyone can check it: it is the start of the SHA-256 GitHub lists for Tempo.exe."] =
+                "{0} – entspricht dem Release {1} auf GitHub. Jeder kann das prüfen: Es ist der Anfang des SHA-256, den GitHub für Tempo.exe angibt.",
+            ["Not signed. Tempo's releases are not code-signed, which is why Windows may say \"Unknown publisher\"."] =
+                "Nicht signiert. Tempos Releases sind nicht codesigniert, deshalb zeigt Windows eventuell „Unbekannter Herausgeber“.",
+            ["Signed by {0}. Tempo's releases are not signed, so someone signed this copy themselves."] =
+                "Signiert von {0}. Tempos Releases sind nicht signiert – jemand hat diese Kopie selbst signiert.",
+            ["No download mark — installed or updated by Tempo itself, or copied here."] =
+                "Keine Download-Markierung – von Tempo selbst installiert oder aktualisiert oder hierher kopiert.",
+            ["From {0} — one of Tempo's official sites."] = "Von {0} – eine der offiziellen Seiten von Tempo.",
+            ["From {0} — not one of Tempo's sites. Get Tempo from its GitHub releases page."] =
+                "Von {0} – keine Seite von Tempo. Hol dir Tempo von seiner Release-Seite auf GitHub.",
+            ["A valid Windows program · {0}% empty bytes · the speech libraries are inside."] =
+                "Ein gültiges Windows-Programm · {0} % leere Bytes · die Sprachbibliotheken sind enthalten.",
+            ["{0}% of it is empty bytes — it is truncated or corrupted."] = "{0} % davon sind leere Bytes – die Datei ist abgeschnitten oder beschädigt.",
+            ["{0} files match {1} ({2} MB, {3})."] = "{0} Dateien stimmen mit {1} überein ({2} MB, {3}).",
+            ["{0} missing — Windows' .NET host puts them back on the next start."] =
+                "{0} fehlen – der .NET-Host von Windows stellt sie beim nächsten Start wieder her.",
+            ["Altered — {0}. Press Repair in Settings to unpack a clean copy."] =
+                "Verändert – {0}. Drücke in den Einstellungen auf „Reparieren“, um eine saubere Kopie zu entpacken.",
+            ["The unpack folder is not this build's, so it was not compared."] =
+                "Der Entpack-Ordner gehört nicht zu diesem Build und wurde daher nicht verglichen.",
+            ["Windows loaded these into Tempo from its folder: {0}. Tempo never puts files there — if you didn't, delete them and restart Tempo."] =
+                "Windows hat diese Dateien aus Tempos Ordner in Tempo geladen: {0}. Tempo legt dort nie Dateien ab – wenn du es nicht warst, lösche sie und starte Tempo neu.",
+            ["Nothing loaded, but these are not Tempo's: {0}"] = "Nichts geladen, aber diese gehören nicht zu Tempo: {0}",
+            ["Matches the fingerprint this PC recorded on {0}."] = "Stimmt mit dem Fingerabdruck überein, den dieser PC am {0} aufgezeichnet hat.",
+            ["First run of this version here — its fingerprint was recorded now."] =
+                "Erster Start dieser Version hier – ihr Fingerabdruck wurde gerade aufgezeichnet.",
+            ["Updated from {0} — the fingerprint was recorded again."] = "Aktualisiert von {0} – der Fingerabdruck wurde neu aufgezeichnet.",
+            ["Not the file recorded on {0}, though the version number is the same."] =
+                "Nicht die am {0} aufgezeichnete Datei, obwohl die Versionsnummer gleich ist.",
+            ["A test build is rebuilt on every publish, so its bytes change under the same version."] =
+                "Ein Testbuild wird bei jeder Veröffentlichung neu gebaut, daher ändern sich seine Bytes bei gleicher Version.",
+            ["Matches the {0} release published on GitHub."] = "Entspricht dem auf GitHub veröffentlichten Release {0}.",
+            ["Matches the {0} release (confirmed on {1} — the same file is not asked about twice)."] =
+                "Entspricht dem Release {0} (bestätigt am {1} – dieselbe Datei wird nicht zweimal abgefragt).",
+            ["The {0} release lists no checksum for Tempo.exe."] = "Das Release {0} nennt keine Prüfsumme für Tempo.exe.",
+            ["Does NOT match the {0} release published on GitHub."] = "Entspricht NICHT dem auf GitHub veröffentlichten Release {0}.",
+            ["Could not reach GitHub. Tempo asks again by itself."] =
+                "GitHub war nicht erreichbar. Tempo fragt von selbst erneut.",
+            ["✗ Windows loaded program files into Tempo from the folder {0} is in, and Tempo never puts any there. Press Show files, delete them, and restart Tempo."] =
+                "✗ Windows hat Programmdateien aus dem Ordner von {0} in Tempo geladen, und Tempo legt dort nie welche ab. Drücke „Dateien zeigen“, lösche sie und starte Tempo neu.",
+            ["Windows loaded program files into Tempo from the folder Tempo.exe is in. Tempo is a single file and never puts any there. If you didn't, delete them and restart Tempo. Click here to see where they are."] =
+                "Windows hat Programmdateien aus dem Ordner von Tempo.exe in Tempo geladen. Tempo ist eine einzige Datei und legt dort nie welche ab. Wenn du es nicht warst, lösche sie und starte Tempo neu. Klicke hier, um zu sehen, wo sie liegen.",
+            ["✗ Program files that are not Tempo's were loaded into it from its folder. Open Settings › Data & Backup › Details to see them."] =
+                "✗ Programmdateien, die nicht zu Tempo gehören, wurden aus seinem Ordner geladen. Öffne Einstellungen › Daten & Sicherung › Details, um sie zu sehen.",
+            // The status bar's exact figures, and the empty-take explanation on the Macros tab.
+            ["CPU {0:0.00}%"] = "CPU {0:0.00} %",
+            ["RAM {0:N2} MB"] = "RAM {0:N2} MB",
+            ["Exactly {0:N0} bytes."] = "Genau {0:N0} Bytes.",
+            ["Running since {0}."] = "Läuft seit {0}.",
+            ["Nothing was saved: the {0} click(s) and key press(es) in this take went to Tempo's own window. A macro leaves those out, because played back they would land on whatever is there by then.\n\nPress Record, then switch to the app you want to automate and do the steps there."] =
+                "Nichts gespeichert: Die {0} Klicks und Tastendrücke dieser Aufnahme gingen an Tempos eigenes Fenster. Ein Makro lässt sie weg, weil sie bei der Wiedergabe auf dem landen würden, was dann dort ist.\n\nDrücke „Aufnehmen“, wechsle zu der App, die du automatisieren willst, und führe die Schritte dort aus.",
+            ["Tip: give Record a hotkey and turn on \"Minimise window during macro record & playback\" in Settings — Tempo then steps out of the way the moment recording starts."] =
+                "Tipp: Weise „Aufnehmen“ eine Taste zu und schalte in den Einstellungen „Fenster während Makro-Aufnahme & Wiedergabe minimieren“ ein – dann geht Tempo aus dem Weg, sobald die Aufnahme beginnt.",
+            ["Nothing was saved: the only keys pressed were Tempo's own hotkeys, and those are never part of a macro."] =
+                "Nichts gespeichert: Gedrückt wurden nur Tempos eigene Tasten, und die sind nie Teil eines Makros.",
+            ["Nothing was saved: the take was only the pointer moving to and from Tempo's buttons ({0}). Record at least one click, key press or scroll — or a second or more of movement."] =
+                "Nichts gespeichert: Die Aufnahme bestand nur aus dem Zeiger auf dem Weg zu und von Tempos Schaltflächen ({0}). Nimm mindestens einen Klick, Tastendruck oder Bildlauf auf – oder eine Sekunde Bewegung oder mehr.",
+            ["Nothing was saved: no click, key press or mouse movement reached Tempo while it was recording."] =
+                "Nichts gespeichert: Während der Aufnahme kam kein Klick, kein Tastendruck und keine Mausbewegung bei Tempo an.",
+            ["\"Capture mouse movement\" or \"Capture keyboard\" is off on the Macros tab — turn on what you want recorded."] =
+                "„Mausbewegung erfassen“ oder „Tastatur erfassen“ ist auf dem Makros-Tab aus – schalte ein, was aufgenommen werden soll.",
+            // A run's clicks landing on Tempo's own window (the status bar).
+            ["Tempo's own window is under the pointer — its clicks there are ignored"] =
+                "Tempos eigenes Fenster liegt unter dem Zeiger – seine Klicks dort werden ignoriert",
+            ["Clicks on Tempo are ignored"] = "Klicks auf Tempo werden ignoriert",
+            ["When you start recording or playing a macro, minimise Tempo — and the Accounts window when it's open on its own — so they aren't in the way. Only when a Record/Stop or Emergency-stop hotkey is bound, so you can always finish. They come back by themselves afterwards, unless the macro was started by a hotkey from inside another app: then Tempo stays out of the way."] =
+                "Beim Start einer Makroaufnahme oder -wiedergabe wird Tempo minimiert – und das Konten-Fenster, wenn es separat geöffnet ist –, damit nichts im Weg ist. Nur wenn ein Aufnahme/Stopp- oder Not-Aus-Tastenkürzel belegt ist, damit du jederzeit beenden kannst. Danach kommen die Fenster von selbst zurück – außer wenn das Makro per Tastenkürzel aus einer anderen App gestartet wurde: Dann bleibt Tempo aus dem Weg.",
+            ["Stops a run from clicking or typing into Tempo itself if the cursor is left over one of its windows — it would otherwise tick boxes, switch tabs and hit buttons at full speed. Clicks made without moving your cursor go through Tempo's windows to the app underneath. Your own clicks and keys always work, so Stop is never blocked. Turn off only if you deliberately automate Tempo's own interface."] =
+                "Verhindert, dass ein Lauf in Tempo selbst klickt oder tippt, wenn der Cursor über einem seiner Fenster bleibt – sonst würde er Kästchen anhaken, Tabs wechseln und Schaltflächen mit voller Geschwindigkeit drücken. Klicks, ohne deinen Cursor zu bewegen, gehen durch Tempos Fenster hindurch an die App darunter. Deine eigenen Klicks und Tasten funktionieren immer, Stopp wird also nie blockiert. Nur ausschalten, wenn du Tempos eigene Oberfläche absichtlich automatisierst.",
+            ["Continue"] = "Weiter",
             // CPS test: the details beside the pad, and the best for each input and length.
             ["Time's up!"] = "Zeit um!",
             ["Speed"] = "Geschwindigkeit",
@@ -7478,6 +8351,7 @@ namespace AutoClicker.Utils
             ["Auto-start for videos && games"] = "Automatischer Start für Videos && Spiele",
             ["Background image"] = "Hintergrundbild",
             ["Caption transcript saved to"] = "Untertitel-Transkript gespeichert unter",
+            ["Tempo Live Captions transcript — {0}"] = "Transkript der Live-Untertitel von Tempo — {0}",
             ["Captions"] = "Untertitel",
             ["Captions run entirely on this PC — audio never leaves it."] = "Untertitel laufen vollständig auf diesem PC – Audio verlässt ihn nie.",
             ["Captions started for"] = "Untertitel gestartet für",
@@ -7795,8 +8669,8 @@ namespace AutoClicker.Utils
             ["Profile name cannot be empty."] = "Der Profilname darf nicht leer sein.",
             ["Interval must be at least 1 millisecond."] = "Das Intervall muss mindestens 1 Millisekunde betragen.",
             ["Choose a key to auto-press first (Click Options → Set key)."] = "Wähle zuerst die Taste, die gedrückt werden soll (Klickoptionen → Taste…).",
-            ["Burst size must be at least 1."] = "Die Klicks pro Burst müssen mindestens 1 sein.",
-            ["Burst pause cannot be negative."] = "Die Burst-Pause darf nicht negativ sein.",
+            ["Burst size must be at least 1."] = "Die Klicks pro Salve müssen mindestens 1 sein.",
+            ["Burst pause cannot be negative."] = "Die Pause zwischen Salven darf nicht negativ sein.",
             ["Repeat count must be at least 1."] = "Die Anzahl der Wiederholungen muss mindestens 1 sein.",
             ["Run duration must be at least 1 second."] = "Die Laufzeit muss mindestens 1 Sekunde betragen.",
             ["Multi-point mode needs at least one enabled point."] = "Der Mehrpunkt-Modus braucht mindestens einen aktivierten Punkt.",
@@ -8162,6 +9036,9 @@ namespace AutoClicker.Utils
             ["Move the selected point earlier in the order."] = "Verschiebt den ausgewählten Punkt in der Reihenfolge nach vorn.",
             ["Move the selected point later in the order."] = "Verschiebt den ausgewählten Punkt in der Reihenfolge nach hinten.",
             ["Nudge each click by a small random offset."] = "Verschiebt jeden Klick um einen kleinen zufälligen Versatz.",
+            ["Maximum random variation added to / removed from the delay (ms) — never more than the delay allows, so the average speed stays what you set. The hold and the pause between bursts vary with it."] = "Maximale zufällige Abweichung, die zur Verzögerung addiert oder abgezogen wird (ms) – nie mehr, als die Verzögerung zulässt, damit die mittlere Geschwindigkeit die eingestellte bleibt. Die Haltedauer und die Pause zwischen den Salven variieren mit.",
+            ["Maximum random distance from the point, in pixels. Clicks stay on the window under the point."] = "Maximaler zufälliger Abstand vom Punkt in Pixeln. Die Klicks bleiben auf dem Fenster unter dem Punkt.",
+            ["Varies the delay and the position a little and holds each click for a natural moment where it was instant, so the clicking looks less robotic. Press again to turn it off."] = "Variiert Verzögerung und Position ein wenig und hält jeden Klick einen natürlichen Moment lang, wo er sofort war, damit das Klicken weniger roboterhaft wirkt. Erneut drücken zum Ausschalten.",
             ["Open the clicks-per-second test."] = "Öffnet den Klicks-pro-Sekunde-Test.",
             ["Pause in milliseconds between bursts (Burst mode)."] = "Pause in Millisekunden zwischen den Salven (Salvenmodus).",
             ["Pick a custom accent colour."] = "Wähle eine eigene Akzentfarbe.",
@@ -8368,6 +9245,172 @@ namespace AutoClicker.Utils
             ["Interval: {0} ms"] = "Intervallo: {0} ms",
             ["Measured: {0} °/count. Press {1} in the game to check it: Tempo turns one full circle with this value."] = "Misurato: {0} °/conteggio. Premi {1} nel gioco per verificarlo: Tempo fa un giro completo con questo valore.",
             ["New best — retry"] = "Nuovo record — riprova",
+            // Anti-Freeze, watching the app and the PC (2026-10)
+            ["Off — no rate limit"] = "Disattivata — nessun limite di velocità",
+            ["Ready — watches the game while it clicks"] = "Pronta — controlla il gioco mentre clicca",
+            ["the app"] = "l'app",
+            ["⏸ Paused — {0} is not responding"] = "⏸ In pausa — {0} non risponde",
+            ["⚠ Slowed to {0:0} CPS — {1} answers in {2:0} ms"] = "⚠ Rallentato a {0:0} CPS — {1} risponde in {2:0} ms",
+            ["⚠ Slowed to {0:0} CPS — {1} is not responding"] = "⚠ Rallentato a {0:0} CPS — {1} non risponde",
+            ["⚠ Slowed to {0:0} CPS — {1} is not reading its clicks"] = "⚠ Rallentato a {0:0} CPS — {1} non sta leggendo i clic",
+            ["⚠ Slowed to {0:0} CPS — the CPU is full ({1:0}%)"] = "⚠ Rallentato a {0:0} CPS — la CPU è al massimo ({1:0}%)",
+            ["⚠ Slowed to {0:0} CPS — memory is {1:0}% full"] = "⚠ Rallentato a {0:0} CPS — la memoria è piena al {1:0}%",
+            ["↗ Speeding back up — {0:0} CPS"] = "↗ Torna alla velocità piena — {0:0} CPS",
+            ["✓ Full speed — {0} answers in {1:0} ms"] = "✓ Velocità piena — {0} risponde in {1:0} ms",
+            ["✓ {0:0} CPS — can't watch {1} (runs as administrator)"] = "✓ {0:0} CPS — impossibile controllare {1} (eseguito come amministratore)",
+            ["✓ Full speed — {0:0} CPS"] = "✓ Velocità piena — {0:0} CPS",
+            ["Battery {0}%"] = "Batteria {0}%",
+            ["On battery"] = "A batteria",
+            ["Plugged in"] = "Collegato",
+            ["Energy saver"] = "Risparmio energia",
+            ["Battery saver"] = "Risparmio batteria",
+            ["Best power efficiency"] = "Massima efficienza energetica",
+            ["Balanced"] = "Bilanciato",
+            ["High performance"] = "Prestazioni elevate",
+            ["Best performance"] = "Prestazioni migliori",
+            ["Game Mode"] = "Modalità gioco",
+            ["Mixed reality"] = "Realtà mista",
+            ["CPU {0:0}%"] = "CPU {0:0}%",
+            ["GPU {0:0}%"] = "GPU {0:0}%",
+            ["RAM {0:0}%"] = "RAM {0:0}%",
+            ["While it clicks, Anti-Freeze asks the app you are clicking for an answer twice a second. If it stops answering, the clicks wait for it; if it answers slowly, or the PC's CPU or memory is full, the rate drops and comes back as things recover. The Max CPS cap always applies."] =
+                "Mentre clicca, la protezione anti-blocco chiede una risposta all'app che stai cliccando due volte al secondo. Se smette di rispondere, i clic la aspettano; se risponde lentamente, o la CPU o la memoria del PC sono al massimo, la velocità scende e risale quando tutto si riprende. Il limite di CPS max vale sempre.",
+            ["How Windows is powering this PC. On battery and in the efficiency modes Windows runs apps it thinks are in the background on slower cores; while Tempo clicks or plays a macro it asks Windows for full speed, and gives it back when it stops."] =
+                "Come Windows alimenta questo PC. A batteria e nelle modalità di efficienza Windows esegue su core più lenti le app che ritiene in background; mentre Tempo clicca o riproduce una macro chiede a Windows la massima velocità, e la restituisce quando si ferma.",
+            ["The whole PC, counted the way Task Manager counts it: the CPU across every core, the busiest part of the GPU, and the memory in use."] =
+                "Tutto il PC, contato come lo conta Gestione attività: la CPU su tutti i core, la parte più occupata della GPU e la memoria in uso.",
+            // About: the build, as text (2026-10)
+            ["Copy details"] = "Copia dettagli",
+            ["Copied ✓"] = "Copiato ✓",
+            ["Copies the version, build, Official ID, Windows and display — paste it into a bug report."] =
+                "Copia versione, build, ID ufficiale, Windows e schermo — incollali in una segnalazione di bug.",
+            ["Built from commit {0}."] = "Compilato dal commit {0}.",
+            ["Built from commit {0}, plus changes that were not committed yet."] = "Compilato dal commit {0}, più modifiche non ancora confermate.",
+            // The crash report's buttons (they were never looked up).
+            ["Report on GitHub"] = "Segnala su GitHub",
+            ["Email report"] = "Invia per e-mail",
+            ["Open report"] = "Apri rapporto",
+            // The tamper check's Details window (IntegrityDetailsForm) and the code-beside-the-exe verdict.
+            ["Tamper check details"] = "Dettagli del controllo di integrità",
+            ["SHA-256"] = "SHA-256",
+            ["Official ID"] = "ID ufficiale",
+            ["Downloaded"] = "Download",
+            ["Identity"] = "Identità",
+            ["Program file"] = "File del programma",
+            ["Unpacked copy"] = "Copia estratta",
+            ["Beside the exe"] = "Accanto all'exe",
+            ["This PC's record"] = "Registro di questo PC",
+            ["GitHub"] = "GitHub",
+            ["This file"] = "Questo file",
+            ["Checks"] = "Controlli",
+            ["Check again"] = "Controlla di nuovo",
+            ["Open release page"] = "Apri pagina della release",
+            ["Show files"] = "Mostra file",
+            ["{0} s"] = "{0} s",
+            ["Not checked."] = "Non controllato.",
+            ["Not compared."] = "Non confrontato.",
+            ["Not asked."] = "Non richiesto.",
+            ["test build"] = "build di prova",
+            ["release build"] = "build pubblicata",
+            ["Folder: {0}"] = "Cartella: {0}",
+            ["changed {0}"] = "modificato il {0}",
+            ["changed: {0}"] = "modificati: {0}",
+            ["{0} · build {1}"] = "{0} · build {1}",
+            ["{0} bytes ({1} MB)"] = "{0} byte ({1} MB)",
+            ["Last checked {0} · took {1}"] = "Ultimo controllo {0} · durata {1}",
+            ["None — this is a test build."] = "Nessuno: questa è una build di prova.",
+            ["None — this copy failed its check."] = "Nessuno: questa copia non ha superato il controllo.",
+            ["Not yet — GitHub has not confirmed this file."] = "Non ancora: GitHub non ha confermato questo file.",
+            ["Stamped as an official Tempo build."] = "Contrassegnato come build ufficiale di Tempo.",
+            ["Not stamped as an official Tempo build."] = "Non contrassegnato come build ufficiale di Tempo.",
+            ["Not a valid Windows program."] = "Non è un programma Windows valido.",
+            ["The speech libraries it carries are missing."] = "Mancano le librerie vocali che contiene.",
+            ["Could not be read right now."] = "Impossibile leggerlo ora.",
+            ["Could not be compared right now."] = "Impossibile confrontarlo ora.",
+            ["Could not read the list of files inside the program."] = "Impossibile leggere l'elenco dei file contenuti nel programma.",
+            ["Not a single-file build — nothing was unpacked."] = "Non è una build a file singolo: non è stato estratto nulla.",
+            ["Nothing was loaded into Tempo from its own folder."] = "Nulla è stato caricato in Tempo dalla sua cartella.",
+            ["Not checked for this kind of build."] = "Non controllato per questo tipo di build.",
+            ["Not asked — a test build is not a published release."] = "Non richiesto: una build di prova non è una release pubblicata.",
+            ["GitHub has no release {0}."] = "GitHub non ha nessuna release {0}.",
+            ["Not before {0}."] = "Non prima di {0}.",
+            ["added, never shipped: {0}"] = "aggiunti, mai distribuiti: {0}",
+            ["Code that isn't Tempo's is running inside it"] = "Codice che non è di Tempo è in esecuzione al suo interno",
+            ["The check has not run yet. Press Check again to run it now."] =
+                "Il controllo non è ancora stato eseguito. Premi Controlla di nuovo per eseguirlo ora.",
+            ["The tamper check is turned off, so nothing was checked. Turn it on in Settings › Data & Backup."] =
+                "Il controllo di integrità è disattivato, quindi non è stato controllato nulla. Attivalo in Impostazioni › Dati e backup.",
+            ["{0} — matches GitHub's {1} release. Anyone can check it: it is the start of the SHA-256 GitHub lists for Tempo.exe."] =
+                "{0}: corrisponde alla release {1} di GitHub. Chiunque può verificarlo: è l'inizio dello SHA-256 che GitHub indica per Tempo.exe.",
+            ["Not signed. Tempo's releases are not code-signed, which is why Windows may say \"Unknown publisher\"."] =
+                "Non firmato. Le release di Tempo non sono firmate digitalmente, per questo Windows può indicare \"Autore sconosciuto\".",
+            ["Signed by {0}. Tempo's releases are not signed, so someone signed this copy themselves."] =
+                "Firmato da {0}. Le release di Tempo non sono firmate, quindi qualcuno ha firmato questa copia di sua iniziativa.",
+            ["No download mark — installed or updated by Tempo itself, or copied here."] =
+                "Nessun contrassegno di download: installato o aggiornato da Tempo stesso, oppure copiato qui.",
+            ["From {0} — one of Tempo's official sites."] = "Da {0}: uno dei siti ufficiali di Tempo.",
+            ["From {0} — not one of Tempo's sites. Get Tempo from its GitHub releases page."] =
+                "Da {0}: non è un sito di Tempo. Scarica Tempo dalla sua pagina delle release su GitHub.",
+            ["A valid Windows program · {0}% empty bytes · the speech libraries are inside."] =
+                "Un programma Windows valido · {0}% di byte vuoti · le librerie vocali sono incluse.",
+            ["{0}% of it is empty bytes — it is truncated or corrupted."] = "Il {0}% è composto da byte vuoti: è troncato o danneggiato.",
+            ["{0} files match {1} ({2} MB, {3})."] = "{0} file corrispondono a {1} ({2} MB, {3}).",
+            ["{0} missing — Windows' .NET host puts them back on the next start."] =
+                "{0} mancanti: l'host .NET di Windows li ripristina al prossimo avvio.",
+            ["Altered — {0}. Press Repair in Settings to unpack a clean copy."] =
+                "Alterata: {0}. Premi Ripara nelle impostazioni per estrarre una copia pulita.",
+            ["The unpack folder is not this build's, so it was not compared."] =
+                "La cartella estratta non è di questa build, quindi non è stata confrontata.",
+            ["Windows loaded these into Tempo from its folder: {0}. Tempo never puts files there — if you didn't, delete them and restart Tempo."] =
+                "Windows ha caricato questi file in Tempo dalla sua cartella: {0}. Tempo non mette mai file lì: se non sei stato tu, eliminali e riavvia Tempo.",
+            ["Nothing loaded, but these are not Tempo's: {0}"] = "Nulla è stato caricato, ma questi non sono di Tempo: {0}",
+            ["Matches the fingerprint this PC recorded on {0}."] = "Corrisponde all'impronta registrata da questo PC il {0}.",
+            ["First run of this version here — its fingerprint was recorded now."] =
+                "Primo avvio di questa versione qui: la sua impronta è stata appena registrata.",
+            ["Updated from {0} — the fingerprint was recorded again."] = "Aggiornato da {0}: l'impronta è stata registrata di nuovo.",
+            ["Not the file recorded on {0}, though the version number is the same."] =
+                "Non è il file registrato il {0}, anche se il numero di versione è lo stesso.",
+            ["A test build is rebuilt on every publish, so its bytes change under the same version."] =
+                "Una build di prova viene ricompilata a ogni pubblicazione, quindi i suoi byte cambiano con la stessa versione.",
+            ["Matches the {0} release published on GitHub."] = "Corrisponde alla release {0} pubblicata su GitHub.",
+            ["Matches the {0} release (confirmed on {1} — the same file is not asked about twice)."] =
+                "Corrisponde alla release {0} (confermato il {1}; lo stesso file non viene richiesto due volte).",
+            ["The {0} release lists no checksum for Tempo.exe."] = "La release {0} non indica alcun checksum per Tempo.exe.",
+            ["Does NOT match the {0} release published on GitHub."] = "NON corrisponde alla release {0} pubblicata su GitHub.",
+            ["Could not reach GitHub. Tempo asks again by itself."] =
+                "Impossibile raggiungere GitHub. Tempo riproverà da solo.",
+            ["✗ Windows loaded program files into Tempo from the folder {0} is in, and Tempo never puts any there. Press Show files, delete them, and restart Tempo."] =
+                "✗ Windows ha caricato in Tempo file di programma dalla cartella di {0}, dove Tempo non ne mette mai. Premi Mostra file, eliminali e riavvia Tempo.",
+            ["Windows loaded program files into Tempo from the folder Tempo.exe is in. Tempo is a single file and never puts any there. If you didn't, delete them and restart Tempo. Click here to see where they are."] =
+                "Windows ha caricato in Tempo file di programma dalla cartella di Tempo.exe. Tempo è un unico file e non ne mette mai lì. Se non sei stato tu, eliminali e riavvia Tempo. Fai clic qui per vedere dove si trovano.",
+            ["✗ Program files that are not Tempo's were loaded into it from its folder. Open Settings › Data & Backup › Details to see them."] =
+                "✗ File di programma che non sono di Tempo sono stati caricati dalla sua cartella. Apri Impostazioni › Dati e backup › Dettagli per vederli.",
+            // The status bar's exact figures, and the empty-take explanation on the Macros tab.
+            ["CPU {0:0.00}%"] = "CPU {0:0.00}%",
+            ["RAM {0:N2} MB"] = "RAM {0:N2} MB",
+            ["Exactly {0:N0} bytes."] = "Esattamente {0:N0} byte.",
+            ["Running since {0}."] = "In esecuzione da {0}.",
+            ["Nothing was saved: the {0} click(s) and key press(es) in this take went to Tempo's own window. A macro leaves those out, because played back they would land on whatever is there by then.\n\nPress Record, then switch to the app you want to automate and do the steps there."] =
+                "Non è stato salvato nulla: i {0} clic e tasti premuti in questa registrazione sono andati alla finestra di Tempo. Una macro li esclude, perché in riproduzione finirebbero su ciò che si trova lì in quel momento.\n\nPremi Registra, passa all'app che vuoi automatizzare e fai lì i passaggi.",
+            ["Tip: give Record a hotkey and turn on \"Minimise window during macro record & playback\" in Settings — Tempo then steps out of the way the moment recording starts."] =
+                "Suggerimento: assegna un tasto a Registra e attiva \"Riduci a icona la finestra durante registrazione & riproduzione macro\" nelle Impostazioni: così Tempo si toglie di mezzo appena inizia la registrazione.",
+            ["Nothing was saved: the only keys pressed were Tempo's own hotkeys, and those are never part of a macro."] =
+                "Non è stato salvato nulla: gli unici tasti premuti erano tasti di Tempo, che non fanno mai parte di una macro.",
+            ["Nothing was saved: the take was only the pointer moving to and from Tempo's buttons ({0}). Record at least one click, key press or scroll — or a second or more of movement."] =
+                "Non è stato salvato nulla: la registrazione era solo il puntatore che andava e tornava dai pulsanti di Tempo ({0}). Registra almeno un clic, un tasto o uno scorrimento, oppure un secondo o più di movimento.",
+            ["Nothing was saved: no click, key press or mouse movement reached Tempo while it was recording."] =
+                "Non è stato salvato nulla: durante la registrazione a Tempo non è arrivato nessun clic, tasto o movimento del mouse.",
+            ["\"Capture mouse movement\" or \"Capture keyboard\" is off on the Macros tab — turn on what you want recorded."] =
+                "\"Cattura movimento del mouse\" o \"Cattura tastiera\" è disattivato nella scheda Macro: attiva ciò che vuoi registrare.",
+            // A run's clicks landing on Tempo's own window (the status bar).
+            ["Tempo's own window is under the pointer — its clicks there are ignored"] =
+                "La finestra di Tempo è sotto il puntatore: i suoi clic lì vengono ignorati",
+            ["Clicks on Tempo are ignored"] = "I clic su Tempo vengono ignorati",
+            ["When you start recording or playing a macro, minimise Tempo — and the Accounts window when it's open on its own — so they aren't in the way. Only when a Record/Stop or Emergency-stop hotkey is bound, so you can always finish. They come back by themselves afterwards, unless the macro was started by a hotkey from inside another app: then Tempo stays out of the way."] =
+                "Quando inizi a registrare o riprodurre una macro, riduce a icona Tempo — e la finestra Account quando è aperta a parte — così non sono d'intralcio. Solo se è assegnato un tasto rapido Registra/Ferma o Arresto di emergenza, così puoi sempre terminare. Tornano da sole alla fine, a meno che la macro sia stata avviata con un tasto rapido da un'altra app: allora Tempo resta in disparte.",
+            ["Stops a run from clicking or typing into Tempo itself if the cursor is left over one of its windows — it would otherwise tick boxes, switch tabs and hit buttons at full speed. Clicks made without moving your cursor go through Tempo's windows to the app underneath. Your own clicks and keys always work, so Stop is never blocked. Turn off only if you deliberately automate Tempo's own interface."] =
+                "Impedisce a un'esecuzione di cliccare o scrivere in Tempo stesso se il cursore resta su una delle sue finestre: altrimenti spunterebbe caselle, cambierebbe scheda e premerebbe pulsanti a tutta velocità. I clic fatti senza spostare il cursore attraversano le finestre di Tempo fino all'app sottostante. I tuoi clic e tasti funzionano sempre, quindi Ferma non è mai bloccato. Disattivalo solo se automatizzi di proposito l'interfaccia di Tempo.",
+            ["Continue"] = "Continua",
             // CPS test: the details beside the pad, and the best for each input and length.
             ["Time's up!"] = "Tempo scaduto!",
             ["Speed"] = "Velocità",
@@ -9014,6 +10057,7 @@ namespace AutoClicker.Utils
             ["Auto-start for videos && games"] = "Avvio automatico per video && giochi",
             ["Background image"] = "Immagine di sfondo",
             ["Caption transcript saved to"] = "Trascrizione dei sottotitoli salvata in",
+            ["Tempo Live Captions transcript — {0}"] = "Trascrizione dei Sottotitoli in tempo reale di Tempo — {0}",
             ["Captions"] = "Sottotitoli",
             ["Captions run entirely on this PC — audio never leaves it."] = "I sottotitoli funzionano interamente su questo PC: l'audio non ne esce mai.",
             ["Captions started for"] = "Sottotitoli avviati per",
@@ -9698,6 +10742,9 @@ namespace AutoClicker.Utils
             ["Move the selected point earlier in the order."] = "Sposta il punto selezionato più avanti nell'ordine.",
             ["Move the selected point later in the order."] = "Sposta il punto selezionato più indietro nell'ordine.",
             ["Nudge each click by a small random offset."] = "Sposta ogni clic di un piccolo scostamento casuale.",
+            ["Maximum random variation added to / removed from the delay (ms) — never more than the delay allows, so the average speed stays what you set. The hold and the pause between bursts vary with it."] = "Variazione casuale massima aggiunta o sottratta al ritardo (ms): mai più di quanto il ritardo consenta, così la velocità media resta quella impostata. La durata della pressione e la pausa tra le raffiche variano con essa.",
+            ["Maximum random distance from the point, in pixels. Clicks stay on the window under the point."] = "Distanza casuale massima dal punto, in pixel. I clic restano sulla finestra sotto il punto.",
+            ["Varies the delay and the position a little and holds each click for a natural moment where it was instant, so the clicking looks less robotic. Press again to turn it off."] = "Varia un po' il ritardo e la posizione e tiene premuto ogni clic per un istante naturale dove era istantaneo, così il clic sembra meno robotico. Premi di nuovo per disattivarlo.",
             ["Open the clicks-per-second test."] = "Apre il test dei clic al secondo.",
             ["Pause in milliseconds between bursts (Burst mode)."] = "Pausa in millisecondi tra le raffiche (modalità Raffica).",
             ["Pick a custom accent colour."] = "Scegli un colore principale personalizzato.",
@@ -9904,6 +10951,172 @@ namespace AutoClicker.Utils
             ["Interval: {0} ms"] = "Intervalo: {0} ms",
             ["Measured: {0} °/count. Press {1} in the game to check it: Tempo turns one full circle with this value."] = "Medido: {0} °/contagem. Prime {1} no jogo para confirmar: o Tempo dá uma volta completa com este valor.",
             ["New best — retry"] = "Novo recorde — tentar de novo",
+            // Anti-Freeze, watching the app and the PC (2026-10)
+            ["Off — no rate limit"] = "Desativada — sem limite de velocidade",
+            ["Ready — watches the game while it clicks"] = "Pronta — vigia o jogo enquanto clica",
+            ["the app"] = "o aplicativo",
+            ["⏸ Paused — {0} is not responding"] = "⏸ Pausado — {0} não está respondendo",
+            ["⚠ Slowed to {0:0} CPS — {1} answers in {2:0} ms"] = "⚠ Reduzido para {0:0} CPS — {1} responde em {2:0} ms",
+            ["⚠ Slowed to {0:0} CPS — {1} is not responding"] = "⚠ Reduzido para {0:0} CPS — {1} não está respondendo",
+            ["⚠ Slowed to {0:0} CPS — {1} is not reading its clicks"] = "⚠ Reduzido para {0:0} CPS — {1} não está lendo os cliques",
+            ["⚠ Slowed to {0:0} CPS — the CPU is full ({1:0}%)"] = "⚠ Reduzido para {0:0} CPS — a CPU está no máximo ({1:0}%)",
+            ["⚠ Slowed to {0:0} CPS — memory is {1:0}% full"] = "⚠ Reduzido para {0:0} CPS — a memória está {1:0}% cheia",
+            ["↗ Speeding back up — {0:0} CPS"] = "↗ Voltando à velocidade total — {0:0} CPS",
+            ["✓ Full speed — {0} answers in {1:0} ms"] = "✓ Velocidade total — {0} responde em {1:0} ms",
+            ["✓ {0:0} CPS — can't watch {1} (runs as administrator)"] = "✓ {0:0} CPS — não é possível vigiar {1} (executado como administrador)",
+            ["✓ Full speed — {0:0} CPS"] = "✓ Velocidade total — {0:0} CPS",
+            ["Battery {0}%"] = "Bateria {0}%",
+            ["On battery"] = "Na bateria",
+            ["Plugged in"] = "Na tomada",
+            ["Energy saver"] = "Economia de energia",
+            ["Battery saver"] = "Economia de bateria",
+            ["Best power efficiency"] = "Melhor eficiência de energia",
+            ["Balanced"] = "Equilibrado",
+            ["High performance"] = "Alto desempenho",
+            ["Best performance"] = "Melhor desempenho",
+            ["Game Mode"] = "Modo de Jogo",
+            ["Mixed reality"] = "Realidade misturada",
+            ["CPU {0:0}%"] = "CPU {0:0}%",
+            ["GPU {0:0}%"] = "GPU {0:0}%",
+            ["RAM {0:0}%"] = "RAM {0:0}%",
+            ["While it clicks, Anti-Freeze asks the app you are clicking for an answer twice a second. If it stops answering, the clicks wait for it; if it answers slowly, or the PC's CPU or memory is full, the rate drops and comes back as things recover. The Max CPS cap always applies."] =
+                "Enquanto clica, a proteção anti-travamento pede uma resposta ao aplicativo em que você está clicando duas vezes por segundo. Se ele parar de responder, os cliques esperam por ele; se responder devagar, ou se a CPU ou a memória do PC estiverem no máximo, a velocidade cai e volta quando tudo se recupera. O limite de CPS máx. sempre se aplica.",
+            ["How Windows is powering this PC. On battery and in the efficiency modes Windows runs apps it thinks are in the background on slower cores; while Tempo clicks or plays a macro it asks Windows for full speed, and gives it back when it stops."] =
+                "Como o Windows está alimentando este PC. Na bateria e nos modos de eficiência, o Windows executa em núcleos mais lentos os aplicativos que considera em segundo plano; enquanto o Tempo clica ou reproduz uma macro, ele pede velocidade total ao Windows e a devolve ao parar.",
+            ["The whole PC, counted the way Task Manager counts it: the CPU across every core, the busiest part of the GPU, and the memory in use."] =
+                "O PC inteiro, contado como o Gerenciador de Tarefas conta: a CPU em todos os núcleos, a parte mais ocupada da GPU e a memória em uso.",
+            // About: the build, as text (2026-10)
+            ["Copy details"] = "Copiar detalhes",
+            ["Copied ✓"] = "Copiado ✓",
+            ["Copies the version, build, Official ID, Windows and display — paste it into a bug report."] =
+                "Copia a versão, a compilação, o ID oficial, o Windows e a tela — cole em um relato de erro.",
+            ["Built from commit {0}."] = "Compilado a partir do commit {0}.",
+            ["Built from commit {0}, plus changes that were not committed yet."] = "Compilado a partir do commit {0}, mais alterações que ainda não tinham sido confirmadas.",
+            // The crash report's buttons (they were never looked up).
+            ["Report on GitHub"] = "Relatar no GitHub",
+            ["Email report"] = "Enviar por e-mail",
+            ["Open report"] = "Abrir relatório",
+            // The tamper check's Details window (IntegrityDetailsForm) and the code-beside-the-exe verdict.
+            ["Tamper check details"] = "Detalhes da verificação de integridade",
+            ["SHA-256"] = "SHA-256",
+            ["Official ID"] = "ID oficial",
+            ["Downloaded"] = "Download",
+            ["Identity"] = "Identidade",
+            ["Program file"] = "Arquivo do programa",
+            ["Unpacked copy"] = "Cópia descompactada",
+            ["Beside the exe"] = "Ao lado do exe",
+            ["This PC's record"] = "Registro deste PC",
+            ["GitHub"] = "GitHub",
+            ["This file"] = "Este arquivo",
+            ["Checks"] = "Verificações",
+            ["Check again"] = "Verificar de novo",
+            ["Open release page"] = "Abrir página da versão",
+            ["Show files"] = "Mostrar arquivos",
+            ["{0} s"] = "{0} s",
+            ["Not checked."] = "Não verificado.",
+            ["Not compared."] = "Não comparado.",
+            ["Not asked."] = "Não consultado.",
+            ["test build"] = "compilação de teste",
+            ["release build"] = "versão publicada",
+            ["Folder: {0}"] = "Pasta: {0}",
+            ["changed {0}"] = "alterado em {0}",
+            ["changed: {0}"] = "alterados: {0}",
+            ["{0} · build {1}"] = "{0} · compilação {1}",
+            ["{0} bytes ({1} MB)"] = "{0} bytes ({1} MB)",
+            ["Last checked {0} · took {1}"] = "Última verificação {0} · levou {1}",
+            ["None — this is a test build."] = "Nenhum: é uma compilação de teste.",
+            ["None — this copy failed its check."] = "Nenhum: esta cópia falhou na verificação.",
+            ["Not yet — GitHub has not confirmed this file."] = "Ainda não: o GitHub não confirmou este arquivo.",
+            ["Stamped as an official Tempo build."] = "Marcado como compilação oficial do Tempo.",
+            ["Not stamped as an official Tempo build."] = "Não marcado como compilação oficial do Tempo.",
+            ["Not a valid Windows program."] = "Não é um programa válido do Windows.",
+            ["The speech libraries it carries are missing."] = "As bibliotecas de voz que ele contém estão faltando.",
+            ["Could not be read right now."] = "Não foi possível ler agora.",
+            ["Could not be compared right now."] = "Não foi possível comparar agora.",
+            ["Could not read the list of files inside the program."] = "Não foi possível ler a lista de arquivos dentro do programa.",
+            ["Not a single-file build — nothing was unpacked."] = "Não é uma compilação de arquivo único: nada foi descompactado.",
+            ["Nothing was loaded into Tempo from its own folder."] = "Nada foi carregado no Tempo a partir da própria pasta dele.",
+            ["Not checked for this kind of build."] = "Não verificado neste tipo de compilação.",
+            ["Not asked — a test build is not a published release."] = "Não consultado: uma compilação de teste não é uma versão publicada.",
+            ["GitHub has no release {0}."] = "O GitHub não tem nenhuma versão {0}.",
+            ["Not before {0}."] = "Não antes de {0}.",
+            ["added, never shipped: {0}"] = "adicionados, nunca distribuídos: {0}",
+            ["Code that isn't Tempo's is running inside it"] = "Código que não é do Tempo está sendo executado dentro dele",
+            ["The check has not run yet. Press Check again to run it now."] =
+                "A verificação ainda não foi executada. Clique em Verificar de novo para executá-la agora.",
+            ["The tamper check is turned off, so nothing was checked. Turn it on in Settings › Data & Backup."] =
+                "A verificação de integridade está desativada, então nada foi verificado. Ative-a em Configurações › Dados e backup.",
+            ["{0} — matches GitHub's {1} release. Anyone can check it: it is the start of the SHA-256 GitHub lists for Tempo.exe."] =
+                "{0}: corresponde à versão {1} do GitHub. Qualquer pessoa pode conferir: é o início do SHA-256 que o GitHub lista para o Tempo.exe.",
+            ["Not signed. Tempo's releases are not code-signed, which is why Windows may say \"Unknown publisher\"."] =
+                "Não assinado. As versões do Tempo não têm assinatura de código, por isso o Windows pode dizer \"Editor desconhecido\".",
+            ["Signed by {0}. Tempo's releases are not signed, so someone signed this copy themselves."] =
+                "Assinado por {0}. As versões do Tempo não são assinadas, então alguém assinou esta cópia por conta própria.",
+            ["No download mark — installed or updated by Tempo itself, or copied here."] =
+                "Sem marca de download: instalado ou atualizado pelo próprio Tempo, ou copiado para cá.",
+            ["From {0} — one of Tempo's official sites."] = "De {0}: um dos sites oficiais do Tempo.",
+            ["From {0} — not one of Tempo's sites. Get Tempo from its GitHub releases page."] =
+                "De {0}: não é um site do Tempo. Baixe o Tempo pela página de versões dele no GitHub.",
+            ["A valid Windows program · {0}% empty bytes · the speech libraries are inside."] =
+                "Um programa válido do Windows · {0}% de bytes vazios · as bibliotecas de voz estão dentro.",
+            ["{0}% of it is empty bytes — it is truncated or corrupted."] = "{0}% dele são bytes vazios: está truncado ou corrompido.",
+            ["{0} files match {1} ({2} MB, {3})."] = "{0} arquivos correspondem ao {1} ({2} MB, {3}).",
+            ["{0} missing — Windows' .NET host puts them back on the next start."] =
+                "{0} faltando: o host .NET do Windows os repõe na próxima inicialização.",
+            ["Altered — {0}. Press Repair in Settings to unpack a clean copy."] =
+                "Alterada: {0}. Clique em Reparar nas Configurações para descompactar uma cópia limpa.",
+            ["The unpack folder is not this build's, so it was not compared."] =
+                "A pasta descompactada não é desta compilação, então não foi comparada.",
+            ["Windows loaded these into Tempo from its folder: {0}. Tempo never puts files there — if you didn't, delete them and restart Tempo."] =
+                "O Windows carregou estes arquivos no Tempo a partir da pasta dele: {0}. O Tempo nunca coloca arquivos lá; se não foi você, exclua-os e reinicie o Tempo.",
+            ["Nothing loaded, but these are not Tempo's: {0}"] = "Nada carregado, mas estes não são do Tempo: {0}",
+            ["Matches the fingerprint this PC recorded on {0}."] = "Corresponde à impressão digital que este PC registrou em {0}.",
+            ["First run of this version here — its fingerprint was recorded now."] =
+                "Primeira execução desta versão aqui: a impressão digital dela acabou de ser registrada.",
+            ["Updated from {0} — the fingerprint was recorded again."] = "Atualizado de {0}: a impressão digital foi registrada novamente.",
+            ["Not the file recorded on {0}, though the version number is the same."] =
+                "Não é o arquivo registrado em {0}, embora o número da versão seja o mesmo.",
+            ["A test build is rebuilt on every publish, so its bytes change under the same version."] =
+                "Uma compilação de teste é refeita a cada publicação, então os bytes dela mudam na mesma versão.",
+            ["Matches the {0} release published on GitHub."] = "Corresponde à versão {0} publicada no GitHub.",
+            ["Matches the {0} release (confirmed on {1} — the same file is not asked about twice)."] =
+                "Corresponde à versão {0} (confirmado em {1}; o mesmo arquivo não é consultado duas vezes).",
+            ["The {0} release lists no checksum for Tempo.exe."] = "A versão {0} não lista nenhuma soma de verificação para o Tempo.exe.",
+            ["Does NOT match the {0} release published on GitHub."] = "NÃO corresponde à versão {0} publicada no GitHub.",
+            ["Could not reach GitHub. Tempo asks again by itself."] =
+                "Não foi possível acessar o GitHub. O Tempo tentará de novo sozinho.",
+            ["✗ Windows loaded program files into Tempo from the folder {0} is in, and Tempo never puts any there. Press Show files, delete them, and restart Tempo."] =
+                "✗ O Windows carregou no Tempo arquivos de programa da pasta onde está o {0}, e o Tempo nunca coloca nenhum lá. Clique em Mostrar arquivos, exclua-os e reinicie o Tempo.",
+            ["Windows loaded program files into Tempo from the folder Tempo.exe is in. Tempo is a single file and never puts any there. If you didn't, delete them and restart Tempo. Click here to see where they are."] =
+                "O Windows carregou no Tempo arquivos de programa da pasta onde está o Tempo.exe. O Tempo é um único arquivo e nunca coloca nenhum lá. Se não foi você, exclua-os e reinicie o Tempo. Clique aqui para ver onde estão.",
+            ["✗ Program files that are not Tempo's were loaded into it from its folder. Open Settings › Data & Backup › Details to see them."] =
+                "✗ Arquivos de programa que não são do Tempo foram carregados da pasta dele. Abra Configurações › Dados e backup › Detalhes para vê-los.",
+            // The status bar's exact figures, and the empty-take explanation on the Macros tab.
+            ["CPU {0:0.00}%"] = "CPU {0:0.00}%",
+            ["RAM {0:N2} MB"] = "RAM {0:N2} MB",
+            ["Exactly {0:N0} bytes."] = "Exatamente {0:N0} bytes.",
+            ["Running since {0}."] = "Em execução desde {0}.",
+            ["Nothing was saved: the {0} click(s) and key press(es) in this take went to Tempo's own window. A macro leaves those out, because played back they would land on whatever is there by then.\n\nPress Record, then switch to the app you want to automate and do the steps there."] =
+                "Nada foi salvo: os {0} cliques e teclas desta gravação foram para a janela do Tempo. Uma macro os deixa de fora, porque na reprodução cairiam no que estiver lá naquele momento.\n\nClique em Gravar, mude para o aplicativo que você quer automatizar e faça os passos lá.",
+            ["Tip: give Record a hotkey and turn on \"Minimise window during macro record & playback\" in Settings — Tempo then steps out of the way the moment recording starts."] =
+                "Dica: atribua uma tecla a Gravar e ative \"Minimizar janela durante gravação & reprodução de macros\" nas Configurações; assim o Tempo sai da frente assim que a gravação começa.",
+            ["Nothing was saved: the only keys pressed were Tempo's own hotkeys, and those are never part of a macro."] =
+                "Nada foi salvo: as únicas teclas pressionadas foram teclas do Tempo, e elas nunca fazem parte de uma macro.",
+            ["Nothing was saved: the take was only the pointer moving to and from Tempo's buttons ({0}). Record at least one click, key press or scroll — or a second or more of movement."] =
+                "Nada foi salvo: a gravação foi só o ponteiro indo e voltando dos botões do Tempo ({0}). Grave pelo menos um clique, tecla ou rolagem, ou um segundo ou mais de movimento.",
+            ["Nothing was saved: no click, key press or mouse movement reached Tempo while it was recording."] =
+                "Nada foi salvo: nenhum clique, tecla ou movimento do mouse chegou ao Tempo durante a gravação.",
+            ["\"Capture mouse movement\" or \"Capture keyboard\" is off on the Macros tab — turn on what you want recorded."] =
+                "\"Capturar movimento do mouse\" ou \"Capturar teclado\" está desativado na aba Macros: ative o que você quer gravar.",
+            // A run's clicks landing on Tempo's own window (the status bar).
+            ["Tempo's own window is under the pointer — its clicks there are ignored"] =
+                "A janela do Tempo está sob o ponteiro: os cliques nela são ignorados",
+            ["Clicks on Tempo are ignored"] = "Os cliques no Tempo são ignorados",
+            ["When you start recording or playing a macro, minimise Tempo — and the Accounts window when it's open on its own — so they aren't in the way. Only when a Record/Stop or Emergency-stop hotkey is bound, so you can always finish. They come back by themselves afterwards, unless the macro was started by a hotkey from inside another app: then Tempo stays out of the way."] =
+                "Ao começares a gravar ou a reproduzir uma macro, minimiza o Tempo — e a janela Contas quando está aberta à parte — para não estorvarem. Só se houver uma tecla de atalho Gravar/Parar ou de paragem de emergência definida, para poderes sempre terminar. Voltam sozinhas no fim, a não ser que a macro tenha sido iniciada por uma tecla de atalho a partir de outra aplicação: aí o Tempo continua fora do caminho.",
+            ["Stops a run from clicking or typing into Tempo itself if the cursor is left over one of its windows — it would otherwise tick boxes, switch tabs and hit buttons at full speed. Clicks made without moving your cursor go through Tempo's windows to the app underneath. Your own clicks and keys always work, so Stop is never blocked. Turn off only if you deliberately automate Tempo's own interface."] =
+                "Impede que uma execução clique ou escreva no próprio Tempo se o cursor ficar sobre uma das suas janelas — de outro modo marcaria caixas, mudaria de separador e premiria botões à velocidade máxima. Os cliques feitos sem mover o cursor atravessam as janelas do Tempo até à aplicação por baixo. Os teus próprios cliques e teclas funcionam sempre, por isso Parar nunca fica bloqueado. Desativa só se automatizares de propósito a interface do Tempo.",
+            ["Continue"] = "Continuar",
             // CPS test: the details beside the pad, and the best for each input and length.
             ["Time's up!"] = "Tempo esgotado!",
             ["Speed"] = "Velocidade",
@@ -10550,6 +11763,7 @@ namespace AutoClicker.Utils
             ["Auto-start for videos && games"] = "Início automático para vídeos && jogos",
             ["Background image"] = "Imagem de fundo",
             ["Caption transcript saved to"] = "Transcrição das legendas guardada em",
+            ["Tempo Live Captions transcript — {0}"] = "Transcrição das Legendas em direto do Tempo — {0}",
             ["Captions"] = "Legendas",
             ["Captions run entirely on this PC — audio never leaves it."] = "As legendas funcionam inteiramente neste PC: o áudio nunca sai dele.",
             ["Captions started for"] = "Legendas iniciadas para",
@@ -11234,6 +12448,9 @@ namespace AutoClicker.Utils
             ["Move the selected point earlier in the order."] = "Move o ponto selecionado para mais cedo na ordem.",
             ["Move the selected point later in the order."] = "Move o ponto selecionado para mais tarde na ordem.",
             ["Nudge each click by a small random offset."] = "Desloca cada clique com um pequeno desvio aleatório.",
+            ["Maximum random variation added to / removed from the delay (ms) — never more than the delay allows, so the average speed stays what you set. The hold and the pause between bursts vary with it."] = "Variação aleatória máxima somada ou subtraída ao atraso (ms) — nunca mais do que o atraso permite, para que a velocidade média continue a ser a que definiu. O tempo de cada clique mantido e a pausa entre rajadas variam com ela.",
+            ["Maximum random distance from the point, in pixels. Clicks stay on the window under the point."] = "Distância aleatória máxima ao ponto, em píxeis. Os cliques ficam na janela que está sob o ponto.",
+            ["Varies the delay and the position a little and holds each click for a natural moment where it was instant, so the clicking looks less robotic. Press again to turn it off."] = "Varia um pouco o atraso e a posição e mantém cada clique premido por um instante natural onde era instantâneo, para que o clique pareça menos robótico. Prima de novo para o desativar.",
             ["Open the clicks-per-second test."] = "Abre o teste de cliques por segundo.",
             ["Pause in milliseconds between bursts (Burst mode)."] = "Pausa em milissegundos entre rajadas (modo Rajada).",
             ["Pick a custom accent colour."] = "Escolhe uma cor de destaque personalizada.",
@@ -11840,7 +13057,7 @@ namespace AutoClicker.Utils
             ["Restore cursor position when stopped"] = "Cursorposition beim Stoppen wiederherstellen",
             ["Repeat"] = "Wiederholen", ["Until stopped"] = "Bis gestoppt", ["Fixed count:"] = "Feste Anzahl:",
             ["For (seconds):"] = "Für (Sekunden):",
-            ["Burst Settings"] = "Burst-Einstellungen", ["Clicks per burst"] = "Klicks pro Burst", ["Pause (ms)"] = "Pause (ms)",
+            ["Burst Settings"] = "Salven-Einstellungen", ["Clicks per burst"] = "Klicks pro Salve", ["Pause (ms)"] = "Pause (ms)",
             ["Randomization (anti-pattern)"] = "Zufall (Anti-Muster)",
             ["Randomize interval  ±"] = "Intervall zufällig  ±", ["Randomize position  ±"] = "Position zufällig  ±",
             ["Manual Speed"] = "Manuelle Geschwindigkeit", ["Speed (10 = 1.0x)"] = "Geschwindigkeit (10 = 1.0x)",

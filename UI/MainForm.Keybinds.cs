@@ -583,7 +583,8 @@ namespace AutoClicker.UI
                 int slot = SlotForAction(info.Action);
                 if (slot > 0)
                 {
-                    var pick = UiFactory.Combo(530, y, 186);
+                    // 4 px up: centred on the 23 px hotkey field beside it (a combo box is 30 tall once it has its window).
+                    var pick = UiFactory.Combo(530, y - 4, 186);
                     pick.DropDownStyle = ComboBoxStyle.DropDownList;
                     pick.AccessibleName = Utils.Localization.F("Macro for {0}",
                         Utils.Localization.T(info.Label));
@@ -600,7 +601,10 @@ namespace AutoClicker.UI
                     var desc = UiFactory.Caption(info.Description, 530, y + 1);
                     desc.ForeColor = _theme.TextMuted;
                     desc.AutoSize = false;
-                    desc.Size = new Size(186, 40);
+                    // Ends at y + 39, clear of the next row's macro picker (from y + 40). At 40 tall the two touched,
+                    // and the start-up fitter — which grows a box only into room it does not already share — grew a
+                    // long German description 11 px over the picker at 150%. Now one that long ends in "…", whole on hover.
+                    desc.Size = new Size(186, 38);
                     page.Controls.Add(desc);
                 }
 
