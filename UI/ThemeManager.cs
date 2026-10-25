@@ -108,6 +108,9 @@ namespace AutoClicker.UI
             }
 
             ApplyToControl(root, theme);
+            // Tempo's own scroll bars over Windows' (ScrollSkins): every control that can scroll is covered here,
+            // since every themed window comes through this pass — and the covers are redrawn in a new theme.
+            ScrollSkins.Apply(root, theme);
             if (root.ContextMenuStrip != null)
             {
                 ThemeMenu(root.ContextMenuStrip, theme);

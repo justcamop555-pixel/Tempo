@@ -71,7 +71,13 @@ namespace AutoClicker.UI
         // Again once shown: a few dialogs finish sizing themselves to their text only after Load.
         private static void OnShown(object sender, EventArgs e)
         {
-            if (sender is Form f) { Fit(f); }
+            if (sender is Form f)
+            {
+                Fit(f);
+                // Every Tempo window passes through here — the ones themed by hand, which never meet ThemeManager,
+                // too — so this is where they all get Tempo's own scroll bars (ScrollSkins).
+                ScrollSkins.ApplyTree(f);
+            }
         }
 
         /// <summary>

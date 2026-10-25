@@ -723,6 +723,8 @@ namespace AutoClicker.UI
             }
             catch { }
             base.OnDropDown(e);
+            // The open list's scroll bar in Tempo's look too (ScrollSkins) — looked at once the list is on screen.
+            try { BeginInvoke(new Action(() => ScrollSkins.CoverDropDown(this))); } catch { }
         }
 
         protected override void OnSelectedIndexChanged(EventArgs e)

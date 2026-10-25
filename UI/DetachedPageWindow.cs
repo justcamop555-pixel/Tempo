@@ -405,6 +405,21 @@ namespace AutoClicker.UI
         /// </summary>
         public void SetBackdrop(Image img, int dimPercent)
         {
+            // The same picture with a new Dim (the Settings slider, many times a second while it is
+            // dragged): only the scrim changes. Re-applying the backdrop re-themed every label on the page.
+            if (img != null && ReferenceEquals(img, _backdrop))
+            {
+                if (dimPercent == _backdropDim) { return; }
+                _backdropDim = dimPercent;
+                _strip.Invalidate();
+                BackdropTabPage page = Page;
+                if (page != null)
+                {
+                    page.SetDim(dimPercent);
+                    page.Invalidate(true);   // the see-through labels draw their own slice of it
+                }
+                return;
+            }
             _backdrop = img;
             _backdropDim = dimPercent;
             _strip.Invalidate();

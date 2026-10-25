@@ -382,7 +382,18 @@ namespace AutoClicker.UI
             if (_showCloaked || !Visible || WindowState == FormWindowState.Minimized) { return; }
             try
             {
-                _switchCurtain = _switchCurtain ?? new SwitchCurtain();
+                if (_switchCurtain == null)
+                {
+                    _switchCurtain = new SwitchCurtain();
+                    // The picture is a window of its own and does not follow this one. Should this window move,
+                    // resize, minimise or hide while it is up, it would stay where it was — a frozen copy of the
+                    // old page over the real one, offset from it. A switch is over long before any of those
+                    // normally happens, so this only ever takes down a picture that should already be gone.
+                    EventHandler liftCurtain = (s, e) => _switchCurtain?.Lift();
+                    Move += liftCurtain;
+                    Resize += liftCurtain;
+                    VisibleChanged += liftCurtain;
+                }
                 var clock = System.Diagnostics.Stopwatch.StartNew();
                 bool covered = _switchCurtain.Cover(_tabs, this);
                 if (clock.ElapsedMilliseconds > 30)
@@ -2596,8 +2607,8 @@ namespace AutoClicker.UI
                                 return;
                             }
                             Utils.Logger.Info("[Captions] auto-start: " + reason + " detected with audio.");
-                            SetCaptionsActive(true);
-                            if (_trayIcon != null && _settings.ShowTrayNotifications)
+                            StartCaptionsAutomatically();
+                            if (_captionsActive && _trayIcon != null && _settings.ShowTrayNotifications)
                             {
                                 TempoNotify(4000, "Tempo",
                                     Localization.T("Captions started for") + " " + reason +
@@ -3468,6 +3479,11 @@ namespace AutoClicker.UI
                     // Sign-in can't open the browser chosen for it, or any browser at all.
                     string browserIssue = SignInBrowserIssue();
                     if (browserIssue != null) { issues.Add(browserIssue); }
+
+                    // A sign-in whose browser never answered, or one left open a long while (it has no window of
+                    // Tempo's own to be noticed by).
+                    string signInIssue = SignInIssue();
+                    if (signInIssue != null) { issues.Add(signInIssue); }
 
                     // Multi-instance switched on while the vault is open, but not actually able to work.
                     if (_settings != null && _settings.RobloxMultiInstance)
@@ -4976,6 +4992,7 @@ namespace AutoClicker.UI
                 }
                 sb.AppendLine();
                 AppendSignInBrowserStats(sb);
+                AppendSignInStats(sb);
                 AppendRobloxInstallStats(sb);
             }
             catch (Exception ex)
@@ -8236,11 +8253,23 @@ namespace AutoClicker.UI
                     _bgGifNote.Text = Localization.T("file missing");
                     _bgGifNote.ForeColor = _theme != null ? _theme.WarningText : _bgGifNote.ForeColor;
                 }
+                else if (!configured)
+                {
+                    // Nothing for Dim to tone down — said beside the slider, which is greyed out (below).
+                    _bgGifNote.Text = Localization.T("(no image)");
+                    _bgGifNote.ForeColor = _theme != null ? _theme.TextMuted : _bgGifNote.ForeColor;
+                }
                 else
                 {
                     _bgGifNote.Text = Localization.T("(experimental)");
                     _bgGifNote.ForeColor = _theme != null ? _theme.TextMuted : _bgGifNote.ForeColor;
                 }
+            }
+            // Dim tones the picture down, so with no picture it has nothing to do. It used to stay live and
+            // look broken: drag it, and nothing anywhere changed.
+            if (_bgDimTrack != null && !_bgDimTrack.IsDisposed)
+            {
+                _bgDimTrack.Enabled = img != null;
             }
 
             // The old image is now detached from every surface and the animator, so it
@@ -8250,6 +8279,68 @@ namespace AutoClicker.UI
             {
                 try { old.Dispose(); } catch { }
             }
+        }
+
+        /// <summary>
+        /// The Dim slider's live path. The wallpaper already showing keeps its image, its animation and
+        /// its current frame; only the readability scrim changes, and each surface re-composes it from the
+        /// slice it has already scaled. The slider used to call ApplyBackgroundGif on every step of a drag,
+        /// which reloaded the image from disk, restarted an animated one from its first frame and re-themed
+        /// every page — so dragging stuttered and the picture kept jumping back to its start.
+        /// </summary>
+        private void ApplyBackgroundDim()
+        {
+            Image img = _fullBgImage;
+            if (img == null || _header == null)
+            {
+                return;
+            }
+            int dim = _settings != null ? _settings.BackgroundDim : 55;
+            _header.SetSharedBackdrop(img, dim);
+            _header.Invalidate(true);
+            _footerGif?.SetSharedBackdrop(img, dim);
+            // The rail and its rows read the setting as they paint — and the rows are windows of their own,
+            // so the rail alone repainted left them showing the old dim behind each tab name.
+            _sidebar?.Invalidate(true);
+            if (_tabs != null)
+            {
+                foreach (TabPage page in _tabs.TabPages)
+                {
+                    (page as BackdropTabPage)?.SetBackdrop(img, dim);   // the same picture: only the scrim
+                }
+                InvalidateWhatShowsTheWallpaper(_tabs.SelectedTab);
+            }
+            SyncAccountsWindowBackdrop();   // the same picture there too: only the scrim
+        }
+
+        /// <summary>
+        /// Repaints what shows a page's wallpaper: the page itself (its margins and the gaps between the
+        /// cards) and the see-through labels and boxes standing directly on it. Not the cards: they are
+        /// solid, and so is everything on them (ThemeManager gives those the card's colour). Repainting all
+        /// of Settings' several hundred controls on every Dim step cost as much as reloading the picture —
+        /// measured, 42 ms a step either way (scratchpad/dimcheck).
+        /// </summary>
+        private static void InvalidateWhatShowsTheWallpaper(Control page)
+        {
+            if (page == null)
+            {
+                return;
+            }
+            page.Invalidate(false);
+            void Walk(Control parent)
+            {
+                foreach (Control c in parent.Controls)
+                {
+                    if (c is CardGroupBox || c is IThemedSurface
+                        || (c is Panel p && p.Tag is string tag && (tag == "surface" || tag == "surface2")))
+                    {
+                        continue;   // a solid surface: the wallpaper never shows on it, or on anything inside it
+                    }
+                    c.Invalidate(false);
+                    Walk(c);
+                }
+            }
+            Walk(page);
         }
 
         private static string FirstNonEmpty(params string[] values)
@@ -10686,25 +10777,20 @@ namespace AutoClicker.UI
                     if (depth[0] == 0)
                     {
                         SendMessage(c.Handle, WM_SETREDRAW, true, 0);
+                        // WM_SETREDRAW(TRUE) paints nothing by itself, and whatever was owed a paint while frozen
+                        // was dropped: the strip a resize uncovered, a control that moved, the paint owed for being
+                        // shown. Left like that it shows what the screen held before — a black box, or a stale
+                        // copy of a control beside where it now is. Mark the whole control dirty, children too
+                        // (the documented way out of WM_SETREDRAW); it paints at the next WM_PAINT, or at once
+                        // under the caller's own RDW_UPDATENOW. Marks merge, so this is never a second paint.
+                        RedrawWindow(c.Handle, IntPtr.Zero, IntPtr.Zero,
+                            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
                     }
                 }
             }
             catch { }
         }
 
-        /// <summary>
-        /// Toggles Windows Live Captions by synthesising its system shortcut,
-        /// Win + Ctrl + L. Live Captions (Windows 11, version 22H2+) transcribes
-        /// ALL audio playing on the PC in real time and floats a caption bar over
-        /// any app, including fullscreen games — so it covers game voice chat,
-        /// Discord and livestream audio. It is built in, free and runs offline.
-        ///
-        /// Tempo can't transcribe speech itself (that needs OS-level, GPU-backed
-        /// speech models), but it can give you a single hotkey to flip the system
-        /// captions on and off without leaving your game.
-        /// </summary>
-        /// <summary>
-        /// Toggles Live Captions. Tempo shows its own transparent caption overlay
         /// <summary>
         /// Toggles Live Captions on/off. This respects the chosen caption SOURCE:
         /// if Tempo's own engine is selected it starts/stops that; if Windows is
@@ -10733,6 +10819,21 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>
+        /// Captions on by themselves — auto-start, the Windows bar appearing, the resume after a restart —
+        /// under the same guard as the hotkey, the tray and the tab's button (ToggleLiveCaptions). Turning
+        /// captions on can show a dialog (the one-time note about speaker labels) and pumps messages while
+        /// it is up; the caption key pressed then switched captions OFF half-way through switching them on,
+        /// and the start carried on to run the engine with captions marked off.
+        /// </summary>
+        private void StartCaptionsAutomatically()
+        {
+            if (_captionToggleBusy || _captionsActive) { return; }
+            _captionToggleBusy = true;
+            try { SetCaptionsActive(true); }
+            finally { _captionToggleBusy = false; }
+        }
+
         private void SetCaptionsActive(bool on)
         {
             _captionsActive = on;
@@ -10748,8 +10849,13 @@ namespace AutoClicker.UI
                 _soundNoteShown = false;
                 _lastVoiceSource = "";
                 _tempoRollingLine = "";
-                // Each caption session gets a fresh transcript.
+                // Each caption session gets a fresh transcript (and, when saved, a file of its own).
                 _transcript.Clear();
+                _transcriptSessionFile = null;
+                // The tab's "N new below" counted the last session's lines: left standing, it read "126 new
+                // below" under the new session's first line.
+                _capNewBelow = 0;
+                _capRenderedText = null;
                 // The on-device mishear fixer (Windows' spell engine) — created once,
                 // reused for the app's lifetime.
                 if (_wordFixer == null)
@@ -10902,7 +11008,9 @@ namespace AutoClicker.UI
                             {
                                 if (_captionsActive && _captionOverlay != null && !_captionOverlay.IsDisposed)
                                 {
-                                    _captionOverlay.SetCaption("🎮 " +
+                                    // No emoji in front: the bar draws words as outlines (AddString), and a colour
+                                    // emoji has no outline in its font — "🎮" came out as the empty no-glyph box.
+                                    _captionOverlay.SetCaption(
                                         Localization.T("Game mode — captions keep running at a lighter pace"));
                                 }
                                 // A game is not the place to be moving captions: while movable they
@@ -11443,17 +11551,17 @@ namespace AutoClicker.UI
             }
         }
 
+        // Set when the opted-in GPU engine proved unable to keep pace in THIS run.
+        // Never saved: it dies with the process, so the next launch tries the GPU
+        // again (a busy GPU is a temporary condition, not a broken one).
+        private bool _gpuTooSlowThisSession;
+
         /// <summary>
         /// Starts Tempo's own offline caption engine: it captures the PC's audio
         /// and transcribes it with Whisper, feeding text into the same overlay the
         /// Windows path uses. If no speech model is installed it tells the user how
         /// to add one and leaves the bar with a friendly note.
         /// </summary>
-        // Set when the opted-in GPU engine proved unable to keep pace in THIS run.
-        // Never saved: it dies with the process, so the next launch tries the GPU
-        // again (a busy GPU is a temporary condition, not a broken one).
-        private bool _gpuTooSlowThisSession;
-
         private void StartTempoCaptions()
         {
             _lastMirroredCaption = "";
@@ -11966,10 +12074,6 @@ namespace AutoClicker.UI
             }
         }
 
-        /// <summary>
-        /// Applies the own-voice-filter setting to a RUNNING caption session, so the
-        /// checkbox works immediately instead of only on the next caption start.
-        /// </summary>
         /// <summary>"Caption song lyrics" on a running session: from its next step, no restart.</summary>
         private void ApplyCaptionLyricsLive()
         {
@@ -11979,6 +12083,10 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>
+        /// Applies the own-voice-filter setting to a RUNNING caption session, so the
+        /// checkbox works immediately instead of only on the next caption start.
+        /// </summary>
         private void ApplyOwnVoiceGuardLive()
         {
             try
@@ -12020,6 +12128,12 @@ namespace AutoClicker.UI
             {
                 if (!_captionsActive) { return; }   // next start picks the settings up
 
+                // Labels already being worked out (the evidence sampler runs exactly while they are): only
+                // face analysis changed, and the people heard so far keep their numbers and their names.
+                // This used to start the speakers over on any change — so "Use faces too" on the Speakers
+                // card, or saving Settings with the face box ticked, put everyone back to "Speaker 1" and
+                // wiped every name given to them, in the middle of the conversation.
+                bool labelsWereOn = _speakerSampleTimer != null;
                 if (_settings != null && _settings.CaptionSpeakerTurns)
                 {
                     MaybeShowSpeakerNotice();
@@ -12049,8 +12163,11 @@ namespace AutoClicker.UI
                         {
                             try { _faceAnalyzer?.Stop(); } catch { }   // labels on, face off
                         }
-                        _speakerTurns.Reset();   // numbering restarts cleanly at Speaker 1
-                        ResetSpeakerIdentities();
+                        if (!labelsWereOn)
+                        {
+                            _speakerTurns.Reset();   // labels just came on: numbering starts cleanly at Speaker 1
+                            ResetSpeakerIdentities();
+                        }
                         StartSpeakerSampling();
                     }
                     else
@@ -12139,7 +12256,8 @@ namespace AutoClicker.UI
             if (string.IsNullOrEmpty(src)) { return src; }
             if (AudioSourcesAreMixed(out int apps, out int _) && apps > 1)
             {
-                return src + " + " + (apps - 1) + " more";
+                // Through F(): "+ 1 more" was English on the bar in every language.
+                return Localization.F("{0} + {1} more", src, apps - 1);
             }
             return src;
         }
@@ -12237,9 +12355,15 @@ namespace AutoClicker.UI
                 string clean = sbClean.ToString().Trim();
                 if (clean.Length == 0) return;
                 if (_wordFixer != null) { clean = _wordFixer.Fix(clean); }
-                if (clean != _lastMirroredCaption)
+                // The same words as the last caption are dropped only right after it (a double hand-over).
+                // Said again later — "Okay." … "Okay." — they are a new caption: the engine stopped stripping
+                // such genuine repeats, but this check still did, whenever the previous caption had been
+                // exactly those words, so the second "Okay." never reached the bar or the transcript.
+                bool justShown = clean == _lastMirroredCaption && Environment.TickCount64 - _lastTempoCaptionTick < 2500;
+                if (!justShown)
                 {
                     _lastMirroredCaption = clean;
+                    _lastTempoCaptionTick = Environment.TickCount64;
                     // Real words: the ♪ note (if it was up) is replaced by this caption, and may come
                     // back after the next stretch of music.
                     _soundNoteShown = false;
@@ -12347,6 +12471,11 @@ namespace AutoClicker.UI
         private void OnTempoCaptionStatus(string status)
         {
             if (string.IsNullOrWhiteSpace(status)) return;
+            // The same status in the reader's language, read here on the engine's thread inside its
+            // RaiseStatus: the next status may replace it before the UI thread runs the lambda. `status`
+            // stays English — it is what the log keeps and what the problem check below reads.
+            string shown = _captionTranscriber?.LastStatusShown;
+            if (string.IsNullOrWhiteSpace(shown)) { shown = status; }
             UiInvoke(() =>
             {
                 Utils.Logger.Info("[Captions] " + status);
@@ -12374,10 +12503,18 @@ namespace AutoClicker.UI
                     FallBackToWindowsCaptions(
                         "Tempo's own captions aren't available on this PC, so it switched to Windows Live Captions.");
                 }
+                else if (status.StartsWith("Tempo Live Captions started", StringComparison.Ordinal))
+                {
+                    // Listening now. The device and the engine it names are the Captions tab's to show (and the
+                    // log's); on the bar this put a technical sentence — "… · system audio · AMZG25F6F (NVIDIA
+                    // High Definition Audio) · CPU engine" — in English, until the first words arrived. The bar's
+                    // own translated "Captions on · listening…" says what matters.
+                    _captionOverlay.SetPending(true);
+                }
                 else
                 {
-                    // Transient info (e.g. "no audio playing yet") is fine on the bar.
-                    _captionOverlay.SetCaption(status);
+                    // Transient info (e.g. "no audio playing yet") is fine on the bar — in the reader's language.
+                    _captionOverlay.SetCaption(shown);
                 }
             });
         }
@@ -12583,6 +12720,9 @@ namespace AutoClicker.UI
         // consecutive passes it has been unchanged.
         private string _mirrorLastPolled = "";
         private int _mirrorIdlePasses;
+
+        // When Tempo's engine last put a caption up (OnTempoCaptionText), for its "same words again" check.
+        private long _lastTempoCaptionTick;
 
         // Which app the captioned audio last came from (for the overlay tag and for
         // resetting speaker numbering when the app changes).
@@ -13000,14 +13140,14 @@ namespace AutoClicker.UI
                 }
 
                 Utils.Logger.Info("[Captions] Windows Live Captions was turned on externally — showing Tempo's bar.");
-                SetCaptionsActive(true);
+                StartCaptionsAutomatically();
             }
             catch { }
         }
 
         /// <summary>
         /// Writes the finished session's transcript (with per-line timestamps) to
-        /// %LOCALAPPDATA%\AutoClicker	ranscripts — opt-in via Settings, because it
+        /// %LOCALAPPDATA%\AutoClicker\transcripts — opt-in via Settings, because it
         /// puts spoken content on disk.
         /// </summary>
         private void SaveTranscriptIfWanted()
@@ -13018,28 +13158,17 @@ namespace AutoClicker.UI
                 {
                     return;
                 }
-                string dir = System.IO.Path.Combine(
-                    Persistence.SettingsManager.GetSettingsDirectory(), "transcripts");
-                System.IO.Directory.CreateDirectory(dir);
-                // Never over an earlier file. Named to the second, two saves in one second — Clear (which
-                // saves first) and then Stop — wrote the same name, and the second replaced the first.
-                // The name is a fixed pattern (any region writes the same digits); the heading is in the
-                // app's language. It was English in every language, dated in Windows' own.
-                string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-                string file = System.IO.Path.Combine(dir, "captions-" + stamp + ".txt");
-                for (int n = 2; System.IO.File.Exists(file); n++)
-                {
-                    file = System.IO.Path.Combine(dir, "captions-" + stamp + "-" + n + ".txt");
-                }
+                // Lines that already left the transcript during a long session are in this session's file
+                // (SpillTranscriptLines): the rest goes on the end of it, so the file is the whole session.
+                string file = _transcriptSessionFile ?? NewTranscriptFile();
+                _transcriptSessionFile = null;
                 var sb = new System.Text.StringBuilder();
-                sb.AppendLine(Localization.F("Tempo Live Captions transcript — {0}", DateTime.Now.ToString("f", Localization.DateCulture)));
-                sb.AppendLine(new string('-', 60));
                 for (int i = 0; i < _captionHistory.Count; i++)
                 {
-                    DateTime t = i < _captionHistoryTimes.Count ? _captionHistoryTimes[i] : DateTime.Now;
-                    sb.AppendLine("[" + t.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + "]  " + _captionHistory[i]);
+                    sb.AppendLine(TranscriptFileLine(_captionHistory[i],
+                        i < _captionHistoryTimes.Count ? _captionHistoryTimes[i] : DateTime.Now));
                 }
-                System.IO.File.WriteAllText(file, sb.ToString());
+                System.IO.File.AppendAllText(file, sb.ToString());
                 Utils.Logger.Info("[Captions] transcript saved: " + file);
                 if (_trayIcon != null && _settings.ShowTrayNotifications)
                 {
@@ -13051,6 +13180,63 @@ namespace AutoClicker.UI
             {
                 Utils.Logger.Warn("Transcript save failed: " + ex.Message);
             }
+        }
+
+        // The file this session's transcript is going into once a long session has had to write lines out
+        // early (SpillTranscriptLines); null until then, and again once the file is complete.
+        private string _transcriptSessionFile;
+
+        /// <summary>
+        /// Lines leaving the front of the transcript, which keeps only the newest 500: with "Save
+        /// transcripts to disk" on they go into this session's file now, and the save when the session
+        /// ends adds the rest. A long session's file used to start wherever those 500 lines did — the
+        /// first hour or two of a stream was simply not in it.
+        /// </summary>
+        private void SpillTranscriptLines(System.Collections.Generic.IReadOnlyList<string> lines,
+                                          System.Collections.Generic.IReadOnlyList<DateTime> times)
+        {
+            if (_settings == null || !_settings.CaptionSaveTranscripts || lines == null || lines.Count == 0) { return; }
+            try
+            {
+                if (_transcriptSessionFile == null) { _transcriptSessionFile = NewTranscriptFile(); }
+                var sb = new System.Text.StringBuilder();
+                for (int i = 0; i < lines.Count; i++)
+                {
+                    sb.AppendLine(TranscriptFileLine(lines[i], i < times.Count ? times[i] : DateTime.Now));
+                }
+                System.IO.File.AppendAllText(_transcriptSessionFile, sb.ToString());
+            }
+            catch (Exception ex)
+            {
+                Utils.Logger.Warn("Transcript save failed (lines leaving a long session): " + ex.Message);
+            }
+        }
+
+        /// <summary>A new transcript file in the transcripts folder, holding just its heading; returns its path.</summary>
+        private static string NewTranscriptFile()
+        {
+            string dir = System.IO.Path.Combine(Persistence.SettingsManager.GetSettingsDirectory(), "transcripts");
+            System.IO.Directory.CreateDirectory(dir);
+            // Never over an earlier file. Named to the second, two saves in one second — Clear (which
+            // saves first) and then Stop — wrote the same name, and the second replaced the first.
+            // The name is a fixed pattern (any region writes the same digits); the heading is in the
+            // app's language. It was English in every language, dated in Windows' own.
+            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+            string file = System.IO.Path.Combine(dir, "captions-" + stamp + ".txt");
+            for (int n = 2; System.IO.File.Exists(file); n++)
+            {
+                file = System.IO.Path.Combine(dir, "captions-" + stamp + "-" + n + ".txt");
+            }
+            System.IO.File.WriteAllText(file,
+                Localization.F("Tempo Live Captions transcript — {0}", DateTime.Now.ToString("f", Localization.DateCulture))
+                + Environment.NewLine + new string('-', 60) + Environment.NewLine);
+            return file;
+        }
+
+        /// <summary>One transcript line as the saved file writes it: "[HH:mm:ss]  text".</summary>
+        private static string TranscriptFileLine(string line, DateTime spoken)
+        {
+            return "[" + spoken.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + "]  " + line;
         }
 
         /// <summary>
@@ -15846,7 +16032,7 @@ HookSystemEvents();
                     try
                     {
                         Utils.Logger.Info("[Captions] resuming captions after the restart that applied a caption setting.");
-                        SetCaptionsActive(true);
+                        StartCaptionsAutomatically();
                     }
                     catch (Exception ex) { Utils.Logger.Warn("[Captions] resume after restart failed: " + ex.Message); }
                 };
@@ -17579,6 +17765,8 @@ HookSystemEvents();
             // switched off or the vault reset, but a straight exit left the HttpListener open and the port
             // held until the process died. Shutting it down here makes closing Tempo release it properly.
             StopApiServer();
+            // A Roblox sign-in still open in its private browser window: closed with Tempo, its profile deleted.
+            CancelSignInOnExit();
             // The tab switch's picture window (SwitchCurtain): a native window of its own.
             try { _switchCurtain?.Dispose(); _switchCurtain = null; } catch { }
             CleanUp();

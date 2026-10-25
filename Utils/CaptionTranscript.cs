@@ -58,6 +58,13 @@ namespace AutoClicker.Utils
         /// </summary>
         public Func<int, int> SpeakerIdentity { get; set; }
 
+        /// <summary>
+        /// Lines about to fall off the front — the transcript keeps the newest <see cref="MaxLines"/> —
+        /// with when each was spoken, handed over before they go: a session longer than that can still
+        /// be saved whole (the host writes them into the session's transcript file as they leave).
+        /// </summary>
+        public Action<IReadOnlyList<string>, IReadOnlyList<DateTime>> Spilling { get; set; }
+
         // Per line, index for index with Lines: whose line it is (number and which holder of it) and
         // its words without the label, so a speaker named part-way through can be renamed in the lines
         // already written.
@@ -170,6 +177,11 @@ namespace AutoClicker.Utils
             if (Lines.Count > MaxLines)
             {
                 int drop = Lines.Count - MaxLines;
+                if (Spilling != null)
+                {
+                    try { Spilling(Lines.GetRange(0, drop), Times.GetRange(0, Math.Min(drop, Times.Count))); }
+                    catch { /* a failed write must never cost the live transcript */ }
+                }
                 Lines.RemoveRange(0, drop);
                 Times.RemoveRange(0, Math.Min(drop, Times.Count));
                 EndTimes.RemoveRange(0, Math.Min(drop, EndTimes.Count));

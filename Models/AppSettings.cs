@@ -768,6 +768,15 @@ namespace AutoClicker.Models
         /// </summary>
         public string LoginBrowser { get; set; } = "";
 
+        /// <summary>
+        /// The Roblox client account launches start: a RobloxPlayerBeta.exe already on this PC, picked under
+        /// "Roblox version" on the Accounts page — or "" for Automatic, whatever roblox-player: links open. Only
+        /// copies Tempo found in Roblox's or a bootstrapper's own folders can be picked, and a pick that is gone
+        /// or not signed by Roblox is passed over (RobloxInstall.WithChoice). A path on THIS PC, so Reset and
+        /// Import keep it (KeepMachineStateFrom).
+        /// </summary>
+        public string RobloxLaunchClient { get; set; } = "";
+
         // ── Second cursor ("second mouse") ────────────────────────────────────
         // A visible, Tempo-controlled second pointer the user grabs (hotkey) to aim,
         // parks anywhere on either monitor, and spam-clicks — while the real mouse
@@ -1058,6 +1067,9 @@ namespace AutoClicker.Models
             RecordingOverlayY = local.RecordingOverlayY;
             CaptionResumeAfterRestart = local.CaptionResumeAfterRestart;
             InstallOfferDeclined = local.InstallOfferDeclined;
+            // The Roblox version account launches start: a file on THIS PC, which another machine's export would
+            // name a copy that isn't here (and which a reset of the Settings page has no business with).
+            RobloxLaunchClient = local.RobloxLaunchClient;
         }
 
         /// <summary>Statistics and records — what the Statistics tab's own resets guard.</summary>

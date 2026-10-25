@@ -44,13 +44,17 @@ namespace AutoClicker.UI
             Height = 14;
         }
 
+        // Whether the last paint showed a live level, so the first refresh after captions stop clears it.
+        private bool _paintedLive;
+
         public void ApplyTheme(Theme theme)
         {
             if (theme == null) { return; }
             bool changed = !ReferenceEquals(_theme, theme);
             _theme = theme;
-            if (changed) { Invalidate(); }
-            else { Invalidate(); }   // level changes every tick anyway
+            // Every tick while captions run (the level moves); otherwise only when there is something to
+            // change. It repainted five times a second for as long as the tab was open with captions off.
+            if (changed || Live || _paintedLive) { Invalidate(); }
         }
 
         private static double Fraction(int db)
@@ -76,6 +80,9 @@ namespace AutoClicker.UI
             }
 
             int db = Live ? Math.Max(MinDb, Math.Min(0, LevelDb)) : MinDb;
+            _paintedLive = Live;
+            // A stopped session's held peak is not the next session's: it flashed up when captions restarted.
+            if (!Live) { _peakDb = MinDb; _peakHoldTicks = 0; }
 
             // Peak hold: speech is spiky, and a bar that only shows the instantaneous
             // value reads as "barely anything" even when the level is fine.

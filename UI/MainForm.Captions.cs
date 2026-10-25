@@ -69,7 +69,8 @@ namespace AutoClicker.UI
             _capStatePill = UiFactory.Label("Off", 16, 30, FontStyle.Bold, 15f);
             // Every state it can say (RefreshCaptionsTab), in 15 pt bold beside the Start button.
             LayoutFitter.DeclareCaptions(_capStatePill, Localization.T("Off"), Localization.T("⚠  Not hearing anything"),
-                Localization.T("◌  Loading the speech model…"), Localization.T("●  Listening…"));
+                Localization.T("◌  Loading the speech model…"), Localization.T("◌  Waiting for Windows captions…"),
+                Localization.T("●  Listening…"));
             status.Controls.Add(_capStatePill);
 
             _capEngineLine = UiFactory.Caption("", 16, 60);
@@ -112,6 +113,11 @@ namespace AutoClicker.UI
                 {
                     int idx = IndexOfTabKey("settings");
                     if (idx >= 0) { _tabs.SelectedIndex = idx; }
+                    // And to the Live Captions card itself: it is far down a long page, and the button said
+                    // "caption settings" but left you wherever Settings had last been scrolled to. After the
+                    // switch has laid the page out, or that pass would put the scroll back.
+                    var card = _captionOverlayCheck?.Parent as GroupBox;
+                    if (card != null) { BeginInvoke((Action)(() => ScrollSettingsTo(card))); }
                 }
                 catch { }
             };
@@ -169,6 +175,8 @@ namespace AutoClicker.UI
             // window, the saved file and the subtitles) and the caption bar's labels.
             _transcript.SpeakerName = SpeakerDisplayName;
             _transcript.SpeakerIdentity = _speakerLinker.Incarnation;
+            // A long session's oldest lines go to its transcript file as they leave the 500 kept here.
+            _transcript.Spilling = SpillTranscriptLines;
             CaptionOverlayForm.SpeakerNameFor = SpeakerDisplayName;
             _capSpeakerActionBtn = UiFactory.Button("Turn on speaker labels", 476, 40, 200, 28);
             _capSpeakerActionBtn.Visible = false;
@@ -406,6 +414,91 @@ namespace AutoClicker.UI
             page.Controls.Add(live);
             page.Controls.Add(actions);
             _tabs.TabPages.Add(page);
+
+            // The transcript takes the window's spare height (FitCaptionsTranscriptToPage). Hooked here,
+            // before EnableAutoFit hooks the page's centring, so on a resize it runs first.
+            _capLiveCard = live;
+            _capActionsCard = actions;
+            page.SizeChanged += (s, e) => FitCaptionsTranscriptToPage();
+            page.ClientSizeChanged += (s, e) => FitCaptionsTranscriptToPage();
+        }
+
+        // The transcript card and the card under it; and their design measurements in the window's units,
+        // taken the first time the fit runs (after the window has scaled).
+        private GroupBox _capLiveCard, _capActionsCard;
+        private int _capLiveH0 = -1, _capBoxH0, _capCountTop0, _capCardGap0;
+        private bool _capFitBusy;
+
+        /// <summary>
+        /// The transcript takes the window's spare height. It was a fixed 158 px box — five lines of what was
+        /// said — while a large or maximised window left a band of empty page under the last card, and the
+        /// transcript is what this tab is watched for. Never shorter than designed, so a small window (a
+        /// laptop) keeps the layout as it was; the Windows &amp; model card moves down with it, and the place
+        /// the page centring notes for that card (CenterPageContent puts every control back there) follows.
+        /// Only while the tab is on screen: a page that is not shown can report a size it does not have.
+        /// </summary>
+        private void FitCaptionsTranscriptToPage()
+        {
+            if (_capFitBusy || _capLiveCard == null || _capActionsCard == null || _capTranscript == null) { return; }
+            var page = _capLiveCard.Parent as ScrollableControl;
+            if (page == null || WindowState == FormWindowState.Minimized || page.ClientSize.Height <= 0) { return; }
+            if (!IsCaptionsTabVisible()) { return; }
+            if (!_autoFitBaseTop.TryGetValue(_capLiveCard, out int liveBase)) { return; }   // not laid out yet
+            _capFitBusy = true;
+            try
+            {
+                if (_capLiveH0 < 0)
+                {
+                    _capLiveH0 = _capLiveCard.Height;
+                    _capBoxH0 = _capTranscript.Height;
+                    _capCountTop0 = _capCountLabel.Top;
+                    _capCardGap0 = _capActionsCard.Top - _capLiveCard.Bottom;
+                }
+                // Where the page would end at the design height, in the noted (unscrolled, uncentred) places
+                // — which neither the scroll nor full-screen centring moves.
+                int designBottom = liveBase + _capLiveH0 + _capCardGap0 + _capActionsCard.Height;
+                int extra = Math.Max(0, page.ClientSize.Height - L(12) - designBottom);
+                int liveH = _capLiveH0 + extra;
+                if (_capLiveCard.Height == liveH) { return; }
+
+                bool followTail = IsTranscriptScrolledToBottom() && _capTranscript.SelectionLength == 0;
+                _capLiveCard.Height = liveH;
+                _capTranscript.Height = _capBoxH0 + extra;
+                _capCountLabel.Top = _capCountTop0 + extra;
+                if (_autoFitBaseTop.ContainsKey(_capActionsCard)) { _autoFitBaseTop[_capActionsCard] = liveBase + liveH + _capCardGap0; }
+                _capActionsCard.Top = _capLiveCard.Bottom + _capCardGap0;
+                if (followTail && _capTranscript.TextLength > 0)
+                {
+                    // A taller box with the newest line still at its foot, not stranded mid-box.
+                    _capTranscript.SelectionStart = _capTranscript.TextLength;
+                    _capTranscript.ScrollToCaret();
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("FitCaptionsTranscriptToPage", ex); }
+            finally { _capFitBusy = false; }
+        }
+
+        /// <summary>
+        /// The engine the captions run on, for the engine line: while Tempo's engine runs, the one that
+        /// actually loaded (whisper says which); otherwise the one that will be tried. It read the setting
+        /// — "GPU (if available)" — even while the run was on the CPU, because the CPU/GPU choice only
+        /// takes effect after a Tempo restart or because this PC has no usable GPU at all.
+        /// </summary>
+        private string CaptionEngineText(TempoTranscriber tr)
+        {
+            if (_settings == null) { return "CPU"; }
+            string runtime = tr != null && (tr.IsRunning || tr.IsStarting) ? tr.RuntimeDescription : null;
+            bool gpuWanted = _settings.CaptionTryGpu;
+            if (gpuWanted && TempoTranscriber.GpuUnavailableReason != null)
+            {
+                // Asked for, and declined at load: restarting would not change that.
+                return Localization.T("CPU (no usable GPU)");
+            }
+            string text = string.IsNullOrEmpty(runtime)
+                ? (gpuWanted ? Localization.T("GPU (if available)") : "CPU")
+                : runtime.StartsWith("Cpu", StringComparison.OrdinalIgnoreCase) ? "CPU" : "GPU (" + runtime + ")";
+            if (GpuSettingNeedsRestart()) { text += " " + Localization.T("(restart Tempo to apply)"); }
+            return text;
         }
 
         /// <summary>
@@ -546,6 +639,10 @@ namespace AutoClicker.UI
             if (_capStatePill == null) { return; }
             try
             {
+                // The tab may have come on screen at a size it has not been fitted to (a resize while
+                // another tab showed): no-op when the transcript is already the right height.
+                FitCaptionsTranscriptToPage();
+
                 bool on = _captionsActive;
                 var tr = _captionTranscriber;
 
@@ -574,6 +671,13 @@ namespace AutoClicker.UI
                 else if (tr != null && tr.IsStarting)
                 {
                     pill = "◌  Loading the speech model…";
+                    pillColor = _theme.TextMuted;
+                }
+                else if (_captionMirrorRunning && !(_captionReader != null && _captionReader.Found))
+                {
+                    // Mirroring Windows Live Captions (chosen, or Tempo's engine fell back to it), and its
+                    // window is not up: nothing is being heard yet, whatever "Listening…" claimed.
+                    pill = "◌  Waiting for Windows captions…";
                     pillColor = _theme.TextMuted;
                 }
                 else
@@ -618,8 +722,7 @@ namespace AutoClicker.UI
                         sb.Append(Localization.F("Model: {0}", string.IsNullOrEmpty(_captionModelActiveKey)
                             ? (string.IsNullOrEmpty(_settings.CaptionModelKey) ? "base" : _settings.CaptionModelKey)
                             : _captionModelActiveKey));
-                        sb.Append("   ·   ").Append(Localization.F("Engine: {0}",
-                            _settings.CaptionTryGpu ? Localization.T("GPU (if available)") : "CPU"));
+                        sb.Append("   ·   ").Append(Localization.F("Engine: {0}", CaptionEngineText(tr)));
                         // What language the text is being decoded as. Pinned shows the
                         // language; auto shows what detection has settled on, or that it
                         // is still deciding — which is the state game audio tends to sit
@@ -642,8 +745,11 @@ namespace AutoClicker.UI
                             {
                                 language += " " + Localization.T("(this model is English-only)");
                             }
+                            // A running engine switches at its next step (ApplyCaptionLanguage). Only a choice it
+                            // still has not taken a few seconds on — its rebuild failed — needs a restart.
                             else if (state != null &&
-                                     !string.Equals(ActiveCaptionLanguageCode(state), pinned, StringComparison.OrdinalIgnoreCase))
+                                     !string.Equals(ActiveCaptionLanguageCode(state), pinned, StringComparison.OrdinalIgnoreCase) &&
+                                     (DateTime.UtcNow - _capLanguageChangedUtc).TotalSeconds > 6)
                             {
                                 language += " " + Localization.T("(restart captions to apply)");
                             }
@@ -691,6 +797,11 @@ namespace AutoClicker.UI
                             : mic
                                 ? Localization.T("Hearing: microphone")
                                 : Localization.T("Hearing: system audio");
+                        // And WHICH one. "System audio" says what kind of sound, not which speaker — the very
+                        // question when captions hear nothing because the video plays on another output. A
+                        // device name is never translated: it is what Windows calls the hardware.
+                        string device = tr.OpenedDeviceName;
+                        if (!string.IsNullOrWhiteSpace(device)) { line += "   ·   " + device.Replace("&", "&&"); }
                     }
                     else
                     {
@@ -816,7 +927,18 @@ namespace AutoClicker.UI
                 // Only follow the tail when the user is already at the bottom, so reading
                 // back through the transcript isn't yanked away every time a line lands.
                 bool atBottom = IsTranscriptScrolledToBottom();
+                // A selection — a phrase being copied — survives the rewrite. Replacing the box's text
+                // dropped it, so while captions ran nothing stayed selected for longer than the couple of
+                // seconds until the next caption. While something is selected the box also stays put.
+                int selStart = _capTranscript.SelectionStart;
+                string selText = _capTranscript.SelectionLength > 0 ? _capTranscript.SelectedText : null;
+                int firstRow = selText != null ? FirstVisibleTranscriptRow() : 0;
                 _capTranscript.Rtf = BuildTranscriptRtf();
+                if (selText != null)
+                {
+                    RestoreTranscriptSelection(selStart, selText, firstRow);
+                    atBottom = false;
+                }
                 if (atBottom)
                 {
                     _capTranscript.SelectionStart = _capTranscript.TextLength;
@@ -835,33 +957,6 @@ namespace AutoClicker.UI
             catch (Exception ex) { Logger.Swallow("RefreshCaptionTranscript", ex); }
         }
 
-        /// <summary>
-        /// True when the Captions tab is the one on screen. Found by walking up from the
-        /// transcript box to its owning TabPage rather than by index, so inserting or
-        /// reordering tabs later can't quietly turn this into the wrong answer.
-        /// </summary>
-
-        /// <summary>
-        /// Shows how far behind the captions are, and — when the model cannot hold
-        /// real-time pace — says so in words rather than leaving the user to wonder why
-        /// the video is ahead of the text.
-        ///
-        /// The distinction that matters: a steady delay is just the pipeline's latency
-        /// (a window has to finish arriving before it can be decoded). A GROWING delay
-        /// means decode is slower than audio arrives, so it drifts further behind for as
-        /// long as you keep playing, and eventually audio is dropped outright.
-        /// </summary>
-
-        /// <summary>
-        /// Shows or hides the on-screen caption bar by driving the SETTING that owns it,
-        /// not by poking the window directly.
-        ///
-        /// SetCaptionsActive only shows/hides the bar when CaptionOverlayEnabled is true,
-        /// so a tab button that called ShowCaptionOverlay() straight out could put a bar
-        /// on screen that the Settings checkbox said should not exist — and nothing would
-        /// ever take it down again, because that branch is skipped entirely while the
-        /// setting is off. Toggling the setting keeps both surfaces telling the same story.
-        /// </summary>
         /// <summary>
         /// The width <paramref name="b"/> needs for the widest of its translated captions, plus
         /// <paramref name="pad"/>: for a button whose caption flips at run time.
@@ -914,6 +1009,16 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>
+        /// Shows or hides the on-screen caption bar by driving the SETTING that owns it,
+        /// not by poking the window directly.
+        ///
+        /// SetCaptionsActive only shows/hides the bar when CaptionOverlayEnabled is true,
+        /// so a tab button that called ShowCaptionOverlay() straight out could put a bar
+        /// on screen that the Settings checkbox said should not exist — and nothing would
+        /// ever take it down again, because that branch is skipped entirely while the
+        /// setting is off. Toggling the setting keeps both surfaces telling the same story.
+        /// </summary>
         private void ToggleCaptionOverlayBar()
         {
             try
@@ -925,13 +1030,6 @@ namespace AutoClicker.UI
             RefreshCaptionsTab();
         }
 
-
-        /// <summary>
-        /// Fills the input meter and the quality line from signals the engine already
-        /// produces. Every one of these existed only in Live debug (or, for confidence,
-        /// nowhere at all), while the tab that calls itself the operational view showed
-        /// none of them.
-        /// </summary>
         /// <summary>
         /// Where a speech model may come from: the folder Tempo downloads into, a file
         /// anywhere on disk, or one of the loose files already sitting in that folder.
@@ -1189,6 +1287,12 @@ namespace AutoClicker.UI
             RefreshCaptionsTab();
         }
 
+        /// <summary>
+        /// Fills the input meter and the quality line from signals the engine already
+        /// produces. Every one of these existed only in Live debug (or, for confidence,
+        /// nowhere at all), while the tab that calls itself the operational view showed
+        /// none of them.
+        /// </summary>
         private void RefreshCaptionQuality(TempoTranscriber tr)
         {
             bool live = _captionsActive && tr != null && (tr.IsRunning || tr.IsStarting);
@@ -1216,7 +1320,32 @@ namespace AutoClicker.UI
 
             // Every piece through the translator: this line was assembled from English and shown as it
             // was, so it read in English on the tab's otherwise translated status card.
-            if (tr.InputClipping)
+            //
+            // First, sound that cannot reach the engine at all: a muted speaker, the sound going to another
+            // output, a slider near zero. Each looks exactly like a quiet room everywhere else here, and the
+            // engine says so on the bar only until the first words — someone who mutes mid-video was told
+            // nothing. (Loopback only: a microphone is not behind the speaker's volume.)
+            bool loopback = tr.ActiveMode == CaptureMode.SystemAudio;
+            string elsewhere = loopback ? tr.AudioElsewhereOn : null;
+            if (loopback && tr.SystemMuted)
+            {
+                warn = true;
+                sb.Append(Localization.T("⚠ The speaker is muted — there is no sound to caption. Unmute it and captions carry on."));
+            }
+            else if (!string.IsNullOrEmpty(elsewhere))
+            {
+                warn = true;
+                // One device name: the line above already names the one being heard, and two long names
+                // ran this to a third line, past the bottom of the card.
+                sb.Append(Localization.F("⚠ Sound is playing on “{0}”, not on the device captions hear — pick that one under Settings › Live Captions.",
+                    elsewhere.Replace("&", "&&")));
+            }
+            else if (loopback && tr.SystemVolume >= 0 && tr.SystemVolume < 0.08)
+            {
+                warn = true;
+                sb.Append(Localization.F("⚠ Speaker volume is {0}% — too faint to caption reliably.", Math.Round(tr.SystemVolume * 100)));
+            }
+            else if (tr.InputClipping)
             {
                 sb.Append(Localization.T("⚠ Audio is clipping — turn the app or system volume down; a smaller model will not help."));
             }
@@ -1267,6 +1396,16 @@ namespace AutoClicker.UI
             _capQualityLine.ForeColor = warn ? _theme.DangerText : _theme.TextMuted;
         }
 
+        /// <summary>
+        /// Shows how far behind the captions are, and — when the model cannot hold
+        /// real-time pace — says so in words rather than leaving the user to wonder why
+        /// the video is ahead of the text.
+        ///
+        /// The distinction that matters: a steady delay is just the pipeline's latency
+        /// (a window has to finish arriving before it can be decoded). A GROWING delay
+        /// means decode is slower than audio arrives, so it drifts further behind for as
+        /// long as you keep playing, and eventually audio is dropped outright.
+        /// </summary>
         private void RefreshCaptionDelayLine()
         {
             if (_capDelayLine == null) { return; }
@@ -1694,12 +1833,17 @@ namespace AutoClicker.UI
             ChangeCaptionSetting(() => _settings.CaptionLanguage = want,
                 want == "auto" ? "caption language: auto-detect"
                                : "caption language: " + CaptionLanguageLabel(want));
-            // The engine reads the language when a run STARTS, so a change mid-run only
-            // lands on the next start — not on a Tempo restart the way the GPU order
-            // does. RefreshCaptionsTab spells that out on the engine line rather than
-            // firing a notification, because these are exactly the routine messages the
-            // user asked to stop being told about.
+            // A running engine takes it at its next step: it re-reads the choice between steps and
+            // rebuilds its processor from the model it already has, so the session — and the transcript
+            // on this tab — carries on. The engine line used to say "restart captions to apply", and
+            // restarting them started a new session, which cleared the transcript.
+            _capLanguageChangedUtc = DateTime.UtcNow;
+            var tr = _captionTranscriber;
+            if (tr != null) { tr.PreferredLanguage = want; }
         }
+
+        /// <summary>When a language picker last changed the language — the engine gets a few seconds to apply it.</summary>
+        private DateTime _capLanguageChangedUtc = DateTime.MinValue;
 
         /// <summary>
         /// Points the Settings model combo at whatever CaptionModelKey now says, without
@@ -1758,17 +1902,6 @@ namespace AutoClicker.UI
             }
             SyncCaptionMoveUi();
         }
-
-        /// <summary>
-        /// The single path for changing a caption setting from anywhere.
-        ///
-        /// Both surfaces show the same values, and the Settings page additionally writes
-        /// its CONTROLS back into _settings whenever Save Settings is pressed. That makes
-        /// any write which skips the Settings control a silent revert waiting to happen,
-        /// and every fix so far has been per-control whack-a-mole. This funnels the whole
-        /// class: mutate, persist once, then push the settings back out to BOTH surfaces
-        /// so nothing can be left showing a stale value.
-        /// </summary>
 
         /// <summary>
         /// Writes the transcript as SubRip (.srt) or WebVTT (.vtt).
@@ -1885,6 +2018,16 @@ namespace AutoClicker.UI
                 (int)t.TotalHours, t.Minutes, t.Seconds, vtt ? "." : ",", t.Milliseconds);
         }
 
+        /// <summary>
+        /// The single path for changing a caption setting from anywhere.
+        ///
+        /// Both surfaces show the same values, and the Settings page additionally writes
+        /// its CONTROLS back into _settings whenever Save Settings is pressed. That makes
+        /// any write which skips the Settings control a silent revert waiting to happen,
+        /// and every fix so far has been per-control whack-a-mole. This funnels the whole
+        /// class: mutate, persist once, then push the settings back out to BOTH surfaces
+        /// so nothing can be left showing a stale value.
+        /// </summary>
         private void ChangeCaptionSetting(Action mutate, string what)
         {
             if (_settings == null || mutate == null) { return; }
@@ -2045,24 +2188,35 @@ namespace AutoClicker.UI
                 {
                     rtf.Run(_captionHistoryTimes[i].ToString("HH:mm:ss") + "  ", muted);
                 }
+                // Each speaker's label in that speaker's colour, as the caption bar, the history window and
+                // the Speakers card show it (readable on this box's ground) — here every line was one colour,
+                // so who said what had to be read off the words "Speaker 2:".
+                int labelLen = Math.Min(line.Length, _transcript.LabelLengthOf(i));
+                Color labelColor = labelLen > 0 ? SpeakerInk(_transcript.SpeakerOf(i)) : text;
+                void Plain(int from, int to)
+                {
+                    if (from < labelLen && to > from)
+                    {
+                        int mid = Math.Min(to, labelLen);
+                        rtf.Run(line.Substring(from, mid - from), labelColor);
+                        from = mid;
+                    }
+                    if (to > from) { rtf.Run(line.Substring(from, to - from), text); }
+                }
+                int at = 0;
                 if (filtering && _capParsedFilter.HasHighlightableText)
                 {
-                    int at = 0;
                     foreach (var span in _capParsedFilter.Highlights(line))
                     {
                         int s = Math.Max(at, Math.Min(span.Key, line.Length));
                         int e = Math.Min(line.Length, span.Key + span.Value);
                         if (e <= s) { continue; }
-                        rtf.Run(line.Substring(at, s - at), text);
+                        Plain(at, s);
                         rtf.Run(line.Substring(s, e - s), hiFore, hiBack);
                         at = e;
                     }
-                    rtf.Run(line.Substring(at), text);
                 }
-                else
-                {
-                    rtf.Run(line, text);
-                }
+                Plain(at, line.Length);
                 rtf.EndLine();
             }
             return rtf.ToRtf();
@@ -2163,7 +2317,10 @@ namespace AutoClicker.UI
             bool filtering = _capParsedFilter != null && !_capParsedFilter.IsEmpty;
             if (_capCopyBtn != null)
             {
-                _capCopyBtn.Text = filtering ? Localization.T("Copy shown") : Localization.T("Copy all");
+                string label = filtering ? Localization.T("Copy shown") : Localization.T("Copy all");
+                // Saying "Copied ✓" right now (ConfirmOnButton): it is the caption to come BACK to that changes.
+                if (ReferenceEquals(_saveConfirmTarget, _capCopyBtn)) { _saveBtnText = label; }
+                else { _capCopyBtn.Text = label; }
             }
             if (_capSaveBtn != null && _capTip != null)
             {
@@ -2173,6 +2330,11 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>
+        /// True when the Captions tab is the one on screen. Found by walking up from the
+        /// transcript box to its owning TabPage rather than by index, so inserting or
+        /// reordering tabs later can't quietly turn this into the wrong answer.
+        /// </summary>
         private bool IsCaptionsTabVisible()
         {
             try
@@ -2216,6 +2378,62 @@ namespace AutoClicker.UI
             catch { return true; }
         }
 
+        /// <summary>A speaker's colour as text in the transcript box: the bar's colour, made readable on the box.</summary>
+        private Color SpeakerInk(int label)
+        {
+            Color c = CaptionOverlayForm.SpeakerColor(label);
+            return _theme != null ? Theme.Readable(c, _theme.InputBackground) : c;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SendMessageW")]
+        private static extern IntPtr SendMessagePtr(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        private const int EM_GETFIRSTVISIBLELINE = 0x00CE, EM_LINESCROLL = 0x00B6;
+
+        /// <summary>The transcript box's top row on screen (wrapped rows count).</summary>
+        private int FirstVisibleTranscriptRow()
+        {
+            try { return (int)SendMessagePtr(_capTranscript.Handle, EM_GETFIRSTVISIBLELINE, IntPtr.Zero, IntPtr.Zero); }
+            catch { return 0; }
+        }
+
+        /// <summary>
+        /// Puts back a selection the rewrite of the transcript box dropped, and the rows the reader had on
+        /// screen. By position when the text there is unchanged; otherwise — the oldest lines left the
+        /// 500 kept, and everything moved up — the nearest place that text is found. Never a selection of
+        /// different words.
+        /// </summary>
+        private void RestoreTranscriptSelection(int start, string selected, int firstRow)
+        {
+            try
+            {
+                string all = _capTranscript.Text;
+                int at = -1;
+                if (start >= 0 && start + selected.Length <= all.Length &&
+                    string.CompareOrdinal(all, start, selected, 0, selected.Length) == 0)
+                {
+                    at = start;
+                }
+                else
+                {
+                    int from = Math.Max(0, Math.Min(start, all.Length - 1));
+                    // Backwards from where the selection ENDED, so text that moved up by less than its own
+                    // length is still found.
+                    int backFrom = Math.Min(all.Length - 1, start + selected.Length - 1);
+                    int back = backFrom >= 0 ? all.LastIndexOf(selected, backFrom, StringComparison.Ordinal) : -1;
+                    int fwd = all.IndexOf(selected, from, StringComparison.Ordinal);
+                    at = back < 0 ? fwd : fwd < 0 ? back : (start - back <= fwd - start ? back : fwd);
+                }
+                if (at >= 0) { _capTranscript.Select(at, selected.Length); }
+                // Selecting scrolls the selection into view; the reader's rows go back where they were.
+                int now = FirstVisibleTranscriptRow();
+                if (now != firstRow)
+                {
+                    SendMessagePtr(_capTranscript.Handle, EM_LINESCROLL, IntPtr.Zero, (IntPtr)(firstRow - now));
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("RestoreTranscriptSelection", ex); }
+        }
+
         private void CopyTranscript()
         {
             try
@@ -2235,6 +2453,9 @@ namespace AutoClicker.UI
                     return;
                 }
                 Clipboard.SetText(text);
+                // On the button itself: with "Show notifications" off, the card below never comes, and a copy
+                // that leaves no trace reads as a button that did nothing.
+                ConfirmOnButton(_capCopyBtn, Localization.T("Copied ✓"));
                 TempoNotify(1800, "Tempo", _capParsedFilter.IsEmpty
                     ? Localization.T("Transcript copied to the clipboard.")
                     : Localization.F("{0} matching line(s) copied to the clipboard.", shown),

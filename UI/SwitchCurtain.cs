@@ -97,6 +97,7 @@ namespace AutoClicker.UI
                 SetWindowPos(Handle, PlaceAbove(owner.Handle), r.X, r.Y, r.Width, r.Height,
                              SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
                 _up = true;
+                StartSafety();
                 return true;
             }
             catch
@@ -134,25 +135,67 @@ namespace AutoClicker.UI
 
         private static bool IsTopmost(IntPtr hwnd) => (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 
-        /// <summary>Takes the picture away. Safe to call at any time, as often as wanted.</summary>
+        /// <summary>
+        /// Takes the picture away. Safe to call at any time, as often as wanted.
+        ///
+        /// Decided by what is ON SCREEN, not by <see cref="_up"/> alone. The picture is a window of its own and
+        /// does not follow Tempo's: one left showing while the flag said "down" could never be taken away again,
+        /// and stayed behind as a stale copy of an old page — cut along its edges, with the real page offset
+        /// beside it once the window had moved or resized (a friend's screenshots, 1.0.325).
+        /// </summary>
         public void Lift()
         {
-            if (!_up) { return; }
             _up = false;
+            _safety?.Stop();
             try
             {
-                if (Handle != IntPtr.Zero)
+                if (Handle != IntPtr.Zero && IsWindowVisible(Handle))
                 {
-                    SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
-                                 SWP_NOACTIVATE | SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+                    if (!SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+                                      SWP_NOACTIVATE | SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER))
+                    {
+                        ShowWindow(Handle, SW_HIDE);
+                    }
                 }
             }
             catch { }
         }
 
+        /// <summary>
+        /// A switch paints and takes the picture down in 20–100 ms (a first visit before the warm-up, up to about
+        /// 1.4 s). Past that, something went wrong — take it down whatever the switch is doing.
+        /// </summary>
+        private System.Windows.Forms.Timer _safety;
+
+        private void StartSafety()
+        {
+            if (_safety == null)
+            {
+                _safety = new System.Windows.Forms.Timer { Interval = 2000 };
+                _safety.Tick += (s, e) => Lift();
+            }
+            _safety.Stop();
+            _safety.Start();
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            // Owned by Tempo's window, the picture is hidden WITH it when Tempo is minimised — and Windows shows
+            // owned pop-ups it hid that way again on restore (SW_PARENTOPENING). A picture up at that moment came
+            // back on restore: a frozen copy of the old page, floating where the window used to be. Shown only
+            // by Cover().
+            if (m.Msg == WM_SHOWWINDOW && m.WParam != IntPtr.Zero && (int)(long)m.LParam == SW_PARENTOPENING && !_up)
+            {
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
         public void Dispose()
         {
             Lift();
+            try { _safety?.Dispose(); } catch { }
+            _safety = null;
             try { if (Handle != IntPtr.Zero) { DestroyHandle(); } } catch { }
         }
 
@@ -191,5 +234,9 @@ namespace AutoClicker.UI
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
         [DllImport("user32.dll")]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        private const int SW_HIDE = 0;
+        private const int WM_SHOWWINDOW = 0x0018, SW_PARENTOPENING = 3;
     }
 }

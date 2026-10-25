@@ -435,6 +435,8 @@ namespace AutoClicker.UI
                 Text = "",
                 ForeColor = theme.TextMuted, BackColor = Color.Transparent
             };
+            // "N new below ↓" — the way back down to the newest lines, as in the captions transcript (see FlushPending).
+            _matchCount.Click += Safe("newBelow", () => { if (_newBelow > 0) { JumpToNewest(); } });
             bottom.Controls.Add(_matchCount);
 
             _pause = new CheckBox
@@ -1007,9 +1009,11 @@ namespace AutoClicker.UI
             {
                 if (_stats == null || _stats.IsDisposed || !_stats.IsHandleCreated) { return false; }
                 if (_stats.ContainsFocus && _stats.SelectionLength > 0) { return true; }
-                // Mid-drag the selection can still be empty: the button is down over the pane.
-                return (Control.MouseButtons & MouseButtons.Left) != 0
-                       && _stats.ClientRectangle.Contains(_stats.PointToClient(Control.MousePosition));
+                // Mid-drag the selection can still be empty: the button is down over the pane — its text or its scroll
+                // bar. The bounds, as the log's check has it: the client area left out the bar, so the stats were
+                // rebuilt under a thumb being dragged, and every rebuild put the view back where the drag began.
+                return (Control.MouseButtons & MouseButtons.Left) != 0 && _stats.Parent != null
+                       && _stats.Parent.RectangleToScreen(_stats.Bounds).Contains(Control.MousePosition);
             }
             catch { return false; }
         }
@@ -1570,6 +1574,13 @@ namespace AutoClicker.UI
             // text out from under it. They wait in the queue (bounded — the ring is the backstop).
             if (LogSelectionDragInProgress()) { return; }
 
+            // Scrolled back down to the newest by hand: nothing is new below any more.
+            if (_newBelow > 0 && FollowingTail())
+            {
+                _newBelow = 0;
+                UpdateMatchCount(_shownLines, LinesSinceClear());
+            }
+
             // Back from minimised: catch the stats and the log up now. Checked here, on this 100 ms tick,
             // rather than in a Resize handler — WindowState can still read Minimized while the restore's
             // own Resize is raised, and a missed restore left the log without what arrived meanwhile.
@@ -1683,13 +1694,30 @@ namespace AutoClicker.UI
                 _log.SelectionStart = _log.TextLength;
                 _log.SelectionLength = 0;
                 _log.ScrollToCaret();
+                _newBelow = 0;
             }
             else
             {
                 try { _log.Select(selStart, selLen); } catch { }
                 if (haveScroll) { SetScrollPos(_log, scroll); }
+                // Read up the log, the reader is not carried down by new lines — so they arrived without a sign.
+                // Counted beside the filter, where a click brings the view down to them.
+                _newBelow += passing.Count;
             }
             _log.Invalidate();
+            UpdateMatchCount(_shownLines, LinesSinceClear());
+        }
+
+        /// <summary>Lines added below the view since the reader scrolled up from the newest (see FlushPending).</summary>
+        private int _newBelow;
+
+        /// <summary>Down to the newest lines, from the "N new below" count.</summary>
+        private void JumpToNewest()
+        {
+            _log.SelectionStart = _log.TextLength;
+            _log.SelectionLength = 0;
+            _log.ScrollToCaret();
+            _newBelow = 0;
             UpdateMatchCount(_shownLines, LinesSinceClear());
         }
 
@@ -1825,6 +1853,7 @@ namespace AutoClicker.UI
                 }
 
                 _shownLines = shown.Count;
+                _newBelow = 0;   // a fresh view: what is below the reader now is not "new" to them
                 _log.SelectionStart = _log.TextLength;
                 if (anchor == null || !ScrollLogTo(anchor, anchorOffset))
                 {
@@ -1914,6 +1943,7 @@ namespace AutoClicker.UI
             _clearedAt = DateTime.Now;
             _log.Clear();
             _shownLines = 0;
+            _newBelow = 0;
             UpdateMatchCount(0, 0);
         }
 
@@ -1945,6 +1975,14 @@ namespace AutoClicker.UI
             {
                 text += "  ·  " + Utils.Localization.F("cleared at {0}", _clearedAt.ToString("HH:mm:ss"));
             }
+            // New lines below a reader who scrolled up: in the accent, and a click away (JumpToNewest).
+            bool newBelow = _newBelow > 0;
+            if (newBelow)
+            {
+                text += "  ·  " + Utils.Localization.F("{0} new below ↓", _newBelow.ToString("N0"));
+                if (_titleTheme != null) { _matchCount.ForeColor = Theme.Readable(_titleTheme.Accent, _titleTheme.Surface, 4.5); }
+            }
+            _matchCount.Cursor = newBelow ? Cursors.Hand : Cursors.Default;
             if (_matchCount.Text != text) { _matchCount.Text = text; }
             // Only when the query changed. This runs after every batch of new lines, and
             // re-setting a tooltip that is on screen makes it flicker while the log streams.

@@ -45,7 +45,6 @@ UI/MainForm.Accounts.cs
 UI/MainForm.MultiInstance.cs
 UI/MainForm.RobloxUpdates.cs
 UI/RobloxClientDialog.cs
-UI/RobloxLoginForm.cs
 UI/RobloxUpdateForm.cs
 Utils/AccountApiServer.cs
 Utils/PrivateServerRef.cs
@@ -54,6 +53,7 @@ Utils/RobloxApi.cs
 Utils/RobloxClients.cs
 Utils/RobloxInstall.cs
 Utils/RobloxLauncher.cs
+Utils/RobloxSignIn.cs
 Utils/RobloxSingletonKiller.cs
 Utils/RobloxUpdates.cs
 

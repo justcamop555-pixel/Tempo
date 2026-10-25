@@ -2,6 +2,48 @@
 
 All notable changes to Tempo. Newest first. Per-release notes are also in the `release-notes/` folder and on the [Releases page](https://github.com/justcamop555-pixel/Tempo/releases).
 
+### 1.0.326
+
+- **Roblox sign-in saves itself.** "Log in to Roblox" opens the private browser window as before, and that is all you see: log in or sign up there, and Tempo saves the account by itself and closes the browser.
+  - The small "Log in to Roblox" window that stood beside the browser, with Cancel and "I've logged in — save", is gone. So is the account screen that came up after a sign-in: a new account is named from Roblox (its display name, else its username), and **Edit…** changes it later.
+  - The line under the account list says what is happening: which browser to sign in in, "Signed in — saving…", what was saved, or why nothing was. While the browser is open, the button reads **Cancel sign-in**, Re-login waits, and a second sign-in is refused instead of opening another browser.
+  - It tells you whether the password was saved ("username and password saved", or "a passwordless sign-in, so only the username is saved").
+- **Where a sign-in is saved depends on who signed in.** Roblox is asked whose session it is:
+  - **No more duplicate accounts.** Signing in to an account you already had added it a second time. Now that account's session is refreshed.
+  - **A re-login never overwrites the wrong account.** When you sign in as a different account than the one you chose, the session goes to that account (added, if you didn't have it), and the one you chose is left as it was. Before, the chosen account got the other account's session.
+  - An account Roblox never named (added by hand) takes the ID and username of the re-login.
+  - A passwordless re-login keeps a password saved earlier.
+  - If the vault locks during the sign-in, it is saved at the next unlock (within 30 minutes), as before.
+- **The password you type is saved when you create a new account too.** Only the log-in field was read, so a sign-up saved the username alone and the log said "passwordless". Any password field in Tempo's sign-in window is now read, and the value survives Roblox's jump to the home page. A passkey or "quick log in" still types no password, so only the username is saved.
+- **Pick a Roblox version.** A new "Roblox version" row under the client line lists **Automatic** (what Roblox's own links open, with its version) and every RobloxPlayerBeta.exe already on your PC, in Roblox's, Bloxstrap's, Fishstrap's and Voidstrap's folders: "0.744.0 · Roblox · newest", "0.727.0 · Fishstrap". Nothing is downloaded.
+  - Account launches start the picked copy. The client line checks THAT copy's signature and says "the version picked below".
+  - Only a copy in one of those folders and signed by Roblox Corporation is started. Anything else is ignored, said in red, and launches go the Automatic way.
+  - An older version gets an amber note: Roblox may update it, hand the launch to a newer Roblox already running, or refuse it (error 280).
+  - When a Roblox update deletes the version you picked, Tempo goes back to Automatic by itself and says so.
+  - The pick is this PC's, so Reset and Import keep it.
+- **Account fixes:**
+  - The local API's `/relogin` could open a second sign-in browser over an open one; it now answers `signInOpen` (409).
+  - Renaming an account while it was being signed in again saved the new session nowhere.
+  - Turning the account manager off, resetting the vault or closing Tempo left the sign-in browser open, its temporary profile holding a session cookie. It is closed and the profile deleted. Cleaning up after a sign-in no longer freezes the window for up to 4 seconds.
+- **Tempo's own scroll bars.** Slim, themed scroll bars with small up and down arrows replace Windows 11's everywhere: the tab pages, the account, macro and click-point lists, the captions transcript, Live debug, the dialogs, and drop-down lists such as the 38 themes.
+  - At rest a slim rounded thumb in the theme's colours; pointed at, it widens and a groove appears; held, it takes the accent. On a long list Windows' thumb is a few pixels, and the drawn one never shrinks below a short bar.
+  - **Scrolling is exactly what it was.** Windows' own scroll bar is still there underneath and does all the work: every drag, arrow, click on the track, wheel turn, key and screen reader. Tempo's bar is a picture of it, drawn on top and transparent to the mouse.
+- **Live Captions:**
+  - **Change the language while captions run.** A new caption language applies straight away, without a restart, and the transcript is kept. The "restart captions" note shows only if the engine hasn't switched within 6 seconds.
+  - **Speaker names stay.** Turning "Use faces too" on or off (or saving Settings with it changed) reset everyone to Speaker 1 and erased their names mid-conversation.
+  - **A long session's saved transcript starts at the beginning.** The transcript keeps 500 lines, and saving wrote only those. Lines that leave it are now written to the session's file as they go.
+  - **The caption bar speaks your language.** The engine's messages were English in every language, and "Tempo Live Captions started…" sat on the bar until the first words.
+  - **Fixed:** a line said twice a minute apart ("Okay." … "Okay.") was dropped the second time; a selection in the transcript was lost at every caption; "N new below" carried over into a new session; the game-mode line showed a box for its emoji.
+  - "Label speakers", "AI face & mouth", "Auto-start" and "Save transcripts" apply as soon as they change, on the tab and in Settings alike.
+  - **The Captions tab:** the transcript grows with the window, speaker labels take each speaker's colour, Copy says "Copied ✓" on the button, and "All caption settings…" scrolls Settings to the Live Captions card.
+- **The Dim slider (Settings › Appearance › Background image) responds at once.** Each step reloaded the picture and rebuilt every surface, about 45 ms a step. Now only the dimming is redone, 16–18 ms. With no picture set the slider is greyed out and says "(no image)". On a light theme Dim tones the picture towards the theme's background, and the tooltip says so. Double-click resets it to 55.
+- **Steadier pages.** A friend's 125% laptop showed pages in pieces: controls twice at an offset, cut labels, black boxes. It didn't happen here, but the two places that hold painting back are hardened. The tab-switch picture always lifts, including after a minimise, a move, a resize or within 2 seconds at the latest, and the end of a paint freeze repaints the whole window.
+- **Live debug:**
+  - **"N new below ↓"** beside the filter counts lines that arrive below a reader who scrolled up. A click takes the view down to them, and it clears when you scroll down yourself.
+  - **A "Sign-in:" line** in the Accounts section: whether a sign-in browser is open, in what, for how long, whether Tempo can see it yet, and whether a password was typed (yes or not yet, never the password or the account). Otherwise, how the last sign-in ended. A Health warning appears when the browser never answered, or has been open for 10 minutes or more.
+  - Its panes have Tempo's scroll bars too. Dialogs themed by hand (the crash report, the report chooser, the tamper details, Save macro, the script step) get them as well.
+  - **Fixed:** the stats were rebuilt under a scroll thumb being dragged and kept snapping back.
+
 ### 1.0.325
 
 - **Anti-Freeze watches the app being clicked.** It used to compare Tempo's OWN CPU use with 80%. One click thread never comes near that on a multi-core PC, so in practice Anti-Freeze was only its speed cap. Now, twice a second, it asks the window under the click whether it still answers, with the same quiet message Windows uses to decide that a program is "not responding".

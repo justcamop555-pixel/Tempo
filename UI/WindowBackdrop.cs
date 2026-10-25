@@ -65,7 +65,8 @@ namespace AutoClicker.UI
         // afterwards. Keyed weakly off the control so nothing is kept alive.
         private sealed class Slice
         {
-            public Bitmap Bmp;
+            public Bitmap Bmp;       // scaled slice + scrim: what is blitted
+            public Bitmap Scaled;    // scaled slice alone — a Dim change re-composes from it, no rescale
             public Image Img;
             public Size FormClient;
             public Point Offset;
@@ -128,44 +129,60 @@ namespace AutoClicker.UI
             if (epoch != _lastSeenEpoch)
             {
                 _lastSeenEpoch = epoch;
-                foreach (var pair in Cache) { pair.Value.Img = null; }   // force a rebuild
+                foreach (var pair in Cache) { pair.Value.Img = null; }   // force a rebuild (rescale and scrim)
             }
 
             Slice slice = Cache.GetValue(surface, _ => new Slice());
-            bool usable = slice.Bmp != null
-                          && ReferenceEquals(slice.Img, img)
-                          && slice.FormClient == fc
-                          && slice.Offset == off
-                          && slice.SurfaceSize.Width == w && slice.SurfaceSize.Height == h
+            // Two stages, so a Dim change (the Settings slider, many times a second while it is dragged)
+            // re-composes from the already-scaled slice instead of rescaling the whole image again.
+            bool scaledOk = slice.Scaled != null
+                            && ReferenceEquals(slice.Img, img)
+                            && slice.FormClient == fc
+                            && slice.Offset == off
+                            && slice.SurfaceSize.Width == w && slice.SurfaceSize.Height == h;
+            bool usable = scaledOk
+                          && slice.Bmp != null
                           && slice.Dim == dimPercent
                           && slice.BaseArgb == baseColor.ToArgb();
 
             if (!usable)
             {
+                if (!scaledOk)
+                {
+                    if (slice.Scaled == null || slice.Scaled.Width != w || slice.Scaled.Height != h)
+                    {
+                        try { slice.Scaled?.Dispose(); } catch { }
+                        slice.Scaled = new Bitmap(w, h);
+                    }
+                    using (Graphics sg = Graphics.FromImage(slice.Scaled))
+                    {
+                        sg.Clear(Color.Transparent);
+                        sg.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                        sg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        try { ImageAnimator.UpdateFrames(img); } catch { }
+                        sg.DrawImage(img, new Rectangle(cover.X - off.X, cover.Y - off.Y, cover.Width, cover.Height));
+                    }
+                    slice.Img = img;
+                    slice.FormClient = fc;
+                    slice.Offset = off;
+                    slice.SurfaceSize = new Size(w, h);
+                }
+
                 if (slice.Bmp == null || slice.Bmp.Width != w || slice.Bmp.Height != h)
                 {
                     try { slice.Bmp?.Dispose(); } catch { }
                     slice.Bmp = new Bitmap(w, h);
                 }
-
                 using (Graphics bg = Graphics.FromImage(slice.Bmp))
                 {
-                    bg.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                    bg.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                    try { ImageAnimator.UpdateFrames(img); } catch { }
-                    bg.DrawImage(img, new Rectangle(cover.X - off.X, cover.Y - off.Y, cover.Width, cover.Height));
-
+                    bg.Clear(Color.Transparent);
+                    bg.DrawImageUnscaled(slice.Scaled, 0, 0);
                     int alpha = Math.Max(0, Math.Min(95, dimPercent)) * 255 / 100;
                     using (var scrim = new SolidBrush(Color.FromArgb(alpha, baseColor)))
                     {
                         bg.FillRectangle(scrim, new Rectangle(0, 0, w, h));
                     }
                 }
-
-                slice.Img = img;
-                slice.FormClient = fc;
-                slice.Offset = off;
-                slice.SurfaceSize = new Size(w, h);
                 slice.Dim = dimPercent;
                 slice.BaseArgb = baseColor.ToArgb();
             }

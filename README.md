@@ -39,26 +39,23 @@
 > **Use responsibly.** Auto-clicking may break the terms of service of some games and apps,
 > and some anti-cheat systems detect it. You are responsible for how you use Tempo.
 
-## What's new in 1.0.325
+## What's new in 1.0.326
 
-- **Anti-Freeze watches the app you click.** It slows down while the app is slow to answer, and
-  holds the clicks while the app is frozen. Before, it watched Tempo's own CPU use. Its card shows
-  the PC's CPU, GPU, memory and power, and Tempo asks Windows for full speed while a run is on.
-- **Randomized clicks keep your speed and your spot.** They stay around the spot where you put the
-  cursor instead of drifting away, jitter no longer changes your average speed, and no click
-  strays into the next window. Changes apply mid-run, and Humanize fits the speed.
-- **Roblox update alerts:** Tempo tells you when Roblox releases a new client, with **Update now**,
-  **Later** or **Keep this version**.
-- **Sign in with any Chromium browser**: Opera GX, Vivaldi, Yandex, Thorium, the Canary channels
-  and more. And Roblox launches again after it updates itself.
-- **Right at 125% and 150%:** the macro list, charts, cards and splash screen scale with the
-  screen, and the window fits the screen on first start.
-- **Every window follows a theme change.** Spinners lost their stray "[ ]" frame, 17 rows that
-  touched are fixed, and dates follow Tempo's language.
-- **Tamper check details** in Settings › Data & Backup, a warning for DLLs that aren't Tempo's, and
-  an installer that copies only Tempo itself.
-- **Updates and uninstall:** a restart after an update waits for the old copy to close, and
-  uninstalling keeps your latest changes and cleans up after itself.
+- **Roblox sign-in saves itself.** Log in or sign up in the private browser window, and Tempo saves
+  the account and closes the browser. There is no extra window and no confirm screen. An account
+  you already have is refreshed, never added twice, and the password you type is saved on sign-up
+  too.
+- **Pick a Roblox version:** Automatic, or any Roblox client already on your PC (Roblox,
+  Bloxstrap, Fishstrap, Voidstrap). Nothing is downloaded, and only copies signed by Roblox are
+  started.
+- **Tempo's own scroll bars.** Slim, themed scroll bars with up and down arrows replace Windows
+  11's everywhere, from the pages to the drop-down lists. Scrolling itself works exactly as before.
+- **Live Captions change language while they run,** with no restart. Speaker names survive the
+  face switch, and a long session's saved transcript starts at the very first line.
+- **A Dim slider that keeps up:** the background picture dims as you drag, without reloading.
+- **Live debug shows more:** new lines below where you're reading are counted, and an open
+  Roblox sign-in shows how long it has waited.
+- **Steadier pages** after tab switches, restores and resizes on 125% laptops.
 
 The full notes are on the [release page](https://github.com/justcamop555-pixel/Tempo/releases/latest),
 and every change is in [CHANGELOG.md](CHANGELOG.md).
@@ -213,7 +210,8 @@ Real-time subtitles for **anything your PC plays** — videos, games, calls, any
 leaves your PC.
 
 - **14 speech models** in six sizes, from Tiny (75 MB, instant) to Large v3, in English-only,
-  any-language (90+ languages, detected automatically) and compact versions — one-click download.
+  any-language (90+ languages, detected automatically, or one you pick, even while captions run)
+  and compact versions — one-click download.
 - **Optional GPU engine** (Vulkan: NVIDIA, AMD and Intel), with an automatic CPU fallback, and
   Tempo steps down to a smaller model by itself if one can't keep up.
 - **Only speech becomes captions.** A voice-detection network (Silero VAD) runs before Whisper, so
@@ -252,8 +250,12 @@ beside your game.
 - **You never type a Roblox password into Tempo.** Signing in opens **your own browser** in a
   private window, and you sign in to Roblox as you always do. Chrome is used by preference, then
   Edge, Brave, Opera, Opera GX, Vivaldi, or any other Chromium browser on your PC. Firefox can't be
-  driven for this. Tempo takes the session from that window when you're done. Sign in with a **passkey or
-  "quick log in"** and Tempo saves only the username.
+  driven for this. When you're done, Tempo saves the account by itself and closes the browser, with
+  no window of its own and no confirm screen. An account you already have is refreshed, never added
+  twice. Sign in with a **passkey or "quick log in"** and Tempo saves only the username.
+- **Pick which Roblox launches:** **Automatic** (what Roblox's own links open), or any Roblox client
+  already on your PC, in Roblox's, Bloxstrap's, Fishstrap's or Voidstrap's folders. Nothing is
+  downloaded, and only copies signed by Roblox are started.
 - **An encrypted vault.** Sessions and any saved passwords are sealed with **AES-256-GCM** under a
   key stretched from a master password you choose (PBKDF2-SHA256, 1.2 million iterations), and the
   file is sealed again by Windows to your account with **DPAPI**. It can lock itself again the
@@ -279,8 +281,8 @@ beside your game.
 
 ### 🎨 Make it yours
 **38 built-in themes** (or **Match Windows** to follow the system's light/dark setting live), your
-own accent colour, optional animated GIF backdrops and six languages (English, Spanish, French,
-German, Italian, Portuguese). A themed tray menu, start with Windows (and, if you like, open the
+own accent colour, optional picture or animated GIF backdrops with a Dim slider, Tempo's own slim
+scroll bars and six languages (English, Spanish, French, German, Italian, Portuguese). A themed tray menu, start with Windows (and, if you like, open the
 window at sign-in), per-tab scroll memory, and windows that fit laptops at 125% and 150% scaling.
 Colours stay right with HDR on.
 
@@ -296,9 +298,10 @@ screen, which is exactly when you were most likely to miss one.
 window position, tab, settings and click totals the moment Windows says the session is ending.
 
 **Live debug** (Settings › Data & Backup) shows a health check, live engine stats and a colour-coded
-event stream, with a real search (`"a phrase"`, `-hide`, `tag:captions`, `level:warn`). It also
-says whether Windows will *really* start Tempo at sign-in. **Copy** gives you the right text to paste
-into a bug report.
+event stream, with a real search (`"a phrase"`, `-hide`, `tag:captions`, `level:warn`). New lines
+that arrive below where you're reading are counted, a click away. It also says whether Windows will
+*really* start Tempo at sign-in, and whether a Roblox sign-in is open. **Copy** gives you the right
+text to paste into a bug report.
 
 ### 🔐 Tamper check
 Tempo hashes its own program file at every launch, and once per release compares it with the

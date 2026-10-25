@@ -271,6 +271,8 @@ namespace AutoClicker.UI
             T(_rememberWindowCheck, "Reopen Tempo at the same position and size it had when you last closed it.");
             T(_rememberTabCheck, "Reopen Tempo on the tab you were last using instead of always starting on Clicker. Handy after a long unattended run: if Windows reboots overnight and Tempo restarts with it, you come back to the Macros tab you left it on rather than the Clicker page.");
             T(_opacitySlider, "Make the Tempo window see-through. 100% is solid; lower values let what's behind show through.");
+            // Greyed out with no background image (the note beside it then says "(no image)").
+            T(_bgDimTrack, "Tones the background image down behind Tempo's text, towards the theme's own background colour, so it reads on any picture. 0% shows the picture as it is. Double-click to go back to 55%.");
             T(_customAccentCheck, "Use your own accent colour instead of the theme's.");
             T(_chooseAccentBtn, "Pick a custom accent colour.");
             T(_hdrCompensateCheck, "With HDR on, Windows shows Tempo and other non-HDR apps with lighter shadows than an ordinary screen: near-blacks turn charcoal and dark themes look milky. This darkens Tempo's colours by exactly that difference so they look as designed. It follows the window between screens and updates by itself when HDR is switched on or off. Untick it if a colour profile already corrects SDR apps under HDR — correcting twice makes shadows too dark.");

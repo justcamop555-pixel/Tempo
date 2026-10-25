@@ -62,6 +62,9 @@ namespace AutoClicker.UI
 
         public void SetTheme(Theme theme)
         {
+            // Only a different theme repaints: the Captions tab calls this on every refresh, five times a
+            // second, and the strip was redrawn each time with nothing changed.
+            if (ReferenceEquals(_theme, theme)) { return; }
             _theme = theme;
             Invalidate();
         }

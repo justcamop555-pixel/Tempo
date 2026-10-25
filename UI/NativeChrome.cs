@@ -131,6 +131,9 @@ namespace AutoClicker.UI
                         // covers Panel/TabPage/anything with AutoScroll.
                         ApplyScrollbarTheme(c, dark);
                     }
+                    // …and Tempo's own bar drawn over it (ScrollSkins). Some windows theme their scroll bars only
+                    // here, never through ThemeManager — Live debug among them — and kept Windows' bar.
+                    ScrollSkins.Apply(c, null);
                 }
                 catch { /* one control refusing must not stop the rest */ }
                 ApplyAllScrollbarThemes(c, dark);

@@ -602,9 +602,19 @@ namespace AutoClicker.Utils
 
         /// <summary>
         /// "auto" to detect the spoken language, or a Whisper language code ("en",
-        /// "es", …) to pin it for the whole session. Read once when a run starts.
+        /// "es", …) to pin it. Read when a run starts, and again before every step while it
+        /// runs, so a new choice applies within a step (TranscribeLoop rebuilds the processor).
         /// </summary>
-        public string PreferredLanguage { get; set; } = "auto";
+        public string PreferredLanguage
+        {
+            get => _preferredLanguage;
+            set => _preferredLanguage = value ?? "auto";
+        }
+        private volatile string _preferredLanguage = "auto";
+
+        // The language StartCore built the session's processor with, handed to TranscribeLoop (which
+        // clears it): the choice can change while the model loads, and the loop must know what it HAS.
+        private volatile string _builtLanguage;
 
         /// <summary>
         /// The language a run should BUILD its processor with: the pinned code when one
@@ -700,7 +710,8 @@ namespace AutoClicker.Utils
 
             if (string.IsNullOrEmpty(modelPath) || !System.IO.File.Exists(modelPath))
             {
-                RaiseStatus("No speech model is installed. Add one in Settings > Captions.");
+                // Where a model actually comes from: "Settings > Captions" is not a place.
+                RaiseStatus("No speech model is installed. Download one with Models… on the Captions tab.");
                 return false;
             }
 
@@ -711,7 +722,7 @@ namespace AutoClicker.Utils
             _starting = true;
             _cts = new CancellationTokenSource();
             CancellationToken token = _cts.Token;
-            RaiseStatus("Loading speech model\u2026");
+            RaiseStatus("Loading the speech model\u2026");
             Task.Run(() => StartCore(modelPath, token));
             return true;
         }
@@ -750,7 +761,9 @@ namespace AutoClicker.Utils
                 try
                 {
                     factory = WhisperFactory.FromPath(modelPath);
-                    processor = BuildProcessor(factory, modelPath, englishOnly ? "en" : StartLanguage());
+                    string builtLanguage = englishOnly ? "en" : StartLanguage();
+                    processor = BuildProcessor(factory, modelPath, builtLanguage);
+                    _builtLanguage = builtLanguage;
 
                     // Report which native engine actually loaded (GPU via Vulkan, or
                     // CPU fallback) — decides whether the big models run real-time.
@@ -820,7 +833,7 @@ namespace AutoClicker.Utils
                     }
                     else
                     {
-                        RaiseStatus("Couldn't load the speech model: " + ex.Message);
+                        RaiseStatus("Couldn't load the speech model: {0}", ex.Message);
                     }
                     try { processor?.Dispose(); } catch { }
                     try { factory?.Dispose(); } catch { }
@@ -977,7 +990,7 @@ namespace AutoClicker.Utils
                     : _runtimeDesc.StartsWith("Cpu", StringComparison.OrdinalIgnoreCase)
                         ? " \u00b7 CPU engine"
                         : " \u00b7 GPU engine (" + _runtimeDesc + ")";
-                RaiseStatus("Tempo Live Captions started \u00b7 " + captureDesc + engineTag);
+                RaiseStatus("Tempo Live Captions started \u00b7 {0}{1}", captureDesc, engineTag);
 
                 // Watchdog: if no audio arrives within a few seconds, say why instead
                 // of leaving the bar on "Listening…" forever.
@@ -985,7 +998,7 @@ namespace AutoClicker.Utils
             }
             catch (Exception ex)
             {
-                RaiseStatus("Couldn't start audio capture: " + ex.Message);
+                RaiseStatus("Couldn't start audio capture: {0}", ex.Message);
                 _starting = false;
                 Stop();
             }
@@ -1589,6 +1602,13 @@ namespace AutoClicker.Utils
         /// <summary>Friendly name of the device being captured, or null.</summary>
         public string CaptureDeviceName => _openDeviceName ?? _captureDeviceName;
 
+        /// <summary>
+        /// The device the capture was opened on — speaker or microphone — or null when NAudio's stock
+        /// capture chose it. Unlike <see cref="CaptureDeviceName"/> it never falls back to the speaker the
+        /// volume check last read, which in microphone mode is a different device.
+        /// </summary>
+        public string OpenedDeviceName => _openDeviceName;
+
         /// <summary>Endpoint id of the device being captured, or null when unknown.</summary>
         public string CaptureDeviceId => _openDeviceId ?? _captureDeviceId;
 
@@ -1654,9 +1674,9 @@ namespace AutoClicker.Utils
                 _audioElsewhereOn = loudest;
                 if (loudest != null && was == null)
                 {
-                    RaiseStatus("Sound is playing on “" + loudest + "”, but Tempo is listening to “" +
-                                (_captureDeviceName ?? "the default output") + "”. Pick that device under " +
-                                "Settings → Live Captions, or move the app's audio back.");
+                    RaiseStatus("Sound is playing on “{0}”, but Tempo is listening to “{1}”. Pick that device under " +
+                                "Settings → Live Captions, or move the app's audio back.",
+                                loudest, _captureDeviceName ?? "the default output");
                     Logger.Warn("[Captions] audio is on '" + loudest + "' but capture is on '" +
                                 (_captureDeviceName ?? "?") + "'.");
                 }
@@ -1856,9 +1876,9 @@ namespace AutoClicker.Utils
                             }
                             else if (_systemVolume >= 0f && _systemVolume < 0.08f)
                             {
-                                RaiseStatus("Your speaker volume is only " + Math.Round(_systemVolume * 100) +
-                                            "%, which is too faint to caption reliably. Turn it up, " +
-                                            "or switch the caption source to a microphone.");
+                                RaiseStatus("Your speaker volume is only {0}%, which is too faint to caption reliably. " +
+                                            "Turn it up, or switch the caption source to a microphone.",
+                                            Math.Round(_systemVolume * 100));
                             }
                             else
                             {
@@ -2490,15 +2510,24 @@ namespace AutoClicker.Utils
         {
             var langLock = new LanguageLock();
             // The language the CURRENT processor was built with — needed when the
-            // too-slow ladder rebuilds the processor (beam off) mid-session.
-            string activeLang = multilingual ? StartLanguage() : "en";
+            // too-slow ladder rebuilds the processor (beam off) mid-session. What StartCore
+            // built it with, not the choice now: a large model loads for up to ~20 s, and a
+            // language picked meanwhile must still be switched to below, not taken as done.
+            string activeLang = multilingual ? (_builtLanguage ?? StartLanguage()) : "en";
+            _builtLanguage = null;
+            // The language CHOICE that processor answers to ("auto" or a pinned code), so a new
+            // choice made while the session runs is noticed at the next step (see below).
+            string appliedPreference = activeLang;
             // A pinned language takes the lock out of the loop entirely: there is
             // nothing to detect, nothing to settle on, and nothing that can wander off
             // onto a burst of gunfire. It also shows as pinned rather than sitting on
             // "auto-detect" forever, which is what the readout did on game audio that
             // never produced four agreeing chunks in a row.
             if (!multilingual) { _langState = "English model"; }
-            else if (LanguagePinned) { _langState = "pinned: " + activeLang; }
+            else if (activeLang != "auto") { _langState = "pinned: " + activeLang; }
+            // Detection starts over with every run: the language the previous session locked onto
+            // ("locked: es") was shown from the first moment of the next one, before anything was heard.
+            else { _langState = "auto-detect"; }
             int windowSamples = (int)(WhisperSampleRate * WindowSeconds);
             int overlapSamples = (int)(WhisperSampleRate * OverlapSeconds);
             int stepSamples = windowSamples - overlapSamples;
@@ -2633,6 +2662,42 @@ namespace AutoClicker.Utils
                     Logger.Info(lowImpact
                         ? "[Captions] fullscreen game detected - low-impact captions (relaxed pace, beam off)."
                         : "[Captions] fullscreen closed - full caption quality restored.");
+                }
+
+                // A different spoken language picked while running (either language picker): the
+                // processor is rebuilt for it from the model already loaded — a moment, as the
+                // language lock's rebuilds are, not a model reload — and the session carries on.
+                // The pickers used to say "restart captions to apply", and restarting started a NEW
+                // session, which cleared the transcript. An English-only model has nothing to switch.
+                if (multilingual)
+                {
+                    string wantLang = StartLanguage();
+                    if (!string.Equals(wantLang, appliedPreference, StringComparison.Ordinal))
+                    {
+                        appliedPreference = wantLang;
+                        try
+                        {
+                            var fresh = BuildProcessor(factory, modelPath, wantLang, _beamActive);
+                            var old = holder.P;
+                            holder.P = fresh;
+                            try { old?.Dispose(); } catch { }
+                            // Whatever detection had settled on belonged to the old choice.
+                            langLock = new LanguageLock();
+                            activeLang = wantLang;
+                            english = wantLang == "en";
+                            _langState = wantLang == "auto" ? "auto-detect" : "pinned: " + wantLang;
+                            Logger.Info(wantLang == "auto"
+                                ? "[Captions] spoken language changed to auto-detect — applied without a restart."
+                                : "[Captions] spoken language changed to " + wantLang + " — applied without a restart.");
+                        }
+                        catch (Exception lex)
+                        {
+                            // Keep the current processor, and the state that describes it: the next
+                            // start of captions builds with the new choice. Not retried every step —
+                            // a rebuild that failed once would fill the log at the pace of the audio.
+                            Logger.Warn("[Captions] spoken language change failed: " + lex.Message);
+                        }
+                    }
                 }
 
                 bool quickStart = Environment.TickCount64 - lastEmitMs > 3000;
@@ -2865,8 +2930,8 @@ namespace AutoClicker.Utils
                     }
                     else if (!_systemMuted && _systemVolume >= 0f && _systemVolume < 0.08f && wasVol >= 0.08f)
                     {
-                        RaiseStatus("Speaker volume dropped to " + Math.Round(_systemVolume * 100) +
-                                    "% — too faint to caption reliably. Turn it up, or switch to a microphone.");
+                        RaiseStatus("Speaker volume dropped to {0}% — too faint to caption reliably. Turn it up, " +
+                                    "or switch to a microphone.", Math.Round(_systemVolume * 100));
                     }
                 }
                 else if (dropStrikes > 0 && lastDropTick != 0
@@ -3592,7 +3657,7 @@ namespace AutoClicker.Utils
                 catch (Exception ex)
                 {
                     Interlocked.Exchange(ref _decodeStartTick, 0);
-                    RaiseStatus("Transcription error: " + ex.Message);
+                    RaiseStatus("Transcription error: {0}", ex.Message);
                     try { await Task.Delay(500, token); } catch { }
                 }
             }
@@ -4813,10 +4878,27 @@ namespace AutoClicker.Utils
             try { TextRecognized?.Invoke(text); } catch { }
         }
 
-        private void RaiseStatus(string msg)
+        /// <summary>
+        /// The latest status in the reader's language: what the caption bar shows. <see cref="Status"/>
+        /// carries it in English — that is logged, and the host reads it to tell a hard failure from a
+        /// passing note. Read inside the Status handler, on the engine's thread, the way
+        /// LastCaptionSpokenAt is read inside TextRecognized's: the next status may have replaced it by
+        /// the time a UI thread looks.
+        /// </summary>
+        public string LastStatusShown => _lastStatusShown;
+        private volatile string _lastStatusShown;
+
+        /// <param name="format">English, with {0}… where the values go: logged as it is, and translated
+        /// for the screen. These used to reach the caption bar in English in every language.</param>
+        private void RaiseStatus(string format, params object[] args)
         {
-            Logger.Info("[TempoTranscriber] " + msg);
-            try { Status?.Invoke(msg); } catch { }
+            bool values = args != null && args.Length > 0;
+            string english = values ? string.Format(System.Globalization.CultureInfo.InvariantCulture, format, args) : format;
+            string shown = english;
+            try { shown = values ? Localization.F(format, args) : Localization.T(format); } catch { }
+            Logger.Info("[TempoTranscriber] " + english);
+            _lastStatusShown = shown;
+            try { Status?.Invoke(english); } catch { }
         }
 
         public void Dispose()

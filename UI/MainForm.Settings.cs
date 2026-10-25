@@ -40,6 +40,9 @@ namespace AutoClicker.UI
         private Button _fullGifClearBtn;
         private SmoothTrackBar _bgDimTrack;
         private Label _bgDimLabel;
+
+        /// <summary>The Dim a fresh install starts with (AppSettings.BackgroundDim); double-click the slider to return to it.</summary>
+        private const int DefaultBackgroundDim = 55;
         // Read-only summary of the display Tempo is on, in the Window & Display card.
         private Label _displayInfoLabel;
         // Tab or its own window, for the Roblox Account Manager.
@@ -291,7 +294,18 @@ namespace AutoClicker.UI
                 _bgDimLabel.Text = _bgDimTrack.Value + "%";
                 if (_suppressSettingsEvents || _settings == null) { return; }
                 _settings.BackgroundDim = _bgDimTrack.Value;
-                ApplyBackgroundGif();     // live: re-apply the uniform dim everywhere
+                // Live and cheap: the picture keeps playing and only the scrim over it changes.
+                // (ApplyBackgroundGif here reloaded the image on every step of a drag.)
+                ApplyBackgroundDim();
+            };
+            // Double-click: back to where it starts.
+            _bgDimTrack.DoubleClick += (s, e) =>
+            {
+                if (_suppressSettingsEvents || _settings == null) { return; }
+                _bgDimTrack.Value = DefaultBackgroundDim;
+                _bgDimLabel.Text = DefaultBackgroundDim + "%";
+                _settings.BackgroundDim = DefaultBackgroundDim;
+                ApplyBackgroundDim();
             };
             appearance.Controls.Add(_bgDimTrack);
             appearance.Controls.Add(_bgDimLabel);
@@ -783,11 +797,13 @@ namespace AutoClicker.UI
             // Pause-based speaker-turn labels ("Speaker 1:", "Speaker 2:") on the bar.
             _captionSpeakerCheck = UiFactory.Check("Label speakers (Speaker 1 / 2)", 420, 64);
             _captionSpeakerCheck.AutoSize = true;
+            _captionSpeakerCheck.CheckedChanged += (sSp, eSp) => OnCaptionSwitchChanged();
             captions.Controls.Add(_captionSpeakerCheck);
 
             // Auto-start captions when a video site or game is playing with sound.
             _captionAutoStartCheck = UiFactory.Check("Auto-start for videos && games", 420, 30);
             _captionAutoStartCheck.AutoSize = true;
+            _captionAutoStartCheck.CheckedChanged += (sAs, eAs) => OnCaptionSwitchChanged();
             captions.Controls.Add(_captionAutoStartCheck);
 
             // Step 2 (Tempo engine only): pick the speech model + see if it's ready.
@@ -833,11 +849,13 @@ namespace AutoClicker.UI
             // Experimental: on-device face/mouth analysis to drive speaker labels.
             _captionFaceCheck = UiFactory.Check("AI face && mouth analysis (experimental)", 16, 156);
             _captionFaceCheck.AutoSize = true;
+            _captionFaceCheck.CheckedChanged += (sFa, eFa) => OnCaptionSwitchChanged();
             captions.Controls.Add(_captionFaceCheck);
 
             // Opt-in transcript files (writes spoken content to disk, hence opt-in).
             _captionTranscriptCheck = UiFactory.Check("Save transcripts to disk", 420, 156);
             _captionTranscriptCheck.AutoSize = true;
+            _captionTranscriptCheck.CheckedChanged += (sTr, eTr) => OnCaptionSwitchChanged();
             captions.Controls.Add(_captionTranscriptCheck);
 
             // Appearance of the caption text (applies to both sources). Every change shows on the caption
@@ -2728,6 +2746,35 @@ namespace AutoClicker.UI
         {
             try { Persistence.SettingsManager.Save(_settings); }
             catch (Exception ex) { Utils.Logger.Swallow("PersistNotify", ex); }
+        }
+
+        /// <summary>
+        /// "Label speakers", "AI face &amp; mouth analysis", "Auto-start" and "Save transcripts to disk" take
+        /// effect the moment they are ticked, and are kept at once — as the caption switches beside them
+        /// (lyrics, own voice, the bar) already were. They waited for Save Settings: until then the Captions
+        /// tab, which reads the settings, said the opposite of these boxes (its Speakers card offered to
+        /// "Turn on speaker labels" under a ticked box, and its Clear went by the old "save transcripts"
+        /// value), and leaving the page without saving lost the change.
+        /// </summary>
+        private void OnCaptionSwitchChanged()
+        {
+            if (_suppressSettingsEvents || _settings == null) { return; }
+            try
+            {
+                bool labels = _captionSpeakerCheck != null ? _captionSpeakerCheck.Checked : _settings.CaptionSpeakerTurns;
+                bool faces = _captionFaceCheck != null ? _captionFaceCheck.Checked : _settings.CaptionFaceAnalysis;
+                bool speakersChanged = labels != _settings.CaptionSpeakerTurns || faces != _settings.CaptionFaceAnalysis;
+                _settings.CaptionSpeakerTurns = labels;
+                _settings.CaptionFaceAnalysis = faces;
+                if (_captionAutoStartCheck != null) { _settings.CaptionAutoStart = _captionAutoStartCheck.Checked; }
+                if (_captionTranscriptCheck != null) { _settings.CaptionSaveTranscripts = _captionTranscriptCheck.Checked; }
+                PersistNotificationSettings();   // the shared "save settings now" helper
+                // A running session picks the speaker switches up now (and keeps its speakers when only
+                // the face switch moved — see ApplySpeakerTurnsLive).
+                if (speakersChanged) { ApplySpeakerTurnsLive(); }
+                if (IsCaptionsTabVisible()) { RefreshCaptionsTab(); }
+            }
+            catch (Exception ex) { Utils.Logger.Warn("[Captions] caption switch failed: " + ex.Message); }
         }
 
         /// <summary>

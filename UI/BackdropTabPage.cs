@@ -42,6 +42,12 @@ namespace AutoClicker.UI
         // the animation's frame timing isn't disturbed by scroll-driven repaints.
         private Bitmap _composed;
 
+        // The same without the scrim: base + cover-scaled frame. The high-quality scaling is the
+        // expensive step, and the Dim slider changes only the scrim — so a dim change re-composes
+        // from this (a blit and a fill) instead of rescaling the whole image on every step of a drag.
+        private Bitmap _scaled;
+        private bool _scaleDirty = true;
+
         public BackdropTabPage(string text) : base(text)
         {
             // Smooth scrolling WITHOUT compositing.
@@ -102,6 +108,12 @@ namespace AutoClicker.UI
         /// </summary>
         public void SetBackdrop(Image img, int dimPercent)
         {
+            // The same picture with a new Dim: only the scrim changes (see SetDim).
+            if (img != null && ReferenceEquals(img, _gif))
+            {
+                SetDim(dimPercent);
+                return;
+            }
             _gif = img;
             _dimPercent = dimPercent;
             if (!ShouldShow)
@@ -109,6 +121,21 @@ namespace AutoClicker.UI
                 BackColor = _base;
             }
             InvalidateComposite();
+            Invalidate();
+        }
+
+        /// <summary>
+        /// A new readability scrim over the same picture — the Dim slider, many times a second while
+        /// it is dragged. Re-composes from the already-scaled frame instead of rescaling the image.
+        /// </summary>
+        public void SetDim(int dimPercent)
+        {
+            if (dimPercent == _dimPercent)
+            {
+                return;
+            }
+            _dimPercent = dimPercent;
+            _composeDirty = true;
             Invalidate();
         }
 
@@ -138,13 +165,15 @@ namespace AutoClicker.UI
             {
                 return;
             }
+            _scaleDirty = true;      // a new frame: rescale it
             _composeDirty = true;
             Invalidate();
         }
 
-        /// <summary>Marks the cached composite stale so the next paint rebuilds it.</summary>
+        /// <summary>Marks the cached composite stale so the next paint rebuilds it (frame and scrim).</summary>
         private void InvalidateComposite()
         {
+            _scaleDirty = true;
             _composeDirty = true;
         }
 
@@ -165,7 +194,7 @@ namespace AutoClicker.UI
             }
 
             bool sizeChanged = _composed == null || _composed.Width != w || _composed.Height != h;
-            if (!sizeChanged && !_composeDirty)
+            if (!sizeChanged && !_composeDirty && !_scaleDirty)
             {
                 return;
             }
@@ -175,35 +204,50 @@ namespace AutoClicker.UI
                 _composed?.Dispose();
                 _composed = new Bitmap(w, h);
             }
-
-            using (Graphics g = Graphics.FromImage(_composed))
+            if (_scaled == null || _scaled.Width != w || _scaled.Height != h)
             {
-                var rect = new Rectangle(0, 0, w, h);
-                using (var b = new SolidBrush(_base))
-                {
-                    g.FillRectangle(b, rect);
-                }
+                _scaled?.Dispose();
+                _scaled = new Bitmap(w, h);
+                _scaleDirty = true;
+            }
 
-                // Draw this page's ALIGNED slice of the window-spanning image: cover-fit
-                // the image over the whole FORM, then offset into it by the page's own
-                // position, so the slice is continuous with the header/footer/sidebar.
-                Form f = FindForm();
-                if (f != null)
+            var rect = new Rectangle(0, 0, w, h);
+            if (_scaleDirty)
+            {
+                using (Graphics g = Graphics.FromImage(_scaled))
                 {
-                    Size fc = f.ClientSize;
-                    Rectangle cover = WindowBackdrop.CoverRect(_gif.Size, fc);
-                    if (!cover.IsEmpty)
+                    using (var b = new SolidBrush(_base))
                     {
-                        Point off;
-                        try { off = f.PointToClient(PointToScreen(Point.Empty)); }
-                        catch { off = Point.Empty; }
-                        try { ImageAnimator.UpdateFrames(_gif); } catch { }
-                        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                        g.DrawImage(_gif, new Rectangle(cover.X - off.X, cover.Y - off.Y, cover.Width, cover.Height));
+                        g.FillRectangle(b, rect);
+                    }
+
+                    // Draw this page's ALIGNED slice of the window-spanning image: cover-fit
+                    // the image over the whole FORM, then offset into it by the page's own
+                    // position, so the slice is continuous with the header/footer/sidebar.
+                    Form f = FindForm();
+                    if (f != null)
+                    {
+                        Size fc = f.ClientSize;
+                        Rectangle cover = WindowBackdrop.CoverRect(_gif.Size, fc);
+                        if (!cover.IsEmpty)
+                        {
+                            Point off;
+                            try { off = f.PointToClient(PointToScreen(Point.Empty)); }
+                            catch { off = Point.Empty; }
+                            try { ImageAnimator.UpdateFrames(_gif); } catch { }
+                            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                            g.DrawImage(_gif, new Rectangle(cover.X - off.X, cover.Y - off.Y, cover.Width, cover.Height));
+                        }
                     }
                 }
+                _scaleDirty = false;
+            }
 
+            // The scrim over the scaled frame — all a Dim change has to redo.
+            using (Graphics g = Graphics.FromImage(_composed))
+            {
+                g.DrawImageUnscaled(_scaled, 0, 0);
                 int a = Math.Max(0, Math.Min(95, _dimPercent)) * 255 / 100;
                 using (var s = new SolidBrush(Color.FromArgb(a, _base)))
                 {
@@ -355,6 +399,8 @@ namespace AutoClicker.UI
             {
                 _composed?.Dispose();
                 _composed = null;
+                _scaled?.Dispose();
+                _scaled = null;
             }
             base.Dispose(disposing);
         }
