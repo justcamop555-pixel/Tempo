@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text;
 using AutoClicker.Utils;
 
 namespace AutoClicker.Persistence
@@ -92,6 +93,14 @@ namespace AutoClicker.Persistence
         /// Hence the generation behind. It is the same bargain Logger already makes
         /// when it rotates the log to ".1", and it turns "lose everything" into "lose
         /// the last save".
+        ///
+        /// The ".1" alone could not keep that promise, though. It is copied in the same
+        /// instant the new file is written, and was no nearer the disk than the new file
+        /// was, so the freeze that zeroed one could zero both. What closes the hole is
+        /// <see cref="WriteToDisk"/>: the new contents are on the disk itself, not just
+        /// in Windows' cache, BEFORE the rename makes them the real file. A freeze now
+        /// leaves the old file or the new one, each complete. The ".1" stays as the second
+        /// line of defence, for damage that does not come from a freeze.
         /// </summary>
         public static bool WriteAtomic(string path, string contents)
         {
@@ -105,7 +114,7 @@ namespace AutoClicker.Persistence
                 }
 
                 string temp = path + ".tmp";
-                File.WriteAllText(temp, contents);
+                WriteToDisk(temp, contents);
 
                 // Keep the outgoing version before it is replaced. Copy rather than
                 // move: a move would leave the destination missing for an instant,
@@ -133,6 +142,26 @@ namespace AutoClicker.Persistence
             {
                 Logger.Error("[Store] atomic write failed for " + path, ex);
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Writes <paramref name="contents"/> as UTF-8 without a BOM - byte for byte what
+        /// File.WriteAllText wrote - and returns only once those bytes are on the disk.
+        ///
+        /// File.WriteAllText returns as soon as Windows has the data in its cache, and the
+        /// cache reaches the disk a few seconds later. The rename that follows is journaled
+        /// at once, so a freeze in between left a file of the right length holding nothing
+        /// but zeros. Flush(true) is FlushFileBuffers: a few milliseconds for a file this
+        /// size, once per save.
+        /// </summary>
+        private static void WriteToDisk(string path, string contents)
+        {
+            byte[] bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(contents ?? string.Empty);
+            using (var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                stream.Write(bytes, 0, bytes.Length);
+                stream.Flush(flushToDisk: true);
             }
         }
 

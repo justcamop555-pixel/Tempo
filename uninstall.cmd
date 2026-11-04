@@ -74,6 +74,10 @@ set "RUNKEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
 set "DATA_DIR=%LOCALAPPDATA%\AutoClicker"
 set "LOG=%TEMP%\tempo-uninstall-log.txt"
 
+REM  Paths are printed as !DATA_DIR!, never with percent signs. A percent-sign variable inside
+REM  ( ... ) is pasted in before cmd reads the block, so a ")" in the account name - "Sam (Home)" -
+REM  ended the block early and stopped this script with "... was unexpected at this time".
+
 > "%LOG%" echo Tempo uninstall log  -  %DATE% %TIME%
 
 echo(
@@ -91,7 +95,7 @@ REM ---------------------------------------------------------------------------
 REM  The program is TempoClicker.exe since the Discord rename; an install from before is Tempo.exe.
 if not exist "%INSTALL_DIR%\TempoClicker.exe" if not exist "%INSTALL_DIR%\Tempo.exe" if not exist "%SM_LNK%" (
   echo   Tempo doesn't appear to be installed for your account.
-  echo   ^(Looked in: %INSTALL_DIR%^)
+  echo   ^(Looked in: !INSTALL_DIR!^)
   echo(
   if defined OPT_PURGE (
     if exist "%DATA_DIR%" (
@@ -104,7 +108,7 @@ if not exist "%INSTALL_DIR%\TempoClicker.exe" if not exist "%INSTALL_DIR%\Tempo.
   ) else (
     if exist "%DATA_DIR%" (
       echo   Your saved settings still exist in:
-      echo     %DATA_DIR%
+      echo     !DATA_DIR!
       echo   Run  uninstall.cmd /purge  to delete those too.
     ) else (
       echo   Nothing to remove.
@@ -162,6 +166,9 @@ REM  Decide what to do with saved settings/profiles.
 REM    flags win; otherwise ask (unless silent, which keeps data).
 REM ---------------------------------------------------------------------------
 set "DOPURGE="
+set "DOBACKUP="
+set "KEEP="
+set "BK="
 if defined OPT_PURGE set "DOPURGE=1"
 if defined OPT_KEEP set "DOPURGE="
 if not defined OPT_PURGE if not defined OPT_KEEP if not defined OPT_SILENT (
@@ -169,15 +176,14 @@ if not defined OPT_PURGE if not defined OPT_KEEP if not defined OPT_SILENT (
   if exist "%DATA_DIR%" (
     echo   Your saved settings, profiles, and any downloaded speech model
     echo   ^(can be 100+ MB^) are in:
-    echo     %DATA_DIR%
+    echo     !DATA_DIR!
     set /p KEEP=  Also delete all of that? [Y/N] 
     if /i "!KEEP!"=="Y" set "DOPURGE=1"
   )
 )
 
+REM  Offer (or honour /backup for) a safety zip on the Desktop first.
 if defined DOPURGE (
-  REM Offer (or honour /backup for) a safety zip on the Desktop first.
-  set "DOBACKUP="
   if defined OPT_BACKUP set "DOBACKUP=1"
   if not defined OPT_BACKUP if not defined OPT_SILENT (
     if exist "%DATA_DIR%" (
@@ -185,19 +191,37 @@ if defined DOPURGE (
       if /i "!BK!"=="Y" set "DOBACKUP=1"
     )
   )
-  if defined DOBACKUP (
-    where powershell >nul 2>&1
-    if not errorlevel 1 (
-      set "BKZIP=%USERPROFILE%\Desktop\Tempo-settings-backup.zip"
-      if exist "!BKZIP!" del /f /q "!BKZIP!" >nul 2>&1
-      REM The signed-in browser profiles stay out of the zip: each is a live Roblox session outside the vault.
-      powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = @(Get-ChildItem -LiteralPath '%DATA_DIR%' -Force | Where-Object { $_.Name -ne 'accountbrowsers' } | ForEach-Object { $_.FullName }); if ($p.Count) { Compress-Archive -LiteralPath $p -DestinationPath '!BKZIP!' -Force }" >nul 2>&1
-      if exist "!BKZIP!" (
-        echo   Backup saved to Desktop: Tempo-settings-backup.zip
-        >> "%LOG%" echo Backup : !BKZIP!
-      )
-    )
+)
+
+REM  A backup that was asked for and not made means the data STAYS. The folder used to be
+REM  deleted whether or not the zip appeared, and the zip failed silently for an account name
+REM  with an apostrophe in it (O'Brien: the path was pasted inside PowerShell's '...' quotes and
+REM  ended them early), for a PC without PowerShell, and for a Desktop that OneDrive had moved
+REM  (the zip went to the profile's own Desktop folder, not the Desktop found above). The paths
+REM  now reach PowerShell as environment variables, the zip goes to DESK_DIR, and the folder is
+REM  deleted only when PowerShell reports success AND the zip is really there - a PowerShell that
+REM  is blocked, broken or a stand-in can exit 0 without writing anything.
+if defined DOBACKUP if exist "%DATA_DIR%" (
+  set "BKZIP=!DESK_DIR!\Tempo-settings-backup.zip"
+  if exist "!BKZIP!" del /f /q "!BKZIP!" >nul 2>&1
+  set "TEMPO_BACKUP_FROM=!DATA_DIR!"
+  set "TEMPO_BACKUP_TO=!BKZIP!"
+  set "BACKUP_OK="
+  REM The signed-in browser profiles stay out of the zip: each is a live Roblox session outside the vault.
+  where powershell >nul 2>&1 && powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; try { $p = @(Get-ChildItem -LiteralPath $env:TEMPO_BACKUP_FROM -Force | Where-Object { $_.Name -ne 'accountbrowsers' } | ForEach-Object { $_.FullName }); if ($p.Count) { Compress-Archive -LiteralPath $p -DestinationPath $env:TEMPO_BACKUP_TO -Force }; exit 0 } catch { Remove-Item -LiteralPath $env:TEMPO_BACKUP_TO -Force -ErrorAction SilentlyContinue; exit 1 }" >nul 2>&1
+  if !errorlevel! equ 0 if exist "!BKZIP!" set "BACKUP_OK=1"
+  if defined BACKUP_OK (
+    echo   Backup saved to Desktop: Tempo-settings-backup.zip
+    >> "%LOG%" echo Backup : !BKZIP!
+  ) else (
+    if exist "!BKZIP!" del /f /q "!BKZIP!" >nul 2>&1
+    set "DOPURGE="
+    echo   No backup zip could be made, so your saved settings were NOT deleted.
+    >> "%LOG%" echo Backup : FAILED - data kept
   )
+)
+
+if defined DOPURGE (
   if exist "%DATA_DIR%" rd /s /q "%DATA_DIR%" >nul 2>&1
   echo   Saved settings removed.
   >> "%LOG%" echo Data   : purged
@@ -206,7 +230,7 @@ if defined DOPURGE (
   REM outside the encrypted vault, which is why turning the Account Manager off deletes them too.
   if exist "%DATA_DIR%\accountbrowsers" rd /s /q "%DATA_DIR%\accountbrowsers" >nul 2>&1
   echo   Saved settings were kept in:
-  echo     %DATA_DIR%
+  echo     !DATA_DIR!
   echo   ^(Run  uninstall.cmd /purge  later if you want to remove them too.^)
   >> "%LOG%" echo Data   : kept
 )
@@ -214,13 +238,22 @@ if defined DOPURGE (
 echo(
 echo   Removing program files. You can close this window.
 echo(
->> "%LOG%" echo Files  : scheduling removal of %INSTALL_DIR%
+>> "%LOG%" echo Files  : scheduling removal of !INSTALL_DIR!
 
 REM  This script lives inside the folder being deleted, so hand the final
 REM  removal to a detached cmd that waits for us to exit, then deletes the
 REM  folder from a different working directory. Use timeout (with a ping
 REM  fallback, in case timeout can't run without a console) for the delay.
-start "" /b cmd /c "cd /d %SystemRoot% & (timeout /t 2 /nobreak >nul 2>&1 || ping -n 3 127.0.0.1 >nul 2>&1) & rd /s /q ""%INSTALL_DIR%"""
+REM
+REM  The folder reaches that cmd as an environment variable that IT expands, inside
+REM  quotes it keeps. It used to be written in between doubled quotes, but cmd /c strips
+REM  only the outer pair of quotes, and doubled quotes escape nothing in cmd - they cancel
+REM  out. The path arrived unquoted, so a space in the account name (C:\Users\John Smith)
+REM  split it in two: rd was handed C:\Users\John and Smith\..., both failed, and the
+REM  program folder stayed behind. The doubled percent signs below reach that cmd as
+REM  single ones, so it is the one that expands the variable.
+set "TEMPO_UNINSTALL_DIR=!INSTALL_DIR!"
+start "" /b cmd /c "cd /d %SystemRoot% & (timeout /t 2 /nobreak >nul 2>&1 || ping -n 3 127.0.0.1 >nul 2>&1) & rd /s /q "%%TEMPO_UNINSTALL_DIR%%""
 
 "%SystemRoot%\System32\timeout.exe" /t 3 >nul
 endlocal

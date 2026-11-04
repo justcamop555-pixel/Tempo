@@ -68,6 +68,10 @@ if defined BADARG (
 )
 
 set "SRC=%~dp0"
+REM  SRC is printed as !SRC!, never with percent signs: it is the folder this was unzipped into,
+REM  and a download saved twice unzips to a folder named like "Tempo (1)". A percent-sign variable
+REM  inside ( ... ) is pasted in before cmd reads the block, so that ")" ended the block early and
+REM  the installer stopped with "... was unexpected at this time" before installing anything.
 REM  Neither the folder nor the program is named "Tempo": Discord's game detection
 REM  lists the Steam game "Tempo" (publisher Aestronauts) as tempo\tempo.exe and
 REM  shows anyone running a matching program as playing it. Renaming only the
@@ -94,7 +98,7 @@ set "REGKEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Tempo"
 set "LOG=%TEMP%\tempo-install-log.txt"
 
 > "%LOG%" echo Tempo install log  -  %DATE% %TIME%
->> "%LOG%" echo Source : %SRC%
+>> "%LOG%" echo Source : !SRC!
 >> "%LOG%" echo Target : %INSTALL_DIR%
 
 echo(
@@ -129,8 +133,8 @@ if not defined SRCEXE (
   echo       or copy install.cmd into bin\publish\^<rid^>\ and run it there.
   echo(
   echo   Looked under:
-  echo     %SRC%
-  echo     %SRC%bin\publish\
+  echo     !SRC!
+  echo     !SRC!bin\publish\
   echo(
   >> "%LOG%" echo RESULT : FAILED - Tempo.exe not found
   if not defined OPT_SILENT pause
@@ -140,9 +144,9 @@ if not defined SRCEXE (
 
 REM Adopt the folder that actually contains Tempo.exe as the copy source.
 for %%F in ("%SRCEXE%") do set "SRC=%%~dpF"
->> "%LOG%" echo Source : resolved to %SRC%
+>> "%LOG%" echo Source : resolved to !SRC!
 echo   Found Tempo.exe in:
-echo     %SRC%
+echo     !SRC!
 echo(
 
 if not "%PROCESSOR_ARCHITECTURE%"=="AMD64" if not "%PROCESSOR_ARCHITEW6432%"=="AMD64" if not "%PROCESSOR_ARCHITECTURE%"=="ARM64" (
