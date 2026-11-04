@@ -5,17 +5,17 @@ using System.Text;
 namespace AutoClicker.Utils
 {
     /// <summary>
-    /// Answers one question, cheaply: is a fullscreen game (or fullscreen video)
-    /// in the foreground RIGHT NOW? Used to switch the caption stack into a
-    /// low-impact mode while someone is playing — captions during games were
-    /// measurably costing FPS (GPU inference bursts, per-frame window captures,
-    /// 30 fps overlay animation), and every one of those can afford to ease off
-    /// exactly while a game needs the machine.
+    /// Answers one question, cheaply: is a fullscreen GAME in the foreground RIGHT NOW? Used to switch the caption
+    /// stack into a low-impact mode while someone is playing — captions during games were measurably costing FPS
+    /// (GPU inference bursts, per-frame window captures, 30 fps overlay animation), and every one of those can afford
+    /// to ease off exactly while a game needs the machine.
     ///
-    /// Detection: the foreground window's rect covers its whole monitor (the
-    /// borderless-fullscreen signature every modern game and fullscreen video
-    /// player uses), excluding the shell and Tempo itself. Polls every 2 s while
-    /// running — negligible cost, and only runs while captions are active.
+    /// Detection: the foreground window covers its whole monitor and is not an app window that merely fills it
+    /// (<see cref="IsFullscreen"/>) — the borderless-fullscreen signature every modern game and video player uses —
+    /// excluding the desktop and Tempo itself, and, for game mode, browsers, video players and slideshows
+    /// (<see cref="NotGames"/>), which are full screen without being games. Start, search, Game Bar or a snip in
+    /// front change nothing either way (<see cref="Overlays"/>). Polls every 2 s while running — negligible cost,
+    /// and only runs while captions are active.
     /// </summary>
     public sealed class GamePresence : IDisposable
     {
@@ -25,6 +25,17 @@ namespace AutoClicker.Utils
         [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
         [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr mon, ref MONITORINFO mi);
         [DllImport("shell32.dll")] private static extern int SHQueryUserNotificationState(out int state);
+        [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr h, int index);
+        [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr h, out RECT r);
+        [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr h, ref POINT p);
+        [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumChildProc callback, IntPtr lParam);
+
+        private delegate bool EnumChildProc(IntPtr h, IntPtr lParam);
+
+        private const int GWL_STYLE = -16;
+        private const int WS_CAPTION = 0x00C00000;   // a title bar: WS_BORDER | WS_DLGFRAME
+        private const int WS_THICKFRAME = 0x00040000;
+        private const int WS_MAXIMIZE = 0x01000000;
 
         // The shell's own "a Direct3D app owns the display EXCLUSIVELY" signal —
         // the same one Windows uses to suppress its notification toasts. Games in
@@ -117,7 +128,14 @@ namespace AutoClicker.Utils
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct RECT { public int L, T, R, B; }
+        internal struct RECT
+        {
+            public int L, T, R, B;
+            public RECT(int l, int t, int r, int b) { L = l; T = t; R = r; B = b; }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT { public int X, Y; }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct MONITORINFO
@@ -130,11 +148,88 @@ namespace AutoClicker.Utils
 
         private const uint MONITOR_DEFAULTTONEAREST = 2;
 
-        private static readonly string[] IgnoreProcesses =
+        // The desktop and Tempo: nobody is playing. "tempoclicker" is the installed exe's name (the Discord
+        // rename): "tempo" alone let Tempo's own screen-sized windows — a maximised main window, the point
+        // picker — count as a game. Tempo is also skipped by process id, whatever it is called.
+        private static readonly string[] IgnoreProcesses = { "explorer", "tempo", "tempoclicker" };
+
+        /// <summary>
+        /// Shell surfaces that open OVER whatever is in front: Start, search, the action centre, the touch keyboard,
+        /// a snip, Game Bar (Win+G, itself a screen-sized window), the lock screen. They change nothing either way —
+        /// Game Bar on the desktop is not a game, and Game Bar over a game must not end game mode once it has been
+        /// open for the three polls an exit takes.
+        /// </summary>
+        private static readonly string[] Overlays =
         {
-            "explorer", "tempo", "searchhost", "shellexperiencehost", "lockapp",
-            "startmenuexperiencehost", "dwm"
+            "searchhost", "searchapp", "shellexperiencehost", "startmenuexperiencehost", "textinputhost", "lockapp",
+            "dwm", "screenclippinghost", "snippingtool", "gamebar", "gamebarftserver"
         };
+
+        private static readonly int OwnPid = System.Diagnostics.Process.GetCurrentProcess().Id;
+
+        /// <summary>
+        /// Full screen but not a GAME: a browser (YouTube full screen, F11), a video player, a slideshow, a call, a
+        /// viewer. They still hold notification cards (ShouldHoldNotifications) — but game mode slowed the captions
+        /// down, turned beam search off and stopped re-raising the bar over exactly what people watch WITH captions,
+        /// and said "Game mode" over a video. A Store app is named by its own process, not ApplicationFrameHost
+        /// (<see cref="FrontWindow"/>), so Movies &amp; TV is a player and a Store game is still a game.
+        /// </summary>
+        private static readonly string[] NotGames =
+        {
+            "chrome", "msedge", "firefox", "opera", "opera_gx", "brave", "vivaldi", "librewolf", "waterfox", "arc",
+            "yandex", "iexplore", "thorium", "chromium", "zen", "msedgewebview2",
+            "vlc", "mpc-hc", "mpc-hc64", "mpc-be", "mpc-be64", "potplayer", "potplayermini", "potplayermini64",
+            "wmplayer", "mpv", "mpvnet", "kodi", "plex", "plexhtpc", "jellyfinmediaplayer", "stremio", "smplayer",
+            "kmplayer", "kmplayer64", "gom", "video.ui", "microsoft.media.player", "netflix", "primevideo",
+            "powerpnt", "pptview", "soffice.bin", "teams", "ms-teams", "zoom", "discord", "telegram", "obs64", "obs32",
+            "spotify", "acrord32", "acrobat", "sumatrapdf", "photos", "microsoft.photos", "i_view64", "i_view32",
+            "imageglass", "code", "windowsterminal"
+        };
+
+        /// <summary>True for a full-screen app that is not a game (see <see cref="NotGames"/>).</summary>
+        internal static bool IsNotAGame(string process)
+        {
+            if (string.IsNullOrEmpty(process)) { return false; }
+            foreach (string n in NotGames)
+            {
+                if (process == n) { return true; }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The full-screen test on its parts: the window covers its whole monitor (within a hair) — and is not an app
+        /// window that merely fills it. A MAXIMISED window hangs a few pixels past every edge, so on a monitor with no
+        /// taskbar — a second screen, or an auto-hidden taskbar — a plain maximised browser or chat app covered "the
+        /// whole monitor" and was a game; a maximised window with a frame (a title bar, or a resizing border, as the
+        /// custom-drawn ones have) is an app. A window sized to the monitor with its title bar showing is too. A game
+        /// that keeps the title-bar style but pushes the bar off screen covers it with its client area, and counts.
+        /// </summary>
+        internal static bool IsFullscreen(RECT window, RECT client, RECT monitor, int style)
+        {
+            bool framed = (style & WS_CAPTION) == WS_CAPTION || (style & WS_THICKFRAME) != 0;
+            if ((style & WS_MAXIMIZE) != 0 && framed) { return false; }
+            if (!Covers(window, monitor)) { return false; }
+            return (style & WS_CAPTION) != WS_CAPTION || Covers(client, monitor);
+        }
+
+        private static bool Covers(RECT r, RECT m) => r.L <= m.L + 2 && r.T <= m.T + 2 && r.R >= m.R - 2 && r.B >= m.B - 2;
+
+        private enum Front { No, Fullscreen, Overlay }
+
+        /// <summary>The app game mode was entered for (a process name, never a window title), or null.</summary>
+        public string FullscreenApp { get; private set; }
+
+        /// <summary>The process game mode was entered for, 0 when none — which Roblox client, so the host can name the
+        /// game it is in.</summary>
+        public int FullscreenPid { get; private set; }
+
+        /// <summary>
+        /// Set by the host: true when a full-screen app is KNOWN to be at its own menu, not in a game — Roblox on its
+        /// home screen (its log says so). Roblox draws its home screen with the game engine, full screen, and game mode
+        /// came on over a menu. It answers false whenever it can't tell, so a game is never missed.
+        /// </summary>
+        public static Func<string, int, bool> AtMenu;
 
         private System.Threading.Timer _timer;
         private volatile bool _fullscreen;
@@ -209,12 +304,20 @@ namespace AutoClicker.Utils
             }
             try
             {
-                bool now = DetectFullscreen();
-                if (now)
+                // A GAME: full screen, and not a browser, a player or a slideshow (NotGames), nor a game at its menu.
+                Front front = FrontWindow(out string app, out uint pid);
+                bool now = front == Front.Fullscreen && !IsNotAGame(app) && !IsAtMenu(app, (int)pid);
+                if (front == Front.Overlay)
+                {
+                    // Start, search or Game Bar over whatever was in front: the state stays as it is.
+                }
+                else if (now)
                 {
                     _exitStreak = 0;
                     if (!_fullscreen)
                     {
+                        FullscreenApp = app;
+                        FullscreenPid = (int)pid;
                         _fullscreen = true;
                         try { FullscreenChanged?.Invoke(true); } catch { }
                     }
@@ -276,37 +379,96 @@ namespace AutoClicker.Utils
             }
         }
 
-        private static bool DetectFullscreen()
-        {
-            IntPtr h = GetForegroundWindow();
-            if (h == IntPtr.Zero) { return false; }
+        /// <summary>Is ANY full-screen app in front — a game, a video, a slideshow? (Notification cards wait for all of them.)</summary>
+        private static bool DetectFullscreen() => FrontWindow(out _, out _) == Front.Fullscreen;
 
-            GetWindowThreadProcessId(h, out uint pid);
-            if (pid == 0) { return false; }
-            string name = "";
+        /// <summary>The host's <see cref="AtMenu"/>, never throwing: a failed look is "in a game".</summary>
+        private static bool IsAtMenu(string app, int pid)
+        {
+            try { return AtMenu != null && app != null && AtMenu(app, pid); }
+            catch { return false; }
+        }
+
+        /// <summary>What is in front: a full-screen window (<see cref="IsFullscreen"/>) and <paramref name="process"/>,
+        /// whose it is (<paramref name="pid"/> its process); a shell overlay (<see cref="Overlays"/>); or neither.</summary>
+        private static Front FrontWindow(out string process, out uint pid) => Judge(GetForegroundWindow(), out process, out pid);
+
+        /// <summary>
+        /// The process name of the full-screen app in front (game mode's own test), or null. For anti-AFK, which never
+        /// takes the focus from one: a game in exclusive full screen minimises the moment it loses it.
+        /// </summary>
+        internal static string FullscreenAppInFront() => FrontWindow(out string process, out _) == Front.Fullscreen ? process : null;
+
+        /// <summary><see cref="FrontWindow"/> for any window (the tests judge windows that are not in front).</summary>
+        private static Front Judge(IntPtr h, out string process) => Judge(h, out process, out _);
+
+        private static Front Judge(IntPtr h, out string process, out uint pid)
+        {
+            process = null;
+            pid = 0;
+            if (h == IntPtr.Zero) { return Front.No; }
+
+            GetWindowThreadProcessId(h, out uint owner);
+            if (owner == 0 || owner == OwnPid) { return Front.No; }
+            string name = ProcessName(owner);
+            if (name == null) { return Front.No; }
+            // A Store app's window belongs to ApplicationFrameHost; the app itself owns a child of it.
+            if (name == "applicationframehost")
+            {
+                uint appPid = 0;
+                EnumChildWindows(h, (c, _) =>
+                {
+                    GetWindowThreadProcessId(c, out uint cp);
+                    if (cp == 0 || cp == owner) { return true; }
+                    appPid = cp;
+                    return false;
+                }, IntPtr.Zero);
+                if (appPid != 0)
+                {
+                    string appName = ProcessName(appPid);
+                    if (appName != null) { name = appName; owner = appPid; }
+                }
+            }
+            pid = owner;
+            foreach (string ig in IgnoreProcesses)
+            {
+                if (name == ig) { return Front.No; }
+            }
+            foreach (string o in Overlays)
+            {
+                if (name == o) { return Front.Overlay; }
+            }
+
+            if (!GetWindowRect(h, out RECT wr) || !GetClientRect(h, out RECT cr)) { return Front.No; }
+            var topLeft = new POINT { X = cr.L, Y = cr.T };
+            var bottomRight = new POINT { X = cr.R, Y = cr.B };
+            if (!ClientToScreen(h, ref topLeft) || !ClientToScreen(h, ref bottomRight)) { return Front.No; }
+            IntPtr mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+            if (mon == IntPtr.Zero) { return Front.No; }
+            var mi = new MONITORINFO { Size = Marshal.SizeOf<MONITORINFO>() };
+            if (!GetMonitorInfo(mon, ref mi)) { return Front.No; }
+
+            // Covers the WHOLE monitor (not just the work area) within a hair, and is not merely an app window
+            // filling it: the borderless-fullscreen signature.
+            if (!IsFullscreen(wr, new RECT(topLeft.X, topLeft.Y, bottomRight.X, bottomRight.Y), mi.Monitor,
+                              GetWindowLong(h, GWL_STYLE)))
+            {
+                return Front.No;
+            }
+            process = name;
+            return Front.Fullscreen;
+        }
+
+        private static string ProcessName(uint pid)
+        {
             try
             {
                 using (var p = System.Diagnostics.Process.GetProcessById((int)pid))
                 {
-                    name = (p.ProcessName ?? "").ToLowerInvariant();
+                    return (p.ProcessName ?? "").ToLowerInvariant();
                 }
             }
-            catch { return false; }
-            foreach (string ig in IgnoreProcesses)
-            {
-                if (name == ig) { return false; }
-            }
-
-            if (!GetWindowRect(h, out RECT wr)) { return false; }
-            IntPtr mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
-            if (mon == IntPtr.Zero) { return false; }
-            var mi = new MONITORINFO { Size = Marshal.SizeOf<MONITORINFO>() };
-            if (!GetMonitorInfo(mon, ref mi)) { return false; }
-
-            // Covers the WHOLE monitor (not just the work area) within a hair:
-            // the borderless-fullscreen signature.
-            return wr.L <= mi.Monitor.L + 2 && wr.T <= mi.Monitor.T + 2 &&
-                   wr.R >= mi.Monitor.R - 2 && wr.B >= mi.Monitor.B - 2;
+            catch { return null; }
         }
     }
 }

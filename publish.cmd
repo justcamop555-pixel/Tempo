@@ -233,13 +233,13 @@ REM  PHASE 1 of 7  -  Environment preflight
 REM ===========================================================================
 echo.
 echo  %C_STEP%[1/7]%C_RESET% Checking the environment ...
-echo        %C_DIM%Looking for the .NET 8 SDK, the project file, and enough free disk space.%C_RESET%
+echo        %C_DIM%Looking for the .NET 10 SDK, the project file, and enough free disk space.%C_RESET%
 set "TP1=%TIME: =0%"
 
 where dotnet >nul 2>&1
 if errorlevel 1 (
   echo        ERROR: The .NET SDK was not found on your PATH.
-  echo        Install the .NET 8 SDK from https://dotnet.microsoft.com/download
+  echo        Install the .NET 10 SDK from https://dotnet.microsoft.com/download
   echo        then run this script again.
   >> "%LOG%" echo RESULT  : FAILED - .NET SDK not found on PATH.
   echo.
@@ -254,11 +254,11 @@ if not defined DOTNETVER set "DOTNETVER=unknown"
 echo        %CHK%[OK]%C_RESET% .NET SDK     : %DOTNETVER%
 >> "%LOG%" echo SDK     : %DOTNETVER%
 
-REM Warn when the active SDK isn't the 8.x the project targets.
-set "SDKMAJOR=%DOTNETVER:~0,1%"
-if not "%SDKMAJOR%"=="8" (
-  echo        NOTE: project targets .NET 8 but the active SDK is %DOTNETVER%.
-  echo              That usually still works ^(SDKs build down-level^) - just FYI.
+REM Warn when the active SDK isn't the 10.x the project targets (two characters: "10", not "1").
+set "SDKMAJOR=%DOTNETVER:~0,2%"
+if not "%SDKMAJOR%"=="10" (
+  echo        NOTE: project targets .NET 10 but the active SDK is %DOTNETVER%.
+  echo              A newer SDK builds it ^(SDKs build down-level^); a 9.x or older one cannot.
 )
 
 REM Every installed SDK, for the log (handy when builds differ between PCs).
@@ -456,8 +456,8 @@ if not "%RESULT%"=="0" (
   echo.
   echo  ---------------------------------------------------------------------------
   echo    Things that fix most build failures:
-  echo      - Make sure the .NET 8 SDK is installed ^(run  dotnet --list-sdks  and
-  echo        look for an 8.x entry^); a newer-only SDK can still build it, an
+  echo      - Make sure the .NET 10 SDK is installed ^(run  dotnet --list-sdks  and
+  echo        look for a 10.x entry^); a newer-only SDK can still build it, an
   echo        older one cannot.
   echo      - Make sure you run this from the project folder ^(AutoClicker.csproj
   echo        next to this script^).

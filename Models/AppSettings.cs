@@ -230,6 +230,13 @@ namespace AutoClicker.Models
         /// </summary>
         public bool CheckRobloxUpdates { get; set; } = true;
 
+        /// <summary>
+        /// Name the Roblox game being played: Tempo reads which game each client is in from Roblox's own log on this PC,
+        /// and asks Roblox for that game's NAME — one public request per game, carrying only the game's number. Off,
+        /// the game is still known by its number; nothing goes online for it.
+        /// </summary>
+        public bool RobloxGameNames { get; set; } = true;
+
         /// <summary>When Roblox's version list last answered (UTC) — the next automatic check counts from it.</summary>
         public DateTime? LastRobloxCheckUtc { get; set; }
 
@@ -722,12 +729,73 @@ namespace AutoClicker.Models
         public bool AccountsWindowTopMost { get; set; } = false;
 
         /// <summary>
+        /// The tabs kept in a window of their own, by key ("macros", "statistics"…), chosen from a sidebar
+        /// row's right-click menu. A tab named here opens its window when its row is clicked; every other
+        /// tab is an ordinary tab. Accounts is never listed: it keeps <see cref="AccountsPlacement"/>, which
+        /// its window has always used.
+        /// </summary>
+        public System.Collections.Generic.List<string> WindowedTabs { get; set; }
+            = new System.Collections.Generic.List<string>();
+
+        /// <summary>
+        /// Where each tab's own window was last, by key, and whether it was kept on top. A place on THESE
+        /// monitors, so a reset and an import keep it (KeepMachineStateFrom), like the Accounts window's.
+        /// </summary>
+        public System.Collections.Generic.Dictionary<string, TabWindowPlace> TabWindowPlaces { get; set; }
+            = new System.Collections.Generic.Dictionary<string, TabWindowPlace>(System.StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// Hold Roblox's single-instance lock so several accounts can run at once. OFF, and
         /// deliberately so: it is the most Terms-sensitive part of the account manager and can
         /// get accounts banned. Only takes effect while the account manager is enabled, and the
         /// UI warns before turning it on. Persisted so the choice survives a restart.
         /// </summary>
         public bool RobloxMultiInstance { get; set; } = false;
+
+        /// <summary>
+        /// Bring back a Roblox client that crashes or freezes: the same account, into the same game. Roblox's own crash
+        /// handler only reports a crash; it brings nothing back. On by default — it touches clients Tempo started, and
+        /// (since 2026-11-01) clients started elsewhere that play as an account saved in the vault, and only when they end
+        /// with a crash or stop responding.
+        /// </summary>
+        public bool RobloxCrashGuard { get; set; } = true;
+
+        /// <summary>
+        /// A notice — Tempo's card, or the Windows one when the cards are off — when a Roblox client joins a game, is
+        /// disconnected from it, crashes in it, or turns out too old to run, whoever started it: Tempo, a browser's
+        /// Play button, the Roblox app or a launcher. Watching for it reads Roblox's own logs on this PC and nothing
+        /// else. On by default (asked for, 2026-11-01); only while the account manager is on.
+        /// </summary>
+        public bool RobloxGameNotices { get; set; } = true;
+
+        /// <summary>
+        /// Smoother play: with several Roblox clients open, every one but the client in front runs in Windows' efficiency
+        /// mode at below-normal priority (Task Manager's "Efficiency mode"), and Tempo holds back its own animations while
+        /// a Roblox window is in front. Process settings only — nothing goes into Roblox — and all put back when off or on
+        /// exit. On by default (asked for, 2026-11-01).
+        /// </summary>
+        public bool RobloxSmootherPlay { get; set; } = true;
+
+        /// <summary>
+        /// Anti-AFK on the Accounts page: every <see cref="RobloxAntiAfkMinutes"/> minutes, each Roblox client in a game
+        /// is brought to the front for a moment and gets one key press no game uses (F13), so Roblox doesn't disconnect it
+        /// for idling (it does after 20 minutes). OFF by default: it takes the focus for a moment, which nobody should
+        /// meet without having asked for it.
+        /// </summary>
+        public bool RobloxAntiAfk { get; set; } = false;
+
+        /// <summary>Anti-AFK's interval, 1–18 minutes (Roblox disconnects at 20; the last two are the margin).</summary>
+        public int RobloxAntiAfkMinutes { get; set; } = 15;
+
+        /// <summary>The Roblox user ids anti-AFK leaves alone (the account list's "Anti-AFK for this account").</summary>
+        public System.Collections.Generic.List<long> RobloxAntiAfkSkip { get; set; } = new System.Collections.Generic.List<long>();
+
+        /// <summary>
+        /// The last games any Roblox client joined, newest first, at most 8 — the Accounts page's "Recent games" list,
+        /// one pick from a straight join (a home launch then a pick in Roblox's app took 15–60 s on 2026-11-01). Each is
+        /// "placeId\tuniverseId\tname". Kept on this PC only, with the rest of the settings; kept by Reset.
+        /// </summary>
+        public System.Collections.Generic.List<string> RecentRobloxGames { get; set; } = new System.Collections.Generic.List<string>();
 
         /// <summary>
         /// A localhost HTTP server that lets other tools on this PC list accounts and trigger
@@ -920,6 +988,20 @@ namespace AutoClicker.Models
         /// </summary>
         public bool RememberLastTab { get; set; } = true;
 
+        /// <summary>
+        /// Whether the Settings page shows its Advanced section (HDR colours and the logo animation, the
+        /// experimental caption options, camera-relative movement). Closed by default: most people never need
+        /// them. Remembered once opened, and kept by Reset to defaults like the tab — where the page is
+        /// folded is not a preference.
+        /// </summary>
+        public bool SettingsAdvancedOpen { get; set; } = false;
+
+        /// <summary>
+        /// The same for the Clicker tab's Advanced section (the second mouse, background clicking, start/stop
+        /// sounds). Closed by default, remembered once opened, kept by Reset to defaults.
+        /// </summary>
+        public bool ClickerAdvancedOpen { get; set; } = false;
+
         /// <summary>UI language.</summary>
         public Language Language { get; set; } = Language.English;
 
@@ -1045,6 +1127,15 @@ namespace AutoClicker.Models
             AccountsWindowTop = local.AccountsWindowTop;
             AccountsWindowWidth = local.AccountsWindowWidth;
             AccountsWindowHeight = local.AccountsWindowHeight;
+            // Every other tab's window too.
+            TabWindowPlaces = new System.Collections.Generic.Dictionary<string, TabWindowPlace>(System.StringComparer.OrdinalIgnoreCase);
+            if (local.TabWindowPlaces != null)
+            {
+                foreach (var kv in local.TabWindowPlaces)
+                {
+                    if (!string.IsNullOrEmpty(kv.Key) && kv.Value != null) { TabWindowPlaces[kv.Key] = kv.Value.Clone(); }
+                }
+            }
             // So is the second cursor's parked spot — a point on THESE monitors.
             SecondCursorX = local.SecondCursorX;
             SecondCursorY = local.SecondCursorY;
@@ -1141,17 +1232,24 @@ namespace AutoClicker.Models
             LastProfileName = s.LastProfileName;
             LastTabIndex = s.LastTabIndex;
             LastTabKey = s.LastTabKey;
+            SettingsAdvancedOpen = s.SettingsAdvancedOpen;
+            ClickerAdvancedOpen = s.ClickerAdvancedOpen;
             Language = s.Language;
             LanguageAutoDetected = s.LanguageAutoDetected;
         }
 
         /// <summary>
         /// Settings with their own page and their own reset: the keybinds (with which macro each
-        /// quick-play key fires and the step the interval keys nudge by), and the Roblox account
-        /// manager's switches, which live with the vault on the Accounts page.
+        /// quick-play key fires and the step the interval keys nudge by), the Roblox account
+        /// manager's switches, which live with the vault on the Accounts page, and which tabs open
+        /// in a window of their own, which is chosen on the sidebar.
         /// </summary>
         private void KeepSeparatelyManagedFrom(AppSettings s)
         {
+            WindowedTabs = s.WindowedTabs != null
+                ? new System.Collections.Generic.List<string>(s.WindowedTabs)
+                : new System.Collections.Generic.List<string>();
+
             Bindings = new System.Collections.Generic.List<HotkeyBinding>();
             if (s.Bindings != null)
             {
@@ -1173,6 +1271,17 @@ namespace AutoClicker.Models
             AccountsPlacement = s.AccountsPlacement;
             AccountsWindowTopMost = s.AccountsWindowTopMost;
             RobloxMultiInstance = s.RobloxMultiInstance;
+            RobloxCrashGuard = s.RobloxCrashGuard;
+            RobloxGameNotices = s.RobloxGameNotices;
+            RobloxSmootherPlay = s.RobloxSmootherPlay;
+            RobloxAntiAfk = s.RobloxAntiAfk;
+            RobloxAntiAfkMinutes = s.RobloxAntiAfkMinutes;
+            RobloxAntiAfkSkip = s.RobloxAntiAfkSkip != null
+                ? new System.Collections.Generic.List<long>(s.RobloxAntiAfkSkip)
+                : new System.Collections.Generic.List<long>();
+            RecentRobloxGames = s.RecentRobloxGames != null
+                ? new System.Collections.Generic.List<string>(s.RecentRobloxGames)
+                : new System.Collections.Generic.List<string>();
             AccountApiEnabled = s.AccountApiEnabled;
             AccountApiPort = s.AccountApiPort;
             AccountApiToken = s.AccountApiToken;
@@ -1214,6 +1323,34 @@ namespace AutoClicker.Models
             {
                 AccountApiPort = 7963;
             }
+
+            // Anti-AFK presses at least every 18 minutes: Roblox disconnects at 20 (a hand-edited 0 pressed every look).
+            if (RobloxAntiAfkMinutes < 1 || RobloxAntiAfkMinutes > 18) { RobloxAntiAfkMinutes = 15; }
+            if (RobloxAntiAfkSkip == null) { RobloxAntiAfkSkip = new System.Collections.Generic.List<long>(); }
+
+            // One entry per tab, in lower case, and never Accounts (AccountsPlacement says where that one lives).
+            var windowed = new System.Collections.Generic.List<string>();
+            if (WindowedTabs != null)
+            {
+                foreach (string key in WindowedTabs)
+                {
+                    if (string.IsNullOrWhiteSpace(key)) { continue; }
+                    string k = key.Trim().ToLowerInvariant();
+                    if (k == "accounts" || windowed.Contains(k)) { continue; }
+                    windowed.Add(k);
+                }
+            }
+            WindowedTabs = windowed;
+            // A loaded file's dictionary compares case-SENSITIVELY; this one is looked up by tab key.
+            var places = new System.Collections.Generic.Dictionary<string, TabWindowPlace>(System.StringComparer.OrdinalIgnoreCase);
+            if (TabWindowPlaces != null)
+            {
+                foreach (var kv in TabWindowPlaces)
+                {
+                    if (!string.IsNullOrWhiteSpace(kv.Key) && kv.Value != null) { places[kv.Key.Trim()] = kv.Value; }
+                }
+            }
+            TabWindowPlaces = places;
 
             EnsureBindings();
         }

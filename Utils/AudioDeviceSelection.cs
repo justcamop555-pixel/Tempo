@@ -70,6 +70,16 @@ namespace AutoClicker.Utils
         public static volatile string MicrophoneId = "";
 
         /// <summary>
+        /// For this session only: the output the SOUND moved to while the speaker is "Default (follow Windows)". An
+        /// app can be sent to another output in Windows' sound settings — the game on one monitor's speakers, Windows'
+        /// default on the other's — and captions then heard a silent device (2026-10-31 on this PC: "audio is on
+        /// AMZG25F6F but capture is on KJW24FVX", three times). Set by the caption engine once Windows' default has been
+        /// quiet and this one playing for a while; never over a speaker the user picked; cleared when Windows' default
+        /// changes (MainForm), and dropped by itself once the device is gone. "" = none.
+        /// </summary>
+        public static volatile string FollowedSpeakerId = "";
+
+        /// <summary>
         /// Resolves the chosen (or default) device for a flow. Returns null when
         /// nothing usable exists. The CALLER owns/disposes the returned device.
         /// A chosen device that has vanished falls back to the default — captions
@@ -78,6 +88,20 @@ namespace AutoClicker.Utils
         public static MMDevice Resolve(MMDeviceEnumerator enumerator, DataFlow flow, out bool usedFallback)
         {
             usedFallback = false;
+            if (flow == DataFlow.Render && string.IsNullOrEmpty(SpeakerId) && !string.IsNullOrEmpty(FollowedSpeakerId))
+            {
+                try
+                {
+                    MMDevice followed = enumerator.GetDevice(FollowedSpeakerId);
+                    if (followed != null && followed.State == DeviceState.Active && followed.DataFlow == flow)
+                    {
+                        return followed;
+                    }
+                    try { followed?.Dispose(); } catch { }
+                }
+                catch { }
+                FollowedSpeakerId = "";   // the device the sound went to is gone: back to Windows' default, quietly
+            }
             string id = flow == DataFlow.Render ? SpeakerId : MicrophoneId;
             if (!string.IsNullOrEmpty(id))
             {

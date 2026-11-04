@@ -183,6 +183,28 @@ namespace AutoClicker.UI
 
         /// <summary>True while the user is dragging or resizing the window.</summary>
         private bool _inMoveLoop;
+
+        /// <summary>
+        /// A Roblox window is in front and Tempo's is not: what nobody is looking at waits — the logo's animation frames
+        /// (each one set an icon on every window and in the tray) and the animated backdrop's repaints (the whole window,
+        /// up to 30 a second) — so those cycles go to the game. Set by the foreground watch (MainForm.MultiInstance.cs)
+        /// through <see cref="SetPlayEasing"/>, only while "Smoother play" is on.
+        /// </summary>
+        private bool _playEasing;
+
+        /// <summary>Starts or ends <see cref="_playEasing"/>; ending it catches the logo and the backdrop up at once.</summary>
+        private void SetPlayEasing(bool on)
+        {
+            if (on == _playEasing) { return; }
+            _playEasing = on;
+            if (on) { return; }
+            try
+            {
+                OnLogoFrame();
+                if (_bgAnimating) { InvalidateBackdropSurfaces(); }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("SetPlayEasing", ex); }
+        }
         /// <summary>Whether compositing was on before the drag, so it can be put back.</summary>
         private bool _compositedBeforeMove;
         private readonly System.Diagnostics.Stopwatch _moveLoopClock = new System.Diagnostics.Stopwatch();
@@ -567,6 +589,14 @@ namespace AutoClicker.UI
         {
             if (WM_SHOW_TEMPO_INSTANCE != 0 && m.Msg == WM_SHOW_TEMPO_INSTANCE)
             {
+                // Not while this copy is closing: the request used to put back a window that was half taken
+                // down (2026-11-01, behind a crash in a restart's exit) and answer "it's on screen". The
+                // launch that asked waits for this copy to go instead (Program.OtherTempoClosing).
+                if (AutoClicker.Program.ExitCommitted || _shuttingDown)
+                {
+                    Utils.Logger.Info("[startup] another launch asked for the window while this copy is closing — left to the next copy.");
+                    return;
+                }
                 try { ShowFromTrayAndActivate(); } catch { }
                 // Only a window that really is up: otherwise the second launch's notice is what
                 // tells the user where Tempo went.
@@ -1747,9 +1777,18 @@ namespace AutoClicker.UI
         /// So the window is shown CLOAKED (DWMWA_CLOAK): there for Windows and painting as usual, but not drawn
         /// by the compositor. It switches, paints the new page, and is uncloaked with it finished.
         /// </summary>
-        private void ShowFromTrayOnTab(string key)
+        private void ShowFromTrayOnTab(string key, bool inMainWindow = false)
         {
             int index = IndexOfTabKey(key);
+            // A tab kept in its own window opens as that window, without the main window coming up
+            // with it. Accounts has its own way (OpenAccountsFromTray), which lands here to show the
+            // tab in the main window — and so does a tab window that failed to open (inMainWindow).
+            if (!inMainWindow && index >= 0 && !ReferenceEquals(_tabs.TabPages[index], _accountsPage)
+                && IsWindowedTab(_tabs.TabPages[index]))
+            {
+                OpenTabWindow(_tabs.TabPages[index], focus: true);
+                return;
+            }
             bool fromTray = !Visible || WindowState == FormWindowState.Minimized;
             if (!fromTray || index < 0 || _tabs == null || _tabs.SelectedIndex == index || !IsHandleCreated)
             {
@@ -2313,6 +2352,11 @@ namespace AutoClicker.UI
         {
             Logger.Initialize();
 
+            // How a fault while closing, and the crash window's Quit, finish the close (Program.cs): through this
+            // window's own close, never Application.Exit (see CloseForGood).
+            AutoClicker.Program.FinishCloseAfterFaultHandler = FinishCloseAfterFault;
+            AutoClicker.Program.QuitAfterCrashHandler = QuitAfterCrash;
+
             _settings = SettingsManager.Load();
             _lifetimeBaseline = _settings.LifetimeClicks;
             Logger.Enabled = _settings.WriteLogFile;
@@ -2336,6 +2380,20 @@ namespace AutoClicker.UI
                 catch (Exception ex) { Utils.Logger.Swallow("PythonInterpreterSave", ex); }
             };
             ApplyHdrCompensationSetting();
+
+            // Which Roblox game is being played (RobloxGameWatcher): whether its name may be asked of Roblox, and the
+            // one fact game mode needs from it — a Roblox client on its home screen is at a menu, not in a game.
+            Utils.RobloxGameWatcher.NamesOnline = _settings.RobloxGameNames;
+            Utils.GamePresence.AtMenu = (app, pid) =>
+                app == "robloxplayerbeta" && Utils.RobloxGameWatcher.AtHomeScreen(pid);
+            Utils.RobloxGameWatcher.Changed += OnRobloxGameChanged;
+            // What happens in a client — joined, disconnected, crashed — for the Accounts page's notices, watched in the
+            // background while they are on, however the client was started (MainForm.Accounts.cs).
+            Utils.RobloxGameWatcher.Happened += OnRobloxGameEvent;
+            SyncRobloxWatching();
+            // The watch's first look runs on its own thread at once — usually before this window has a handle to hand
+            // the change to, and an idle tray copy sends no second one. So the window catches up when it gets one.
+            HandleCreated += (s, e) => OnRobloxGameChanged();
 
             // First run only: match Tempo to the user's Windows display language
             // using the translations already built in (no new languages added).
@@ -2692,6 +2750,9 @@ namespace AutoClicker.UI
                             // the engine and the voice profiler at the new default.
                             if (previous != null && previous != name)
                             {
+                                // A new default is the user saying where sound goes now: any output captions had
+                                // followed the sound to gives way to it (AudioDeviceSelection.FollowedSpeakerId).
+                                Utils.AudioDeviceSelection.FollowedSpeakerId = "";
                                 Utils.Logger.Info("[Captions] default speaker changed (" +
                                     previous + " → " + name + ") - following.");
                                 try
@@ -3092,7 +3153,7 @@ namespace AutoClicker.UI
                         string detail = cut > 0 && cut + 2 < line.Length ? line.Substring(cut + 2) : line;
                         if (detail.Length > 120) { detail = detail.Substring(0, 120) + "…"; }
                         TempoNotify(6000, "Tempo — " + Localization.T("something went wrong"),
-                            detail + "\n" + Localization.T("Details: Settings → Data & Backup → Live debug."),
+                            detail + "\n" + Localization.T("Details: Settings → Help & troubleshooting → Live debug."),
                             ToolTipIcon.Warning, always: true);
                     }
                     catch { }
@@ -3318,7 +3379,7 @@ namespace AutoClicker.UI
                         issues.Add("⚠ The window is bigger than the screen's work area (" +
                                    Width + "×" + Height + " vs " + wa.Width + "×" + wa.Height +
                                    ") — its bottom edge sits under the taskbar, so the status strip and the " +
-                                   "last card on a page are cut off. Settings → Window & Display → " +
+                                   "last card on a page are cut off. Settings → Window → " +
                                    "\"Reset window position\" restores it.");
                     }
                 }
@@ -3863,7 +3924,7 @@ namespace AutoClicker.UI
                 {
                     sb.AppendLine(_gamePresence.ExclusiveFullscreen
                         ? "Game mode: 🎮 EXCLUSIVE fullscreen — caption bar cannot be shown (switch game to Borderless)"
-                        : "Game mode: 🎮 fullscreen app on screen — low-impact captions active");
+                        : "Game mode: 🎮 fullscreen app on screen (" + GameModeAppLabel() + ") — low-impact captions active");
                 }
 
                 string src = _mediaDetector != null ? _mediaDetector.CurrentAudioSource : "";
@@ -4405,6 +4466,7 @@ namespace AutoClicker.UI
                     // singleton closer stop" has no visible answer once the page can live
                     // in a window of its own: the selected TAB no longer decides it.
                     AppendAccountsPlacementStats(sb);
+                    AppendTabWindowStats(sb);
                 }
                 catch (Exception wex)
                 {
@@ -4734,7 +4796,7 @@ namespace AutoClicker.UI
                 {
                     if (!Utils.DisplayColorInfo.HdrOnFor(PaletteScreenName())) { sb.Append(" · this screen is SDR, no correction needed"); }
                     else if (Theme.CompensateForHdr) { sb.Append(" · colours corrected for HDR"); }
-                    else { sb.Append("  ⚠ HDR lightens Tempo's dark colours and the correction is off (Settings > Appearance)"); }
+                    else { sb.Append("  ⚠ HDR lightens Tempo's dark colours and the correction is off (Settings > Advanced > Display & logo)"); }
                 }
                 sb.AppendLine();
 
@@ -4870,8 +4932,10 @@ namespace AutoClicker.UI
                 if (_accounts == null && !multiOn
                     && killer == Utils.RobloxSingletonKiller.KillerStatus.Off)
                 {
-                    // The Roblox update check works without the account manager, so its line is still due.
+                    // The Roblox update check works without the account manager, so its line is still due — and so
+                    // does which game each running client is in.
                     if (_robloxRelease != null || _robloxCheckError != null) { AppendRobloxUpdateStats(sb); }
+                    AppendRobloxGameStats(sb);
                     return;
                 }
 
@@ -4994,6 +5058,7 @@ namespace AutoClicker.UI
                 AppendSignInBrowserStats(sb);
                 AppendSignInStats(sb);
                 AppendRobloxInstallStats(sb);
+                AppendRobloxGameStats(sb);
             }
             catch (Exception ex)
             {
@@ -5617,12 +5682,16 @@ namespace AutoClicker.UI
                     }
                 }
             }
-            // With Accounts in its own window, the sidebar row opens that window and never the
-            // tab behind it — so Tempo should not open on that tab either (a remembered
-            // "accounts" from tab mode, or one reached through the settings search, did).
-            if (open >= 0 && open < _tabs.TabPages.Count && IsDetachedPage(_tabs.TabPages[open]))
+            // A tab kept in its own window is opened by its sidebar row as that window, never as the
+            // tab behind it — so Tempo should not open on that tab either (a remembered "accounts"
+            // from tab mode, or one reached through the settings search, did). The first tab still
+            // in the main window instead; if every tab is out, the remembered one, on its card.
+            if (open >= 0 && open < _tabs.TabPages.Count && IsWindowedTab(_tabs.TabPages[open]))
             {
-                open = 0;
+                for (int i = 0; i < _tabs.TabPages.Count; i++)
+                {
+                    if (!IsWindowedTab(_tabs.TabPages[i])) { open = i; break; }
+                }
             }
             _tabs.SelectedIndex = open;
             RefreshSidebarSelection();
@@ -5992,7 +6061,7 @@ namespace AutoClicker.UI
             // still fitting the page content beside it (the Statistics grid is ~740px
             // wide, plus the 188px sidebar and a scrollbar).
             MinimumSize = new Size(980, 700);
-            Size = new Size(1020, 824);
+            Size = new Size(DefaultWindowWidth, DefaultWindowHeight);
             StartPosition = FormStartPosition.CenterScreen;
             Font = UiFactory.BodyFont;
             Icon = Utils.AppIcon.Get();
@@ -6373,6 +6442,7 @@ namespace AutoClicker.UI
                     FormBorderStyle = FormBorderStyle.None;
                     TopMost = true;
                     SyncAccountsWindowTopMost();   // or the Accounts window would open under the full screen
+                    SyncTabWindowsTopMost();       // and every other tab's window
                     Bounds = screen;
                     _isFullScreen = true;
 
@@ -6520,6 +6590,7 @@ namespace AutoClicker.UI
             // Restore the user's always-on-top preference precisely.
             try { if (_settings != null) { TopMost = _settings.AlwaysOnTop; } } catch { }
             SyncAccountsWindowTopMost();
+            SyncTabWindowsTopMost();
 
             try
             {
@@ -6740,8 +6811,10 @@ namespace AutoClicker.UI
                     // Ctrl+1…9 has always jumped straight to a tab. Holding Ctrl shows each
                     // row's digit where its icon is (see ShowNavKeyTips).
                     ShortcutHint = i < 9 ? (i + 1).ToString() : null,
-                    // A page kept in its own window (Accounts, when set so) says so with a ↗.
-                    OpensWindow = IsDetachedPage(_tabs.TabPages[i])
+                    // A tab kept in its own window says so with a ↗.
+                    OpensWindow = IsWindowedTab(_tabs.TabPages[i]),
+                    // Right-click (or Shift+F10 on a focused row): open the tab in its own window, or put it back.
+                    ContextMenuStrip = NavMenu()
                 };
                 nav.FlatAppearance.BorderSize = 0;
                 // Screen readers announce the tab and its shortcut, not just "button".
@@ -6755,10 +6828,10 @@ namespace AutoClicker.UI
                 {
                     if (index >= 0 && index < _tabs.TabPages.Count)
                     {
-                        // A page the user has detached into its own window is not reachable by
-                        // selecting its tab — the tab is an empty shell holding its place in the
-                        // sidebar. Raise the window instead, and leave the current tab alone.
-                        if (AccountsNavHandled(_tabs.TabPages[index])) { return; }
+                        // A tab the user keeps in its own window is not reachable by selecting it —
+                        // the tab holds its place in the sidebar while its controls are in the
+                        // window. Open or raise the window instead, and leave the current tab alone.
+                        if (TabWindowNavHandled(_tabs.TabPages[index])) { return; }
 
                         // Remember where the current tab is scrolled BEFORE we leave it.
                         // The sidebar changes SelectedIndex programmatically, which does
@@ -7224,7 +7297,7 @@ namespace AutoClicker.UI
                 nav.ForeColor = _theme.TextMuted;
                 nav.HotForeColor = _theme.Text;
                 nav.SelectedForeColor = selectedText;
-                nav.OpensWindow = i < _tabs.TabPages.Count && IsDetachedPage(_tabs.TabPages[i]);
+                nav.OpensWindow = i < _tabs.TabPages.Count && IsWindowedTab(_tabs.TabPages[i]);
                 // Through the palette's HDR correction like every colour beside it (and like the
                 // tray menu's icons for the same sections, see SectionColors). The button keeps
                 // it calm at rest and shows the full hue under the pointer and when open.
@@ -7286,13 +7359,24 @@ namespace AutoClicker.UI
             // moving controls / touching the scroll position against that bogus size is
             // exactly what left the Statistics dashboard pushed far down with a huge
             // empty gap above it. We re-lay-out cleanly on restore instead (OnResize).
-            if (WindowState == FormWindowState.Minimized)
+            //
+            // The window the PAGE is in: a tab's controls can be in a window of their own
+            // (MainForm.TabWindows.cs), which is up while this one is minimised and the other
+            // way round. Full-screen centring is the main window's alone.
+            Form pageForm = page.FindForm();
+            bool inMainWindow = pageForm == null || ReferenceEquals(pageForm, this);
+            if ((inMainWindow ? WindowState : pageForm.WindowState) == FormWindowState.Minimized)
             {
                 return;
             }
+            bool fullScreen = _isFullScreen && inMainWindow;
 
             int minLeft = int.MaxValue;
             int maxRight = 0;
+            // The right edge of what is SHOWING (meaningful only on a page that is on screen): AutoScroll
+            // measures its range from visible children, so a hidden control past the edge needs no room —
+            // see the stale-range repair below.
+            int shownRight = 0;
             foreach (Control c in page.Controls)
             {
                 if (!_autoFitBaseLeft.TryGetValue(c, out int baseLeft))
@@ -7301,6 +7385,7 @@ namespace AutoClicker.UI
                 }
                 if (baseLeft < minLeft) minLeft = baseLeft;
                 if (baseLeft + c.Width > maxRight) maxRight = baseLeft + c.Width;
+                if (c.Visible && baseLeft + c.Width > shownRight) shownRight = baseLeft + c.Width;
             }
             if (minLeft == int.MaxValue)
             {
@@ -7328,7 +7413,7 @@ namespace AutoClicker.UI
             // re-layout (positions + AutoScrollMinSize + scroll reset) - otherwise a tab
             // could come back empty because its scroll metrics were left stale.
             if (!force
-                && !_isFullScreen
+                && !fullScreen
                 && _lastCenteredWidth.TryGetValue(page, out int prevW)
                 && prevW == available)
             {
@@ -7346,7 +7431,7 @@ namespace AutoClicker.UI
             // past (the reported bug). So outside full screen, content always starts
             // at the top and the page scrolls normally.
             int offsetY = 0;
-            if (_isFullScreen)
+            if (fullScreen)
             {
                 int minTop = int.MaxValue;
                 int maxBottom = 0;
@@ -7403,7 +7488,10 @@ namespace AutoClicker.UI
             // page you're actually on. That is the reported "after the 8-hour macro grind the
             // Macros tab was showing the Clicker page" bug. Hidden pages aren't painting, so
             // they don't need the freeze at all; skipping it leaves them correctly hidden.
-            bool pageShown = Visible && _tabs != null && ReferenceEquals(page, _tabs.SelectedTab);
+            // A page in a window of its own is on screen whenever that window is.
+            bool pageShown = inMainWindow
+                ? Visible && _tabs != null && ReferenceEquals(page, _tabs.SelectedTab)
+                : pageForm.Visible;
 
             // Re-entrancy guard: the moves below fire SizeChanged/ClientSizeChanged,
             // whose handlers call straight back in here. An interleaved pass toggled
@@ -7481,7 +7569,7 @@ namespace AutoClicker.UI
                 // minimum scroll size to the visible client size in that case so there
                 // is nothing extra to scroll into. In every other case clear the clamp
                 // and let AutoScroll measure normally.
-                if (_isFullScreen && offsetY > 0)
+                if (fullScreen && offsetY > 0)
                 {
                     scrollable.AutoScrollMinSize = new Size(0, scrollable.ClientSize.Height);
                 }
@@ -7507,14 +7595,18 @@ namespace AutoClicker.UI
                     // order, all six left it at 1715. The same toggle one message later —
                     // after the thaw — reads the real 1207 and takes: 1207 → 815, scrollbar
                     // gone. So the repair is deferred rather than done inline.
+                    //
+                    // Judged by what SHOWS on a page that is on screen: a hidden control wider than
+                    // the page (Keybinds' "Unsaved changes" line in Portuguese ran 33 px past it)
+                    // made the content look too wide to repair, and the stale range stayed.
                     if (scrollable.DisplayRectangle.Width > scrollable.ClientSize.Width
-                        && maxRight + offset <= available)
+                        && (pageShown ? shownRight : maxRight) + offset <= available)
                     {
                         ScheduleScrollRangeRepair(page, scrollable);
                     }
                 }
 
-                if (force && !_isFullScreen)
+                if (force && !fullScreen)
                 {
                     // A forced re-centre happens on a tab switch: restore the scroll
                     // position this tab had last time (or top on first visit). The page
@@ -8046,10 +8138,12 @@ namespace AutoClicker.UI
                         (_recorder != null && _recorder.IsRecording) ||
                         (_movement != null && _movement.IsRunning);
             // Shown or busy is in use. Only a Tempo that has sat hidden and idle for TraySleepAfterMs — a
-            // forgotten one — goes to sleep; one that was just hidden keeps its hotkeys.
-            if (Visible || busy) { NoteTempoActivity(); }
+            // forgotten one — goes to sleep; one that was just hidden keeps its hotkeys. A tab up in a
+            // window of its own is Tempo shown, with the main window in the tray or not.
+            bool shown = Visible || AnyTabWindowShowing();
+            if (shown || busy) { NoteTempoActivity(); }
             bool idleLongEnough = Environment.TickCount64 - _trayActivityTicks >= TraySleepAfterMs;
-            bool shouldSleep = _settings.TraySleepEnabled && !Visible && !busy && idleLongEnough;
+            bool shouldSleep = _settings.TraySleepEnabled && !shown && !busy && idleLongEnough;
 
             // The signature carries whether captions are running, but only while asleep.
             //
@@ -8240,6 +8334,7 @@ namespace AutoClicker.UI
             // The detached Accounts window is not in _tabs, so the loops above never reach
             // it: without this it kept the old wallpaper (or none) after a change here.
             SyncAccountsWindowBackdrop();
+            SyncTabWindowsBackdrop();   // nor is any other tab's window
 
             StartSharedBgAnimation();     // one animator on the NEW image
 
@@ -8311,6 +8406,7 @@ namespace AutoClicker.UI
                 InvalidateWhatShowsTheWallpaper(_tabs.SelectedTab);
             }
             SyncAccountsWindowBackdrop();   // the same picture there too: only the scrim
+            SyncTabWindowsBackdrop();       // and in every tab's own window
         }
 
         /// <summary>
@@ -8417,8 +8513,10 @@ namespace AutoClicker.UI
 
             // Mid-drag: the animation is stopped in BeginMoveResizeLoop, but a frame
             // already queued can still arrive after it. Repainting every surface while
-            // the window is being dragged is exactly the cost we just removed.
-            if (_inMoveLoop)
+            // the window is being dragged is exactly the cost we just removed. And while a
+            // Roblox game is in front (_playEasing), a whole-window repaint up to 30 times
+            // a second — Tempo open beside the game — is CPU and GPU the game could use.
+            if (_inMoveLoop || _playEasing)
             {
                 return;
             }
@@ -8445,6 +8543,7 @@ namespace AutoClicker.UI
             (_tabs?.SelectedTab as BackdropTabPage)?.InvalidateBackdrop();
             // Same frame in the detached Accounts window, so the two never drift apart.
             InvalidateAccountsWindowBackdrop();
+            InvalidateTabWindowsBackdrop();
         }
 
         private static Image LoadGifImage(string path)
@@ -8957,8 +9056,10 @@ namespace AutoClicker.UI
             // window the user is currently throwing across the screen. The move loop has
             // to paint through that work, which is exactly where a drag loses frames.
             // The animation keeps running; only the pushing stops, so it carries on from
-            // the right frame the moment the drag ends.
-            if (_inMoveLoop) { return; }
+            // the right frame the moment the drag ends. The same while a Roblox game is in
+            // front (_playEasing): nobody looks at Tempo's icon then, and every frame costs
+            // the game a little CPU here and in Explorer, which redraws the tray icon.
+            if (_inMoveLoop || _playEasing) { return; }
 
             Icon frame = Utils.AnimatedLogo.CurrentIcon;
             if (frame == null) { return; }
@@ -9227,7 +9328,7 @@ namespace AutoClicker.UI
         }
 
         private void TempoNotify(int timeoutMs, string title, string text, ToolTipIcon icon,
-                                 bool always = false)
+                                 bool always = false, Action onClick = null)
         {
             try
             {
@@ -9259,16 +9360,16 @@ namespace AutoClicker.UI
                     // Show Tempo's own icon so its cards read like a real app notification,
                     // and make the card open the Tempo window when clicked.
                     _notifications.Notify("Tempo", title, text, KindFor(icon),
-                        TempoNotifyIcon(), null, ShowFromTrayAndActivate);
+                        TempoNotifyIcon(), null, onClick ?? ShowFromTrayAndActivate);
                     return;
                 }
 
                 // Fallback to the plain Windows balloon. (This line was accidentally
                 // turned into a recursive TempoNotify call by an earlier bulk rename —
                 // it must call the tray balloon, or the off-custom path stack-overflows.)
-                // This balloon has no action of its own, so it must not inherit an update
+                // A balloon without an action of its own must not inherit an update
                 // notice's (a click on it would otherwise open the update dialog).
-                _balloonClickAction = null;
+                _balloonClickAction = onClick;
                 _trayIcon?.ShowBalloonTip(timeoutMs, title, text, icon);
             }
             catch (Exception ex) { Utils.Logger.Swallow("TempoNotify", ex); }
@@ -9715,11 +9816,8 @@ namespace AutoClicker.UI
                 item.ToolTipText = TipStyle.Wrap(Utils.Localization.T(text));
                 item.Click += (s, e) =>
                 {
-                    try
-                    {
-                        int i = IndexOfTabKey(tabKey);
-                        if (i >= 0 && _tabs != null) { _tabs.SelectedIndex = i; }
-                    }
+                    // Wherever the tab lives: a tab in its own window opens as that window.
+                    try { ShowTab(tabKey); }
                     catch (Exception ex) { Utils.Logger.Swallow("StatusBarShortcut", ex); }
                 };
             }
@@ -10995,8 +11093,11 @@ namespace AutoClicker.UI
                         OverlayTopmost.LowImpactMode = fullscreen;
                         // The authoritative mode log — fires on BOTH caption paths
                         // (the engine adds its own beam/pace detail when it reacts).
+                        // Which app, by its process name (never a window title): a game mode nobody expected can
+                        // then be traced to whatever caused it.
                         Utils.Logger.Info(fullscreen
-                            ? "[Audio] fullscreen app took the screen — caption stack easing off (game mode)."
+                            ? "[Audio] fullscreen app took the screen (" + GameModeAppLabel()
+                              + ") — caption stack easing off (game mode)."
                             : "[Audio] fullscreen app closed — caption stack back to full quality.");
                         if (fullscreen)
                         {
@@ -11704,6 +11805,8 @@ namespace AutoClicker.UI
                     _captionTranscriber = new Utils.TempoTranscriber();
                     _captionTranscriber.TextRecognized += OnTempoCaptionText;
                     _captionTranscriber.Status += OnTempoCaptionStatus;
+                    // Captions followed the sound to another output: the voice profiler listens to the same speaker.
+                    _captionTranscriber.SoundFollowed += () => { try { _voiceProfiler?.FollowDefaultDevice(); } catch { } };
                     _captionTranscriber.RealTimeTooSlow += OnTempoModelTooSlow;
                     _captionTranscriber.RealTimeHeadroom += OnTempoEngineHeadroom;
                 }
@@ -12254,12 +12357,53 @@ namespace AutoClicker.UI
         private string CaptionSourceTagText(string src)
         {
             if (string.IsNullOrEmpty(src)) { return src; }
+            src = WithRobloxGame(src);
             if (AudioSourcesAreMixed(out int apps, out int _) && apps > 1)
             {
                 // Through F(): "+ 1 more" was English on the bar in every language.
                 return Localization.F("{0} + {1} more", src, apps - 1);
             }
             return src;
+        }
+
+        /// <summary>
+        /// "Roblox" made "Roblox: Blox Fruits" when the client making the sound is in a game whose name is known
+        /// (RobloxGameWatcher). On the SHOWN tag only — <paramref name="src"/>, the source's identity, stays "Roblox": a
+        /// name that arrives a few seconds after the sound did would otherwise read as a new source and reset the
+        /// speakers (see <see cref="CaptionSourceTagText"/>).
+        /// </summary>
+        private string WithRobloxGame(string src)
+        {
+            if (src != "Roblox" || _mediaDetector == null) { return src; }
+            string game = null;
+            int sound = 0, from = 0;
+            try
+            {
+                sound = _mediaDetector.CurrentAudioPid;
+                game = Utils.RobloxGameWatcher.GameNameNear(sound, out from);
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("WithRobloxGame", ex); }
+            // Said when it changes: which client the sound was, and what the tag became — a tag that stays plain
+            // "Roblox" then says why in the log instead of nowhere.
+            Utils.Logger.InfoIfChanged("captiontag", string.IsNullOrEmpty(game)
+                ? "[Captions] source tag: Roblox (sound from client " + sound + "; no game known for it yet)."
+                : "[Captions] source tag: Roblox: " + game + " (sound from client " + sound
+                  + (from != sound ? ", game from client " + from : "") + ").");
+            return string.IsNullOrEmpty(game) ? src : src + ": " + game;
+        }
+
+        /// <summary>
+        /// The app game mode is on for, for the log and Live debug: its process name, and for a Roblox client the game
+        /// it is in ("robloxplayerbeta: Blox Fruits").
+        /// </summary>
+        private string GameModeAppLabel()
+        {
+            string app = _gamePresence?.FullscreenApp ?? "?";
+            if (app != "robloxplayerbeta" || _gamePresence == null) { return app; }
+            string game = null;
+            try { game = Utils.RobloxGameWatcher.GameNameFor(_gamePresence.FullscreenPid); }
+            catch (Exception ex) { Utils.Logger.Swallow("GameModeAppLabel", ex); }
+            return string.IsNullOrEmpty(game) ? app : app + ": " + game;
         }
 
         /// <summary>
@@ -12322,6 +12466,8 @@ namespace AutoClicker.UI
             _speakerTurns.NoteFrontShed(shed);
         }
 
+        private long _lastCaptionUiLagLog;
+
         private void OnTempoCaptionText(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
@@ -12331,9 +12477,18 @@ namespace AutoClicker.UI
             DateTime spokenStart = engine != null ? engine.LastCaptionSpokenAt : DateTime.MinValue;
             DateTime spokenEnd = engine != null ? engine.LastCaptionSpokenEndAt : DateTime.MinValue;
             int retract = engine != null ? engine.LastCaptionRetractWords : 0;
+            long raisedAt = Environment.TickCount64;
             UiInvoke(() =>
             {
                 if (!_captionsActive) return;
+                // The window's share of a late caption: the engine's is logged by the engine. Once a stretch.
+                long waited = Environment.TickCount64 - raisedAt;
+                if (waited >= 2000 && Environment.TickCount64 - _lastCaptionUiLagLog > 30000)
+                {
+                    _lastCaptionUiLagLog = Environment.TickCount64;
+                    Utils.Logger.Warn("[Captions] a caption waited " + (waited / 1000.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+                                      + " s for the window to put it on the bar (the window was busy).");
+                }
                 string audioSource = UpdateCaptionSourceTag();
                 _captionHadAnyText = true;
 
@@ -12355,15 +12510,16 @@ namespace AutoClicker.UI
                 string clean = sbClean.ToString().Trim();
                 if (clean.Length == 0) return;
                 if (_wordFixer != null) { clean = _wordFixer.Fix(clean); }
-                // The same words as the last caption are dropped only right after it (a double hand-over).
-                // Said again later — "Okay." … "Okay." — they are a new caption: the engine stopped stripping
-                // such genuine repeats, but this check still did, whenever the previous caption had been
-                // exactly those words, so the second "Okay." never reached the bar or the transcript.
-                bool justShown = clean == _lastMirroredCaption && Environment.TickCount64 - _lastTempoCaptionTick < 2500;
+                // The same words as the last caption are dropped only when they arrive together with it (a double
+                // delivery). Said again — "Okay." … "Okay.", or "Can you hear me?" twice two seconds apart — they
+                // are a new caption: the engine already strips the words it re-heard (JoinSeam) and passes only what
+                // the speaker said again, which a 2.5 s window here still threw away. Timed when the engine raised
+                // each one, so a busy UI thread running both lambdas back to back cannot make them look like one.
+                bool justShown = clean == _lastMirroredCaption && raisedAt - _lastTempoCaptionTick < 250;
                 if (!justShown)
                 {
                     _lastMirroredCaption = clean;
-                    _lastTempoCaptionTick = Environment.TickCount64;
+                    _lastTempoCaptionTick = raisedAt;
                     // Real words: the ♪ note (if it was up) is replaced by this caption, and may come
                     // back after the next stretch of music.
                     _soundNoteShown = false;
@@ -14357,12 +14513,12 @@ namespace AutoClicker.UI
                 // was credited correctly.
                 _runProfileName = _currentProfileName ?? "";
 
-                // A run is a use of the profile, counted where it starts — the same however the
-                // profile was chosen (see ClickProfile.TimesUsed). History, so it follows the
-                // session-history switch. Written down with the run's time when it ends.
-                if (_settings.RecordSessionHistory && _profiles != null && _runProfileName.Length > 0)
+                // A run uses the profile: counted if this turn of it as the loaded profile has not been yet (the
+                // profile Tempo opened with is counted at its first run), else its last-used time moves on. See
+                // ClickProfile.TimesUsed; NoteProfileUse follows the session-history switch.
+                if (_runProfileName.Length > 0)
                 {
-                    _profiles.MarkUsed(_runProfileName);
+                    NoteProfileUse(_runProfileName);
                 }
             }
 
@@ -14861,9 +15017,12 @@ namespace AutoClicker.UI
             // regardless, because the overlay can be visible while the main window is in
             // the tray during a click run.
             bool windowShowing = Visible && WindowState != FormWindowState.Minimized;
-            bool onStatsTab = windowShowing && _statsPage != null && _tabs != null && _tabs.SelectedTab == _statsPage;
+            // On screen in the main window or in a window of its own (MainForm.TabWindows.cs).
+            bool onStatsTab = _statsPage != null && IsPageShowing(_statsPage);
             UpdateClickerHealthHold(windowShowing);
-            Point keepScroll = onStatsTab ? CaptureActiveScroll() : Point.Empty;
+            // The page the dashboard is on: the tab, or its window's page.
+            ScrollableControl statsHost = onStatsTab ? PageHost(_statsPage) : null;
+            Point keepScroll = statsHost != null ? statsHost.AutoScrollPosition : Point.Empty;
 
             // The status bar is visible on every tab, so always keep it current — but
             // only ASSIGN when the text actually differs.
@@ -14962,9 +15121,10 @@ namespace AutoClicker.UI
             UpdateStatusHint();
             UpdateProfileDirty();
 
-            if (onStatsTab)
+            if (statsHost != null && !statsHost.IsDisposed)
             {
-                RestoreActiveScroll(keepScroll);
+                // A no-op when nothing moved (see RestoreActiveScroll).
+                statsHost.AutoScrollPosition = new Point(-keepScroll.X, -keepScroll.Y);
             }
         }
 
@@ -15128,7 +15288,9 @@ namespace AutoClicker.UI
         /// </summary>
         private void UpdateClickerHealthHold(bool windowShowing)
         {
-            bool want = windowShowing && _tabs != null && _tabs.SelectedTab != null && _tabs.SelectedTab.Name == "clicker";
+            // Wherever its controls are: the main window's open tab while that is up (windowShowing), or a
+            // window of its own (MainForm.TabWindows.cs).
+            bool want = IsPageShowing(TabByKey("clicker"));
             if (want == _clickerHealthHeld) { return; }
             _clickerHealthHeld = want;
             if (want) { Utils.SystemHealthMonitor.Shared.Acquire("clicker-tab"); }
@@ -15195,6 +15357,9 @@ namespace AutoClicker.UI
             // below, and stay highlighted after the search was cleared.
             ClearSettingsHighlight();
             ThemeManager.Apply(this, _theme);
+            // The controls of tabs out in windows of their own are not in this form's tree. Here, before
+            // everything below puts back the colours that mean something.
+            ThemeTabWindowPages();
 
             // Re-apply accent colours to the primary action buttons.
             if (_startBtn != null)
@@ -15323,6 +15488,10 @@ namespace AutoClicker.UI
             // THIS form's control tree; another top-level window is not in it, so it would keep
             // the palette it was born with until it was closed and reopened.
             ThemeAccountsWindow();
+            // The same for every other tab's window (its title bar, header and wallpaper), and the
+            // sidebar rows' right-click menu.
+            ThemeTabWindows();
+            ApplyThemeToNavMenu();
 
             // Keep the Settings live preview in sync.
             RefreshThemePreview();
@@ -15488,6 +15657,10 @@ namespace AutoClicker.UI
             // positions (capturing them in the constructor would make every
             // re-centre snap controls back to their unscaled 96-DPI spots).
             EnableAutoFit();
+            // The Settings stack again, now in the scaled window's units and into the notes just taken: the
+            // scaling rounded each card's Top on its own, so at 150% a card could sit a pixel off the stack
+            // the Advanced fold computes — and the first fold moved it by that pixel.
+            RestackSettingsCards();
 
             ReconcileStartupEntry();
 
@@ -16642,6 +16815,7 @@ HookSystemEvents();
         private void FadeOutAndExit()
         {
             Utils.Logger.Info("[Restart] replacement is up; this instance is exiting.");
+            AutoClicker.Program.NoteExitCommitted();
             double from = 1.0;
             try { from = Opacity; } catch { }
             var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -16658,9 +16832,91 @@ HookSystemEvents();
                 t.Stop();
                 t.Dispose();
                 try { Opacity = 0; } catch { }
-                Application.Exit();
+                // The new copy is waiting for this process, so it ends once the close is done.
+                AutoClicker.Program.ExitProcessAfterShutdown = true;
+                CloseForGood();
             };
             t.Start();
+        }
+
+        /// <summary>
+        /// How a restart and an update helper end this copy: this window's own close — the route the tray's
+        /// Exit takes. They used Application.Exit, which raises FormClosing on every open window while walking
+        /// Application.OpenForms, and this window's FormClosing disposes the caption bar, its history, the
+        /// toasts and the cursor trail, which takes them out of that same list. "Collection was modified"
+        /// came out of Application.Exit (2026-11-01, language restarts), the close stopped half-way, and the
+        /// crash window held the half-closed copy alive while the new one waited behind it. Close() raises
+        /// FormClosing on this window and on its owned windows from a copy; the rest go when the loop ends.
+        /// </summary>
+        private void CloseForGood()
+        {
+            AutoClicker.Program.NoteExitCommitted();
+            Utils.Logger.Info("[shutdown] closing — windows open: " + DescribeOpenForms() + ".");
+            try { Close(); }
+            catch (Exception ex)
+            {
+                Utils.Logger.Error("[shutdown] the close itself failed.", ex);
+                FinishCloseAfterFault(2);
+            }
+        }
+
+        /// <summary>The crash window's Quit (Program.QuitAfterCrashHandler): the same close, with no question.</summary>
+        private void QuitAfterCrash()
+        {
+            _reallyClosing = true;
+            _restartingApp = true;   // the crash window already asked; "exit anyway?" would ask twice
+            AutoClicker.Program.ExitProcessAfterShutdown = true;
+            CloseForGood();
+        }
+
+        /// <summary>
+        /// Finishes the close after a fault in it (Program.FinishCloseAfterFault). The first time: once more
+        /// through the ordinary close, from a clean stack — every step in it is guarded, and the ones already
+        /// done are cheap to repeat. After that: save what has not been saved (CleanUp: profiles, macros,
+        /// settings) and end the loop.
+        /// </summary>
+        private void FinishCloseAfterFault(int fault)
+        {
+            _reallyClosing = true;
+            _restartingApp = true;
+            if (fault == 1 && IsHandleCreated && !IsDisposed)
+            {
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        try { Close(); }
+                        catch { FinishCloseAfterFault(2); }
+                    }));
+                    return;
+                }
+                catch { }
+            }
+            ShutdownStep("clean-up after a fault", CleanUp);
+            try { Application.ExitThread(); } catch { }
+        }
+
+        /// <summary>"MainForm, CaptionOverlayForm, NotificationToastForm ×2" — for the log line of a close.</summary>
+        private static string DescribeOpenForms()
+        {
+            var counts = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, int>>();
+            try
+            {
+                FormCollection open = Application.OpenForms;
+                for (int i = 0; i < open.Count; i++)
+                {
+                    string name;
+                    try { name = open[i]?.GetType().Name; }
+                    catch { continue; }
+                    if (name == null) { continue; }
+                    int at = counts.FindIndex(p => p.Key == name);
+                    if (at < 0) { counts.Add(new System.Collections.Generic.KeyValuePair<string, int>(name, 1)); }
+                    else { counts[at] = new System.Collections.Generic.KeyValuePair<string, int>(name, counts[at].Value + 1); }
+                }
+            }
+            catch { }
+            if (counts.Count == 0) { return "none"; }
+            return string.Join(", ", counts.ConvertAll(p => p.Value > 1 ? p.Key + " ×" + p.Value : p.Key));
         }
 
         /// <summary>What an overlay from <see cref="ShowBusyOverlay"/> is made of.</summary>
@@ -17185,6 +17441,7 @@ HookSystemEvents();
             TopMost = !desired;
             TopMost = desired;
             SyncAccountsWindowTopMost();
+            SyncTabWindowsTopMost();
         }
 
         /// <summary>
@@ -17429,6 +17686,9 @@ HookSystemEvents();
         protected override void OnActivated(EventArgs e)
         {
             base.OnActivated(e);
+            // The user is back in this window: a dialog asked for now belongs to it, not to the tab
+            // window they were in before (see ScreenFit.OwnByPageWindowInUse).
+            DetachedPageWindow.NoteMainWindowInUse();
 
             // When a modal dialog closes (the update result, Merge, the macro editor,
             // a CPS test) or we Alt-Tab back, the current page just needs repainting -
@@ -17644,6 +17904,7 @@ HookSystemEvents();
             // not sit there for a beat while its threads wind down. Purely cosmetic
             // ordering — the teardown itself is unchanged.
             _shuttingDown = true;
+            AutoClicker.Program.NoteExitCommitted();
             _shutdownClock = System.Diagnostics.Stopwatch.StartNew();
             try { if (Visible) { Hide(); } } catch { }
             try { if (_trayIcon != null) { _trayIcon.Visible = false; } } catch { }
@@ -17761,10 +18022,14 @@ HookSystemEvents();
             // window is hidden and minimised with its owner, which would defeat the point of
             // detaching it). Nothing else would take it down, so it is closed here.
             CloseAccountsWindowOnExit();
+            // Every other tab's window too — its controls back on the tab first (MainForm.TabWindows.cs).
+            CloseTabWindowsOnExit();
             // Nothing else closed the local API's listener: it is stopped when the account manager is
             // switched off or the vault reset, but a straight exit left the HttpListener open and the port
             // held until the process died. Shutting it down here makes closing Tempo release it properly.
             StopApiServer();
+            // Anti-AFK's thread: no key press may start while Tempo goes away.
+            StopAntiAfk();
             // A Roblox sign-in still open in its private browser window: closed with Tempo, its profile deleted.
             CancelSignInOnExit();
             // The tab switch's picture window (SwitchCurtain): a native window of its own.
@@ -17939,8 +18204,13 @@ HookSystemEvents();
             }
         }
 
+        /// <summary>Set by the first CleanUp: a close finished after a fault (FinishCloseAfterFault) may ask twice.</summary>
+        private bool _cleanedUp;
+
         private void CleanUp()
         {
+            if (_cleanedUp) { return; }
+            _cleanedUp = true;
             try
             {
                 Utils.StartupManager.StopGuard();
@@ -18005,6 +18275,8 @@ HookSystemEvents();
                 ShutdownStep("overlay move mode", () => SetOverlayMoveMode(false));
                 // The Windows key and the accessibility shortcuts back as they were, before anything else.
                 ShutdownStep("shortcut guard", () => _shortcutGuard?.Dispose());
+                // Roblox clients eased by "Smoother play" get their priority and power settings back.
+                ShutdownStep("smoother play", () => Utils.RobloxClients.Focus.RestoreAll());
                 HideRecordingIndicator();
 
                 try

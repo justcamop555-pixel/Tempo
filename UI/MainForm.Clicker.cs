@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using AutoClicker.Models;
@@ -510,7 +511,7 @@ namespace AutoClicker.UI
             afGroup.Controls.Add(_antiFreezeHealthLabel);
 
             // ── Windows shortcuts ──────────────────────────────────────────────
-            // Settings ▸ Behaviour's "Hold back Windows shortcuts…", here where a run is started
+            // Settings ▸ While running's "Hold back Windows shortcuts…", here where a run is started
             // (the same setting: SetGuardWindowsShortcuts). In the right-hand column's gap under
             // Anti-Freeze, its bottom level with Manual Speed's.
             var guardGroup = UiFactory.Group(Localization.T("Windows Shortcuts"), 384, 690, 324, 62, CardIcon.Keyboard);
@@ -540,7 +541,70 @@ namespace AutoClicker.UI
             page.Controls.Add(afGroup);
             page.Controls.Add(guardGroup);
 
+            // Footer hint bar (matches the design): a faint info line under the everyday cards.
+            //
+            // It used to sit at y=904, which is INSIDE the Second Cursor card's band
+            // (766-928). LayoutFitter saw the collision and did its job — it clamped
+            // the tip to 174px — so the line has been rendering as
+            // "Tip: Press F6 to start/stop    •    All t…" in every language since the
+            // card was added. It belongs below the cards it follows, not on top of one.
+            //
+            // And it names the key that is actually bound: it said "Press F6" whatever the Keybinds tab
+            // held, so rebinding Start / Stop, unbinding it or switching to Hold-to-click left the tip
+            // telling people to press a key that did something else or nothing. Refreshed with the
+            // other key hints (UpdateStartButtonHotkeyHint).
+            // Under Manual Speed's row and above the Advanced section: opening or closing that section
+            // then moves nothing at all — only its own cards appear or go.
+            _clickerTipLabel = new Label
+            {
+                Text = ClickerFooterTip(),
+                Left = 14,
+                Top = speedGroup.Bottom + 8,
+                AutoSize = true,
+                Font = new Font("Segoe UI", 8.5f),
+                ForeColor = _theme.TextMuted,
+                BackColor = Color.Transparent
+            };
+            page.Controls.Add(_clickerTipLabel);
+
+            // ── Advanced ───────────────────────────────────────────────────────
+            // What most people never need, folded away under one button as on the Settings page: the
+            // second mouse, clicking without moving the cursor, the start/stop sounds. The last thing on the
+            // page, so they are shown or hidden in place and nothing above them moves (the page centring
+            // puts every control back where it was noted — see RestackSettingsCards). A line says which of
+            // them is on, so a folded card never hides a feature that is working.
+            var advanced = UiFactory.Group(Localization.T("Advanced"), 12, LayoutBottom(_clickerTipLabel) + 10, 696, 70, CardIcon.Gear);
+            _clickerAdvancedBtn = UiFactory.Button("Show advanced settings", 476, 26, 204, 30);
+            LayoutFitter.DeclareCaptions(_clickerAdvancedBtn,
+                Localization.T("Show advanced settings"), Localization.T("Hide advanced settings"));
+            // In the window's units (MeasureLayout): built before the window is scaled.
+            FitButtonToText(_clickerAdvancedBtn, 204, 30);
+            _clickerAdvancedBtn.Left = 680 - _clickerAdvancedBtn.Width;
+            _clickerAdvancedBtn.Click += (s, e) => SetClickerAdvancedOpen(!ClickerAdvancedOpen);
+            advanced.Controls.Add(_clickerAdvancedBtn);
+
+            var advancedNote = UiFactory.Caption(
+                "The second mouse, clicking without moving your cursor, and start/stop sounds — most people never need them.",
+                16, 28);
+            advancedNote.ForeColor = _theme.TextMuted;
+            advancedNote.AutoSize = false;
+            advancedNote.Width = _clickerAdvancedBtn.Left - 12 - 16;
+            advancedNote.Height = Math.Max(32, MeasureLayout(advancedNote.Text, advancedNote.Font, advancedNote.Width, TextFormatFlags.Default).Height);
+            advanced.Controls.Add(advancedNote);
+
+            // "On: Background Clicking · Sound" — empty while none of them is.
+            _clickerAdvancedOnLabel = UiFactory.Caption("", 16, advancedNote.Bottom + 2);
+            _clickerAdvancedOnLabel.ForeColor = _theme.AccentText;
+            _clickerAdvancedOnLabel.AutoSize = false;
+            _clickerAdvancedOnLabel.AutoEllipsis = true;
+            _clickerAdvancedOnLabel.Width = 664;
+            _clickerAdvancedOnLabel.Height = 18;
+            advanced.Controls.Add(_clickerAdvancedOnLabel);
+            advanced.Height = Math.Max(_clickerAdvancedBtn.Bottom, _clickerAdvancedOnLabel.Bottom) + 10;
+            page.Controls.Add(advanced);
+
             Control secondCursorGroup = BuildSecondCursorGroup();
+            secondCursorGroup.Top = advanced.Bottom + 10;
             page.Controls.Add(secondCursorGroup);
             Control bgClickGroup = BuildBackgroundClickGroup();
             Control soundGroup = BuildClickSoundGroup();
@@ -554,31 +618,13 @@ namespace AutoClicker.UI
             page.Controls.Add(bgClickGroup);
             page.Controls.Add(soundGroup);
 
-            // Footer hint bar (matches the design): a faint info line under the cards.
-            //
-            // It used to sit at y=904, which is INSIDE the Second Cursor card's band
-            // (766-928). LayoutFitter saw the collision and did its job — it clamped
-            // the tip to 174px — so the line has been rendering as
-            // "Tip: Press F6 to start/stop    •    All t…" in every language since the
-            // card was added. It belongs below the last card, not on top of it.
-            //
-            // And it names the key that is actually bound: it said "Press F6" whatever the Keybinds tab
-            // held, so rebinding Start / Stop, unbinding it or switching to Hold-to-click left the tip
-            // telling people to press a key that did something else or nothing. Refreshed with the
-            // other key hints (UpdateStartButtonHotkeyHint).
-            // Below the row it follows, wherever that ends. It was fixed at 1070 when the row
-            // ended at 1060; the row grew to 1074 and the line's top ran into the cards' border.
-            _clickerTipLabel = new Label
-            {
-                Text = ClickerFooterTip(),
-                Left = 14,
-                Top = bgClickGroup.Bottom + 8,
-                AutoSize = true,
-                Font = new Font("Segoe UI", 8.5f),
-                ForeColor = _theme.TextMuted,
-                BackColor = Color.Transparent
-            };
-            page.Controls.Add(_clickerTipLabel);
+            _clickerAdvancedCards.AddRange(new[] { secondCursorGroup, bgClickGroup, soundGroup });
+            _secondCursorEnableCheck.CheckedChanged += (s, e) => RefreshClickerAdvancedOn();
+            _backgroundClickCheck.CheckedChanged += (s, e) => RefreshClickerAdvancedOn();
+            _soundOnStartCheck.CheckedChanged += (s, e) => RefreshClickerAdvancedOn();
+            _soundOnStopCheck.CheckedChanged += (s, e) => RefreshClickerAdvancedOn();
+            ShowClickerAdvanced(ClickerAdvancedOpen);
+            RefreshClickerAdvancedOn();
 
             _tabs.TabPages.Add(page);
 
@@ -588,6 +634,55 @@ namespace AutoClicker.UI
             LoadAntiFreezeIntoUi();
             SyncSpeedSliderFromInterval();
             UpdateIntervalHint();
+        }
+
+        // ── Advanced section ─────────────────────────────────────────────────────
+
+        /// <summary>The Clicker tab's folded cards: Second Cursor, Background Clicking, Sound.</summary>
+        private readonly List<Control> _clickerAdvancedCards = new List<Control>();
+        private Button _clickerAdvancedBtn;
+        private Label _clickerAdvancedOnLabel;
+
+        private bool ClickerAdvancedOpen => _settings != null && _settings.ClickerAdvancedOpen;
+
+        /// <summary>
+        /// Opens or closes the Clicker tab's Advanced section. Its cards are the last thing on the page, so
+        /// they are only shown or hidden where they are — nothing else moves, and a hidden card adds nothing
+        /// to the page's scroll range.
+        /// </summary>
+        private void SetClickerAdvancedOpen(bool open)
+        {
+            if (_settings == null) { return; }
+            if (_settings.ClickerAdvancedOpen != open)
+            {
+                _settings.ClickerAdvancedOpen = open;
+                SaveSettingsQuietly();
+            }
+            ShowClickerAdvanced(open);
+            Logger.Info("[Clicker] advanced section " + (open ? "opened" : "closed") + ".");
+        }
+
+        private void ShowClickerAdvanced(bool show)
+        {
+            foreach (Control c in _clickerAdvancedCards) { c.Visible = show; }
+            if (_clickerAdvancedBtn != null && !_clickerAdvancedBtn.IsDisposed)
+            {
+                _clickerAdvancedBtn.Text = Localization.T(show ? "Hide advanced settings" : "Show advanced settings");
+            }
+        }
+
+        /// <summary>Which of the folded features is on — what a closed section must not hide.</summary>
+        private void RefreshClickerAdvancedOn()
+        {
+            if (_clickerAdvancedOnLabel == null || _clickerAdvancedOnLabel.IsDisposed) { return; }
+            var on = new List<string>();
+            if (_secondCursorEnableCheck != null && _secondCursorEnableCheck.Checked) { on.Add(Localization.T("Second Cursor (second mouse)")); }
+            if (_backgroundClickCheck != null && _backgroundClickCheck.Checked) { on.Add(Localization.T("Background Clicking")); }
+            if ((_soundOnStartCheck != null && _soundOnStartCheck.Checked) || (_soundOnStopCheck != null && _soundOnStopCheck.Checked))
+            {
+                on.Add(Localization.T("Sound"));
+            }
+            _clickerAdvancedOnLabel.Text = on.Count == 0 ? string.Empty : Localization.F("On: {0}", string.Join("  ·  ", on));
         }
 
         // ── Manual speed slider ──────────────────────────────────────────────────
@@ -3083,15 +3178,20 @@ namespace AutoClicker.UI
             // "worked" but produced nothing visible — and the restore afterwards brought
             // the window back half-painted. There is nothing to pick INTO when the window
             // isn't up, so the press is dropped and logged rather than acted on.
-            if (!Visible || WindowState == FormWindowState.Minimized)
+            // Up means the main window, or the Clicker tab in a window of its own (the coordinate goes
+            // into whichever shows it).
+            bool mainUp = Visible && WindowState != FormWindowState.Minimized;
+            if (!mainUp && !IsPageShowing(TabByKey("clicker")))
             {
                 Utils.Logger.Info("[UI] Pick-position hotkey ignored — Tempo is in the tray.");
                 return;
             }
 
-            // Hide ourselves briefly so the overlay covers the desktop cleanly.
-            bool wasVisible = Visible;
-            Hide();
+            // Hide ourselves briefly so the overlay covers the desktop cleanly — every Tempo window
+            // that is up, or the spot under one of them is what gets picked.
+            bool wasVisible = mainUp;
+            if (wasVisible) { Hide(); }
+            List<Form> hiddenWindows = HidePageWindowsForPick();
             System.Threading.Thread.Sleep(150);
 
             try
@@ -3110,6 +3210,7 @@ namespace AutoClicker.UI
             }
             finally
             {
+                ShowPageWindowsAfterPick(hiddenWindows);
                 if (wasVisible)
                 {
                     // Rebuild what Hide() threw away. A bare Show() left the window in
@@ -3129,6 +3230,9 @@ namespace AutoClicker.UI
                         ReassertTopMost();
                     });
                 }
+                // The Clicker tab in a window of its own ends in front: that is where the pick went.
+                TabWindow clickerWindow = OpenTabWindowOf(TabByKey("clicker"));
+                if (clickerWindow != null && hiddenWindows.Contains(clickerWindow.Window)) { RaiseTabWindow(clickerWindow); }
             }
         }
 

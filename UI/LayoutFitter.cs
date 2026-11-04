@@ -143,6 +143,27 @@ namespace AutoClicker.UI
                         // something; a scanner that silently examines nothing reports a
                         // clean layout just as loudly as a clean layout does.
                         Report rep = Measure(now);
+                        // A clean start says so in ONE line, every count still in it — ten lines that each said "0"
+                        // were a quarter of every start's log. Anything found keeps the line per check, as before
+                        // (and each fault its own line besides, which is what the layout suites read).
+                        bool clean = rep.Overlaps == 0 && rep.Clipped == 0 && rep.Overflows == 0 && rep.Sideways == 0
+                                     && rep.EnglishText == 0 && rep.TextCut == 0 && rep.ItemsCut == 0 && rep.Ampersands == 0
+                                     && rep.TooClose == 0 && rep.Misaligned == 0;
+                        if (clean)
+                        {
+                            Utils.Logger.Info("[layout] start-up check for " + Utils.Localization.Current + ": all clean — overlaps 0 of "
+                                              + rep.PairsCompared + " pairs, buttons 0 clipped, overflow 0 of " + rep.OverflowExamined
+                                              + ", sideways 0 of " + rep.SidewaysExamined + " page(s), untranslated 0 of " + rep.TextExamined
+                                              + ", cut text 0 of " + rep.CutExamined + ", cut items 0 of " + rep.ItemsExamined
+                                              + ", hidden \"&\" 0 of " + rep.AmpExamined + ", spacing 0 of " + rep.SpacingCompared
+                                              + " pairs; " + clock.ElapsedMilliseconds + " ms.");
+                            if (rep.IconsDropped > 0)
+                            {
+                                Utils.Logger.Info("[layout] icon check for " + Utils.Localization.Current + ": " +
+                                                  rep.IconsDropped + " button icon(s) left off so the caption fits.");
+                            }
+                            return;
+                        }
                         Utils.Logger.Info("[layout] overlap check for " + Utils.Localization.Current +
                                           ": " + rep.Overlaps + " remaining, " + rep.PairsCompared + " pairs compared.");
                         Utils.Logger.Info("[layout] button check for " + Utils.Localization.Current +
@@ -261,6 +282,47 @@ namespace AutoClicker.UI
         }
 
         private static bool IsOverlay(Control c) => c != null && _overlays.TryGetValue(c, out _);
+
+        /// <summary>Words a control shows that are the USER's, not Tempo's.</summary>
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, string[]> _userTexts =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<Control, string[]>();
+
+        /// <summary>
+        /// Declares words <paramref name="c"/> shows that are the user's own — a profile's name — so the language check
+        /// leaves them out: it called a profile named "New Profile" untranslated English on the French Profiles page, a
+        /// name Tempo must never translate (it is the key the profile is found by). Only those exact lines are skipped;
+        /// the rest of the control's text and tooltip is still checked.
+        /// </summary>
+        internal static void DeclareUserText(Control c, params string[] texts)
+        {
+            if (c == null) { return; }
+            try
+            {
+                _userTexts.Remove(c);
+                _userTexts.Add(c, texts ?? new string[0]);
+            }
+            catch { }
+        }
+
+        /// <summary><paramref name="text"/> without the lines that are the user's own words (see DeclareUserText).</summary>
+        private static string WithoutUserText(Control c, string text)
+        {
+            if (string.IsNullOrEmpty(text) || c == null || !_userTexts.TryGetValue(c, out string[] user) || user.Length == 0)
+            {
+                return text;
+            }
+            var kept = new List<string>();
+            foreach (string line in text.Split('\n'))
+            {
+                bool own = false;
+                foreach (string u in user)
+                {
+                    if (!string.IsNullOrEmpty(u) && string.Equals(line.Trim(), u.Trim(), StringComparison.Ordinal)) { own = true; break; }
+                }
+                if (!own) { kept.Add(line); }
+            }
+            return string.Join("\n", kept);
+        }
 
         /// <summary>Every caption a control can show besides the one it has now, declared where it is built.</summary>
         private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, string[]> _captions =
@@ -989,14 +1051,14 @@ namespace AutoClicker.UI
 
                 if (c is Label || c is ButtonBase || c is GroupBox || c is TabPage)
                 {
-                    found += CheckShown(c, c.Text);
+                    found += CheckShown(c, WithoutUserText(c, c.Text));
                 }
                 // A window's title, the items of a status or menu bar, every tooltip and every caption a
                 // control switches to later: the app's own words, reaching the screen by roads the
                 // types above never covered.
                 if (c is Form) { found += CheckShown(c, c.Text); }
                 if (c is ToolStrip strip && !(c is ToolStripDropDown)) { found += CheckMenu(c, strip.Items); }
-                foreach (string tip in TipStyle.TextsFor(c)) { found += CheckShown(c, tip); }
+                foreach (string tip in TipStyle.TextsFor(c)) { found += CheckShown(c, WithoutUserText(c, tip)); }
                 if (HasDeclaredCaptions(c))
                 {
                     foreach (string caption in CaptionsOf(c))
@@ -1947,6 +2009,16 @@ namespace AutoClicker.UI
             if (c is FlatComboBox fc && !fc.IsHandleCreated)
             {
                 int h = fc.ClosedHeight;
+                if (h > b.Height) { b.Height = h; }
+            }
+            // A spinner is the same: FlatNumericUpDown is built borderless and sized then (19 px), and grows to its
+            // PreferredHeight (23, with the frame UiFactory gives it) at its first layout or font pass — a page that
+            // has not been shown has had neither. Tempo started in the tray and checked its pages like that, and on
+            // every start called the Clicker tab's spinner rows MISALIGNED by 2.5–3.5 px (2026-10-18 onwards, 11
+            // times a start) while the shown window (mainscan) had them exactly in line.
+            if (c is UpDownBase ud)
+            {
+                int h = ud.PreferredHeight;
                 if (h > b.Height) { b.Height = h; }
             }
             // A text box, spinner or combo box is auto-sized in HEIGHT only — one line of its font — and its

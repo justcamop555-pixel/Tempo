@@ -221,11 +221,14 @@ namespace AutoClicker.UI
         private bool _syncing, _dead, _coversPending, _trackingLeave, _redrawHeld;
         private ScrollPart _hot = ScrollPart.None, _pressed = ScrollPart.None;
         private bool _hotVertical, _pressedVertical;
+        private bool _thumbTracking;             // Windows is dragging the pressed thumb (SB_THUMBTRACK seen)
+        private readonly bool _listBox;          // a list box or a combo's list: scrolled without the smooth-scroll stall
 
         internal ScrollSkin(Control control)
         {
             _control = control;
             _colourFrom = control;
+            _listBox = control is ListBox;
             control.HandleCreated += OnHandleCreated;
             control.HandleDestroyed += OnHandleDestroyed;
             control.Disposed += OnDisposed;
@@ -238,6 +241,7 @@ namespace AutoClicker.UI
         internal ScrollSkin(IntPtr list, ComboBox combo)
         {
             _colourFrom = combo;
+            _listBox = true;
             combo.Disposed += OnDisposed;
             Hook(list);
         }
@@ -402,6 +406,23 @@ namespace AutoClicker.UI
                     base.WndProc(ref m);   // NativeWindow lets go of the handle here
                     HideCovers();
                     return;
+                case ScrollNative.WM_VSCROLL:
+                case ScrollNative.WM_HSCROLL:
+                case ScrollNative.WM_MOUSEWHEEL:
+                case ScrollNative.WM_MOUSEHWHEEL:
+                    // Windows' drag of the pressed thumb has begun: from now until the button is let go the thumb is
+                    // read from the drag (ScrollNative.TrackedThumb). Not before — nTrackPos still holds the last drag.
+                    if (_pressed == ScrollPart.Thumb && m.Msg != ScrollNative.WM_MOUSEWHEEL && m.Msg != ScrollNative.WM_MOUSEHWHEEL
+                        && ((int)(long)m.WParam & 0xFFFF) == ScrollNative.SB_THUMBTRACK)
+                    {
+                        _thumbTracking = true;
+                    }
+                    if (_listBox && WouldScroll(m))
+                    {
+                        ScrollWithoutAnimation(ref m);
+                        return;
+                    }
+                    break;
                 // Painting frozen around a batch (BeginUpdate, Live debug's rebuilds twice a second): Windows does
                 // that by CLEARING the window's visible bit, so the bar read as hidden and its cover dropped out —
                 // and the parent painted its own background into the gap — until painting came back. Hold the
@@ -419,6 +440,54 @@ namespace AutoClicker.UI
             Sync();
         }
 
+        /// <summary>A scroll message a list box would act on now: its bar shows, it paints, and it is not the end-of-scroll note.</summary>
+        private bool WouldScroll(Message m)
+        {
+            if (_redrawHeld || Handle == IntPtr.Zero || !ScrollNative.IsWindowVisible(Handle)) { return false; }
+            switch (m.Msg)
+            {
+                case ScrollNative.WM_VSCROLL:
+                    return _v.Visible && ((int)(long)m.WParam & 0xFFFF) != ScrollNative.SB_ENDSCROLL;
+                case ScrollNative.WM_HSCROLL:
+                    return _h.Visible && ((int)(long)m.WParam & 0xFFFF) != ScrollNative.SB_ENDSCROLL;
+                case ScrollNative.WM_MOUSEWHEEL:
+                    return _v.Visible;
+                default:
+                    return _h.Visible;
+            }
+        }
+
+        /// <summary>
+        /// Windows' "smooth-scroll list boxes" (on by default) makes a list box's first scroll after it is shown or
+        /// moved take ~0.4 s, with the window answering nothing meanwhile: 465 ms for the first line of a fresh list box
+        /// against 1 ms for the next, measured (scratchpad/arrowhold), and ~0.3 s at the first scroll of every drop-down
+        /// list each time it opens. Holding a bar's arrow ran into it as a freeze — with Windows' own bars as well, but
+        /// Tempo's arrows are always on show. With painting suspended the same scroll takes under a millisecond and
+        /// animates nothing (the later ones never did); the list is then painted once, where it now is.
+        /// </summary>
+        private void ScrollWithoutAnimation(ref Message m)
+        {
+            bool vertical = m.Msg == ScrollNative.WM_VSCROLL || m.Msg == ScrollNative.WM_MOUSEWHEEL;
+            int before = ScrollNative.Position(Handle, vertical);
+            // WM_SETREDRAW(FALSE) clears the visible bit: a Sync in between would read the bar as hidden and drop the covers.
+            _redrawHeld = true;
+            try
+            {
+                Message off = Message.Create(Handle, ScrollNative.WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+                base.WndProc(ref off);
+                try { base.WndProc(ref m); }
+                finally
+                {
+                    Message on = Message.Create(Handle, ScrollNative.WM_SETREDRAW, (IntPtr)1, IntPtr.Zero);
+                    base.WndProc(ref on);
+                }
+            }
+            finally { _redrawHeld = false; }
+            // At the end of the list an arrow or a wheel turn moves nothing: nothing to paint again.
+            if (ScrollNative.Position(Handle, vertical) != before) { ScrollNative.RepaintNow(Handle); }
+            Sync();
+        }
+
         /// <summary>Reads both bars and puts the covers where they are, redrawing the ones that changed.</summary>
         internal void Sync()
         {
@@ -429,6 +498,12 @@ namespace AutoClicker.UI
                 IntPtr hwnd = Handle;
                 ScrollBarState v = ScrollBarState.Read(hwnd, true);
                 ScrollBarState h = ScrollBarState.Read(hwnd, false);
+                // A thumb being dragged is drawn where the drag has it, not where it was when the drag began.
+                if (_thumbTracking)
+                {
+                    if (_pressedVertical && v.Visible) { ScrollNative.TrackedThumb(hwnd, true, ref v); }
+                    else if (!_pressedVertical && h.Visible) { ScrollNative.TrackedThumb(hwnd, false, ref h); }
+                }
                 // A hidden page, a closed list, a minimised dialog: nothing to cover.
                 if (!ScrollNative.IsWindowVisible(hwnd) || (TopLevelTarget && ScrollNative.IsIconic(hwnd)))
                 {
@@ -650,6 +725,7 @@ namespace AutoClicker.UI
         {
             bool vertical = _pressedVertical;
             _pressed = ScrollPart.None;
+            _thumbTracking = false;
             Sync();
             Redraw(vertical);
         }
@@ -975,6 +1051,12 @@ namespace AutoClicker.UI
         internal const int WM_ENTERIDLE = 0x0121;
         internal const int WM_MOUSEMOVE = 0x0200;
         internal const int WM_NCMOUSELEAVE = 0x02A2;
+        internal const int WM_HSCROLL = 0x0114;
+        internal const int WM_VSCROLL = 0x0115;
+        internal const int WM_MOUSEWHEEL = 0x020A;
+        internal const int WM_MOUSEHWHEEL = 0x020E;
+        internal const int SB_ENDSCROLL = 8;
+        internal const int SB_THUMBTRACK = 5;
         internal const int HTTRANSPARENT = -1;
         internal const int HTHSCROLL = 6;
         internal const int HTVSCROLL = 7;
@@ -1108,6 +1190,52 @@ namespace AutoClicker.UI
         [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
 
         internal static void Invalidate(IntPtr hwnd) => InvalidateRect(hwnd, IntPtr.Zero, false);
+
+        [DllImport("user32.dll")] private static extern bool RedrawWindow(IntPtr hwnd, IntPtr rect, IntPtr region, uint flags);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SCROLLINFO { public int cbSize, fMask, nMin, nMax, nPage, nPos, nTrackPos; }
+
+        [DllImport("user32.dll")] private static extern bool GetScrollInfo(IntPtr hwnd, int bar, ref SCROLLINFO info);
+
+        /// <summary>A window's scroll position on its vertical or horizontal bar.</summary>
+        internal static int Position(IntPtr hwnd, bool vertical)
+        {
+            var si = new SCROLLINFO { cbSize = Marshal.SizeOf(typeof(SCROLLINFO)), fMask = 0x4 /* SIF_POS */ };
+            return GetScrollInfo(hwnd, vertical ? 1 /* SB_VERT */ : 0 /* SB_HORZ */, ref si) ? si.nPos : 0;
+        }
+
+        /// <summary>
+        /// Puts <paramref name="s"/>'s thumb where a drag has it. While the thumb is dragged Windows moves its own with
+        /// the pointer, but GetScrollBarInfo (and nPos) report where it was when the drag began until the button is
+        /// let go; only nTrackPos follows the drag. Read from that alone, Tempo's thumb sat still under a moving
+        /// pointer while the text scrolled — "it didn't move while I scroll" (scratchpad/debugscroll, real mouse).
+        /// </summary>
+        internal static bool TrackedThumb(IntPtr hwnd, bool vertical, ref ScrollBarState s)
+        {
+            var si = new SCROLLINFO
+            {
+                cbSize = Marshal.SizeOf(typeof(SCROLLINFO)),
+                fMask = 0x1 | 0x2 | 0x4 | 0x10,   // SIF_RANGE | SIF_PAGE | SIF_POS | SIF_TRACKPOS
+            };
+            if (!GetScrollInfo(hwnd, vertical ? 1 : 0, ref si)) { return false; }
+            int span = si.nMax - si.nMin - Math.Max(si.nPage - 1, 0);   // the positions past the first one
+            int thumb = s.ThumbEnd - s.ThumbStart;
+            int room = s.Length(vertical) - 2 * s.Arrow - thumb;
+            if (span <= 0 || thumb <= 0 || room <= 0) { return false; }
+            int track = Math.Max(si.nMin, Math.Min(si.nMin + span, si.nTrackPos)) - si.nMin;
+            int at = s.Arrow + (int)Math.Round((double)track * room / span);
+            s.ThumbStart = at;
+            s.ThumbEnd = at + thumb;
+            return true;
+        }
+
+        /// <summary>The whole window painted again now, frame included: what a scroll made with painting suspended owes.</summary>
+        internal static void RepaintNow(IntPtr hwnd)
+        {
+            const uint RDW_INVALIDATE = 0x1, RDW_ERASE = 0x4, RDW_ALLCHILDREN = 0x80, RDW_UPDATENOW = 0x100, RDW_FRAME = 0x400;
+            RedrawWindow(hwnd, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+        }
 
         internal static void Hide(IntPtr hwnd) => ShowWindow(hwnd, 0 /* SW_HIDE */);
 

@@ -3,12 +3,12 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <!--
-      Windows-SDK-versioned TFM (not plain net8.0-windows): the caption feature's
+      Windows-SDK-versioned TFM (not plain net10.0-windows): the caption feature's
       face-and-mouth speaker analysis uses the OS's built-in on-device face
       detector (Windows.Media.FaceAnalysis.FaceDetector), which is only reachable
       through the WinRT projections this TFM brings in. Runs on Win10 1809+.
     -->
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <!--
@@ -23,12 +23,20 @@
     <RootNamespace>AutoClicker</RootNamespace>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <LangVersion>12.0</LangVersion>
+    <LangVersion>12.0</LangVersion><!-- Kept at C# 12 on .NET 10 on purpose: C# 14 changes which overload some span/array calls bind to (e.g. arr.Reverse() becomes an in-place reverse). Move it up as its own reviewed change, not as a side effect of the runtime. -->
+    <!--
+      WFO1000 (new in .NET 9, an error by default) asks every public property of a custom
+      control to declare how the WinForms DESIGNER should write it into InitializeComponent.
+      Tempo has no designer files - every screen is built in code - so nothing is ever
+      designer-serialized and the rule has nothing to protect; on the move to .NET 10 it
+      only produced 117 build errors across the custom controls.
+    -->
+    <NoWarn>$(NoWarn);WFO1000</NoWarn>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\tempo.ico</ApplicationIcon>
-    <Version>1.0.326</Version>
-    <AssemblyVersion>1.0.326.0</AssemblyVersion>
-    <FileVersion>1.0.326.0</FileVersion>
+    <Version>1.0.327</Version>
+    <AssemblyVersion>1.0.327.0</AssemblyVersion>
+    <FileVersion>1.0.327.0</FileVersion>
     <Company>Tempo Project</Company>
     <Product>Tempo</Product>
     <AssemblyTitle>Tempo</AssemblyTitle>

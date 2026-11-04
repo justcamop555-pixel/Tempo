@@ -81,7 +81,7 @@ namespace AutoClicker.UI
             {
                 y = AddText(Localization.T(checkEnabled
                         ? "The check has not run yet. Press Check again to run it now."
-                        : "The tamper check is turned off, so nothing was checked. Turn it on in Settings › Data & Backup."),
+                        : "The tamper check is turned off, so nothing was checked. Turn it on in Settings › Updates & privacy."),
                     Pad, y, ClientW - 2 * Pad, _valueFont, _t.Text) + 10;
             }
             else

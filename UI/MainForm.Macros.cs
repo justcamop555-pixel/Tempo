@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using AutoClicker.Models;
 using AutoClicker.Persistence;
@@ -573,6 +574,61 @@ namespace AutoClicker.UI
             _liveStepList.FitLastColumn();
             liveGroup.Controls.Add(_liveStepList);
 
+            // Shown only while the list has stopped following a playing macro because it was scrolled away
+            // (HighlightLiveStep): the way back to the step being played.
+            _liveFollowLink = new LinkLabel
+            {
+                Text = Utils.Localization.T("Jump to the playing step"),
+                AutoSize = true,
+                Top = 27,
+                Visible = false,
+                UseMnemonic = false,
+                BackColor = Color.Transparent,
+                LinkBehavior = LinkBehavior.HoverUnderline,
+            };
+            _liveFollowLink.LinkClicked += (s, e) => FollowLiveAgain();
+            liveGroup.Controls.Add(_liveFollowLink);   // its tip: SetupTooltips
+            // Measured once it is in the card, in the card's font, by what it needs: its Size before it is laid out is
+            // a default 100 px, and placed by that it sat 31 px over "Show every step" (the start-up layout check's find).
+            int linkWidth = (int)Math.Ceiling(_liveFollowLink.GetPreferredSize(Size.Empty).Width * LayoutUnitsPerPixel);
+            _liveFollowLink.Left = Math.Max(16, _liveEveryStepCheck.Left - linkWidth - 12);
+            // Hidden until a playing macro is scrolled away from — and with no size while hidden (SetLiveFollowPaused).
+            _liveFollowLink.AutoSize = false;
+            _liveFollowLink.Size = Size.Empty;
+
+            // A step can be opened in the editor, and the steps copied as text (a bug report, a note).
+            var liveMenu = new ContextMenuStrip();
+            var editStep = new ToolStripMenuItem(Utils.Localization.T("Edit this step…"), null, (s, e) => EditLiveStep(_liveMenuRow));
+            var copyStep = new ToolStripMenuItem(Utils.Localization.T("Copy this step"), null, (s, e) => CopyLiveSteps(_liveMenuRow));
+            var copyAll = new ToolStripMenuItem(Utils.Localization.T("Copy all steps"), null, (s, e) => CopyLiveSteps(-1));
+            liveMenu.Items.AddRange(new ToolStripItem[] { editStep, new ToolStripSeparator(), copyStep, copyAll });
+            liveMenu.Opening += (s, e) =>
+            {
+                bool onRow = _liveMenuRow >= 0 && _liveMenuRow < _liveRows.Count;
+                editStep.Enabled = onRow && CanEditLiveSteps();
+                copyStep.Enabled = onRow;
+                copyAll.Enabled = _liveRows.Count > 0;
+                if (_liveRows.Count == 0) { e.Cancel = true; }
+            };
+            _liveStepList.ContextMenuStrip = liveMenu;
+            _liveStepList.MouseDown += (s, e) =>
+            {
+                if (e.Button == MouseButtons.Right) { _liveMenuRow = LiveRowAt(e.Location); }
+            };
+            _liveStepList.MouseDoubleClick += (s, e) =>
+            {
+                int row = LiveRowAt(e.Location);
+                if (row >= 0 && CanEditLiveSteps()) { EditLiveStep(row); }
+            };
+            _liveStepList.KeyDown += (s, e) =>
+            {
+                if (e.Control && e.KeyCode == Keys.C && _liveRows.Count > 0)
+                {
+                    CopyLiveSteps(-1);
+                    e.Handled = true;
+                }
+            };
+
             page.Controls.Add(help);
             page.Controls.Add(listLabel);
             page.Controls.Add(_macroSearchBox);
@@ -905,6 +961,7 @@ namespace AutoClicker.UI
         {
             _liveMonitorMacro = macro;
             if (!_liveRecording) { _liveTake.Clear(); }    // a finished take's steps, let go
+            ResetLiveFollow();
             RebuildLiveRows(macro?.Actions);
             // After the rows exist, so the column fit accounts for the scrollbar.
             _liveStepList.RefreshLayout();
@@ -960,7 +1017,12 @@ namespace AutoClicker.UI
                 int n = _liveRows.Count;
                 if (_liveStepList.VirtualListSize != n) { _liveStepList.VirtualListSize = n; }
                 if (rowsBefore > 0 && rowsBefore <= n) { _liveStepList.RedrawItems(rowsBefore - 1, rowsBefore - 1, true); }
-                if (follow && n > 0) { _liveStepList.EnsureVisible(n - 1); }
+                // A take follows its newest step the way playback follows its playhead: not while scrolled away.
+                if (follow && n > 0 && KeepFollowingLive(n - 1))
+                {
+                    _liveStepList.EnsureVisible(n - 1);
+                    _liveFollowTop = _liveStepList.TopRowIndex;
+                }
                 _liveStepList.Invalidate();
             }
             catch { }
@@ -1128,12 +1190,148 @@ namespace AutoClicker.UI
             // row and reset the previous one to the LIST's colours — which would now
             // erase that row's own action colour and its stripe.
             try { _liveStepList.SelectedIndices.Clear(); } catch { }
+            if (!KeepFollowingLive(row))
+            {
+                _liveStepList.HighlightIndex = row;   // the playhead moves; the list stays where the reader put it
+                return;
+            }
             _liveStepList.MoveHighlightTo(row);
+            _liveFollowTop = _liveStepList.TopRowIndex;
+        }
+
+        // ── Following the macro ──────────────────────────────────────────────────
+        // The list used to scroll back to the playing step at EVERY step, so nothing else could be read while a macro
+        // played (or a take was recorded): a scroll was undone at the next step. It now follows only until it is
+        // scrolled away from the step being played; then the playhead moves on without moving the list, until the
+        // reader scrolls back to it or clicks "Jump to the playing step".
+        private bool _liveFollowPaused;
+        private int _liveFollowTop = -1;          // the top row the list had after it last followed; -1 = not following yet
+        private LinkLabel _liveFollowLink;
+        private int _liveMenuRow = -1;            // the row a right-click was on
+
+        /// <summary>Whether the list should scroll to <paramref name="row"/>: false while a reader has it somewhere else.</summary>
+        private bool KeepFollowingLive(int row)
+        {
+            int top = _liveStepList.TopRowIndex;
+            bool inView = _liveStepList.RowInView(row);
+            if (_liveFollowPaused)
+            {
+                if (inView) { SetLiveFollowPaused(false); return true; }   // scrolled back to it, or it caught up
+                return false;
+            }
+            if (_liveFollowTop >= 0 && top != _liveFollowTop && !inView)
+            {
+                SetLiveFollowPaused(true);   // moved since it last followed, and not to where the macro is
+                return false;
+            }
+            return true;
+        }
+
+        private void SetLiveFollowPaused(bool paused)
+        {
+            _liveFollowPaused = paused;
+            if (_liveFollowLink == null) { return; }
+            _liveFollowLink.Visible = paused;
+            // Hidden, it has no size. The layout checks judge boxes, not visibility, and its box lay across the header
+            // line, which takes the room back while the link is away: in German "Zum laufenden Schritt" over
+            // "Makro auswählen, aufnehmen oder abspielen, u…" (the start-up check, 2026-11-03).
+            _liveFollowLink.AutoSize = paused;
+            if (!paused) { _liveFollowLink.Size = Size.Empty; }
+            // The header line gives the link its room while it shows.
+            int full = Math.Max(120, _liveEveryStepCheck.Left - 16 - 12);
+            _liveHeaderLabel.Width = paused ? Math.Max(120, Math.Min(full, _liveFollowLink.Left - 16 - 8)) : full;
+        }
+
+        /// <summary>"Jump to the playing step": back to the playhead (or the newest step of a take), following again.</summary>
+        private void FollowLiveAgain()
+        {
+            SetLiveFollowPaused(false);
+            int row = _liveStepList.HighlightIndex >= 0 ? _liveStepList.HighlightIndex
+                    : _liveRecording ? _liveRows.Count - 1 : -1;
+            if (row >= 0 && row < _liveRows.Count)
+            {
+                try { _liveStepList.EnsureVisible(row); } catch { }
+                _liveStepList.Invalidate();
+            }
+            _liveFollowTop = _liveStepList.TopRowIndex;
+        }
+
+        /// <summary>Following starts afresh: a new macro shown, playback or a take begun or ended.</summary>
+        private void ResetLiveFollow()
+        {
+            SetLiveFollowPaused(false);
+            _liveFollowTop = -1;
+        }
+
+        private int LiveRowAt(Point client)
+        {
+            try
+            {
+                ListViewItem item = _liveStepList.GetItemAt(client.X, client.Y);
+                return item != null ? item.Index : -1;
+            }
+            catch { return -1; }
+        }
+
+        /// <summary>The list shows a saved macro at rest — not a take being recorded, not one playing.</summary>
+        private bool CanEditLiveSteps()
+        {
+            return _liveMonitorMacro != null && !_liveRecording && (_player == null || !_player.IsPlaying)
+                   && (_recorder == null || !_recorder.IsRecording)
+                   && ReferenceEquals(_liveActions, _liveMonitorMacro.Actions);
+        }
+
+        /// <summary>Opens the step editor on the first step of Live Monitor row <paramref name="row"/>.</summary>
+        private void EditLiveStep(int row)
+        {
+            if (row < 0 || row >= _liveRows.Count || !CanEditLiveSteps()) { return; }
+            EditMacro(_liveMonitorMacro, _liveRows[row].First);
+        }
+
+        /// <summary>
+        /// The rows as text, as the list shows them (tab-separated, under the column titles): row
+        /// <paramref name="row"/>, or all of them for -1.
+        /// </summary>
+        private void CopyLiveSteps(int row)
+        {
+            if (_liveRows.Count == 0) { return; }
+            int from = row >= 0 ? row : 0, to = row >= 0 ? row : _liveRows.Count - 1;
+            if (from >= _liveRows.Count) { return; }
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine(string.Join("\t", _liveStepList.Columns.Cast<ColumnHeader>().Select(c => c.Text)));
+            for (int i = from; i <= to; i++)
+            {
+                ListViewItem item = MakeLiveItem(i);
+                if (item == null) { continue; }
+                sb.AppendLine(string.Join("\t", item.SubItems.Cast<ListViewItem.ListViewSubItem>().Select(c => c.Text)));
+            }
+            try
+            {
+                Clipboard.SetText(sb.ToString());
+            }
+            catch (Exception ex)
+            {
+                // Another program holding the clipboard: said, not swallowed.
+                Utils.Logger.Warn("[Macro] copying the Live Monitor's steps failed: " + ex.Message);
+                return;
+            }
+            string before = _liveHeaderLabel.Text;
+            string copied = Utils.Localization.T("Copied ✓");
+            _liveHeaderLabel.Text = copied;
+            var back = new System.Windows.Forms.Timer { Interval = 1500 };
+            back.Tick += (s, e) =>
+            {
+                back.Stop();
+                back.Dispose();
+                if (_liveHeaderLabel.Text == copied) { _liveHeaderLabel.Text = before; }
+            };
+            back.Start();
         }
 
         private void ClearLiveHighlight()
         {
             _liveStepList.HighlightIndex = -1;
+            ResetLiveFollow();
             try { _liveStepList.SelectedIndices.Clear(); } catch { }
             if (_liveMonitorMacro != null)
             {
@@ -1570,6 +1768,7 @@ namespace AutoClicker.UI
             // Reset the live monitor for a fresh recording feed.
             _liveRecording = true;
             _liveTake.Clear();
+            ResetLiveFollow();
             RebuildLiveRows(_liveTake);
             _liveHeaderLabel.Text = Utils.Localization.T("● Recording…");
 
@@ -1915,6 +2114,8 @@ namespace AutoClicker.UI
                 }
             }
             catch (Exception ex) { Utils.Logger.Swallow("MinimizeForMacro/accounts", ex); }
+            // And every other tab up in a window of its own (MainForm.TabWindows.cs).
+            MinimizeTabWindowsForMacro();
             return main;
         }
 
@@ -1926,6 +2127,7 @@ namespace AutoClicker.UI
         {
             bool accounts = _autoMinimizedAccountsWindow;
             _autoMinimizedAccountsWindow = false;
+            RestoreTabWindowsAfterMacro(restore);
             if (!restore) { return; }
             try
             {
@@ -2239,9 +2441,11 @@ namespace AutoClicker.UI
 
         // ── Management ─────────────────────────────────────────────────────────
 
-        private void EditSelectedMacro()
+        private void EditSelectedMacro() => EditMacro(SelectedMacro(), -1);
+
+        /// <param name="step">The step the editor opens on (a double-click in the Live Monitor), or -1.</param>
+        private void EditMacro(Macro macro, int step)
         {
-            Macro macro = SelectedMacro();
             if (macro == null)
             {
                 return;
@@ -2249,6 +2453,7 @@ namespace AutoClicker.UI
 
             using (var editor = new MacroEditorForm(_theme, macro))
             {
+                if (step >= 0) { editor.ShowStep(step); }
                 if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
                 {
                     // The edited macro keeps the same name, so Update replaces it.

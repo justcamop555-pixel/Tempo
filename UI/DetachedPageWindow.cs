@@ -111,6 +111,40 @@ namespace AutoClicker.UI
         public bool InMoveLoop => _inMoveLoop;
         private bool _inMoveLoop;
 
+        /// <summary>
+        /// The window-wide keys the main window answers in its own ProcessCmdKey — Escape as the emergency
+        /// stop, Escape out of a hotkey field, Ctrl+1…9 — offered here first, since a page in this window
+        /// never reaches the main window's key handling. True when the key was used.
+        /// </summary>
+        public Func<Keys, Control, bool> CommandKey { get; set; }
+
+        /// <summary>
+        /// The page window the user was last in, until the main window is used again (or this one goes).
+        /// A dialog a page opens is owned by the main window in the code that opens it; ScreenFit hands it
+        /// to this window instead, so it opens over the page that asked for it rather than over a main
+        /// window that may be minimised, in the tray or on the other monitor.
+        /// </summary>
+        public static DetachedPageWindow InUse { get; private set; }
+
+        /// <summary>The main window was activated: dialogs belong to it again.</summary>
+        public static void NoteMainWindowInUse() => InUse = null;
+
+        protected override void OnActivated(EventArgs e)
+        {
+            InUse = this;
+            base.OnActivated(e);
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            try
+            {
+                if (CommandKey != null && CommandKey(keyData, ActiveControl)) { return true; }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("DetachedPageWindow.CommandKey", ex); }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
         public DetachedPageWindow(string title, Theme theme, Icon icon, NavIconKind glyph = NavIconKind.None)
         {
             _theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
@@ -587,10 +621,20 @@ namespace AutoClicker.UI
             base.OnFormClosing(e);
         }
 
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            if (ReferenceEquals(InUse, this)) { InUse = null; }
+            base.OnFormClosed(e);
+        }
+
+        /// <summary>The height the header strip takes above the page, at this screen's scale.</summary>
+        public int StripPixels => _strip != null ? _strip.Height : D(StripHeight);
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
+                if (ReferenceEquals(InUse, this)) { InUse = null; }
                 try { _compositeOff?.Stop(); _compositeOff?.Dispose(); } catch { }
                 _compositeOff = null;
             }

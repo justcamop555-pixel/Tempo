@@ -383,14 +383,14 @@ namespace AutoClicker.Persistence
         }
 
         /// <summary>
-        /// Records that a run just started with a profile: bumps its use count and last-used
-        /// timestamp. Call when a run starts (see ClickProfile.TimesUsed for why not on switch).
+        /// Records a use of a profile (see ClickProfile.TimesUsed for what counts): bumps its use count, or with
+        /// <paramref name="count"/> false only its last-used time (another run in a turn already counted).
         /// </summary>
-        public void MarkUsed(string name)
+        public void MarkUsed(string name, bool count = true)
         {
             var p = GetByName(name);
             if (p == null) return;
-            p.TimesUsed++;
+            if (count) { p.TimesUsed++; }
             p.LastUsedUtc = DateTime.UtcNow;
         }
 

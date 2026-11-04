@@ -62,6 +62,10 @@ namespace AutoClicker.Utils
         /// <summary>True when Vulkan reports at least one physical device.</summary>
         public static bool HasUsableDevice { get { Probe(); return _hasDevice; } }
 
+        /// <summary>Whether the probe has run: <see cref="HasUsableDevice"/> then answers at once instead of loading
+        /// Vulkan — what a caller on the UI thread asks first.</summary>
+        public static bool Probed => _probed;
+
         /// <summary>
         /// One line for the UI: the GPU name and Vulkan version, or the reason the GPU
         /// engine cannot be used here.

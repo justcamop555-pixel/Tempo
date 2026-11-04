@@ -224,6 +224,8 @@ namespace AutoClicker.Utils
                 ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
                 var request = (HttpWebRequest)WebRequest.Create(url);
                 request.Method = "GET";
+                // The proxy Windows is set to use, not automatic discovery (SystemProxy): this runs on the UI thread.
+                request.Proxy = SystemProxy.Get();
                 // A browser-shaped User-Agent, because "Tempo" was getting 403ed. Plenty
                 // of image hosts and CDNs reject unrecognised agents outright, so an
                 // image dragged from a page that displayed it perfectly well would fail

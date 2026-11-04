@@ -160,7 +160,7 @@ namespace AutoClicker.UI
             {
                 Logger.Info("[Guard] a Windows shortcut was held back during a run — said so once this session.");
                 TempoNotify(6000, "Tempo",
-                    Localization.T("A Windows shortcut was held back: while Tempo clicks, plays a macro or records one, only Tempo's keybinds work. You can turn this off in Settings ▸ Behaviour."),
+                    Localization.T("A Windows shortcut was held back: while Tempo clicks, plays a macro or records one, only Tempo's keybinds work. You can turn this off in Settings ▸ While running."),
                     ToolTipIcon.Info);
             });
         }

@@ -13,10 +13,10 @@ namespace AutoClicker.Utils
     /// </summary>
     public static class PrerequisiteChecker
     {
-        /// <summary>Official download page for the .NET 8 Desktop Runtime.</summary>
-        public const string DotNetDownloadUrl = "https://dotnet.microsoft.com/download/dotnet/8.0";
+        /// <summary>Official download page for the .NET 10 Desktop Runtime.</summary>
+        public const string DotNetDownloadUrl = "https://dotnet.microsoft.com/download/dotnet/10.0";
 
-        private const int RequiredDotNetMajor = 8;
+        private const int RequiredDotNetMajor = 10;
         private const int MinWindowsMajor = 10;
 
         public sealed class Result
@@ -55,7 +55,7 @@ namespace AutoClicker.Utils
                     result.Problems.Add(
                         "Tempo requires Windows 10 or Windows 11. Older versions such as " +
                         "Windows 7 and Windows 8.1 are not supported, because Tempo runs on " +
-                        ".NET 8, which itself requires Windows 10 (version 1607) or newer. " +
+                        $".NET {RequiredDotNetMajor}, which itself requires Windows 10 (version 1607) or newer. " +
                         $"(This PC is {WindowsVersion.Describe()}.)");
                 }
                 else if (WindowsVersion.Status == WindowsVersion.Support.Outdated)
@@ -127,7 +127,7 @@ namespace AutoClicker.Utils
                 "Tempo can't start because the following requirement(s) are not met:\n\n  • " +
                 string.Join("\n  • ", result.Problems) +
                 "\n\nPlease install the required software manually, then start Tempo again.\n\n" +
-                "The .NET 8 Desktop Runtime can be downloaded from:\n" + DotNetDownloadUrl +
+                $"The .NET {RequiredDotNetMajor} Desktop Runtime can be downloaded from:\n" + DotNetDownloadUrl +
                 "\n\nOpen that download page now?";
 
             DialogResult choice = MessageBox.Show(

@@ -64,6 +64,10 @@ namespace AutoClicker.UI
                 Width = 420,
                 Height = 470,
                 MultiSelect = true,
+                // The steps picked for Delete / Move / Edit are drawn picked. The list draws its own rows, and drew
+                // a selection only where asked to: the editor's never showed, so "Delete selected" acted on rows
+                // that looked untouched.
+                HighlightSelection = true,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
             _list.Columns.Add("#", 44);
@@ -140,6 +144,24 @@ namespace AutoClicker.UI
             RefreshList();
             ThemeManager.Apply(this, _theme);
             UiFactory.ScaleToScreen(this);
+        }
+
+        /// <summary>Opens on step <paramref name="index"/> (a double-click in the Live Monitor): picked, and in view.</summary>
+        public void ShowStep(int index)
+        {
+            if (index < 0 || index >= _list.Items.Count) { return; }
+            Shown += (s, e) =>
+            {
+                try
+                {
+                    _list.SelectedIndices.Clear();
+                    _list.Items[index].Selected = true;
+                    _list.Items[index].Focused = true;
+                    _list.EnsureVisible(index);
+                    _list.Focus();
+                }
+                catch { }
+            };
         }
 
         private void RefreshList()

@@ -215,7 +215,7 @@ namespace AutoClicker.UI
                     case Utils.IntegrityVerdict.ForeignCode:
                         colour = theme.DangerText;
                         return Localization.T("✗ Program files that are not Tempo's were loaded into it from its folder. "
-                                              + "Open Settings › Data & Backup › Details to see them.");
+                                              + "Open Settings › Updates & privacy › Details to see them.");
                     case Utils.IntegrityVerdict.Modified:
                     case Utils.IntegrityVerdict.Repackaged:
                     case Utils.IntegrityVerdict.UnknownRelease:

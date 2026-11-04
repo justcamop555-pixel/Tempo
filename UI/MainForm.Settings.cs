@@ -17,6 +17,7 @@ namespace AutoClicker.UI
         private CheckBox _hideWhenClickingCheck;
         private CheckBox _checkUpdatesCheck;
         private CheckBox _checkRobloxUpdatesCheck;
+        private CheckBox _robloxGameNamesCheck;
         private CheckBox _writeLogCheck;
         private CheckBox _showIndicatorCheck;
         private CheckBox _minimizeRecordingCheck;
@@ -45,9 +46,6 @@ namespace AutoClicker.UI
         private const int DefaultBackgroundDim = 55;
         // Read-only summary of the display Tempo is on, in the Window & Display card.
         private Label _displayInfoLabel;
-        // Tab or its own window, for the Roblox Account Manager.
-        private ComboBox _accountsPlacementCombo;
-        private bool _updatingAccountsPlacement;
 
         /// <summary>
         /// Writes settings now, and never lets a disk problem reach the user as a crash — the
@@ -61,20 +59,20 @@ namespace AutoClicker.UI
             catch (Exception ex) { Utils.Logger.Swallow("SaveSettingsQuietly", ex); }
         }
 
-        /// <summary>Points the placement combo at what the setting actually says, without re-firing it.</summary>
-        private void SyncAccountsPlacementCombo()
+        /// <summary>
+        /// The sidebar after the settings were loaded, imported or reset: each row's ↗ and tip follow
+        /// what the settings now say, and a tab's window that is open although its tab is no longer
+        /// kept in one is put back. (Accounts, as before, keeps an open window until it is closed.)
+        /// </summary>
+        private void SyncTabPlacements()
         {
-            if (_accountsPlacementCombo == null || _settings == null) { return; }
-            _updatingAccountsPlacement = true;
-            try
+            if (_settings == null || _tabs == null) { return; }
+            foreach (TabPage tab in _tabs.TabPages)
             {
-                _accountsPlacementCombo.SelectedIndex =
-                    _settings.AccountsPlacement == AccountsPlacement.Window ? 1 : 0;
+                if (!IsWindowedTab(tab) && OpenTabWindowOf(tab) != null) { DockTabWindow(tab); }
             }
-            finally { _updatingAccountsPlacement = false; }
-            // The Accounts row's ↗ follows the setting (every change of it passes here or through
-            // the combo itself).
             RefreshSidebarSelection();
+            RefreshNavTips();
         }
         private NumericUpDown _captionLinesNum;
         // "(experimental)" normally; "file missing" when the configured background
@@ -320,63 +318,22 @@ namespace AutoClicker.UI
             _bgGifNote.Width = 150;
             appearance.Controls.Add(_bgGifNote);
 
-            // The custom logo (About → "Choose image…") accepts a GIF, and a GIF now
-            // plays wherever the logo appears. This is the off switch, and — more useful
-            // day to day — the only place that says out loud what the logo is doing:
-            // "3.2s loop" means it worked, "still image" means the file has one frame.
-            _animateLogoCheck = UiFactory.Check("Animate my logo", 16, 176);
-            _animateLogoCheck.AutoSize = true;
-            _animateLogoCheck.CheckedChanged += OnAnimateLogoToggled;
-            appearance.Controls.Add(_animateLogoCheck);
+            // The custom logo's animation and the HDR colour correction used to end this card. They are in
+            // "Display & logo" in the Advanced section now: the first does something only with a GIF logo,
+            // the second only on an HDR screen — four rows of a card everyone opens, for a few people.
 
-            // Playback speed. A logo GIF is authored for a web page, not for a 16px tray
-            // icon — timing that reads well at 400px is often a blur at icon size, and an
-            // ambient loop can be too sleepy to notice. The values are ratios of the
-            // file's own delays, so "1×" always means "exactly as the author made it".
-            _logoSpeedLabel = UiFactory.Caption("Speed:", 16, 206);
-            _logoSpeedLabel.AutoSize = true;
-            appearance.Controls.Add(_logoSpeedLabel);
+            // What the cursor LOOKS like, so it is here — moved from the Behaviour card (and before that the
+            // Macros tab, where it never belonged). Its state is loaded in LoadSettingsIntoUi's tail.
+            _cursorTrailCheck = UiFactory.Check("Colorful cursor trail (just for fun)", 16, 176);
+            _cursorTrailCheck.Checked = _settings != null && _settings.CursorTrailEnabled;
+            _cursorTrailCheck.CheckedChanged += OnCursorTrailChanged;
+            appearance.Controls.Add(_cursorTrailCheck);
+            appearance.Height = 212;
 
-            _logoSpeedCombo = UiFactory.Combo(100, 202, 76,
-                "0.25×", "0.5×", "1×", "1.5×", "2×", "4×");
-            _logoSpeedCombo.SelectedIndexChanged += OnLogoSpeedChanged;
-            appearance.Controls.Add(_logoSpeedCombo);
-
-            // What the DISPLAY is doing to these colours.
-            //
-            // "The theme doesn't look like the colours you picked" has causes that live
-            // entirely outside Tempo, and this card — where the user is standing when they
-            // notice — said nothing about any of them. Windows HDR is the big one: Tempo
-            // is an SDR app, so the compositor converts everything it paints, dark themes
-            // come out milky and near-blacks lift. Nothing inside the process can see that;
-            // the pixels we drew are the pixels we asked for. The box pre-darkens the
-            // palette by exactly the curve Windows uses (Theme.ForHdr), per screen.
-            _hdrCompensateCheck = UiFactory.Check("Correct colours for HDR", 200, 204);
-            _hdrCompensateCheck.AutoSize = true;
-            _hdrCompensateCheck.CheckedChanged += OnHdrCompensationToggled;
-            appearance.Controls.Add(_hdrCompensateCheck);
-
-            // One colour per line (NoteLabel): a single warning used to turn the whole note amber.
-            _displayColourNote = new NoteLabel
-            {
-                Left = 16,
-                Top = 230,
-                AutoSize = false,
-                Width = 670,
-                Height = 58,
-                Font = UiFactory.FontFor(8.25f, FontStyle.Regular)
-            };
-            appearance.Controls.Add(_displayColourNote);
-            RefreshDisplayColourNote();
-
-            _animateLogoNote = UiFactory.Caption("", 190, 178);
-            _animateLogoNote.AutoSize = false;
-            _animateLogoNote.Width = 496;
-            _animateLogoNote.ForeColor = _theme.TextMuted;
-            appearance.Controls.Add(_animateLogoNote);
-
-            // ── Startup & Window ───────────────────────────────────────────────
-            var startup = UiFactory.Group(Localization.T("Startup & Window"), 12, 192, 696, 142, CardIcon.Play);
+            // ── Startup & tray ─────────────────────────────────────────────────
+            // Everything about how Tempo starts and when it goes to the tray, in one place: the three tray
+            // options were in Behaviour, a card away from "Hide window to tray when clicking starts".
+            var startup = UiFactory.Group(Localization.T("Startup & tray"), 12, 192, 696, 142, CardIcon.Play);
 
             _launchStartupCheck = UiFactory.Check("Launch Tempo when I sign in to Windows", 16, 30);
             _launchStartupCheck.CheckedChanged += (s, e) => SyncOpenAtSignInEnabled();
@@ -426,18 +383,28 @@ namespace AutoClicker.UI
             _startupDelayNum = UiFactory.Numeric(470, 28, 60, 0, 120, 0);
             startup.Controls.Add(_startupDelayNum);
 
-            // "Remember window position & size" moved to the Window & Display card —
-            // see the note in Appearance above.
+            // The tray, in the right-hand column (from the Behaviour card).
+            _minimizeToTrayCheck = UiFactory.Check("Minimise to tray instead of closing", 360, 58);
+            _startMinimizedCheck = UiFactory.Check("Start minimised to tray", 360, 86);
+            startup.Controls.Add(_minimizeToTrayCheck);
+            startup.Controls.Add(_startMinimizedCheck);
 
-            // ── Behaviour ──────────────────────────────────────────────────────
-            // 256, not 228: one more row for the cursor trail, moved here from the
-            // Macros tab where it never belonged. 284: and one for holding back Windows' shortcuts.
-            // 312: and one for the Roblox update check.
-            var behaviour = UiFactory.Group(Localization.T("Behaviour"), 12, 316, 696, 312, CardIcon.Gear);
+            // Safety: a forgotten Tempo in the tray shouldn't react to hotkeys.
+            _traySleepCheck = UiFactory.Check("Sleep in tray (pause hotkeys && cursor trail)", 360, 114);
+            startup.Controls.Add(_traySleepCheck);
 
-            _minimizeToTrayCheck = UiFactory.Check("Minimise to tray instead of closing", 16, 30);
-            _startMinimizedCheck = UiFactory.Check("Start minimised to tray", 16, 58);
-            _trayNotifyCheck = UiFactory.Check("Show tray notifications", 16, 86);
+            // "Remember window position & size" is in the Window card — see the note in Appearance above.
+
+            // ── While running ──────────────────────────────────────────────────
+            // What Tempo does while the clicker or a macro runs: how to stop it, what it shows, and what
+            // it keeps out of the way. The rest of the old Behaviour card went where it belongs — the tray
+            // to Startup & tray, updates and records to Updates & privacy, the cursor trail to Appearance,
+            // the tray notifications switch to Notifications.
+            var behaviour = UiFactory.Group(Localization.T("While running"), 12, 316, 696, 214, CardIcon.Bolt);
+
+            // The master switch for Tempo's own notifications (TempoNotify) — built here, shown at the top
+            // of the Notifications card.
+            _trayNotifyCheck = UiFactory.Check("Show tray notifications", 16, 30);
             // Persist the moment it is clicked, exactly like "Use Tempo's animated pop-up
             // notifications" beside it.
             //
@@ -453,58 +420,21 @@ namespace AutoClicker.UI
                 _settings.ShowTrayNotifications = _trayNotifyCheck.Checked;
                 PersistNotificationSettings();
             };
+            _safetyEscapeCheck = UiFactory.Check("Allow Escape key as emergency stop", 16, 30);
             _confirmExitCheck = UiFactory.Check("Confirm before exit while running", 360, 30);
-            _safetyEscapeCheck = UiFactory.Check("Allow Escape key as emergency stop", 360, 58);
-
-            behaviour.Controls.Add(_minimizeToTrayCheck);
-            behaviour.Controls.Add(_startMinimizedCheck);
-
-            // Safety: a forgotten Tempo in the tray shouldn't react to hotkeys.
-            // Placed in the right column so the left column isn't over-stuffed (it used to
-            // run past the card edge and collide with the row above it). At the bottom of it:
-            // its old row now holds the overlay's Customise button (see below).
-            _traySleepCheck = UiFactory.Check("Sleep in tray (pause hotkeys && cursor trail)", 360, 226);
-            behaviour.Controls.Add(_traySleepCheck);
-            behaviour.Controls.Add(_trayNotifyCheck);
-            behaviour.Controls.Add(_confirmExitCheck);
             behaviour.Controls.Add(_safetyEscapeCheck);
+            behaviour.Controls.Add(_confirmExitCheck);
 
-            behaviour.Controls.Add(UiFactory.Label("Start delay (s):", 360, 90));
-            _startDelayNum = UiFactory.Numeric(462, 86, 56, 0, 60, 0);
+            // The wait before a run starts, after its label however wide that is.
+            var startDelayLabel = UiFactory.Label("Start delay (s):", 16, 62);
+            behaviour.Controls.Add(startDelayLabel);
+            _startDelayNum = UiFactory.Numeric(Math.Max(118, LayoutRight(startDelayLabel) + 6), 58, 56, 0, 60, 0);
             behaviour.Controls.Add(_startDelayNum);
-            _startDelayBeepCheck = UiFactory.Check("Beep", 530, 88);
+            _startDelayBeepCheck = UiFactory.Check("Beep", _startDelayNum.Right + 12, 60);
             _startDelayBeepCheck.AutoSize = true;
             behaviour.Controls.Add(_startDelayBeepCheck);
 
-            // Update checking: the checkbox is the master on/off; the combo beside it
-            // sets how often the automatic check may actually run. The row reads
-            // "Check for updates [Daily]". Not "… on start": it also runs while Tempo stays open,
-            // which for a tray app is most of the time. And short on purpose — the combo leaves it
-            // 184 px, and the longer captions ended in "…" (in five languages the old one did).
-            _checkUpdatesCheck = UiFactory.Check("Check for updates", 16, 114);
-            _checkUpdatesCheck.AutoSize = true;
-            _checkUpdatesCheck.CheckedChanged += (s, e) =>
-            {
-                if (_updateFreqCombo != null) { _updateFreqCombo.Enabled = _checkUpdatesCheck.Checked; }
-            };
-            behaviour.Controls.Add(_checkUpdatesCheck);
-            _updateFreqCombo = UiFactory.Combo(210, 111, 128,
-                Localization.T("Every launch"), Localization.T("Daily"), Localization.T("Weekly"));
-            // As wide as its longest choice (French "À chaque lancement" needed 116 px of the 104 it
-            // had), short of the "Write a log file" tick box at x = 360.
-            if (_updateFreqCombo is FlatComboBox freqBox) { freqBox.Width = Math.Min(142, freqBox.WidthForChoices96(128)); }
-            behaviour.Controls.Add(_updateFreqCombo);
-
-            _writeLogCheck = UiFactory.Check("Write a log file to disk", 360, 118);
-            // Applies the moment it is ticked, like the other privacy switches: "turn off for extra
-            // privacy" used to keep writing until Save, and left the log already written behind.
-            _writeLogCheck.CheckedChanged += OnWriteLogChanged;
-            behaviour.Controls.Add(_writeLogCheck);
-
-            _recordHistoryCheck = UiFactory.Check("Record session history and statistics", 16, 142);
-            behaviour.Controls.Add(_recordHistoryCheck);
-
-            _showIndicatorCheck = UiFactory.Check("Show on-screen overlay while running", 360, 146);
+            _showIndicatorCheck = UiFactory.Check("Show on-screen overlay while running", 360, 62);
             _showIndicatorCheck.AutoSize = true;
             // Applies at once — the badge of a run in progress appears or goes — as tray ▸ Overlays' copy
             // of this switch always did; here it waited for Save.
@@ -513,17 +443,17 @@ namespace AutoClicker.UI
             // Under the checkbox, not beside it. Beside it left the caption 218 px, and it needs
             // more than that in every language — English included, where it always read "Show
             // on-screen overlay whi…".
-            var overlayCustomizeBtn = UiFactory.Button("Customise…", 380, 171, 100, 26);
+            var overlayCustomizeBtn = UiFactory.Button("Customise…", 380, 87, 100, 26);
             overlayCustomizeBtn.Click += OnCustomiseOverlay;
             behaviour.Controls.Add(overlayCustomizeBtn);
 
-            _minimizeRecordingCheck = UiFactory.Check("Minimise window during macro record && playback", 16, 170);
+            _minimizeRecordingCheck = UiFactory.Check("Minimise window during macro record && playback", 16, 122);
             behaviour.Controls.Add(_minimizeRecordingCheck);
 
             // Sits directly under the minimise option because the two are related: both keep
             // a run from operating Tempo itself. Minimising only covers macros (and only with
             // a stop hotkey bound); this one also covers the clicker and works while visible.
-            _ignoreOwnWindowCheck = UiFactory.Check("Ignore Tempo's own window while clicking or playing a macro", 16, 198);
+            _ignoreOwnWindowCheck = UiFactory.Check("Ignore Tempo's own window while clicking or playing a macro", 16, 150);
             // Applies and persists the moment it's ticked, rather than waiting for Save
             // Settings. A safety toggle that silently does nothing until you find the Save
             // button is precisely the confusion this option exists to avoid.
@@ -535,19 +465,11 @@ namespace AutoClicker.UI
             };
             behaviour.Controls.Add(_ignoreOwnWindowCheck);
 
-            // Moved here from the Macros tab: an app-wide preference belongs with the
-            // other app-wide preferences. Its state is loaded in LoadSettingsIntoUi's
-            // tail, which already handled it and needs no change.
-            _cursorTrailCheck = UiFactory.Check("Colorful cursor trail (just for fun)", 16, 226);
-            _cursorTrailCheck.Checked = _settings != null && _settings.CursorTrailEnabled;
-            _cursorTrailCheck.CheckedChanged += OnCursorTrailChanged;
-            behaviour.Controls.Add(_cursorTrailCheck);
-
             // While a run lasts only Tempo's keybinds act: the Windows key, Win+…, Ctrl+Esc and the
             // Sticky Keys question are held back (Native.ShortcutGuard). A row of its own — the caption
             // needs the card's width. Applies the moment it is ticked, mid-run included, like the
             // safety option above it.
-            _guardShortcutsCheck = UiFactory.Check("Hold back Windows shortcuts while clicking or running a macro", 16, 254);
+            _guardShortcutsCheck = UiFactory.Check("Hold back Windows shortcuts while clicking or running a macro", 16, 178);
             // The same switch is on the Clicker and Macros tabs and in the tray (SetGuardWindowsShortcuts).
             _guardShortcutsCheck.CheckedChanged += (s, e) =>
             {
@@ -556,9 +478,33 @@ namespace AutoClicker.UI
             };
             behaviour.Controls.Add(_guardShortcutsCheck);
 
-            // Is a newer Roblox out (MainForm.RobloxUpdates)? Under Tempo's own update switch's card, a row of its own.
+            // ── Updates & privacy ──────────────────────────────────────────────
+            // What goes online and what is written down, beside the check that this copy is the one that
+            // was installed — the privacy panel at the foot of the page names each of them.
+            var updates = UiFactory.Group(Localization.T("Updates & privacy"), 12, 1180, 696, 240, CardIcon.Shield);
+
+            // Update checking: the checkbox is the master on/off; the combo beside it
+            // sets how often the automatic check may actually run. The row reads
+            // "Check for updates [Daily]". Not "… on start": it also runs while Tempo stays open,
+            // which for a tray app is most of the time. And short on purpose — the combo leaves it
+            // 184 px, and the longer captions ended in "…" (in five languages the old one did).
+            _checkUpdatesCheck = UiFactory.Check("Check for updates", 16, 30);
+            _checkUpdatesCheck.AutoSize = true;
+            _checkUpdatesCheck.CheckedChanged += (s, e) =>
+            {
+                if (_updateFreqCombo != null) { _updateFreqCombo.Enabled = _checkUpdatesCheck.Checked; }
+            };
+            updates.Controls.Add(_checkUpdatesCheck);
+            _updateFreqCombo = UiFactory.Combo(210, 27, 128,
+                Localization.T("Every launch"), Localization.T("Daily"), Localization.T("Weekly"));
+            // As wide as its longest choice (French "À chaque lancement" needed 116 px of the 104 it
+            // had), short of the "Check for Roblox updates" tick box at x = 360.
+            if (_updateFreqCombo is FlatComboBox freqBox) { freqBox.Width = Math.Min(142, freqBox.WidthForChoices96(128)); }
+            updates.Controls.Add(_updateFreqCombo);
+
+            // Is a newer Roblox out (MainForm.RobloxUpdates)? Beside Tempo's own update switch.
             // Applies the moment it is ticked, like the other switches that decide what goes online.
-            _checkRobloxUpdatesCheck = UiFactory.Check("Check for Roblox updates", 16, 282);
+            _checkRobloxUpdatesCheck = UiFactory.Check("Check for Roblox updates", 360, 30);
             _checkRobloxUpdatesCheck.AutoSize = true;
             _checkRobloxUpdatesCheck.CheckedChanged += (s, e) =>
             {
@@ -566,14 +512,75 @@ namespace AutoClicker.UI
                 _settings.CheckRobloxUpdates = _checkRobloxUpdatesCheck.Checked;
                 PersistNotificationSettings();   // shared "save settings now" helper
             };
-            behaviour.Controls.Add(_checkRobloxUpdatesCheck);
+            updates.Controls.Add(_checkRobloxUpdatesCheck);
 
-            // (Live Captions controls moved to their own dedicated group below.)
+            _recordHistoryCheck = UiFactory.Check("Record session history and statistics", 16, 58);
+            updates.Controls.Add(_recordHistoryCheck);
+
+            _writeLogCheck = UiFactory.Check("Write a log file to disk", 360, 58);
+            // Applies the moment it is ticked, like the other privacy switches: "turn off for extra
+            // privacy" used to keep writing until Save, and left the log already written behind.
+            _writeLogCheck.CheckedChanged += OnWriteLogChanged;
+            updates.Controls.Add(_writeLogCheck);
+
+            // Which Roblox game is being played comes from Roblox's own log on this PC; its NAME is asked of Roblox
+            // (RobloxGameWatcher). A row of its own — the caption needs the room. Applies the moment it is ticked.
+            _robloxGameNamesCheck = UiFactory.Check("Name the Roblox game you're playing", 16, 86);
+            _robloxGameNamesCheck.AutoSize = true;
+            _robloxGameNamesCheck.CheckedChanged += (s, e) =>
+            {
+                if (_suppressSettingsEvents || _settings == null) { return; }
+                _settings.RobloxGameNames = _robloxGameNamesCheck.Checked;
+                Utils.RobloxGameWatcher.NamesOnline = _settings.RobloxGameNames;
+                PersistNotificationSettings();   // shared "save settings now" helper
+            };
+            updates.Controls.Add(_robloxGameNamesCheck);
+
+            // ── Is this still the Tempo that was installed? ────────────────────
+            // (From the Data & Backup card: it is about the copy that updates replace, not about data.)
+            _integrityCheck = UiFactory.Toggle("Check that Tempo hasn't been tampered with", 16, 124);
+            _integrityCheck.AutoSize = true;
+            _integrityCheck.CheckedChanged += (s, e) =>
+            {
+                if (_suppressSettingsEvents) { return; }
+                _settings.IntegrityCheckEnabled = _integrityCheck.Checked;
+                SettingsManager.Save(_settings);
+                RefreshIntegrityStatus();
+            };
+            updates.Controls.Add(_integrityCheck);
+
+            var recheckBtn = UiFactory.Button("Check now", 396, 120, 140, 28);
+            recheckBtn.Click += OnRecheckIntegrity;
+            updates.Controls.Add(recheckBtn);
+
+            // Without this the warning is permanent and unactionable: someone who
+            // replaced the exe on purpose — a self-built copy, a sideloaded update —
+            // would be told forever that Tempo had been tampered with, and the only
+            // way to stop it would be to switch the whole check off.
+            _integrityTrustBtn = UiFactory.Button("Trust this copy", 546, 120, 140, 28);
+            _integrityTrustBtn.Click += OnTrustThisCopy;
+            updates.Controls.Add(_integrityTrustBtn);
+
+            // The one sentence, with everything behind it a click away: the Details window lists each layer
+            // of the check, the file's hash and Official ID, and where it came from. The sentence is as tall
+            // as the longest one any verdict can produce in this language, so no verdict is ever cut short.
+            _integrityDetailsBtn = UiFactory.Button("Details…", 546, 154, 140, 28);
+            _integrityDetailsBtn.Click += (sD, eD) => ShowIntegrityDetails();
+            updates.Controls.Add(_integrityDetailsBtn);
+
+            _integrityStatusLabel = UiFactory.Caption("", 16, 156);
+            _integrityStatusLabel.AutoSize = false;
+            _integrityStatusLabel.Width = 520;
+            _integrityStatusLabel.Height = Math.Max(32, LongestIntegrityStatusHeight(_integrityStatusLabel.Font, 520));
+            _integrityStatusLabel.ForeColor = _theme.TextMuted;
+            updates.Controls.Add(_integrityStatusLabel);
+            updates.Height = Math.Max(_integrityStatusLabel.Bottom, _integrityDetailsBtn.Bottom) + 12;
 
             // ── Notifications ──────────────────────────────────────────────────
             // 252, not 220: one row for the history button, and one more for muted apps.
             // (The card's Y is derived by RestackSettingsCards, so growing it is safe.)
-            var notify = UiFactory.Group(Localization.T("Notifications"), 12, 556, 696, 252, CardIcon.Gear);
+            // 280: and one on top for "Show tray notifications", moved here from Behaviour (see the end of the card).
+            var notify = UiFactory.Group(Localization.T("Notifications"), 12, 556, 696, 280, CardIcon.Gear);
 
             _customNotifyCheck = UiFactory.Check("Use Tempo's animated pop-up notifications", 16, 30);
             _customNotifyCheck.AutoSize = true;
@@ -757,11 +764,23 @@ namespace AutoClicker.UI
             _notifyStatusLabel.AutoEllipsis = true;
             notify.Controls.Add(_notifyStatusLabel);
 
+            // Whether Tempo shows its own notifications at all (TempoNotify asks it) leads the card: it was
+            // in Behaviour, a card away from every other notification setting. Everything above was laid
+            // out from row 30, so the whole card moves down one row under it.
+            foreach (Control c in notify.Controls) { c.Top += 28; }
+            notify.Controls.Add(_trayNotifyCheck);
+
             // ── Live Captions ─────────────────────────────────────────────────
             // 436, not 400: the language row below needs a line of its own, and every
             // other row in this card is already occupied edge to edge. 468 for the lyrics
             // row under it, for the same reason.
+            // 444: the experimental and specialist options went to "More caption options" (below).
             var captions = UiFactory.Group(Localization.T("Live Captions (accessibility)"), 12, 754, 696, 468, CardIcon.Caption);
+
+            // In the Advanced section: what most people who use captions never touch — the experimental
+            // face analysis and GPU engine, the own-voice filter, transcript files, and the Windows bar's
+            // troubleshooter. Built here, beside the rest of the caption controls they work with.
+            var moreCaptions = UiFactory.Group(Localization.T("More caption options"), 12, 2020, 696, 130, CardIcon.Caption);
 
             _captionOverlayCheck = UiFactory.Check("Show Tempo's caption overlay bar when Live Captions is on", 16, 30);
             // This switch had no handler at all, so the two options that only affect the
@@ -847,16 +866,16 @@ namespace AutoClicker.UI
             captions.Controls.Add(_captionModelStatus);
 
             // Experimental: on-device face/mouth analysis to drive speaker labels.
-            _captionFaceCheck = UiFactory.Check("AI face && mouth analysis (experimental)", 16, 156);
+            _captionFaceCheck = UiFactory.Check("AI face && mouth analysis (experimental)", 16, 30);
             _captionFaceCheck.AutoSize = true;
             _captionFaceCheck.CheckedChanged += (sFa, eFa) => OnCaptionSwitchChanged();
-            captions.Controls.Add(_captionFaceCheck);
+            moreCaptions.Controls.Add(_captionFaceCheck);
 
             // Opt-in transcript files (writes spoken content to disk, hence opt-in).
-            _captionTranscriptCheck = UiFactory.Check("Save transcripts to disk", 420, 156);
+            _captionTranscriptCheck = UiFactory.Check("Save transcripts to disk", 420, 30);
             _captionTranscriptCheck.AutoSize = true;
             _captionTranscriptCheck.CheckedChanged += (sTr, eTr) => OnCaptionSwitchChanged();
-            captions.Controls.Add(_captionTranscriptCheck);
+            moreCaptions.Controls.Add(_captionTranscriptCheck);
 
             // Appearance of the caption text (applies to both sources). Every change shows on the caption
             // bar and the transcript at once and is kept — it used to wait for Save, so picking a font
@@ -890,13 +909,13 @@ namespace AutoClicker.UI
             // How much of what was said stays readable. The bar kept three lines and
             // dropped the rest, so a phrase was gone within seconds of being spoken.
             //
-            // Row 312, right-hand side — NOT row 280, where this first went. That row
-            // already holds "Show audio source name on the bar" at x=16 and "Try GPU
-            // engine" at x=420, so all three controls landed on top of existing ones and
-            // the card rendered as overlapping text. Row 312 carries only the own-voice
-            // checkbox, which ends around x=250.
-            captions.Controls.Add(UiFactory.Label("Lines kept:", 300, 314));
-            _captionLinesNum = UiFactory.Numeric(378, 310, 60, 1, 12, 6);
+            // Row 312, a row of its own — NOT row 280, where this first went: that row holds "Show
+            // audio source name on the bar", and the controls landed on top of it. (It shared row 312
+            // with the own-voice checkbox, which is in "More caption options" now.) The box follows
+            // its label, however wide that is.
+            var linesLabel = UiFactory.Label("Lines kept:", 16, 314);
+            captions.Controls.Add(linesLabel);
+            _captionLinesNum = UiFactory.Numeric(Math.Max(94, LayoutRight(linesLabel) + 6), 310, 60, 1, 12, 6);
             _captionLinesNum.ValueChanged += (sLn, eLn) =>
             {
                 if (_suppressSettingsEvents || _settings == null) { return; }
@@ -907,9 +926,9 @@ namespace AutoClicker.UI
                 }
             };
             captions.Controls.Add(_captionLinesNum);
-            var linesHint = UiFactory.Caption("lines of speech kept on the bar", 446, 314);
+            var linesHint = UiFactory.Caption("lines of speech kept on the bar", _captionLinesNum.Right + 8, 314);
             linesHint.AutoSize = false;
-            linesHint.Width = 234;      // 446..680, the space left on this row
+            linesHint.Width = 680 - linesHint.Left;      // the space left on this row
             linesHint.Height = 20;
             captions.Controls.Add(linesHint);
 
@@ -921,9 +940,9 @@ namespace AutoClicker.UI
             // through the speakers (sidetone / "Listen to this device" / chat
             // monitoring). Opt-in because it opens a lightweight mic monitor (the
             // mic-in-use indicator shows) — envelope only, nothing recorded.
-            // Its own row: at (420, 248) it sat ON TOP of the "Open models folder"
+            // At x = 16: at (420, 248) in the old card it sat ON TOP of the "Open models folder"
             // and "Download model" buttons (seen overlapping in a user screenshot).
-            _captionOwnVoiceCheck = UiFactory.Check("Ignore my own voice (uses your mic)", 16, 312);
+            _captionOwnVoiceCheck = UiFactory.Check("Ignore my own voice (uses your mic)", 16, 86);
             _captionOwnVoiceCheck.AutoSize = true;
             _captionOwnVoiceCheck.CheckedChanged += (sOv, eOv) =>
             {
@@ -931,7 +950,7 @@ namespace AutoClicker.UI
                 _settings.CaptionFilterOwnVoice = _captionOwnVoiceCheck.Checked;
                 ApplyOwnVoiceGuardLive();
             };
-            captions.Controls.Add(_captionOwnVoiceCheck);
+            moreCaptions.Controls.Add(_captionOwnVoiceCheck);
 
             // The "♪ App ·" tag on the caption bar: some users want to know where
             // the audio comes from, others call it clutter — so it's their choice.
@@ -948,7 +967,8 @@ namespace AutoClicker.UI
             // cards, and worth a try on NVIDIA. Proven CPU engine stays the default;
             // if the GPU can't keep pace, that SESSION uses Windows Live Captions and
             // this stays on (see OnTempoModelTooSlow — a busy GPU is not a broken one).
-            _captionGpuCheck = UiFactory.Check("Try GPU engine (experimental · needs restart)", 420, 280);
+            // A row of its own (in the old card it shared one at x = 420, and ended in "…" in four languages).
+            _captionGpuCheck = UiFactory.Check("Try GPU engine (experimental · needs restart)", 16, 58);
             _captionGpuCheck.AutoSize = true;
             _captionGpuCheck.CheckedChanged += (sGpu, eGpu) =>
             {
@@ -961,7 +981,7 @@ namespace AutoClicker.UI
                 // to do the restart right now.
                 PromptGpuRestartIfNeeded();
             };
-            captions.Controls.Add(_captionGpuCheck);
+            moreCaptions.Controls.Add(_captionGpuCheck);
 
             // Device pickers: which SPEAKER captions listen through (loopback) and
             // which MICROPHONE the mic mode uses. Every active device shows by its
@@ -1037,18 +1057,21 @@ namespace AutoClicker.UI
             captions.Controls.Add(_captionDownloadModelBtn);
 
             // Troubleshooting: does Windows 11's own Live Captions bar work with Tempo here, and
-            // if not, the button that fixes it (CaptionDiagnosticForm). Placed between the
-            // background-panel check and the model buttons, on the same row.
-            var captionDiagBtn = UiFactory.Button("Diagnose Windows bar", 178, 244, 172, 28);
+            // if not, the button that fixes it (CaptionDiagnosticForm).
+            var captionDiagBtn = UiFactory.Button("Diagnose Windows bar", 420, 82, 172, 28);
             captionDiagBtn.Click += (sD, eD) => ShowCaptionDiagnostic();
-            captions.Controls.Add(captionDiagBtn);
+            moreCaptions.Controls.Add(captionDiagBtn);
+            moreCaptions.Height = captionDiagBtn.Bottom + 12;
+
+            // The face/transcripts row (156) went with them: everything from the font row down moves up
+            // by it. 24, not the 32 rows are apart — the model status above is two lines tall.
+            foreach (Control c in captions.Controls) { if (c.Top >= 181) { c.Top -= 24; } }
+            captions.Height = 444;
 
             // ── Data ───────────────────────────────────────────────────────────
-            // 232, not 164: the tamper check adds a row of actions and a status line.
-            // Everything below — Window & Display, the movement card in its own method,
-            // the button row and the notes under it — shifts down by the same 68.
-            // 266, not 232: a row for restore points under the tamper check (its final height is measured below).
-            var data = UiFactory.Group(Localization.T("Data & Backup"), 12, 1202, 696, 266, CardIcon.Folder);
+            // Data, and only data: the tamper check is in Updates & privacy, the bug reports and the
+            // log in Help & troubleshooting.
+            var data = UiFactory.Group(Localization.T("Data & Backup"), 12, 1202, 696, 166, CardIcon.Folder);
 
             var openFolderBtn = UiFactory.Button("Open data folder", 16, 30, 150, 30);
             openFolderBtn.Click += OnOpenDataFolder;
@@ -1062,9 +1085,9 @@ namespace AutoClicker.UI
             importBtn.Click += OnImportSettings;
             data.Controls.Add(importBtn);
 
-            var openLogBtn = UiFactory.Button("Open log file", 496, 30, 150, 30);
-            openLogBtn.Click += OnOpenLogFile;
-            data.Controls.Add(openLogBtn);
+            var backupBtn = UiFactory.Button("Back up all data…", 496, 30, 170, 30);
+            backupBtn.Click += OnBackupAllData;
+            data.Controls.Add(backupBtn);
 
             var pathLabel = UiFactory.Caption(SettingsManager.GetSettingsDirectory(), 16, 70);
             pathLabel.ForeColor = _theme.TextMuted;
@@ -1073,79 +1096,10 @@ namespace AutoClicker.UI
             pathLabel.Height = 16;
             data.Controls.Add(pathLabel);
 
-            var uninstallBtn = UiFactory.Button("Uninstall Tempo…", 16, 92, 170, 28);
-            uninstallBtn.Click += OnUninstallClicked;
-            data.Controls.Add(uninstallBtn);
-
-            var reportBugBtn = UiFactory.Button("Report a bug…", 196, 92, 150, 28);
-            reportBugBtn.Click += OnReportBug;
-            data.Controls.Add(reportBugBtn);
-
-            var emailBugBtn = UiFactory.Button("Email a bug…", 356, 92, 150, 28);
-            emailBugBtn.Click += OnEmailBug;
-            data.Controls.Add(emailBugBtn);
-
-            var backupBtn = UiFactory.Button("Back up all data…", 510, 92, 170, 28);
-            backupBtn.Click += OnBackupAllData;
-            data.Controls.Add(backupBtn);
-
-            // Real-time view of everything Tempo's caption stack reports: engine,
-            // model, backlog, devices, speaker verdicts and the live event log.
-            _liveDebugBtn = UiFactory.Button("Live debug…", 16, 126, 170, 28);
-            _liveDebugBtn.Click += (sDbg, eDbg) => OpenLiveDebug();
-            data.Controls.Add(_liveDebugBtn);
-
-            var debugHint = UiFactory.Caption(
-                Localization.T("Live engine stats and event stream — great for bug reports."), 196, 132);
-            debugHint.ForeColor = _theme.TextMuted;
-            debugHint.AutoSize = false;
-            debugHint.Width = 480;
-            debugHint.Height = 16;
-            data.Controls.Add(debugHint);
-
-            // ── Is this still the Tempo that was installed? ────────────────────
-            _integrityCheck = UiFactory.Toggle("Check that Tempo hasn't been tampered with", 16, 160);
-            _integrityCheck.AutoSize = true;
-            _integrityCheck.CheckedChanged += (s, e) =>
-            {
-                if (_suppressSettingsEvents) { return; }
-                _settings.IntegrityCheckEnabled = _integrityCheck.Checked;
-                SettingsManager.Save(_settings);
-                RefreshIntegrityStatus();
-            };
-            data.Controls.Add(_integrityCheck);
-
-            var recheckBtn = UiFactory.Button("Check now", 396, 156, 140, 28);
-            recheckBtn.Click += OnRecheckIntegrity;
-            data.Controls.Add(recheckBtn);
-
-            // Without this the warning is permanent and unactionable: someone who
-            // replaced the exe on purpose — a self-built copy, a sideloaded update —
-            // would be told forever that Tempo had been tampered with, and the only
-            // way to stop it would be to switch the whole check off.
-            _integrityTrustBtn = UiFactory.Button("Trust this copy", 546, 156, 140, 28);
-            _integrityTrustBtn.Click += OnTrustThisCopy;
-            data.Controls.Add(_integrityTrustBtn);
-
-            // The one sentence, with everything behind it a click away: the Details window lists each layer
-            // of the check, the file's hash and Official ID, and where it came from. The sentence is as tall
-            // as the longest one any verdict can produce in this language, so no verdict is ever cut short.
-            _integrityDetailsBtn = UiFactory.Button("Details…", 546, 190, 140, 28);
-            _integrityDetailsBtn.Click += (sD, eD) => ShowIntegrityDetails();
-            data.Controls.Add(_integrityDetailsBtn);
-
-            _integrityStatusLabel = UiFactory.Caption("", 16, 192);
-            _integrityStatusLabel.AutoSize = false;
-            _integrityStatusLabel.Width = 520;
-            _integrityStatusLabel.Height = Math.Max(32, LongestIntegrityStatusHeight(_integrityStatusLabel.Font, 520));
-            _integrityStatusLabel.ForeColor = _theme.TextMuted;
-            data.Controls.Add(_integrityStatusLabel);
-            int afterIntegrity = Math.Max(_integrityStatusLabel.Bottom, _integrityDetailsBtn.Bottom) + 8;
-
             // ── Restore points ─────────────────────────────────────────────────
             // Tempo takes one by itself before a new version first touches the data. A backup nobody can
             // get back from is only a folder, so the way back sits right here beside "Back up all data".
-            var restoreBtn = UiFactory.Button("Restore points…", 16, Math.Max(228, afterIntegrity), 170, 28);
+            var restoreBtn = UiFactory.Button("Restore points…", 16, 92, 170, 28);
             // In the window's units (MeasureLayout): this is built before the window is scaled.
             FitButtonToText(restoreBtn, 170, 28);
             restoreBtn.Click += OnRestorePointsClicked;
@@ -1158,28 +1112,75 @@ namespace AutoClicker.UI
             restoreHint.Width = 680 - restoreHint.Left;
             restoreHint.Height = Math.Max(16, MeasureLayout(restoreHint.Text, restoreHint.Font, restoreHint.Width, TextFormatFlags.Default).Height);
             data.Controls.Add(restoreHint);
-            data.Height = Math.Max(266, Math.Max(restoreBtn.Bottom, restoreHint.Bottom) + 10);
 
-            // ── Window & Display ───────────────────────────────────────────────
-            // 152, not 88: this card held one row and half of it was empty, while the
-            // two settings that most belong in it lived in other cards entirely.
-            var windowGroup = UiFactory.Group(Localization.T("Window & Display"), 12, 1450, 696, 152, CardIcon.Gauge);
+            // Uninstalling keeps the data and offers to save it (OnUninstallClicked), so it is about data too.
+            var uninstallBtn = UiFactory.Button("Uninstall Tempo…", 16, Math.Max(restoreBtn.Bottom, restoreHint.Bottom) + 8, 170, 28);
+            uninstallBtn.Click += OnUninstallClicked;
+            data.Controls.Add(uninstallBtn);
+            data.Height = uninstallBtn.Bottom + 12;
 
-            windowGroup.Controls.Add(UiFactory.Label("Window opacity", 16, 34));
+            // ── Help & troubleshooting ─────────────────────────────────────────
+            // Reporting a problem and the two things a report needs, from the Data & Backup card.
+            var help = UiFactory.Group(Localization.T("Help & troubleshooting"), 12, 1300, 696, 104, CardIcon.Wave);
+
+            var reportBugBtn = UiFactory.Button("Report a bug…", 16, 30, 150, 28);
+            reportBugBtn.Click += OnReportBug;
+            help.Controls.Add(reportBugBtn);
+
+            var emailBugBtn = UiFactory.Button("Email a bug…", 176, 30, 150, 28);
+            emailBugBtn.Click += OnEmailBug;
+            help.Controls.Add(emailBugBtn);
+
+            var openLogBtn = UiFactory.Button("Open log file", 336, 30, 150, 28);
+            openLogBtn.Click += OnOpenLogFile;
+            help.Controls.Add(openLogBtn);
+
+            // Real-time view of everything Tempo's caption stack reports: engine,
+            // model, backlog, devices, speaker verdicts and the live event log.
+            _liveDebugBtn = UiFactory.Button("Live debug…", 16, 64, 170, 28);
+            _liveDebugBtn.Click += (sDbg, eDbg) => OpenLiveDebug();
+            help.Controls.Add(_liveDebugBtn);
+
+            var debugHint = UiFactory.Caption(
+                Localization.T("Live engine stats and event stream — great for bug reports."), 196, 70);
+            debugHint.ForeColor = _theme.TextMuted;
+            debugHint.AutoSize = false;
+            debugHint.Width = 480;
+            debugHint.Height = 16;
+            help.Controls.Add(debugHint);
+            help.Height = _liveDebugBtn.Bottom + 12;
+
+            // ── Window ─────────────────────────────────────────────────────────
+            // What the window itself does. The read-out of the screens it is on went to "Display & logo"
+            // in the Advanced section, with the HDR correction it explains.
+            var windowGroup = UiFactory.Group(Localization.T("Window"), 12, 250, 696, 152, CardIcon.Pin);
+
+            var opacityLabel = UiFactory.Label("Window opacity", 16, 34);
+            windowGroup.Controls.Add(opacityLabel);
             // SmoothTrackBar, not the framework TrackBar: a raw TrackBar swallows the mouse
             // wheel whenever the pointer is over it, so scrolling THIS page silently dragged
             // the window's opacity instead of scrolling — and it painted as a grey native
             // slider among themed ones. SmoothTrackBar bubbles the wheel to the page unless
             // it has focus, and themes itself.
+            // It starts where its label ENDS (the Dim slider's fix): "Opacidad de la ventana" ends a few pixels
+            // short of a fixed 150, and a longer translation would run under it. Its right edge stays at 450.
+            int opacityLeft = Math.Max(150, LayoutRight(opacityLabel) + 6);
             _opacitySlider = new SmoothTrackBar
             {
-                Left = 150, Top = 30, Width = 300, Height = 22,
+                Left = opacityLeft, Top = 30, Width = Math.Max(120, 450 - opacityLeft), Height = 22,
                 Minimum = 50, Maximum = 100, TickFrequency = 10,
                 SmallChange = 1, LargeChange = 5, Value = 100
             };
             // Scroll (user-driven) rather than ValueChanged: the load path sets the label and
             // applies the window opacity itself, so it must not also fire on a programmatic set.
             _opacitySlider.Scroll += OnOpacityChanged;
+            // Double-click: fully opaque again, like the Dim slider's way back to its start.
+            _opacitySlider.DoubleClick += (s, e) =>
+            {
+                if (_suppressSettingsEvents) { return; }
+                _opacitySlider.Value = 100;
+                OnOpacityChanged(_opacitySlider, EventArgs.Empty);
+            };
             windowGroup.Controls.Add(_opacitySlider);
 
             _opacityValueLabel = UiFactory.Label("100%", 460, 34);
@@ -1199,56 +1200,129 @@ namespace AutoClicker.UI
 
             _rememberWindowCheck = UiFactory.Check("Remember window position && size", 200, 66);
             _rememberWindowCheck.AutoSize = true;
+            // After "Always on top", however long that is in this language ("Toujours au premier plan" ends 9 px
+            // short of a fixed 200).
+            _rememberWindowCheck.Left = Math.Max(200, LayoutRight(_alwaysOnTopCheck) + 24);
+            _rememberWindowCheck.CheckedChanged += OnRememberWindowToggled;
             windowGroup.Controls.Add(_rememberWindowCheck);
 
-            // ── Row 3: what Tempo is actually drawing on ────────────────────────
-            // The About box has always shown this and the Settings page never did, so
-            // "why is the window this size / why does it look soft" had no answer here.
+            // ── Row 3: where a tab can go ───────────────────────────────────────
+            // "Roblox Accounts: as a tab / in its own window" lived here. Every tab can now go into a
+            // window of its own from its row's right-click menu in the sidebar (MainForm.TabWindows.cs),
+            // so the one-tab setting went, and this line says where its job moved to.
+            var tabWindowHint = UiFactory.Caption(
+                Localization.T("To keep a tab in a window of its own — beside your game, open while Tempo is minimised — right-click it in the sidebar."),
+                16, 100);
+            tabWindowHint.ForeColor = _theme.TextMuted;
+            tabWindowHint.AutoSize = false;
+            tabWindowHint.Width = 664;
+            // As tall as its words, in this language and at this scale.
+            tabWindowHint.Height = Math.Max(18, MeasureLayout(tabWindowHint.Text, tabWindowHint.Font,
+                                                              tabWindowHint.Width, TextFormatFlags.Default).Height);
+            windowGroup.Controls.Add(tabWindowHint);
+            windowGroup.Height = tabWindowHint.Bottom + 14;
+
+            // ── Advanced ───────────────────────────────────────────────────────
+            // Settings most people never need, folded away under one button: the HDR correction and
+            // the logo animation, the experimental and specialist caption options, camera-relative
+            // movement. Opening and closing is SetSettingsAdvancedOpen; the cards' place while closed is
+            // RestackSettingsCards'. Search finds them either way, and Enter opens the section.
+            var advanced = UiFactory.Group(Localization.T("Advanced"), 12, 2000, 696, 70, CardIcon.Gear);
+            _settingsAdvancedBtn = UiFactory.Button("Show advanced settings", 476, 26, 204, 30);
+            LayoutFitter.DeclareCaptions(_settingsAdvancedBtn,
+                Localization.T("Show advanced settings"), Localization.T("Hide advanced settings"));
+            // In the window's units (MeasureLayout): built before the window is scaled.
+            FitButtonToText(_settingsAdvancedBtn, 204, 30);
+            _settingsAdvancedBtn.Left = 680 - _settingsAdvancedBtn.Width;
+            _settingsAdvancedBtn.Click += (s, e) => SetSettingsAdvancedOpen(!SettingsAdvancedOpen);
+            advanced.Controls.Add(_settingsAdvancedBtn);
+
+            var advancedNote = UiFactory.Caption(
+                "HDR colours, the logo animation, experimental caption options and camera-relative movement — most people never need them.",
+                16, 28);
+            advancedNote.ForeColor = _theme.TextMuted;
+            advancedNote.AutoSize = false;
+            advancedNote.Width = _settingsAdvancedBtn.Left - 12 - 16;
+            advancedNote.Height = Math.Max(32, MeasureLayout(advancedNote.Text, advancedNote.Font, advancedNote.Width, TextFormatFlags.Default).Height);
+            advanced.Controls.Add(advancedNote);
+            advanced.Height = Math.Max(_settingsAdvancedBtn.Bottom, advancedNote.Bottom) + 12;
+
+            // ── Display & logo (Advanced) ──────────────────────────────────────
+            // From Appearance and Window: what the screen does to Tempo's colours, the screens it is on,
+            // and the custom logo's animation — each matters to a few people, and to them a lot.
+            var display = UiFactory.Group(Localization.T("Display & logo"), 12, 2010, 696, 232, CardIcon.Gauge);
+
+            // What the DISPLAY is doing to these colours.
+            //
+            // "The theme doesn't look like the colours you picked" has causes that live
+            // entirely outside Tempo, and this card — where the user is standing when they
+            // notice — said nothing about any of them. Windows HDR is the big one: Tempo
+            // is an SDR app, so the compositor converts everything it paints, dark themes
+            // come out milky and near-blacks lift. Nothing inside the process can see that;
+            // the pixels we drew are the pixels we asked for. The box pre-darkens the
+            // palette by exactly the curve Windows uses (Theme.ForHdr), per screen.
+            _hdrCompensateCheck = UiFactory.Check("Correct colours for HDR", 16, 30);
+            _hdrCompensateCheck.AutoSize = true;
+            _hdrCompensateCheck.CheckedChanged += OnHdrCompensationToggled;
+            display.Controls.Add(_hdrCompensateCheck);
+
+            // One colour per line (NoteLabel): a single warning used to turn the whole note amber.
+            _displayColourNote = new NoteLabel
+            {
+                Left = 16,
+                Top = 56,
+                AutoSize = false,
+                Width = 670,
+                Height = 58,
+                Font = UiFactory.FontFor(8.25f, FontStyle.Regular)
+            };
+            display.Controls.Add(_displayColourNote);
+            RefreshDisplayColourNote();
+
+            // What Tempo is actually drawing on. The About box has always shown this and the Settings
+            // page never did, so "why is the window this size / why does it look soft" had no answer.
             // Read-only: it describes the display, it doesn't change it.
-            _displayInfoLabel = UiFactory.Caption(DescribeDisplay(), 16, 104);
+            _displayInfoLabel = UiFactory.Caption(DescribeDisplay(), 16, 120);
             _displayInfoLabel.AutoSize = false;
             _displayInfoLabel.Width = 664;
             _displayInfoLabel.Height = 34;   // two lines when several monitors are listed
-            windowGroup.Controls.Add(_displayInfoLabel);
+            display.Controls.Add(_displayInfoLabel);
 
-            // ── Row 4: where the Roblox Account Manager lives ───────────────────
-            // Here rather than on the Accounts page itself, because the page is behind a
-            // locked vault half the time and this must be reachable either way — including
-            // from a window the user has just closed.
-            var acctPlacementLabel = UiFactory.Label("Roblox Accounts:", 16, 150);
-            windowGroup.Controls.Add(acctPlacementLabel);
+            // The custom logo (About → "Choose image…") accepts a GIF, and a GIF now
+            // plays wherever the logo appears. This is the off switch, and — more useful
+            // day to day — the only place that says out loud what the logo is doing:
+            // "3.2s loop" means it worked, "still image" means the file has one frame.
+            _animateLogoCheck = UiFactory.Check("Animate my logo", 16, 164);
+            _animateLogoCheck.AutoSize = true;
+            _animateLogoCheck.CheckedChanged += OnAnimateLogoToggled;
+            display.Controls.Add(_animateLogoCheck);
 
-            _accountsPlacementCombo = UiFactory.Combo(150, 146, 250,
-                Localization.T("As a tab in this window"),
-                Localization.T("In its own window"));
-            _accountsPlacementCombo.SelectedIndexChanged += (s, e) =>
-            {
-                if (_suppressSettingsEvents || _updatingAccountsPlacement || _settings == null) { return; }
-                var want = _accountsPlacementCombo.SelectedIndex == 1
-                    ? AccountsPlacement.Window
-                    : AccountsPlacement.Tab;
-                if (_settings.AccountsPlacement == want) { return; }
-                _settings.AccountsPlacement = want;
-                SaveSettingsQuietly();
-                ApplyAccountsPlacement();
-                RefreshSidebarSelection();   // the Accounts row's ↗
-            };
-            windowGroup.Controls.Add(_accountsPlacementCombo);
+            _animateLogoNote = UiFactory.Caption("", 190, 166);
+            _animateLogoNote.AutoSize = false;
+            _animateLogoNote.Width = 496;
+            _animateLogoNote.ForeColor = _theme.TextMuted;
+            display.Controls.Add(_animateLogoNote);
 
-            var acctPlacementHint = UiFactory.Caption(
-                Localization.T("A separate window can sit beside your game and stay open while Tempo is minimised."),
-                410, 152);
-            acctPlacementHint.AutoSize = false;
-            acctPlacementHint.Width = 274;
-            // As tall as its words: 30 was two 100% lines, and at 150% (or in a longer language) the
-            // last line did not fit and was not drawn at all.
-            acctPlacementHint.Height = Math.Max(30, MeasureLayout(acctPlacementHint.Text, acctPlacementHint.Font,
-                                                                  acctPlacementHint.Width, TextFormatFlags.Default).Height);
-            windowGroup.Controls.Add(acctPlacementHint);
-            windowGroup.Height = Math.Max(196, acctPlacementHint.Bottom + 12);
+            // Playback speed. A logo GIF is authored for a web page, not for a 16px tray
+            // icon — timing that reads well at 400px is often a blur at icon size, and an
+            // ambient loop can be too sleepy to notice. The values are ratios of the
+            // file's own delays, so "1×" always means "exactly as the author made it".
+            _logoSpeedLabel = UiFactory.Caption("Speed:", 16, 194);
+            _logoSpeedLabel.AutoSize = true;
+            display.Controls.Add(_logoSpeedLabel);
 
-            // ── Camera-relative movement ───────────────────────────────────────
+            _logoSpeedCombo = UiFactory.Combo(100, 190, 76,
+                "0.25×", "0.5×", "1×", "1.5×", "2×", "4×");
+            _logoSpeedCombo.SelectedIndexChanged += OnLogoSpeedChanged;
+            display.Controls.Add(_logoSpeedCombo);
+            // 30, not the combo's Height: it is 30 tall once it has its window, which is after this.
+            display.Height = _logoSpeedCombo.Top + 30 + 12;
+
+            // ── Camera-relative movement (Advanced) ────────────────────────────
             var movement = BuildMovementGroup();
+            movement.Top = 2030;   // after "More caption options" (2020): the order is all a Y says here
+
+            foreach (GroupBox g in new[] { display, moreCaptions, movement }) { _settingsAdvancedCards.Add(g); }
 
             // ── Buttons ────────────────────────────────────────────────────────
             // Placed below the last card. This row and everything under it used to be
@@ -1259,8 +1333,14 @@ namespace AutoClicker.UI
             // So the Y here is measured from the lowest card's bottom, 12 below it. It was a
             // fixed 1866 — 12 below where the last card used to end — and the recorded "gap"
             // came out negative the moment that card grew: the whole row sat 24 px inside it.
+            // In the order they stack (their Y says only that): the everyday cards, then the Advanced section.
+            var cards = new Control[]
+            {
+                appearance, startup, windowGroup, behaviour, notify, captions, updates, data, help,
+                advanced, display, moreCaptions, movement
+            };
             int tail0 = 0;
-            foreach (Control card in new Control[] { appearance, startup, behaviour, notify, captions, data, windowGroup, movement })
+            foreach (Control card in cards)
             {
                 if (card.Bottom > tail0) { tail0 = card.Bottom; }
             }
@@ -1282,14 +1362,7 @@ namespace AutoClicker.UI
             var resetBtn = UiFactory.Button("Reset to defaults", 560, tail0, 148, 36);
             resetBtn.Click += OnResetSettings;
 
-            page.Controls.Add(appearance);
-            page.Controls.Add(startup);
-            page.Controls.Add(behaviour);
-            page.Controls.Add(notify);
-            page.Controls.Add(captions);
-            page.Controls.Add(data);
-            page.Controls.Add(windowGroup);
-            page.Controls.Add(movement);
+            foreach (Control card in cards) { page.Controls.Add(card); }
             page.Controls.Add(_saveSettingsBtn);
             page.Controls.Add(aboutBtn);
             page.Controls.Add(checkUpdatesBtn);
@@ -1301,6 +1374,9 @@ namespace AutoClicker.UI
             _lastCheckedLabel.AutoSize = false;
             _lastCheckedLabel.Width = 696;
             _lastCheckedLabel.Height = 18;
+            // Its longest state (an update known and the last check failed) runs past 696 px in every language
+            // but English (711–822 px, scratchpad/updateflow): "…" and the whole line on hover, not words lost.
+            _lastCheckedLabel.AutoEllipsis = true;
             // "Update available: v…" opens the update it names.
             _lastCheckedLabel.Click += OnLastCheckedLabelClick;
             page.Controls.Add(_lastCheckedLabel);
@@ -1391,6 +1467,9 @@ namespace AutoClicker.UI
             // the tail and gets left behind the moment a card above it changes height.
             CaptureSettingsLayout(page);
             RestackSettingsCards();
+            // Closed on a new install; as it was left otherwise.
+            ShowAdvancedCards(SettingsAdvancedOpen);
+            RefreshSettingsAdvancedButton();
 
             // Kept as a guard, not as the fix. Cards used to be positioned by hand and
             // one of them (the movement card) is built in its own method, so resizing a
@@ -1429,6 +1508,7 @@ namespace AutoClicker.UI
         private static readonly Color PrivacyBlue = Color.FromArgb(92, 168, 255);
         private static readonly Color PrivacyViolet = Color.FromArgb(178, 140, 255);
         private static readonly Color PrivacyRose = Color.FromArgb(255, 122, 170);
+        private static readonly Color PrivacyTeal = Color.FromArgb(64, 200, 196);
         private readonly System.Collections.Generic.List<(Label Name, Label Text, Func<Theme, Color> Hue)> _privacyRows =
             new System.Collections.Generic.List<(Label, Label, Func<Theme, Color>)>();
 
@@ -1487,23 +1567,28 @@ namespace AutoClicker.UI
 
             // Name | what it does, when, and where it is switched off. The names column is as wide as the
             // widest name in this language, so the descriptions line up.
-            // Each name its own hue, the same in every theme: blue, green, rose, amber, violet. The theme's accent
+            // Each name its own hue, the same in every theme: blue, green, rose, teal, amber, violet. The theme's accent
             // was used at first, and Monokai's accent IS its green — three green names and an amber one.
             // RefreshPrivacyPanel fits each hue to the panel (Theme.Readable keeps the hue, moves lightness).
             var rows = new (string Name, string Text, Func<Theme, Color> Hue)[]
             {
                 (Localization.T("Update check"),
-                 Localization.T("Asks GitHub whether a newer version is out. Switch it off with “Check for updates” in Behaviour."),
+                 Localization.T("Asks GitHub whether a newer version is out. Switch it off with “Check for updates” in Updates & privacy."),
                  t => PrivacyBlue),
                 (Localization.T("Release check"),
                  Localization.T("Compares a new release with the copy GitHub published, once per version. "
-                 + "Switch it off with “Check that Tempo hasn't been tampered with” in Data & Backup."),
+                 + "Switch it off with “Check that Tempo hasn't been tampered with” in Updates & privacy."),
                  t => t.SuccessText),
                 (Localization.T("Roblox update check"),
                  Localization.T("Asks Roblox which client version it hands out and which it has uploaded since — what Roblox itself "
                  + "reads — every two hours while Roblox is installed. Nothing about you or your accounts is sent. "
-                 + "Switch it off with “Check for Roblox updates” in Behaviour."),
+                 + "Switch it off with “Check for Roblox updates” in Updates & privacy."),
                  t => PrivacyRose),
+                (Localization.T("Roblox game names"),
+                 Localization.T("Which Roblox game you're in is read from Roblox's own log on this PC. Tempo then asks Roblox "
+                 + "for that game's name — once per game, sending only the game's number. Switch it off with “Name the "
+                 + "Roblox game you're playing” in Updates & privacy."),
+                 t => PrivacyTeal),
                 (Localization.T("When you use them"),
                  Localization.T("Downloading a speech model (from Hugging Face), setting a logo from a web address, and the Roblox "
                  + "account manager, which signs in, checks sessions and launches games through Roblox."),
@@ -1583,7 +1668,7 @@ namespace AutoClicker.UI
                 }
                 else if (Utils.IntegrityCheck.IsProblem)
                 {
-                    status = Localization.T("⚠ This copy is not the published release. See “Check that Tempo hasn't been tampered with” in Data & Backup.");
+                    status = Localization.T("⚠ This copy is not the published release. See “Check that Tempo hasn't been tampered with” in Updates & privacy.");
                     ink = t.DangerText;
                 }
                 else
@@ -1740,6 +1825,7 @@ namespace AutoClicker.UI
                     _updateFreqCombo.Enabled = _settings.CheckForUpdatesOnLaunch;
                 }
                 if (_checkRobloxUpdatesCheck != null) { _checkRobloxUpdatesCheck.Checked = _settings.CheckRobloxUpdates; }
+                if (_robloxGameNamesCheck != null) { _robloxGameNamesCheck.Checked = _settings.RobloxGameNames; }
                 _writeLogCheck.Checked = _settings.WriteLogFile;
                 _recordHistoryCheck.Checked = _settings.RecordSessionHistory;
                 _showIndicatorCheck.Checked = _settings.ShowClickingIndicator;
@@ -1761,7 +1847,7 @@ namespace AutoClicker.UI
                 SyncGuardShortcutControls();
                 _rememberWindowCheck.Checked = _settings.RememberWindowPosition;
                 _rememberTabCheck.Checked = _settings.RememberLastTab;
-                SyncAccountsPlacementCombo();
+                SyncTabPlacements();
 
                 if (_integrityCheck != null)
                 {
@@ -1849,6 +1935,9 @@ namespace AutoClicker.UI
             RefreshThemePreview();
             RefreshMissedNotificationsLabel();
             RefreshMutedAppsLabel();
+            // An imported file can say the Advanced section was open somewhere else (Reset keeps it).
+            SyncSettingsAdvancedSection();
+            if (_clickerAdvancedCards.Count > 0) { ShowClickerAdvanced(ClickerAdvancedOpen); }
         }
 
         /// <summary>1 while a label refresh is already queued, so a burst of entries costs one.</summary>
@@ -1963,6 +2052,8 @@ namespace AutoClicker.UI
                 _trayAlwaysOnTopItem.Checked = _settings.AlwaysOnTop;
             }
             ReassertTopMost();
+            // Kept at once, as the tray menu's tick is: it waited for Save Settings or a clean exit.
+            SaveSettingsQuietly();
         }
 
         private void OnLanguageChanged(object sender, EventArgs e)
@@ -2014,9 +2105,48 @@ namespace AutoClicker.UI
         {
             int v = _opacitySlider.Value;
             _opacityValueLabel.Text = v + "%";
-            // Live preview; the value is persisted when Save Settings is pressed.
             try { Opacity = v / 100.0; } catch { }
+            // Kept as it is set, like the window's other settings in this card: it waited for Save Settings, or a
+            // clean exit, so a crash or an End task put the window back to the old opacity. Written when the
+            // dragging stops (a save per step of a drag would be a write per pixel).
+            if (_suppressSettingsEvents || _settings == null) { return; }
+            _settings.WindowOpacity = v;
+            if (_opacitySaveTimer == null)
+            {
+                _opacitySaveTimer = new System.Windows.Forms.Timer { Interval = 600 };
+                _opacitySaveTimer.Tick += (s, ev) => { _opacitySaveTimer.Stop(); SaveSettingsQuietly(); };
+            }
+            _opacitySaveTimer.Stop();
+            _opacitySaveTimer.Start();
         }
+
+        private System.Windows.Forms.Timer _opacitySaveTimer;
+
+        /// <summary>
+        /// "Remember window position & size", kept at once. Turned on, it records where the window is now — it
+        /// used to start remembering only from the NEXT exit after Save Settings, so the next start opened wherever
+        /// the window had been long before. Turned off, the remembered place is let go.
+        /// </summary>
+        private void OnRememberWindowToggled(object sender, EventArgs e)
+        {
+            if (_suppressSettingsEvents || _settings == null) { return; }
+            _settings.RememberWindowPosition = _rememberWindowCheck.Checked;
+            if (_settings.RememberWindowPosition)
+            {
+                SaveWindowPosition();
+            }
+            else
+            {
+                _settings.WindowLeft = -1;
+                _settings.WindowTop = -1;
+                _settings.WindowWidth = -1;
+                _settings.WindowHeight = -1;
+            }
+            SaveSettingsQuietly();
+        }
+
+        /// <summary>The window's first-start size in 100% numbers (InitializeShell), scaled where it is used.</summary>
+        private const int DefaultWindowWidth = 1020, DefaultWindowHeight = 824;
 
         private void OnResetWindowPosition(object sender, EventArgs e)
         {
@@ -2027,21 +2157,25 @@ namespace AutoClicker.UI
                     ToggleFullScreen();
                 }
                 WindowState = FormWindowState.Normal;
-                Size = new Size(800, 824);
 
+                // The size Tempo opens at on a first start, at this window's scale, within this screen. It was a
+                // fixed 800×824: not scaled on a 125%/150% screen, and narrower than the window's own minimum.
                 Rectangle wa = Screen.FromControl(this).WorkingArea;
-                Location = new Point(
-                    wa.X + (wa.Width - Width) / 2,
-                    wa.Y + (wa.Height - Height) / 2);
+                float k = AppliedWindowScale;
+                int w = Math.Min(wa.Width, (int)Math.Round(DefaultWindowWidth * k));
+                int h = Math.Min(wa.Height, (int)Math.Round(DefaultWindowHeight * k));
+                Bounds = new Rectangle(wa.X + (wa.Width - w) / 2, wa.Y + (wa.Height - h) / 2, w, h);
 
                 // Forget any stored position so it stays centred next launch too.
                 _settings.WindowLeft = -1;
                 _settings.WindowTop = -1;
                 _settings.WindowWidth = -1;
                 _settings.WindowHeight = -1;
-                ShowInfo("Window position reset.");
+                SaveSettingsQuietly();
+                // In the status line: a dialog to dismiss for something the user can see happen was one click too many.
+                _statusState.Text = Localization.T("Window position reset.");
             }
-            catch { }
+            catch (Exception ex) { Utils.Logger.Swallow("OnResetWindowPosition", ex); }
         }
 
         /// <summary>
@@ -2608,6 +2742,29 @@ namespace AutoClicker.UI
                     (size.Length > 0 ? " \u00b7 " + size + " " + Localization.T("on disk") : "") +
                     " \u00b7 " + language + ".";
                 _captionModelStatus.ForeColor = Theme.Readable(_theme.Success, _theme.InputBackground);
+
+                // A bigger model already on disk, and a graphics card that runs it live: say so, in place of the size
+                // (the line has two rows). Measured on this PC, 2026-11-01, a spelling game's words (caprecall
+                // "spelling"): Base on the CPU heard 35 of 40, Large Turbo on the RTX 5060 38 of 40, at 0.3\u00d7 real time \u2014
+                // the user's captions were on Base with the better models downloaded and the GPU engine off.
+                var better = BetterInstalledModel(model);
+                if (better != null)
+                {
+                    if (!Utils.VulkanProbe.Probed)
+                    {
+                        // Loading Vulkan to ask takes a moment: asked off the UI thread, the line is redrawn after.
+                        System.Threading.Tasks.Task.Run(() => { bool _ = Utils.VulkanProbe.HasUsableDevice; })
+                            .ContinueWith(t => { try { if (IsHandleCreated && !IsDisposed) { BeginInvoke(new Action(UpdateCaptionSourceUi)); } } catch { } });
+                    }
+                    else if (Utils.VulkanProbe.HasUsableDevice)
+                    {
+                        string now = ShortModelName(Localization.T(model.Label));
+                        string bigger = ShortModelName(Localization.T(better.Label));
+                        _captionModelStatus.Text = _settings != null && _settings.CaptionTryGpu
+                            ? Localization.F("\u2713 {0} is ready. {1} is downloaded too and mishears far fewer words \u2014 your GPU engine runs it live.", now, bigger)
+                            : Localization.F("\u2713 {0} is ready. {1} is downloaded too and mishears far fewer words \u2014 tick \u201cTry GPU engine\u201d and your graphics card runs it live.", now, bigger);
+                    }
+                }
             }
             else
             {
@@ -2616,6 +2773,42 @@ namespace AutoClicker.UI
                     Localization.T(model.Note);
                 _captionModelStatus.ForeColor = Theme.Readable(_theme.Warning, _theme.InputBackground);
             }
+        }
+
+        /// <summary>How well a model family hears, for <see cref="BetterInstalledModel"/>: Large Turbo above the plain Large v3,
+        /// which is the more accurate on paper but too slow to keep up live on most graphics cards.</summary>
+        private static int ModelRank(string key)
+        {
+            key = key ?? "";
+            if (key.StartsWith("large-v3", StringComparison.Ordinal)) { return 4; }
+            if (key.StartsWith("large", StringComparison.Ordinal)) { return 5; }
+            if (key.StartsWith("medium", StringComparison.Ordinal)) { return 3; }
+            if (key.StartsWith("small", StringComparison.Ordinal)) { return 2; }
+            if (key.StartsWith("base", StringComparison.Ordinal)) { return 1; }
+            return 0;   // tiny, or one this list does not know
+        }
+
+        /// <summary>The best model already downloaded that hears better than <paramref name="current"/>, or null.</summary>
+        private static Utils.WhisperModelInfo BetterInstalledModel(Utils.WhisperModelInfo current)
+        {
+            if (current == null) { return null; }
+            Utils.WhisperModelInfo best = null;
+            int bar = ModelRank(current.Key);
+            foreach (var m in Utils.WhisperModelManager.Available)
+            {
+                int r = ModelRank(m.Key);
+                if (r <= bar || !Utils.WhisperModelManager.IsInstalled(m)) { continue; }
+                if (best == null || r > ModelRank(best.Key)) { best = m; }
+            }
+            return best;
+        }
+
+        /// <summary>"Large Turbo (best all-round, any language)" → "Large Turbo": the name without its description.</summary>
+        private static string ShortModelName(string label)
+        {
+            if (string.IsNullOrEmpty(label)) { return label; }
+            int cut = label.IndexOf(" (", StringComparison.Ordinal);
+            return cut > 0 ? label.Substring(0, cut) : label;
         }
 
         private void OnDownloadCaptionModel(object sender, EventArgs e)
@@ -3006,18 +3199,22 @@ namespace AutoClicker.UI
             _movementDegPerCountNum.DecimalPlaces = 4;
             _movementDegPerCountNum.Increment = 0.005m;
             g.Controls.Add(_movementDegPerCountNum);
-            g.Controls.Add(UiFactory.Caption("°/count", 246 + sdx, 168 + dy));
+            var unitCaption = UiFactory.Caption("°/count", 246 + sdx, 168 + dy);
+            g.Controls.Add(unitCaption);
 
-            _movementCalibrateBtn = UiFactory.Button("Calibrate…", 310 + sdx, 162 + dy, 120, 28);
+            // After the unit, however long it is in this language: the button sat at a fixed x, and the French
+            // "°/impulsion" (and the Italian "°/conteggio") ran under it.
+            int calibrateX = Math.Max(310 + sdx, LayoutRight(unitCaption) + 8);
+            _movementCalibrateBtn = UiFactory.Button("Calibrate…", calibrateX, 162 + dy, 120, 28);
             _movementCalibrateBtn.Click += OnCalibrateCameraSensitivity;
             g.Controls.Add(_movementCalibrateBtn);
 
             // The value in a unit you can check against the game: how much mouse movement one full turn
             // takes. "0.0600 °/count" alone says nothing to anyone (RefreshMovementHints).
-            _movementTurnHint = UiFactory.Caption("", 440 + sdx, 168 + dy);
+            _movementTurnHint = UiFactory.Caption("", calibrateX + 130, 168 + dy);
             _movementTurnHint.ForeColor = _theme.TextMuted;
             _movementTurnHint.AutoSize = false;
-            _movementTurnHint.Width = 244 - sdx;
+            _movementTurnHint.Width = 684 - (calibrateX + 130);
             _movementTurnHint.Height = 28;
             g.Controls.Add(_movementTurnHint);
 
@@ -3457,6 +3654,9 @@ namespace AutoClicker.UI
             var prevCaptionSource = _settings.CaptionSource;
             string prevCaptionModel = _settings.CaptionModelKey;
             int prevCaptionCapture = _settings.CaptionCaptureMode;
+            // And the update schedule's, so a new pace applies now rather than after the next check.
+            bool prevUpdateChecks = _settings.CheckForUpdatesOnLaunch;
+            int prevUpdateFrequency = _settings.UpdateCheckFrequency;
 
             if (_themeCombo.SelectedIndex >= 0)
             {
@@ -3523,6 +3723,11 @@ namespace AutoClicker.UI
             _settings.CheckForUpdatesOnLaunch = _checkUpdatesCheck.Checked;
             if (_updateFreqCombo != null) { _settings.UpdateCheckFrequency = Math.Max(0, _updateFreqCombo.SelectedIndex); }
             if (_checkRobloxUpdatesCheck != null) { _settings.CheckRobloxUpdates = _checkRobloxUpdatesCheck.Checked; }
+            if (_robloxGameNamesCheck != null)
+            {
+                _settings.RobloxGameNames = _robloxGameNamesCheck.Checked;
+                Utils.RobloxGameWatcher.NamesOnline = _settings.RobloxGameNames;
+            }
             _settings.WriteLogFile = _writeLogCheck.Checked;
             _settings.RecordSessionHistory = _recordHistoryCheck.Checked;
             _settings.ShowClickingIndicator = _showIndicatorCheck.Checked;
@@ -3609,6 +3814,10 @@ namespace AutoClicker.UI
             // "Sleep in tray" is what silences these hotkeys — keep the notice on the
             // Keybinds tab in step with the setting the moment it is saved.
             RefreshTraySleepNotice();
+            if (prevUpdateChecks != _settings.CheckForUpdatesOnLaunch || prevUpdateFrequency != _settings.UpdateCheckFrequency)
+            {
+                RearmUpdateSchedule();
+            }
 
             // No modal. A dialog that says "Settings saved." demands a click to dismiss
             // something the user already knows they did — it interrupts the exact moment
@@ -3868,6 +4077,8 @@ namespace AutoClicker.UI
             if (before != null)
             {
                 ApplyChangedCaptionEngine(before);
+                SyncRobloxWatching();   // an imported "notices" switch starts or stops the background watch
+                RefreshRobloxFocus();   // …and an imported "smoother play" eases clients or puts them back
                 if (AccountSettingsDiffer(before, _settings))
                 {
                     // Import can switch the account manager, multi-instance or the local API;
@@ -3925,6 +4136,9 @@ namespace AutoClicker.UI
         private static bool AccountSettingsDiffer(AppSettings a, AppSettings b) =>
             a.AccountsEnabled != b.AccountsEnabled
             || a.RobloxMultiInstance != b.RobloxMultiInstance
+            || a.RobloxCrashGuard != b.RobloxCrashGuard
+            || a.RobloxGameNotices != b.RobloxGameNotices
+            || a.RobloxSmootherPlay != b.RobloxSmootherPlay
             || a.AccountApiEnabled != b.AccountApiEnabled
             || a.AccountApiPort != b.AccountApiPort
             || !string.Equals(a.AccountApiToken ?? "", b.AccountApiToken ?? "", StringComparison.Ordinal);
@@ -5142,6 +5356,11 @@ namespace AutoClicker.UI
             _settings.CheckForUpdatesOnLaunch = _checkUpdatesCheck.Checked;
             if (_updateFreqCombo != null) { _settings.UpdateCheckFrequency = Math.Max(0, _updateFreqCombo.SelectedIndex); }
             if (_checkRobloxUpdatesCheck != null) { _settings.CheckRobloxUpdates = _checkRobloxUpdatesCheck.Checked; }
+            if (_robloxGameNamesCheck != null)
+            {
+                _settings.RobloxGameNames = _robloxGameNamesCheck.Checked;
+                Utils.RobloxGameWatcher.NamesOnline = _settings.RobloxGameNames;
+            }
             _settings.WriteLogFile = _writeLogCheck.Checked;
             _settings.RecordSessionHistory = _recordHistoryCheck.Checked;
             _settings.ShowClickingIndicator = _showIndicatorCheck.Checked;
@@ -5243,9 +5462,9 @@ namespace AutoClicker.UI
                 {
                     if (digit < _tabs.TabPages.Count)
                     {
-                        // Ctrl+9 on a detached page raises its window — the tab behind it is an
-                        // empty placeholder, so selecting it would show nothing.
-                        if (AccountsNavHandled(_tabs.TabPages[digit])) { return true; }
+                        // Ctrl+N on a tab kept in its own window opens or raises that window — the tab
+                        // behind it holds only a card while its controls are there.
+                        if (TabWindowNavHandled(_tabs.TabPages[digit])) { return true; }
                         _tabs.SelectedIndex = digit;
                         return true;
                     }
@@ -5256,10 +5475,9 @@ namespace AutoClicker.UI
                     int count = _tabs.TabPages.Count;
                     bool back = (keyData & Keys.Shift) == Keys.Shift;
                     int next = ((_tabs.SelectedIndex + (back ? -1 : 1)) % count + count) % count;
-                    // Cycling SKIPS a detached page rather than stopping on its empty tab. At
-                    // most one step is ever skipped today, but the loop is written to survive a
-                    // second detachable page, and to give up rather than spin if every page were.
-                    for (int guard = 0; guard < count && IsDetachedPage(_tabs.TabPages[next]); guard++)
+                    // Cycling SKIPS a tab kept in its own window rather than stopping on its card,
+                    // and gives up rather than spins if every tab is out.
+                    for (int guard = 0; guard < count && IsWindowedTab(_tabs.TabPages[next]); guard++)
                     {
                         next = ((next + (back ? -1 : 1)) % count + count) % count;
                     }

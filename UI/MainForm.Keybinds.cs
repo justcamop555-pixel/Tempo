@@ -30,7 +30,7 @@ namespace AutoClicker.UI
             SetKeybindNotice(_keybindsTraySleepLabel, !sleeping ? null : Utils.Localization.T(
                 "⏾  “Sleep in tray” is on: after 30 minutes hidden with nothing running, Tempo sleeps and "
                 + "its start hotkeys pause — the first press then only wakes it, so press again. Emergency "
-                + "stop and Show / hide window always work. Turn it off in Settings → Startup & Window."));
+                + "stop and Show / hide window always work. Turn it off in Settings → Startup & tray."));
         }
         private Label _keybindsRouteLabel;
 
@@ -472,8 +472,8 @@ namespace AutoClicker.UI
             // send Tempo to the tray, press F6 — and nothing happens, with no clue why.
             // The only hint was buried in the tray icon's tooltip.
             _keybindsTraySleepLabel = NewKeybindNotice(rowY + 162, _theme.TextMuted);
-            // "Settings → Startup & Window": a label takes "&" as an accelerator marker and hides it,
-            // so this read "Startup  Window".
+            // "Settings → Startup & tray": a label takes "&" as an accelerator marker and hides it,
+            // so this read "Startup  tray".
             _keybindsTraySleepLabel.UseMnemonic = false;
             page.Controls.Add(_keybindsTraySleepLabel);
 
@@ -517,9 +517,13 @@ namespace AutoClicker.UI
             // Park the dirty label after the caption rather than at a hard-coded 448.
             // This row is the only place it can live — everything below it moves with the
             // notices — so it has to share the row without colliding, in every language.
-            // The page is ~815 wide and the longest of these (Portuguese) needs about 748,
-            // so this fits without a second line.
             _keybindsDirtyLabel.Left = Math.Max(448, stepCaption.Right + 16);
+            // …and it ends at the page's 772 px content edge. After the longer captions it starts at
+            // x=520 (Portuguese, German), and its 324 px cap ran 33 px past that edge: on show it
+            // would sit under the vertical scroll bar with a sideways one, and hidden it still counted
+            // in the page's centring, enough to keep a stale sideways scroll bar after the page had been
+            // wider (scratchpad/tabwin, 2026-11-03). Two lines fit in this row.
+            _keybindsDirtyLabel.MaximumSize = new Size(Math.Max(160, 772 - _keybindsDirtyLabel.Left), 0);
             _intervalStepNum = UiFactory.Numeric(344, rowY + 18, 90, 1, 600000, 10);
             _intervalStepNum.ValueChanged += OnKeybindEdited;
 
@@ -752,7 +756,8 @@ namespace AutoClicker.UI
         /// </summary>
         private void RelayoutKeybindNotices()
         {
-            TabPage page = _keybindsPage;
+            // The tab, or its window's page while Keybinds is in a window of its own (MainForm.TabWindows.cs).
+            TabPage page = PageHost(_keybindsPage);
             if (page == null || page.IsDisposed || _keybindsHeaderLabel == null || _keybindRelayoutBusy) { return; }
             if (_keybindsSaveBtn == null || _intervalStepNum == null) { return; }
             // Page centring is moving everything at once (and back to the places noted below):
@@ -791,7 +796,8 @@ namespace AutoClicker.UI
                 if (moves.Count == 0 && delta == 0) { return; }
 
                 // The control being edited, if it is in the table: it stays where it is on screen.
-                Control focused = ActiveControl;
+                // Asked of the window the page is in — the main one, or the tab's own.
+                Control focused = (page.FindForm() ?? this).ActiveControl;
                 bool onScreen = page.Visible && page.IsHandleCreated;
                 bool anchor = delta != 0 && onScreen && focused != null && page.ContainsFocus &&
                               _keybindTable.Contains(focused);

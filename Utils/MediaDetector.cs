@@ -56,6 +56,7 @@ namespace AutoClicker.Utils
             ("netflix", "Netflix"), ("prime video", "Prime Video"), ("disney+", "Disney+"),
             ("hulu", "Hulu"), ("crunchyroll", "Crunchyroll"), ("vimeo", "Vimeo"),
             ("dailymotion", "Dailymotion"), ("bilibili", "Bilibili"), ("kick", "Kick"),
+            ("google translate", "Google Translate"),
             ("robloxplayerbeta", "Roblox"), ("roblox", "Roblox"),
             ("cod", "Call of Duty"), ("blackops", "Call of Duty"),
             ("modernwarfare", "Call of Duty"), ("warzone", "Call of Duty"),
@@ -73,7 +74,8 @@ namespace AutoClicker.Utils
         // Shell/system processes whose sounds should never count as "watching something".
         private static readonly string[] IgnoreProcesses =
         {
-            "tempo", "explorer", "shellexperiencehost", "searchhost", "sihost",
+            // "tempoclicker": the installed exe's name — "tempo" alone let Tempo's own sounds become the source.
+            "tempo", "tempoclicker", "explorer", "shellexperiencehost", "searchhost", "sihost",
             "startmenuexperiencehost", "textinputhost", "systemsettings", "dwm",
             "audiodg", "rundll32", "svchost", "widgets", "lockapp",
             // Caption tools are never the MEDIA — blaming "♪ Live Captions" for a
@@ -89,6 +91,7 @@ namespace AutoClicker.Utils
         private int _consecutive;   // debounce: positives in a row before firing
         private volatile bool _disposed;
         private readonly Dictionary<uint, string> _pidNames = new Dictionary<uint, string>();
+        private readonly Dictionary<uint, long> _pidNamedAt = new Dictionary<uint, long>();
 
         /// <summary>Fired on every transition. Args: active, human-readable source name.</summary>
         public event Action<bool, string> StateChanged;
@@ -141,6 +144,10 @@ namespace AutoClicker.Utils
         /// "where this audio comes from" tag.
         /// </summary>
         public string CurrentAudioSource => _audioSource;
+
+        /// <summary>The process behind <see cref="CurrentAudioSource"/> (0 when none) — which Roblox client, when there are
+        /// several, so the tag can name the game that one is in.</summary>
+        public int CurrentAudioPid => (int)_audioSourcePid;
 
         /// <summary>
         /// How many apps are audibly playing RIGHT NOW (active sessions above the peak
@@ -433,28 +440,48 @@ namespace AutoClicker.Utils
         // content. Re-adding this table is the first step back toward broadcasting what
         // the user is reading.
 
+        /// <summary>The KnownNames that are WEBSITES — the only ones a browser's tab title may name. The rest are apps and
+        /// games, named by their own process.</summary>
+        private static readonly HashSet<string> SiteKeys = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "youtube music", "spotify", "soundcloud", "apple music", "youtube", "tiktok", "twitch", "netflix",
+            "prime video", "disney+", "hulu", "crunchyroll", "vimeo", "dailymotion", "bilibili", "kick", "google translate"
+        };
+
         /// <summary>Human name for the playing source — site for browsers, app/game otherwise.</summary>
-        private static string IdentifySource(string procName, string title)
+        internal static string IdentifySource(string procName, string title)
         {
             title = CleanTitle(title);
             string titleLower = title.ToLowerInvariant();
+            bool browser = IsBrowserProc(procName);
 
-            // Known site/game names first (proper capitalisation).
+            // Known site/game names first (proper capitalisation), the PROCESS before any title: VLC playing
+            // "cod_trailer.mp4" is VLC, not "♪ Call of Duty". Process names keep the looser match for the longer keys
+            // ("fortniteclient-win64-shipping" is Fortnite); the short ones must be the whole name.
             foreach (var (key, name) in KnownNames)
             {
-                if (titleLower.Contains(key) || procName.Contains(key))
-                {
-                    return name;
-                }
+                if (ProcessHasKey(procName, key)) { return name; }
             }
 
-            bool isBrowser = false;
-            foreach (string b in Browsers)
+            // Then a WORD of the title, never part of one: plain Contains tagged every tab about "decode", "barcode" or
+            // "Unicode" — and VS Code, whose process is "code" — "♪ Call of Duty", and a Kickstarter page "♪ Kick".
+            //  • A browser's title names a SITE only: a page about "COD" or "Minecraft" playing a video is a web page, not
+            //    the game. And "kick" is an everyday word ("Kick-off: Arsenal v Chelsea"): the site is "Kick" only as a
+            //    part of the title of its own ("xQc - Kick").
+            //  • Another app's title can name a site it shows (the Prime Video and Apple Music apps), or the game it runs
+            //    (Minecraft Java is "javaw") — but a player's, a chat's or an editor's title is CONTENT ("Minecraft
+            //    trailer.mp4 - PotPlayer"), and no game is named by a key of three letters or fewer ("cod.txt").
+            bool contentTitle = !browser && GamePresence.IsNotAGame(procName);
+            foreach (var (key, name) in KnownNames)
             {
-                if (procName.Contains(b)) { isBrowser = true; break; }
+                bool site = SiteKeys.Contains(key);
+                if (browser && !site) { continue; }
+                if (!browser && !site && (key.Length <= 3 || contentTitle)) { continue; }
+                bool named = key == "kick" ? HasSegment(titleLower, key) : HasWord(titleLower, key);
+                if (named) { return name; }
             }
 
-            if (isBrowser)
+            if (browser)
             {
                 // (The old segment-splitting that pulled a site name out of the window
                 // title is gone — everything it produced beyond a recognised service was
@@ -482,6 +509,38 @@ namespace AutoClicker.Utils
             // an office app's is the document — all of it private, and none of it is the
             // "source name" this setting offers to show.
             return PrettyAppName(procName);
+        }
+
+        /// <summary>A KnownNames/Browsers key in a process name: the long keys anywhere in it, the short ones ("cod", "cs2",
+        /// "arc" — inside "code", "starcraft") only as a whole word.</summary>
+        internal static bool ProcessHasKey(string procName, string key) => key.Length > 3 ? procName.Contains(key) : HasWord(procName, key);
+
+        /// <summary><paramref name="key"/> as a word of <paramref name="text"/>: no letter or digit right before or after it.</summary>
+        internal static bool HasWord(string text, string key)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(key)) { return false; }
+            int at = 0;
+            while ((at = text.IndexOf(key, at, StringComparison.Ordinal)) >= 0)
+            {
+                int end = at + key.Length;
+                bool startOk = at == 0 || !char.IsLetterOrDigit(text[at - 1]);
+                bool endOk = end >= text.Length || !char.IsLetterOrDigit(text[end]);
+                if (startOk && endOk) { return true; }
+                at = at + 1;
+            }
+            return false;
+        }
+
+        /// <summary><paramref name="key"/> as a whole PART of a title — between its " - ", " – ", " | " or ": " separators,
+        /// or the whole of it: "xqc - kick" has the part "kick"; "kick-off: arsenal v chelsea" does not.</summary>
+        internal static bool HasSegment(string title, string key)
+        {
+            if (string.IsNullOrEmpty(title) || string.IsNullOrEmpty(key)) { return false; }
+            foreach (string part in title.Split(new[] { " - ", " – ", " — ", " | ", ": " }, StringSplitOptions.None))
+            {
+                if (part.Trim() == key) { return true; }
+            }
+            return false;
         }
 
         /// <summary>
@@ -677,7 +736,7 @@ namespace AutoClicker.Utils
                 // the longest title (page titles beat stub windows), then the process.
                 foreach (var (key, name) in KnownNames)
                 {
-                    if (procName.Contains(key))
+                    if (ProcessHasKey(procName, key))
                     {
                         return name;
                     }
@@ -701,7 +760,7 @@ namespace AutoClicker.Utils
                                 string lower = t.ToLowerInvariant();
                                 foreach (var (key, _) in KnownNames)
                                 {
-                                    if (lower.Contains(key)) { bestKnown = t; bestKnownWnd = p.MainWindowHandle; break; }
+                                    if (HasWord(lower, key)) { bestKnown = t; bestKnownWnd = p.MainWindowHandle; break; }
                                 }
                             }
                             if (t.Length > longest.Length)
@@ -739,7 +798,7 @@ namespace AutoClicker.Utils
         {
             foreach (string b in Browsers)
             {
-                if (procName.Contains(b)) { return true; }
+                if (ProcessHasKey(procName, b)) { return true; }
             }
             return false;
         }
@@ -761,7 +820,7 @@ namespace AutoClicker.Utils
             string lower = CleanTitle(title ?? "").ToLowerInvariant();
             foreach (var (key, _) in KnownNames)
             {
-                if (lower.Contains(key)) { return true; }
+                if (HasWord(lower, key)) { return true; }
             }
             return false;
         }
@@ -820,7 +879,11 @@ namespace AutoClicker.Utils
         /// <summary>Lower-case executable name for a PID (cached — PIDs churn slowly here).</summary>
         private string ProcessNameOf(uint pid)
         {
-            if (_pidNames.TryGetValue(pid, out string cached))
+            // Kept for half a minute, not until the table fills: Windows hands a closed process's number to the next
+            // one soon, and a name cached for ever named that newcomer after whatever had the number before — a game
+            // started under a closed browser's pid read as the browser.
+            if (_pidNames.TryGetValue(pid, out string cached) && _pidNamedAt.TryGetValue(pid, out long at)
+                && Environment.TickCount64 - at < 30000)
             {
                 return cached;
             }
@@ -833,9 +896,10 @@ namespace AutoClicker.Utils
                 }
             }
             catch { }
-            // Small bounded cache; PIDs get recycled, so flush wholesale when large.
-            if (_pidNames.Count > 256) { _pidNames.Clear(); }
+            // Small bounded cache, flushed wholesale when large.
+            if (_pidNames.Count > 256) { _pidNames.Clear(); _pidNamedAt.Clear(); }
             _pidNames[pid] = name;
+            _pidNamedAt[pid] = Environment.TickCount64;
             return name;
         }
 

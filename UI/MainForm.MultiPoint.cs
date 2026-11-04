@@ -26,6 +26,13 @@ namespace AutoClicker.UI
         // True while a row is being dragged: the live marker must not scroll the list under the drag.
         private bool _pointsDragging;
 
+        // Picks every point (Ctrl+A does the same).
+        private Button _selectAllPointsBtn;
+
+        // The top row the list had after the live marker last scrolled it; -1 while no run has. A list scrolled
+        // somewhere else since is being read, and is left there (UpdateMultiPointLive).
+        private int _pointsFollowTop = -1;
+
         // The live marker is an index into the list the RUN started with. Once the working list is
         // reordered or edited mid-run that index names a different row, so the marker is withheld
         // until the run ends rather than pointing at the wrong point.
@@ -38,9 +45,9 @@ namespace AutoClicker.UI
 
             string helpText =
                 "Define a sequence of points. In Multi-Point mode the engine visits the " +
-                "enabled points using the chosen order. Tick a row to enable/disable it; " +
-                "Delete removes the selected point, Ctrl+D duplicates it, Ctrl+\u2191/\u2193 reorders, Ctrl+Home/End jumps it to the ends, " +
-                "and Alt+arrows nudge it a pixel at a time (hold Shift for 10).";
+                "enabled points using the chosen order. Tick a row to enable/disable it, and drag rows to reorder them. " +
+                "Ctrl+A, Shift+click or Ctrl+click selects several at once: Delete removes them, Ctrl+D duplicates, " +
+                "Ctrl+\u2191/\u2193 reorders, Ctrl+Home/End jumps to the ends, and Alt+arrows nudge a pixel at a time (hold Shift for 10).";
             var help = UiFactory.Label(helpText, 12, 12);
             help.MaximumSize = new Size(720, 0);
             help.AutoSize = true;
@@ -70,7 +77,12 @@ namespace AutoClicker.UI
                 Left = 12,
                 Top = 86,
                 Width = 552,
-                Height = 444
+                Height = 444,
+                // Several points at once (Ctrl+A, Shift/Ctrl+click): every action below takes them all.
+                MultiSelect = true,
+                // And the picked rows are drawn picked. The list draws its own rows and drew a selection only
+                // where asked to — the point Delete or Alt+arrows would act on looked like every other row.
+                HighlightSelection = true,
             };
             // Column widths sum to 528, leaving room inside the 552-px list for its border
             // and a vertical scrollbar — so the last "Rep" column is never clipped once the
@@ -117,14 +129,22 @@ namespace AutoClicker.UI
             pointMenu.Items.Add(Utils.Localization.T("Move to top"), null, (s, e) => MovePointToEnd(true));
             pointMenu.Items.Add(Utils.Localization.T("Move to bottom"), null, (s, e) => MovePointToEnd(false));
             pointMenu.Items.Add(new ToolStripSeparator());
+            pointMenu.Items.Add(Utils.Localization.T("Select all"), null, (s, e) => SelectAllPoints());
             pointMenu.Items.Add(Utils.Localization.T("Remove"), null, OnRemovePoint);
             _pointsList.ContextMenuStrip = pointMenu;
             _pointsList.MouseDown += (s, e) =>
             {
                 if (e.Button == MouseButtons.Right)
                 {
+                    // A right-click on a row already picked keeps the whole pick, so the menu acts on all of it;
+                    // on any other row it picks just that one, as a left click would.
                     var hit = _pointsList.HitTest(e.Location);
-                    if (hit.Item != null) hit.Item.Selected = true;
+                    if (hit.Item != null && !hit.Item.Selected)
+                    {
+                        _pointsList.SelectedIndices.Clear();
+                        hit.Item.Selected = true;
+                        hit.Item.Focused = true;
+                    }
                 }
             };
 
@@ -147,22 +167,26 @@ namespace AutoClicker.UI
             _removePointBtn = UiFactory.Button(Utils.Localization.T("Remove"), bx, 256, 130, 30);
             _removePointBtn.Click += OnRemovePoint;
 
+            // With the actions that take a selection: every one of them takes all the points picked.
+            _selectAllPointsBtn = UiFactory.Button(Utils.Localization.T("Select all"), bx, 290, 130, 30);
+            _selectAllPointsBtn.Click += (s, e) => SelectAllPoints();
+
             // Move Up / Move Down are gone: rows are reordered by dragging them in the list (and
             // Ctrl+Up/Down, Ctrl+Home/End still work from the keyboard). The rest close the gap.
-            _showPointsBtn = UiFactory.Button(Utils.Localization.T("Show on screen"), bx, 300, 130, 30);
+            _showPointsBtn = UiFactory.Button(Utils.Localization.T("Show on screen"), bx, 334, 130, 30);
             _showPointsBtn.Click += OnShowPointsOverlay;
 
-            _clearPointsBtn = UiFactory.Button(Utils.Localization.T("Clear All"), bx, 334, 130, 30);
+            _clearPointsBtn = UiFactory.Button(Utils.Localization.T("Clear All"), bx, 368, 130, 30);
             _clearPointsBtn.Click += OnClearPoints;
 
-            _toggleAllPointsBtn = UiFactory.Button(Utils.Localization.T("Enable / Disable all"), bx, 368, 130, 30);
+            _toggleAllPointsBtn = UiFactory.Button(Utils.Localization.T("Enable / Disable all"), bx, 402, 130, 30);
             _toggleAllPointsBtn.Click += OnToggleAllPoints;
 
             // Save right here. This column used to end in a tip — "press Save on the Clicker tab to
             // store these points" — while switching profile throws unsaved point edits away, and the only
             // unsaved-changes warning was on that other tab. Always enabled, like the Clicker tab's own
             // Save; the note below carries the state.
-            _pointsSaveBtn = UiFactory.Button(Utils.Localization.T("Save"), bx, 414, 130, 30);
+            _pointsSaveBtn = UiFactory.Button(Utils.Localization.T("Save"), bx, 448, 130, 30);
             _pointsSaveBtn.Click += OnSaveProfile;
             StyleAccentButton(_pointsSaveBtn);
             SetGlyph(_pointsSaveBtn, ActionGlyph.Save);
@@ -172,7 +196,7 @@ namespace AutoClicker.UI
                 Text = Utils.Localization.T("● Unsaved changes — click Save"),
                 AutoSize = false,
                 AutoEllipsis = true,
-                Location = new Point(bx, 450),
+                Location = new Point(bx, 484),
                 // Three lines at this width: the longer translations need them.
                 Size = new Size(130, 48),
                 Font = new Font("Segoe UI", 8.25f, FontStyle.Bold),
@@ -228,6 +252,7 @@ namespace AutoClicker.UI
             page.Controls.Add(_duplicatePointBtn);
             page.Controls.Add(_togglePointBtn);
             page.Controls.Add(_removePointBtn);
+            page.Controls.Add(_selectAllPointsBtn);
             page.Controls.Add(_showPointsBtn);
             page.Controls.Add(_clearPointsBtn);
             page.Controls.Add(_toggleAllPointsBtn);
@@ -266,8 +291,11 @@ namespace AutoClicker.UI
                 item.SubItems.Add(p.Label);
                 item.SubItems.Add(p.X.ToString());
                 item.SubItems.Add(p.Y.ToString());
-                item.SubItems.Add(p.Button.ToString());
-                item.SubItems.Add(p.Style.ToString());
+                // In the reader's language: these were the enum's own names — "Left", "Single" — in every
+                // language. The button rides along for the row's colour, which used to be read off the English.
+                var buttonCell = item.SubItems.Add(Utils.Localization.T(p.Button.ToString()));
+                buttonCell.Tag = p.Button;
+                item.SubItems.Add(Utils.Localization.T(p.Style.ToString()));
                 item.SubItems.Add(p.DwellMilliseconds.ToString());
                 item.SubItems.Add((p.Repeat < 1 ? 1 : p.Repeat).ToString());
                 item.Tag = i;
@@ -326,13 +354,58 @@ namespace AutoClicker.UI
         /// </summary>
         private void UpdatePointButtonStates()
         {
-            int index = GetSelectedPointIndex();
-            bool hasSelection = index >= 0 && index < _workingPoints.Count;
+            int picked = _pointsList.SelectedIndices.Count;
+            bool hasSelection = picked > 0;
 
             if (_editPointBtn != null) _editPointBtn.Enabled = hasSelection;
             if (_duplicatePointBtn != null) _duplicatePointBtn.Enabled = hasSelection;
             if (_togglePointBtn != null) _togglePointBtn.Enabled = hasSelection;
             if (_removePointBtn != null) _removePointBtn.Enabled = hasSelection;
+            if (_selectAllPointsBtn != null) _selectAllPointsBtn.Enabled = _workingPoints.Count > 0 && picked < _workingPoints.Count;
+        }
+
+        /// <summary>The picked points' places in the working list, in list order.</summary>
+        private List<int> SelectedPointIndices()
+        {
+            var picked = new List<int>();
+            foreach (int row in _pointsList.SelectedIndices)
+            {
+                if (row < 0 || row >= _pointsList.Items.Count) { continue; }
+                ListViewItem item = _pointsList.Items[row];
+                int index = item.Tag is int tag ? tag : row;
+                if (index >= 0 && index < _workingPoints.Count) { picked.Add(index); }
+            }
+            picked.Sort();
+            return picked;
+        }
+
+        /// <summary>Picks these rows again after a refresh (which drops every pick), with <paramref name="focus"/> in view.</summary>
+        private void SelectPoints(IEnumerable<int> indices, int focus)
+        {
+            _pointsList.SelectedIndices.Clear();
+            foreach (int i in indices)
+            {
+                if (i >= 0 && i < _pointsList.Items.Count) { _pointsList.Items[i].Selected = true; }
+            }
+            if (focus >= 0 && focus < _pointsList.Items.Count)
+            {
+                _pointsList.Items[focus].Focused = true;
+                _pointsList.Items[focus].EnsureVisible();
+            }
+        }
+
+        /// <summary>"Select all" and Ctrl+A: every point picked, ready for one action on them all.</summary>
+        private void SelectAllPoints()
+        {
+            if (_pointsList == null || _pointsList.Items.Count == 0) { return; }
+            _pointsList.BeginUpdate();
+            try
+            {
+                foreach (ListViewItem item in _pointsList.Items) { item.Selected = true; }
+            }
+            finally { _pointsList.EndUpdate(); }
+            _pointsList.Focus();
+            UpdatePointButtonStates();
         }
 
         /// <summary>Shows how many points are active and the clicks per full cycle.</summary>
@@ -475,6 +548,7 @@ namespace AutoClicker.UI
             return (totalSec / 60) + " m " + (totalSec % 60).ToString("00") + " s";
         }
 
+        /// <summary>The one point Edit opens: the focused row of the pick, else its first.</summary>
         private int GetSelectedPointIndex()
         {
             if (_pointsList.SelectedItems.Count == 0)
@@ -482,7 +556,9 @@ namespace AutoClicker.UI
                 return -1;
             }
 
-            return _pointsList.SelectedItems[0].Index;
+            ListViewItem focused = _pointsList.FocusedItem;
+            ListViewItem item = focused != null && focused.Selected ? focused : _pointsList.SelectedItems[0];
+            return item.Tag is int tag ? tag : item.Index;
         }
 
         private void OnAddPoint(object sender, EventArgs e)
@@ -499,8 +575,11 @@ namespace AutoClicker.UI
 
         private void OnQuickCapturePoint(object sender, EventArgs e)
         {
-            bool wasVisible = Visible;
-            Hide();
+            // Every Tempo window that is up steps aside — the main one, and the tabs in windows of their
+            // own (the Multi-Point tab itself, when it is in one).
+            bool wasVisible = Visible && WindowState != FormWindowState.Minimized;
+            if (wasVisible) { Hide(); }
+            List<Form> hiddenWindows = HidePageWindowsForPick();
             System.Threading.Thread.Sleep(150);
 
             int added = 0;
@@ -519,7 +598,8 @@ namespace AutoClicker.UI
 
                         _workingPoints.Add(new ClickPoint(picker.PickedX, picker.PickedY)
                         {
-                            Label = "Point " + (_workingPoints.Count + 1),
+                            // In the reader's language ("Point 3" was English in every one).
+                            Label = Utils.Localization.F("Point {0}", _workingPoints.Count + 1),
                             // Enabled by default so a freshly captured sequence is ready to
                             // run immediately (matching points added via the editor), instead
                             // of silently not clicking until each row is ticked. Untick to skip.
@@ -539,6 +619,7 @@ namespace AutoClicker.UI
                         : Utils.Localization.F("Captured {0} points", added);
                 }
 
+                ShowPageWindowsAfterPick(hiddenWindows);
                 if (wasVisible)
                 {
                     // Same repair the coordinate picker needs: without it the window
@@ -553,6 +634,9 @@ namespace AutoClicker.UI
                         ReassertTopMost();
                     });
                 }
+                // The Multi-Point tab in a window of its own ends in front: the points went there.
+                TabWindow pointsWindow = OpenTabWindowOf(TabByKey("multipoint"));
+                if (pointsWindow != null && hiddenWindows.Contains(pointsWindow.Window)) { RaiseTabWindow(pointsWindow); }
             }
         }
 
@@ -612,6 +696,12 @@ namespace AutoClicker.UI
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
+            else if (e.Control && e.KeyCode == Keys.A)
+            {
+                SelectAllPoints();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
             else if (e.Control && e.KeyCode == Keys.Up)
             {
                 MovePoint(-1);
@@ -660,25 +750,26 @@ namespace AutoClicker.UI
         /// </summary>
         private void NudgeSelectedPoint(int dx, int dy)
         {
-            int index = GetSelectedPointIndex();
-            if (index < 0 || index >= _workingPoints.Count) { return; }
+            List<int> picked = SelectedPointIndices();
+            if (picked.Count == 0) { return; }
+            int focus = GetSelectedPointIndex();
 
-            ClickPoint p = _workingPoints[index];
-            p.X += dx;
-            p.Y += dy;
-            RefreshPointsList();
-
-            if (index < _pointsList.Items.Count)
+            foreach (int i in picked)
             {
-                _pointsList.Items[index].Selected = true;
-                _pointsList.Items[index].EnsureVisible();
-                _pointsList.Focus();
+                _workingPoints[i].X += dx;
+                _workingPoints[i].Y += dy;
             }
+            RefreshPointsList();
+            SelectPoints(picked, focus);
+            _pointsList.Focus();
 
             // Say where it landed, and say so plainly when that is off every monitor —
             // a point nudged off-screen still looks perfectly ordinary in the list.
-            string where = Utils.Localization.F("Point moved to ({0}, {1})", p.X, p.Y);
-            if (!AutoClicker.Utils.ScreenGeometry.IsOnScreen(p.X, p.Y))
+            ClickPoint p = _workingPoints[picked.Contains(focus) ? focus : picked[0]];
+            string where = picked.Count == 1
+                ? Utils.Localization.F("Point moved to ({0}, {1})", p.X, p.Y)
+                : Utils.Localization.F("{0} points moved by ({1}, {2})", picked.Count, dx, dy);
+            if (picked.Exists(i => !AutoClicker.Utils.ScreenGeometry.IsOnScreen(_workingPoints[i].X, _workingPoints[i].Y)))
             {
                 where += "  •  " + Utils.Localization.T("off-screen");
             }
@@ -687,33 +778,35 @@ namespace AutoClicker.UI
 
         private void OnRemovePoint(object sender, EventArgs e)
         {
-            int index = GetSelectedPointIndex();
-            if (index < 0 || index >= _workingPoints.Count)
+            List<int> picked = SelectedPointIndices();
+            if (picked.Count == 0)
             {
                 return;
             }
 
-            _workingPoints.RemoveAt(index);
+            // From the end, so the places before each one hold still.
+            for (int k = picked.Count - 1; k >= 0; k--)
+            {
+                _workingPoints.RemoveAt(picked[k]);
+            }
             RefreshPointsList();
 
-            // Keep a row selected: the one that moved up into this slot, or the new last row. The refresh
+            // Keep a row selected: the one that moved up into the first slot, or the new last row. The refresh
             // rebuilds every item and drops the selection, so pressing Delete a second time used to do
             // nothing at all — even though the help text says Delete "removes the selected point".
             if (_pointsList.Items.Count > 0)
             {
-                int next = Math.Min(index, _pointsList.Items.Count - 1);
-                _pointsList.Items[next].Selected = true;
-                _pointsList.Items[next].Focused = true;
-                _pointsList.Items[next].EnsureVisible();
+                int next = Math.Min(picked[0], _pointsList.Items.Count - 1);
+                SelectPoints(new[] { next }, next);
             }
         }
 
         // ── Drag to reorder ─────────────────────────────────────────────────────────
-        // What rides the drag: the row's index in the working list. A private type, so nothing dragged
-        // in from outside Tempo can ever be mistaken for one of these rows.
+        // What rides the drag: the rows' places in the working list — the whole pick when the dragged row is
+        // in it. A private type, so nothing dragged in from outside Tempo can ever be mistaken for these rows.
         private sealed class PointDragData
         {
-            public int Index;
+            public List<int> Indices;
         }
 
         private void OnPointItemDrag(object sender, ItemDragEventArgs e)
@@ -724,10 +817,15 @@ namespace AutoClicker.UI
             int from = item.Tag is int tag ? tag : item.Index;
             if (from < 0 || from >= _workingPoints.Count) { return; }
 
+            // The pick moves as one when the row taken is part of it; a row outside it goes alone.
+            List<int> moving = SelectedPointIndices();
+            if (!moving.Contains(from)) { moving = new List<int> { from }; }
+            if (moving.Count >= _workingPoints.Count) { return; }   // every row: nowhere else to put them
+
             _pointsDragging = true;
             try
             {
-                _pointsList.DoDragDrop(new PointDragData { Index = from }, DragDropEffects.Move);
+                _pointsList.DoDragDrop(new PointDragData { Indices = moving }, DragDropEffects.Move);
             }
             finally
             {
@@ -775,27 +873,32 @@ namespace AutoClicker.UI
             _pointsList.DropLineIndex = -1;
 
             var data = e.Data?.GetData(typeof(PointDragData)) as PointDragData;
-            if (data == null || dropAt < 0) { return; }
+            if (data?.Indices == null || dropAt < 0) { return; }
 
-            int from = data.Index;
-            if (from < 0 || from >= _workingPoints.Count) { return; }
+            var moving = new List<int>();
+            foreach (int i in data.Indices)
+            {
+                if (i >= 0 && i < _workingPoints.Count && !moving.Contains(i)) { moving.Add(i); }
+            }
+            if (moving.Count == 0) { return; }
+            moving.Sort();
 
-            // dropAt is a gap in the list as it stands, counted BEFORE the dragged row is taken out;
-            // removing that row first moves every later gap up by one.
-            int to = dropAt > from ? dropAt - 1 : dropAt;
-            if (to == from) { return; }   // dropped onto its own row, or the gap just after it
+            // dropAt is a gap in the list as it stands, counted BEFORE the dragged rows are taken out;
+            // taking them out first moves every later gap up by however many of them sat above it.
+            int to = dropAt - moving.FindAll(i => i < dropAt).Count;
 
-            ClickPoint moved = _workingPoints[from];
-            _workingPoints.RemoveAt(from);
-            _workingPoints.Insert(to, moved);
+            var block = moving.ConvertAll(i => _workingPoints[i]);
+            for (int k = moving.Count - 1; k >= 0; k--)
+            {
+                _workingPoints.RemoveAt(moving[k]);
+            }
+            to = Math.Max(0, Math.Min(_workingPoints.Count, to));
+            _workingPoints.InsertRange(to, block);
 
             RefreshPointsList();
-            if (to < _pointsList.Items.Count)
-            {
-                _pointsList.Items[to].Selected = true;
-                _pointsList.Items[to].Focused = true;
-                _pointsList.Items[to].EnsureVisible();
-            }
+            var landed = new List<int>();
+            for (int k = 0; k < block.Count; k++) { landed.Add(to + k); }
+            SelectPoints(landed, to);
         }
 
         /// <summary>
@@ -813,56 +916,57 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>Ctrl+↑/↓: the picked points a row up or down, as one block; never past either end.</summary>
         private void MovePoint(int direction)
         {
-            int index = GetSelectedPointIndex();
-            if (index < 0)
+            List<int> picked = SelectedPointIndices();
+            if (picked.Count == 0)
+            {
+                return;
+            }
+            if (direction < 0 ? picked[0] == 0 : picked[picked.Count - 1] == _workingPoints.Count - 1)
             {
                 return;
             }
 
-            int target = index + direction;
-            if (target < 0 || target >= _workingPoints.Count)
+            // Up from the top of the pick, down from its bottom, so each swap moves a picked row past an unpicked one.
+            var moved = new List<int>();
+            for (int k = 0; k < picked.Count; k++)
             {
-                return;
+                int i = direction < 0 ? picked[k] : picked[picked.Count - 1 - k];
+                int target = i + direction;
+                ClickPoint temp = _workingPoints[i];
+                _workingPoints[i] = _workingPoints[target];
+                _workingPoints[target] = temp;
+                moved.Add(target);
             }
-
-            ClickPoint temp = _workingPoints[index];
-            _workingPoints[index] = _workingPoints[target];
-            _workingPoints[target] = temp;
 
             RefreshPointsList();
-            if (target < _pointsList.Items.Count)
-            {
-                _pointsList.Items[target].Selected = true;
-            }
+            moved.Sort();
+            SelectPoints(moved, direction < 0 ? moved[0] : moved[moved.Count - 1]);
         }
 
-        /// <summary>Moves the selected point straight to the top or bottom of the list.</summary>
+        /// <summary>Moves the picked points straight to the top or bottom of the list, keeping their order.</summary>
         private void MovePointToEnd(bool toTop)
         {
-            int index = GetSelectedPointIndex();
-            if (index < 0 || _workingPoints.Count < 2)
+            List<int> picked = SelectedPointIndices();
+            if (picked.Count == 0 || _workingPoints.Count < 2)
             {
                 return;
             }
 
-            int target = toTop ? 0 : _workingPoints.Count - 1;
-            if (target == index)
+            var block = picked.ConvertAll(i => _workingPoints[i]);
+            for (int k = picked.Count - 1; k >= 0; k--)
             {
-                return;
+                _workingPoints.RemoveAt(picked[k]);
             }
-
-            ClickPoint p = _workingPoints[index];
-            _workingPoints.RemoveAt(index);
-            _workingPoints.Insert(target, p);
+            int at = toTop ? 0 : _workingPoints.Count;
+            _workingPoints.InsertRange(at, block);
 
             RefreshPointsList();
-            if (target < _pointsList.Items.Count)
-            {
-                _pointsList.Items[target].Selected = true;
-                _pointsList.Items[target].EnsureVisible();
-            }
+            var landed = new List<int>();
+            for (int k = 0; k < block.Count; k++) { landed.Add(at + k); }
+            SelectPoints(landed, toTop ? landed[0] : landed[landed.Count - 1]);
         }
 
         private void OnClearPoints(object sender, EventArgs e)
@@ -887,20 +991,26 @@ namespace AutoClicker.UI
 
         private void OnDuplicatePoint(object sender, EventArgs e)
         {
-            int index = GetSelectedPointIndex();
-            if (index < 0 || index >= _workingPoints.Count)
+            List<int> picked = SelectedPointIndices();
+            if (picked.Count == 0)
             {
                 return;
             }
 
-            ClickPoint copy = _workingPoints[index].Clone();
-            copy.Label = copy.Label + " copy";
-            _workingPoints.Insert(index + 1, copy);
-            RefreshPointsList();
-            if (index + 1 < _pointsList.Items.Count)
+            // Each copy right after its point; from the end, so the places before it hold still. The copies
+            // land at picked[k] + k + 1, and those are the rows picked afterwards.
+            for (int k = picked.Count - 1; k >= 0; k--)
             {
-                _pointsList.Items[index + 1].Selected = true;
+                int i = picked[k];
+                ClickPoint copy = _workingPoints[i].Clone();
+                // In the reader's language: " copy" was added in English whatever the language.
+                copy.Label = Utils.Localization.F("{0} copy", copy.Label);
+                _workingPoints.Insert(i + 1, copy);
             }
+            RefreshPointsList();
+            var copies = new List<int>();
+            for (int k = 0; k < picked.Count; k++) { copies.Add(picked[k] + k + 1); }
+            SelectPoints(copies, copies[copies.Count - 1]);
         }
 
         private void OnToggleAllPoints(object sender, EventArgs e)
@@ -922,18 +1032,21 @@ namespace AutoClicker.UI
 
         private void OnTogglePoint(object sender, EventArgs e)
         {
-            int index = GetSelectedPointIndex();
-            if (index < 0 || index >= _workingPoints.Count)
+            List<int> picked = SelectedPointIndices();
+            if (picked.Count == 0)
             {
                 return;
             }
 
-            _workingPoints[index].Enabled = !_workingPoints[index].Enabled;
-            RefreshPointsList();
-            if (index < _pointsList.Items.Count)
+            // One state for the whole pick: on when any of it is off, otherwise off — never a mix flipped both ways.
+            bool turnOn = picked.Exists(i => !_workingPoints[i].Enabled);
+            foreach (int i in picked)
             {
-                _pointsList.Items[index].Selected = true;
+                _workingPoints[i].Enabled = turnOn;
             }
+            int focus = GetSelectedPointIndex();
+            RefreshPointsList();
+            SelectPoints(picked, focus);
         }
 
         private void OnShowPointsOverlay(object sender, EventArgs e)
@@ -984,7 +1097,7 @@ namespace AutoClicker.UI
 
             _workingPoints.Add(new ClickPoint(x, y)
             {
-                Label = "Point " + (_workingPoints.Count + 1)
+                Label = Utils.Localization.F("Point {0}", _workingPoints.Count + 1)
             });
             RefreshPointsList();
 
@@ -1032,6 +1145,7 @@ namespace AutoClicker.UI
                 // A finished run leaves no marker, and the next run starts with a trustworthy one.
                 _pointsLiveStale = false;
                 _pointsList.LiveIndex = -1;
+                _pointsFollowTop = -1;
                 return;
             }
 
@@ -1055,9 +1169,16 @@ namespace AutoClicker.UI
             // Scroll first, mark after (ThemedListView's rule: a rectangle invalidated before a scroll is
             // stale after it), and never scroll while a row is being dragged, or the list would move out
             // from under the pointer.
-            if (!_pointsDragging)
+            //
+            // Nor while the list has been scrolled away from the marker since it last followed: it used to be pulled
+            // back to the point being clicked many times a second, so nothing else could be read during a run. It
+            // follows again once the marker comes back into view.
+            bool readingElsewhere = _pointsFollowTop >= 0 && _pointsList.TopRowIndex != _pointsFollowTop
+                                    && !_pointsList.RowInView(idx);
+            if (!_pointsDragging && !readingElsewhere)
             {
                 _pointsList.Items[idx].EnsureVisible();
+                _pointsFollowTop = _pointsList.TopRowIndex;
             }
             _pointsList.LiveIndex = idx;
         }

@@ -62,6 +62,9 @@ namespace AutoClicker.UI
         private readonly Func<string> _statsProvider;
         private readonly RichTextBox _stats;
         private readonly RichTextBox _log;
+        // Sideways scrolling for both panes (SidewaysWheel); held so they live as long as the window.
+        private readonly SidewaysWheel _statsSideways;
+        private readonly SidewaysWheel _logSideways;
         private readonly TextBox _filter;
         private readonly CheckBox _pause;
         private readonly CheckBox _problemsOnly;
@@ -143,6 +146,75 @@ namespace AutoClicker.UI
                 }
             }
             catch { }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SystemParametersInfo(int action, int param, out int value, int winIni);
+
+        /// <summary>
+        /// Sideways scrolling for a pane whose lines run wider than it: the tilt wheel (a touchpad's sideways swipe
+        /// arrives the same way) and Shift with the wheel, as in a browser. A rich edit box acts on neither —
+        /// measured (scratchpad/debugscroll): its horizontal bar moved only by its own arrows and track, so the long
+        /// event lines could not be read the way people reach for first ("it didn't move while I scroll left/right").
+        /// Only while the pane has a horizontal bar; otherwise Shift+wheel stays the ordinary wheel.
+        /// </summary>
+        private sealed class SidewaysWheel : NativeWindow
+        {
+            private const int WM_MOUSEWHEEL = 0x020A, WM_MOUSEHWHEEL = 0x020E, MK_SHIFT = 0x0004;
+            private const int SPI_GETWHEELSCROLLCHARS = 0x006C;
+            private readonly Control _box;
+            private int _carry;   // part of a notch not scrolled yet: high-resolution wheels and touchpads send small steps
+
+            internal SidewaysWheel(Control box)
+            {
+                _box = box;
+                box.HandleCreated += (s, e) => { try { AssignHandle(_box.Handle); } catch { } };
+                box.HandleDestroyed += (s, e) => { try { ReleaseHandle(); } catch { } };
+                if (box.IsHandleCreated) { AssignHandle(box.Handle); }
+            }
+
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == WM_MOUSEHWHEEL || m.Msg == WM_MOUSEWHEEL)
+                {
+                    long wp = (long)m.WParam;
+                    bool shifted = m.Msg == WM_MOUSEWHEEL && (wp & MK_SHIFT) != 0;
+                    if ((m.Msg == WM_MOUSEHWHEEL || shifted) && HasSidewaysBar())
+                    {
+                        int delta = (short)(wp >> 16);
+                        // Tilting right is positive. With Shift, turning the wheel towards you reads as "right".
+                        Scroll(m.Msg == WM_MOUSEHWHEEL ? delta : -delta);
+                        m.Result = IntPtr.Zero;
+                        return;
+                    }
+                }
+                base.WndProc(ref m);
+            }
+
+            private bool HasSidewaysBar()
+            {
+                try { return Handle != IntPtr.Zero && ScrollBarState.Read(Handle, false).Visible; }
+                catch { return false; }
+            }
+
+            private void Scroll(int delta)
+            {
+                // Windows' "characters to scroll" for a sideways notch (3 by default), three times over in this font:
+                // a notch moves about as far as a vertical notch moves a page of text.
+                int chars = 3;
+                try { if (SystemParametersInfo(SPI_GETWHEELSCROLLCHARS, 0, out int c, 0) && c > 0) { chars = c; } } catch { }
+                int charWidth = Math.Max(4, TextRenderer.MeasureText("0000000000", _box.Font).Width / 10);
+                int perNotch = chars * 3 * charWidth;
+                _carry += delta * perNotch;
+                int px = _carry / 120;
+                _carry -= px * 120;
+                if (px == 0) { return; }
+                var pos = Point.Empty;
+                SendMessage(Handle, EM_GETSCROLLPOS, IntPtr.Zero, ref pos);
+                pos.X = Math.Max(0, pos.X + px);
+                // Through the window, not straight to the box: Tempo's scroll bar watches the same window and redraws.
+                SendMessage(Handle, EM_SETSCROLLPOS, IntPtr.Zero, ref pos);
+            }
         }
 
         /// <summary>
@@ -292,12 +364,11 @@ namespace AutoClicker.UI
 
             // Drag to give the stats more room (or less). The report runs to some 35 sections, and a
             // fixed 196 px showed about twelve lines of it. Remembered while Tempo runs.
-            _splitter = new Splitter
+            _splitter = new PaneSplitter(_stats, StatsLeastHeight,
+                () => ClientSize.Height - (_legend?.Height ?? 0) - (_splitter?.Height ?? 0) - (_controlStrip?.Height ?? 0) - LogLeastHeight)
             {
                 Dock = DockStyle.Top,
                 Height = 5,
-                MinSize = StatsLeastHeight,
-                MinExtra = LogLeastHeight,
                 BackColor = theme.Border,
             };
             _splitter.SplitterMoved += (s, e) =>
@@ -637,6 +708,8 @@ namespace AutoClicker.UI
             };
             Controls.Add(_log);
             _log.BringToFront();
+            _statsSideways = new SidewaysWheel(_stats);
+            _logSideways = new SidewaysWheel(_log);
 
             // Top to bottom: stats, the splitter that resizes them, the colour legend, the event
             // log, the control strip. Docking goes by z-order, back to front, and the legend — the
@@ -779,11 +852,80 @@ namespace AutoClicker.UI
         // The least the event log keeps when the stats are dragged taller.
         private const int LogLeastHeight = 100;
 
-        private readonly Splitter _splitter;
+        private readonly PaneSplitter _splitter;
         // A height the user chose by dragging the splitter (0 = the automatic share), and the same
         // for the next Live debug opened this session.
         private int _userStatsHeight;
         private static int s_rememberedStatsHeight;
+
+        /// <summary>
+        /// The bar between the stats and the event log, dragged to share the height between them. It was a WinForms
+        /// Splitter until Tempo's own scroll bars (1.0.326): a Splitter resizes the first sibling, in z-order, whose edge
+        /// meets its own — and the stats pane's scroll-bar covers sit in front of the pane with exactly that edge, so a
+        /// drag resized a cover and the stats stayed put (196 → 196 px after a 60 px drag, scratchpad/arrowhold). This
+        /// one resizes the pane it was given, as the pointer moves.
+        /// </summary>
+        private sealed class PaneSplitter : Control
+        {
+            private readonly Control _above;
+            private readonly int _least;
+            private readonly Func<int> _most;
+            private int _grabY, _grabHeight;
+            private bool _dragging;
+
+            public event EventHandler SplitterMoved;
+
+            public PaneSplitter(Control above, int least, Func<int> most)
+            {
+                _above = above;
+                _least = least;
+                _most = most;
+                Cursor = Cursors.HSplit;
+                TabStop = false;
+                SetStyle(ControlStyles.Selectable, false);
+                AccessibleRole = AccessibleRole.Separator;
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                base.OnMouseDown(e);
+                if (e.Button != MouseButtons.Left || _above == null || _above.IsDisposed) { return; }
+                _dragging = true;
+                // On the screen, not on this bar: the bar itself moves as the pane above it grows.
+                _grabY = MousePosition.Y;
+                _grabHeight = _above.Height;
+                Capture = true;
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                base.OnMouseMove(e);
+                if (!_dragging || _above.IsDisposed) { return; }
+                int want = _grabHeight + (MousePosition.Y - _grabY);
+                want = Math.Max(_least, Math.Min(Math.Max(_least, _most()), want));
+                if (want != _above.Height) { _above.Height = want; }
+            }
+
+            protected override void OnMouseUp(MouseEventArgs e)
+            {
+                base.OnMouseUp(e);
+                EndDrag();
+            }
+
+            protected override void OnMouseCaptureChanged(EventArgs e)
+            {
+                base.OnMouseCaptureChanged(e);
+                if (!Capture) { EndDrag(); }   // capture taken away (a window popping up): keep what was reached
+            }
+
+            private void EndDrag()
+            {
+                if (!_dragging) { return; }
+                _dragging = false;
+                Capture = false;
+                SplitterMoved?.Invoke(this, EventArgs.Empty);
+            }
+        }
 
         private readonly FlatComboBox _sectionPicker;
         private string _sectionKey = "";          // the headings the picker lists, joined

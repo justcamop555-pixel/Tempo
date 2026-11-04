@@ -37,10 +37,13 @@ namespace AutoClicker.Models
         public DateTime LastUsedUtc { get; set; } = DateTime.MinValue;
 
         /// <summary>
-        /// How many runs have started with this profile. It counted switches made from the
-        /// Profiles tab and the tray — clicking the card already active counted again — while
-        /// switching with the Clicker dropdown or the profile hotkeys never counted. A run is
-        /// the same thing whichever way you got to the profile.
+        /// How many times this profile has been used: picked — from its card, the Clicker dropdown, the tray or a
+        /// profile hotkey, every way alike — or, when it was already the loaded one (the profile Tempo opened
+        /// with), run for the first time in that turn. One count per turn as the loaded profile.
+        ///
+        /// It once counted switches from the Profiles tab and the tray only (a click on the card already active
+        /// counted again), then runs only — and a profile picked and used without starting the clicker read
+        /// "never used" ("I already used it and it doesn't count", 2026-11-02).
         /// </summary>
         public int TimesUsed { get; set; } = 0;
 

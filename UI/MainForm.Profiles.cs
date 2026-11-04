@@ -426,13 +426,16 @@ namespace AutoClicker.UI
                 if (card.Focused) { focusedName = card.ProfileName; break; }
             }
 
-            _profilesPage.SuspendLayout();
+            // The page the cards go on: the tab, or its window's page while Profiles is in a window of
+            // its own (MainForm.TabWindows.cs).
+            TabPage host = PageHost(_profilesPage);
+            host.SuspendLayout();
             try
             {
                 foreach (var card in _profileCards)
                 {
                     TipStyle.Set(_tips, card, null);   // the tooltip lets go of it too
-                    _profilesPage.Controls.Remove(card);
+                    card.Parent?.Controls.Remove(card);
                     card.Dispose();
                 }
                 _profileCards.Clear();
@@ -464,6 +467,8 @@ namespace AutoClicker.UI
                     card.AccessibleName = p.Name;
                     card.AccessibleDescription = ProfileUsageText(p);
                     card.TipText = ProfileCardTip(p);
+                    // Its name is the user's own, never translated: not English for the language check to report.
+                    LayoutFitter.DeclareUserText(card, p.Name);
                     // At the window's scale: the grid is rebuilt long after the window has scaled,
                     // and new cards came out at 100% size on a 125%/150% laptop, the first row on
                     // top of the New profile / Import buttons (scratchpad/mainscan, "dpi").
@@ -476,12 +481,12 @@ namespace AutoClicker.UI
                     card.KeyDown += (s, e) => OnProfileCardKey(name, e);
 
                     _profileCards.Add(card);
-                    _profilesPage.Controls.Add(card);
+                    host.Controls.Add(card);
                 }
             }
             finally
             {
-                _profilesPage.ResumeLayout(false);
+                host.ResumeLayout(false);
             }
 
             ApplyThemeToProfileCards();
@@ -536,7 +541,9 @@ namespace AutoClicker.UI
 
             // Use the page's client width, less the left margin and a right margin
             // wide enough that the vertical scrollbar never sits on top of a card.
-            int available = _profilesPage.ClientSize.Width - (gridLeft * 2) - (int)Math.Round(8 * k);
+            // The page the cards are on: the tab, or its window's page (MainForm.TabWindows.cs).
+            TabPage host = PageHost(_profilesPage);
+            int available = host.ClientSize.Width - (gridLeft * 2) - (int)Math.Round(8 * k);
             if (available < cardWidth) { available = cardWidth; }
 
             int step = cardWidth + gap;
@@ -545,7 +552,7 @@ namespace AutoClicker.UI
             // Child coordinates on an AutoScroll page are relative to the SCROLLED
             // origin, so a relayout while scrolled down would otherwise plant every
             // card one viewport too low. AutoScrollPosition is zero or negative.
-            Point origin = _profilesPage.AutoScrollPosition;
+            Point origin = host.AutoScrollPosition;
 
             for (int i = 0; i < _profileCards.Count; i++)
             {
@@ -553,12 +560,21 @@ namespace AutoClicker.UI
                 int rowIndex = i / columns;
                 _profileCards[i].Left = origin.X + gridLeft + (col * step);
                 _profileCards[i].Top = origin.Y + gridTop + (rowIndex * (cardHeight + gap));
+                // Placed by the grid only. The cards there when the window loaded were noted by the page
+                // centring as well, and the two took turns: those cards sat 20 px from where every card
+                // made since (never noted) sits, depending on which pass ran last.
+                _autoFitBaseLeft.Remove(_profileCards[i]);
+                _autoFitBaseTop.Remove(_profileCards[i]);
             }
 
             if (_profileEmptyLabel != null)
             {
                 _profileEmptyLabel.Left = origin.X + gridLeft;
                 _profileEmptyLabel.Top = origin.Y + gridTop + (int)Math.Round(12 * k);
+                // Placed with the grid, like the cards, and never by the page's centring as well: the two
+                // took turns, so where it showed depended on which ran last after a resize (20 px apart).
+                _autoFitBaseLeft.Remove(_profileEmptyLabel);
+                _autoFitBaseTop.Remove(_profileEmptyLabel);
             }
         }
 
@@ -818,7 +834,37 @@ namespace AutoClicker.UI
             }
 
             Logger.Info("[profiles] switched to '" + profile.Name + "' (" + source + ").");
+            // A pick by the user is a use. Not New, Duplicate or Delete moving the selection (askAboutEdits false),
+            // and not a click on the card already loaded (returned above).
+            if (!same && askAboutEdits) { NoteProfileUse(profile.Name); }
             return true;
+        }
+
+        /// <summary>
+        /// The profile whose current turn as the loaded one has been counted as a use; null until one has (see
+        /// ClickProfile.TimesUsed).
+        /// </summary>
+        private string _useCountedFor;
+
+        /// <summary>
+        /// Counts a use of <paramref name="name"/> — once per turn as the loaded profile; a later run in the same turn
+        /// only moves its last-used time — saves it, and puts it on its card at once. Like the rest of the history,
+        /// not while session history is switched off.
+        /// </summary>
+        private void NoteProfileUse(string name)
+        {
+            if (string.IsNullOrEmpty(name) || _profiles == null || _settings == null || !_settings.RecordSessionHistory)
+            {
+                return;
+            }
+            bool first = !string.Equals(_useCountedFor, name, StringComparison.OrdinalIgnoreCase);
+            _useCountedFor = name;
+            _profiles.MarkUsed(name, count: first);
+            if (first)
+            {
+                try { _profiles.Save(); } catch (Exception ex) { Logger.Swallow("profiles.NoteProfileUse", ex); }
+            }
+            RefreshProfileGrid();
         }
 
         /// <summary>True when the Clicker/Multi-Point tabs differ from the loaded profile as saved.</summary>

@@ -14,7 +14,7 @@
 
 <p align="center">
   <img alt="Windows 10 &amp; 11" src="https://img.shields.io/badge/Windows-10%20%26%2011-0078D6?logo=windows&logoColor=white">
-  <img alt=".NET 8 (built in)" src="https://img.shields.io/badge/.NET%208-built--in-512BD4?logo=dotnet&logoColor=white">
+  <img alt=".NET 10 (built in)" src="https://img.shields.io/badge/.NET%2010-built--in-512BD4?logo=dotnet&logoColor=white">
   <img alt="Free" src="https://img.shields.io/badge/Free-source--available-34d399">
   <img alt="No telemetry" src="https://img.shields.io/badge/Telemetry-none-7c5cff">
   <a href="https://github.com/justcamop555-pixel/Tempo/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/justcamop555-pixel/Tempo?color=7c5cff"></a>
@@ -39,23 +39,22 @@
 > **Use responsibly.** Auto-clicking may break the terms of service of some games and apps,
 > and some anti-cheat systems detect it. You are responsible for how you use Tempo.
 
-## What's new in 1.0.326
+## What's new in 1.0.327
 
-- **Roblox sign-in saves itself.** Log in or sign up in the private browser window, and Tempo saves
-  the account and closes the browser. There is no extra window and no confirm screen. An account
-  you already have is refreshed, never added twice, and the password you type is saved on sign-up
-  too.
-- **Pick a Roblox version:** Automatic, or any Roblox client already on your PC (Roblox,
-  Bloxstrap, Fishstrap, Voidstrap). Nothing is downloaded, and only copies signed by Roblox are
-  started.
-- **Tempo's own scroll bars.** Slim, themed scroll bars with up and down arrows replace Windows
-  11's everywhere, from the pages to the drop-down lists. Scrolling itself works exactly as before.
-- **Live Captions change language while they run,** with no restart. Speaker names survive the
-  face switch, and a long session's saved transcript starts at the very first line.
-- **A Dim slider that keeps up:** the background picture dims as you drag, without reloading.
-- **Live debug shows more:** new lines below where you're reading are counted, and an open
-  Roblox sign-in shows how long it has waited.
-- **Steadier pages** after tab switches, restores and resizes on 125% laptops.
+- **Any tab in its own window.** Right-click a tab in the sidebar and choose **Open in its own
+  window** to keep it beside your game, still open while Tempo's main window is minimised.
+- **Anti-AFK for Roblox.** Every few minutes, each Roblox window in a game gets one real key press
+  (F13), so Roblox doesn't disconnect it for idling. It doesn't modify Roblox, and it waits until
+  you're idle.
+- **See which game each account is in,** with notices when a client joins a game, is
+  disconnected or crashes.
+- **A crash and freeze guard** starts a crashed or frozen Roblox client again, as the same account
+  in the same game.
+- **A tidier Settings tab:** nine cards by topic, with the rarely used ones under **Advanced**.
+- **Multi-Point works on several points at once,** and the macro Live Monitor follows the playing
+  step.
+- **Fewer missed words in Live Captions,** and laughter reads "ha ha ha".
+- **Tempo now runs on .NET 10,** Microsoft's long-term release. There is still nothing to install.
 
 The full notes are on the [release page](https://github.com/justcamop555-pixel/Tempo/releases/latest),
 and every change is in [CHANGELOG.md](CHANGELOG.md).
@@ -162,7 +161,8 @@ speed you set.
 ### 🎯 Multi-Point
 Click a whole route — **sequential, reverse, random or ping-pong** — with each point's own
 button, click style, dwell time and repeat count. Numbered markers show the points on screen, and
-a hotkey adds a point wherever your cursor is.
+a hotkey adds a point wherever your cursor is. Select several points (Ctrl+A or **Select all**) to
+edit, move, delete or drag them together.
 
 ### 🗂 Profiles
 Save the whole setup as a profile and switch from the Profiles tab, the dropdown, the tray menu or
@@ -173,8 +173,8 @@ switching from a hotkey or the tray keeps them, so no question pops up over your
 Record and replay the mouse **and** keyboard, with looping, a countdown, a loop delay and
 **one-tap speed presets** (0.5× / 1× / 2× / 4×). Recording catches **camera turns in games** and
 the **mouse side buttons**, and leaves out clicks on Tempo's own controls. Edit steps, pin
-favourites, add notes, search, merge, and export or import macros, with a live step monitor and
-play history. **Fix…** finds and repairs what quietly breaks a recording: keys that are never
+favourites, add notes, search, merge, and export or import macros, with a live step monitor that
+follows the playing step, and play history. **Fix…** finds and repairs what quietly breaks a recording: keys that are never
 released, clicks that land off-screen, duplicate moves, empty waits, machine-perfect timing, and
 marathon pauses. Up to three macros can sit on their own **Play macro #1–#3** keys.
 
@@ -244,8 +244,8 @@ presets · searchable history · **copy summary** · CSV export · milestone bad
 ### 👤 Accounts — a Roblox account manager
 **Off until you turn it on.** Keep several Roblox accounts, launch any of them straight into a game
 by **Place ID** or a private server, **follow** a player into whatever they're playing, and switch
-accounts without signing in and out. It can sit on its own tab or **open in a window of its own**,
-beside your game.
+accounts without signing in and out. Like any tab, it can **open in a window of its own**, beside
+your game.
 
 - **You never type a Roblox password into Tempo.** Signing in opens **your own browser** in a
   private window, and you sign in to Roblox as you always do. Chrome is used by preference, then
@@ -270,6 +270,13 @@ beside your game.
   that is already running, and it does not modify or inject into Roblox.
 - **Knows your Roblox client:** the check looks at everything the game loads and recognises
   Bloxstrap, Fishstrap and Voidstrap.
+- **Knows which game each client is in,** from Roblox's own log on your PC, and can tell you when a
+  client joins a game, is disconnected or crashes. A **crash and freeze guard** starts a crashed or
+  frozen client again as the same account in the same game, at most 3 times in 15 minutes.
+- **Anti-AFK** (off until you turn it on): every few minutes, each Roblox window in a game gets one
+  real key press (F13), so Roblox doesn't disconnect it for idling. It doesn't modify Roblox. It
+  waits until you're idle, and it leaves you alone while you use a controller or play something
+  else full screen.
 - **An optional Local API** lets your own scripts launch accounts. It is off by default, listens only
   on this PC, needs a token, runs only while the vault is unlocked, and has no request that returns
   a cookie or a password.
@@ -283,7 +290,8 @@ beside your game.
 **38 built-in themes** (or **Match Windows** to follow the system's light/dark setting live), your
 own accent colour, optional picture or animated GIF backdrops with a Dim slider, Tempo's own slim
 scroll bars and six languages (English, Spanish, French, German, Italian, Portuguese). A themed tray menu, start with Windows (and, if you like, open the
-window at sign-in), per-tab scroll memory, and windows that fit laptops at 125% and 150% scaling.
+window at sign-in), per-tab scroll memory, any tab in a window of its own (right-click it in the
+sidebar), and windows that fit laptops at 125% and 150% scaling.
 Colours stay right with HDR on.
 
 ### 🛡 Dependable
@@ -297,7 +305,7 @@ screen, which is exactly when you were most likely to miss one.
 **Survives a restart.** Tempo never answers a Windows shutdown with a dialog, and it writes your
 window position, tab, settings and click totals the moment Windows says the session is ending.
 
-**Live debug** (Settings › Data & Backup) shows a health check, live engine stats and a colour-coded
+**Live debug** (Settings › Help & troubleshooting) shows a health check, live engine stats and a colour-coded
 event stream, with a real search (`"a phrase"`, `-hide`, `tag:captions`, `level:warn`). New lines
 that arrive below where you're reading are counted, a click away. It also says whether Windows will
 *really* start Tempo at sign-in, and whether a Roblox sign-in is open. **Copy** gives you the right
@@ -305,7 +313,7 @@ text to paste into a bug report.
 
 ### 🔐 Tamper check
 Tempo hashes its own program file at every launch, and once per release compares it with the
-SHA-256 that GitHub publishes for that release. **Settings › Data & Backup** then tells you whether
+SHA-256 that GitHub publishes for that release. **Settings › Updates & privacy** then tells you whether
 the copy you're running is the one that was published, and a confirmed copy shows its
 **Official ID** — the first 16 characters of that SHA-256 — in the sidebar and in About, so anyone
 can check the answer on GitHub instead of taking Tempo's word for it. **Details…** shows what the
@@ -349,7 +357,7 @@ games forbid input automation — use it with care.
 ## Updates
 
 Tempo checks GitHub for a newer release when it starts and again while it stays open; you choose
-how often, or turn it off, under **Settings › Behaviour › Check for updates**. When there is one,
+how often, or turn it off, under **Settings › Updates & privacy › Check for updates**. When there is one,
 Tempo can download and install it for you. The download picks up where it stopped after a dropped
 connection, is checked against the SHA-256 GitHub publishes for it, and a failed update is reported
 rather than leaving Tempo closed. The **Check for updates** button at the foot of Settings, or the
@@ -358,7 +366,7 @@ same item in the tray menu, asks straight away.
 Tempo can also tell you when **Roblox** has released a new client, with **Update now**, **Later**
 or **Keep this version**. Roblox updates itself and turns old clients away after a while, so
 keeping a version means no reminders until the next release. Switch it off with **Settings ›
-Behaviour › Check for Roblox updates**.
+Updates & privacy › Check for Roblox updates**.
 
 ## Privacy
 
@@ -370,9 +378,10 @@ list:
 
 | | What contacts what | When | Sends |
 | --- | --- | --- | --- |
-| **Update check** | GitHub releases API | Automatically, at start and while Tempo is open. Off: **Settings › Behaviour › Check for updates** | nothing but the request itself |
-| **Release check** | GitHub releases API | Automatically, once per release (test builds never ask). Off: **Settings › Data & Backup › Check that Tempo hasn't been tampered with** | nothing but the request itself |
-| **Roblox update check** | Roblox's client-version address (the one Roblox's own client asks) and its public deploy log | Automatically, every two hours, only while Roblox is installed. Off: **Settings › Behaviour › Check for Roblox updates** | nothing but the request itself |
+| **Update check** | GitHub releases API | Automatically, at start and while Tempo is open. Off: **Settings › Updates & privacy › Check for updates** | nothing but the request itself |
+| **Release check** | GitHub releases API | Automatically, once per release (test builds never ask). Off: **Settings › Updates & privacy › Check that Tempo hasn't been tampered with** | nothing but the request itself |
+| **Roblox update check** | Roblox's client-version address (the one Roblox's own client asks) and its public deploy log | Automatically, every two hours, only while Roblox is installed. Off: **Settings › Updates & privacy › Check for Roblox updates** | nothing but the request itself |
+| **Roblox game names** | roblox.com | Once per game, after Roblox's own log on your PC says which game a client is in. Off: **Settings › Updates & privacy › Name the Roblox game you're playing** | only the game's number |
 | Downloading an update | GitHub release asset | When you choose to update | — |
 | Speech models | Hugging Face | When you download a model | — |
 | A logo from a URL | the address you enter | When you set it | — |
@@ -382,7 +391,8 @@ list:
 | **Local API** | nothing — it only listens on this PC (127.0.0.1 and ::1) | Only if you turn it on | — |
 
 The **Accounts** rows only ever happen if you turn the Accounts tab on and add an account. With it
-off, the only thing Tempo asks Roblox is the update check above, and that can be switched off too.
+off, Tempo asks Roblox only for the update check and the game names above, and both can be switched
+off too.
 Account sessions are stored encrypted on your PC and are sent to nobody but Roblox itself. None of these rows carry your data anywhere else, and every one can be avoided.
 
 **Bug reports are yours to review.** Nothing is sent until you choose how to send it, and Tempo shows
@@ -415,7 +425,7 @@ you have opened.
   on that account; Tempo also offers this the moment a launch fails for that reason.
 - **"Tempo has been modified" / "This version was never published"** — the tamper check found that
   your copy isn't the file published for its version. If you built it yourself, click **Trust this
-  copy** in Settings › Data & Backup. If you downloaded it, get it again from the
+  copy** in Settings › Updates & privacy. If you downloaded it, get it again from the
   [releases page](https://github.com/justcamop555-pixel/Tempo/releases).
 - **Something looks wrong, or it crashed** — Tempo writes a report you can send in (see below).
 
@@ -428,7 +438,7 @@ this session's warnings — which you can edit before choosing GitHub, your emai
 Yahoo or the clipboard. Identifying details are removed for you.
 
 Please say what you did, what you expected and what happened. If Tempo crashed, it also saves a
-crash report; attaching it helps a lot. **Settings › Data & Backup › Live debug** → **Copy** gives an
+crash report; attaching it helps a lot. **Settings › Help & troubleshooting › Live debug** → **Copy** gives an
 even fuller picture to paste in.
 
 ## Where your data is stored
@@ -472,7 +482,7 @@ and the program that check verifies is built from exactly this tree plus those f
 
 ## Build & run
 
-**Requirements:** [.NET 8 SDK](https://dotnet.microsoft.com/download), Windows.
+**Requirements:** [.NET 10 SDK](https://dotnet.microsoft.com/download), Windows.
 
 ```bat
 dotnet build -c Release

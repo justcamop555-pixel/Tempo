@@ -42,6 +42,7 @@ UI/AccountApiDialog.cs
 UI/AccountDialog.cs
 UI/AccountListView.cs
 UI/MainForm.Accounts.cs
+UI/MainForm.AntiAfk.cs
 UI/MainForm.MultiInstance.cs
 UI/MainForm.RobloxUpdates.cs
 UI/RobloxClientDialog.cs
@@ -49,8 +50,10 @@ UI/RobloxUpdateForm.cs
 Utils/AccountApiServer.cs
 Utils/PrivateServerRef.cs
 Utils/RealBrowserLogin.cs
+Utils/RobloxAntiAfk.cs
 Utils/RobloxApi.cs
 Utils/RobloxClients.cs
+Utils/RobloxGameWatcher.cs
 Utils/RobloxInstall.cs
 Utils/RobloxLauncher.cs
 Utils/RobloxSignIn.cs

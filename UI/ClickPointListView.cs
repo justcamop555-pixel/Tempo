@@ -58,6 +58,14 @@ namespace AutoClicker.UI
                 return Color.FromArgb(138, 151, 165);
             }
 
+            // The button itself where the row carries it: the cell's text is in the reader's language.
+            if (item != null && item.SubItems.Count > 4 && item.SubItems[4].Tag is Models.MouseButtonType b)
+            {
+                return b == Models.MouseButtonType.Left ? Color.FromArgb(61, 220, 132)
+                     : b == Models.MouseButtonType.Right ? Color.FromArgb(255, 159, 67)
+                     : Color.FromArgb(176, 133, 245);
+            }
+
             string button = item != null && item.SubItems.Count > 4 ? item.SubItems[4].Text : null;
             if (string.IsNullOrEmpty(button))
             {

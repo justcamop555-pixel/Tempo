@@ -31,6 +31,17 @@ namespace AutoClicker.UI
         private readonly List<GroupBox> _settingsCards = new List<GroupBox>();
 
         /// <summary>
+        /// The cards of the Advanced section — settings most people never need. While it is closed they are
+        /// hidden and parked below the end of the page (see <see cref="RestackSettingsCards"/>).
+        /// </summary>
+        private readonly HashSet<GroupBox> _settingsAdvancedCards = new HashSet<GroupBox>();
+        private Button _settingsAdvancedBtn;
+
+        private bool SettingsAdvancedOpen => _settings != null && _settings.SettingsAdvancedOpen;
+
+        private bool SettingsCardShown(GroupBox g) => !_settingsAdvancedCards.Contains(g) || SettingsAdvancedOpen;
+
+        /// <summary>
         /// Everything below the last card — the action row, the notes, the version stamp —
         /// each paired with its distance from the bottom of the card stack, so the whole
         /// tail follows the cards up or down as one.
@@ -83,6 +94,8 @@ namespace AutoClicker.UI
             _settingsSearchInfo.AutoSize = false;
             _settingsSearchInfo.Width = 384;
             _settingsSearchInfo.Height = 18;
+            // With "n in Advanced" in it, the line can run past 384 px: "…" and the whole of it on hover.
+            _settingsSearchInfo.AutoEllipsis = true;
 
             page.Controls.Add(_settingsSearch);
             page.Controls.Add(_settingsSearchInfo);
@@ -135,44 +148,135 @@ namespace AutoClicker.UI
         /// once the tail moved, which is exactly its position with the hidden card still
         /// counted. Re-asserting afterwards only turned a gap into an overlap. So the
         /// search highlights and scrolls instead, and nothing moves while you type.
+        ///
+        /// The Advanced section is the one fold, and it is opened by a click, not by typing.
+        /// What sank the search version was CenterPageContent: on every tab switch, resize
+        /// and scroll-bar change it puts each control back at the place it noted when the
+        /// window opened (_autoFitBaseTop), so a card moved without its note moves back. Once
+        /// those notes exist, this writes them and lets the centring pass move everything.
+        /// Folded cards are parked BELOW the end of the page: the layout checks go by size,
+        /// not Visible, and a hidden card left where the tail now sits would collide with it.
         /// </summary>
         private void RestackSettingsCards()
         {
-            BackdropTabPage page = _settingsPage;
+            // The tab, or its window's page while Settings is in a window of its own (MainForm.TabWindows.cs).
+            TabPage page = PageHost(_settingsPage);
             if (page == null || page.IsDisposed || _settingsCards.Count == 0) { return; }
 
             try
             {
+                // Noted by EnableAutoFit (OnLoad), after the window was scaled: from then on the
+                // notes, unscrolled and uncentred, are where the controls belong.
+                bool noted = _autoFitBaseTop.ContainsKey(_settingsCards[0]);
+
                 // Children of an AutoScroll container sit at (design position + scroll
                 // offset), and AutoScrollPosition reports that offset as a NEGATIVE
                 // number — so a design Y written straight into Top lands that far out
                 // whenever the page is scrolled.
                 int dy = page.AutoScrollPosition.Y;
+                void Place(Control c, int designY)
+                {
+                    if (noted) { _autoFitBaseTop[c] = designY; }
+                    else { c.Top = designY + dy; }
+                }
 
                 // The first card's top, the gaps and the tail's offsets are 100% numbers (L puts them
-                // in the window's units): today this only runs while the window is built, where they
-                // are the same, but run after a 150% window had scaled it would pull every card up.
+                // in the window's units): at build they are the same, but after a 150% window has
+                // scaled they are not, and the fold runs then.
                 int y = L(_settingsCardTop);
                 foreach (GroupBox g in _settingsCards)
                 {
-                    g.Top = y + dy;
+                    if (!SettingsCardShown(g)) { continue; }
+                    Place(g, y);
                     // Height, not Bottom: Bottom already carries dy, and adding it to a
                     // design-space running total would compound the offset per card.
                     y += g.Height + L(SettingsCardGap);
                 }
 
                 int bottom = y - L(SettingsCardGap);
+                int end = bottom;
                 foreach (KeyValuePair<Control, int> kv in _settingsTail)
                 {
                     if (kv.Key == null || kv.Key.IsDisposed) { continue; }
-                    kv.Key.Top = bottom + L(kv.Value) + dy;
+                    Place(kv.Key, bottom + L(kv.Value));
+                    end = Math.Max(end, bottom + L(kv.Value) + kv.Key.Height);
+                }
+
+                int park = end + L(SettingsCardGap) * 4;
+                foreach (GroupBox g in _settingsCards)
+                {
+                    if (SettingsCardShown(g)) { continue; }
+                    Place(g, park);
+                    park += g.Height + L(SettingsCardGap);
+                }
+
+                if (noted)
+                {
+                    // Without its width noted the pass is not skipped, and unforced it puts the view
+                    // back where it is (a forced one would restore where the tab was last visited).
+                    _lastCenteredWidth.Remove(page);
+                    CenterPageContent(page, false);
                 }
 
                 // Same [layout] channel the fitter reports on; Debug, as it says the same every start.
-                Logger.Debug("[layout] settings stack: " + _settingsCards.Count +
-                            " cards, bottom " + bottom + ", " + _settingsTail.Count + " tail");
+                Logger.Debug("[layout] settings stack: " + _settingsCards.Count + " cards ("
+                            + _settingsAdvancedCards.Count + " advanced, " + (SettingsAdvancedOpen ? "open" : "closed")
+                            + "), bottom " + bottom + ", " + _settingsTail.Count + " tail");
             }
             catch (Exception ex) { Logger.Swallow("RestackSettingsCards", ex); }
+        }
+
+        /// <summary>
+        /// Opens or closes the Advanced section, keeping the view where it is.
+        ///
+        /// The order is what keeps the page whole: closing hides the cards BEFORE the tail moves up over
+        /// them, opening moves them into place while still hidden and only then shows them — no visible
+        /// card ever sits on another, not even for one frame.
+        /// </summary>
+        private void SetSettingsAdvancedOpen(bool open)
+        {
+            if (_settings == null || _settingsPage == null || _settingsPage.IsDisposed) { return; }
+            if (_settings.SettingsAdvancedOpen != open)
+            {
+                _settings.SettingsAdvancedOpen = open;
+                SaveSettingsQuietly();
+            }
+            if (_settingsAdvancedShown != open)
+            {
+                if (!open) { ShowAdvancedCards(false); }
+                RestackSettingsCards();
+                if (open) { ShowAdvancedCards(true); }
+                Logger.Info("[Settings] advanced section " + (open ? "opened" : "closed") + ".");
+            }
+            RefreshSettingsAdvancedButton();
+        }
+
+        /// <summary>
+        /// What the page shows now — tracked here, never read back: Visible reports the whole parent
+        /// chain, so on a page that is not on screen every card claims to be hidden.
+        /// </summary>
+        private bool _settingsAdvancedShown;
+
+        private void ShowAdvancedCards(bool show)
+        {
+            foreach (GroupBox g in _settingsAdvancedCards) { g.Visible = show; }
+            _settingsAdvancedShown = show;
+        }
+
+        /// <summary>The section's button says what a click will do; both captions are measured by the fitter.</summary>
+        private void RefreshSettingsAdvancedButton()
+        {
+            if (_settingsAdvancedBtn == null || _settingsAdvancedBtn.IsDisposed) { return; }
+            _settingsAdvancedBtn.Text = SettingsAdvancedOpen
+                ? Localization.T("Hide advanced settings")
+                : Localization.T("Show advanced settings");
+        }
+
+        /// <summary>After settings were loaded from somewhere else (Import): the page follows the setting.</summary>
+        private void SyncSettingsAdvancedSection()
+        {
+            if (_settings == null || _settingsAdvancedCards.Count == 0) { return; }
+            SetSettingsAdvancedOpen(_settings.SettingsAdvancedOpen);
         }
 
         // ── search ─────────────────────────────────────────────────────────────
@@ -243,7 +347,7 @@ namespace AutoClicker.UI
                 return;
             }
 
-            int cards = 0, hits = 0;
+            int cards = 0, hits = 0, folded = 0;
             GroupBox first = null;
             foreach (GroupBox g in _settingsCards)
             {
@@ -255,6 +359,8 @@ namespace AutoClicker.UI
                 {
                     cards++;
                     hits += n;
+                    // The Advanced cards come last, so a hit you can already see is always the first.
+                    if (!SettingsCardShown(g)) { folded += n; }
                     if (first == null) { first = g; }
                 }
             }
@@ -263,9 +369,12 @@ namespace AutoClicker.UI
 
             if (_settingsSearchInfo != null)
             {
+                // A setting in the closed Advanced section is found all the same: the count says so, and
+                // Enter opens the section when that is where the first hit is (ScrollSettingsTo).
                 _settingsSearchInfo.Text = hits == 0
                     ? Localization.T("Nothing matches that.")
                     : Localization.F("{0} match(es) in {1} section(s)", hits, cards)
+                      + (folded > 0 ? "   ·   " + Localization.F("{0} in Advanced", folded) : "")
                       + "   ·   " + Localization.T("Enter to jump");
                 _settingsSearchInfo.ForeColor = hits == 0 ? _theme.WarningText : _theme.TextMuted;
             }
@@ -284,8 +393,10 @@ namespace AutoClicker.UI
         {
             try
             {
-                BackdropTabPage page = _settingsPage;
+                // The page the cards are on: the tab, or its window's page (MainForm.TabWindows.cs).
+                TabPage page = PageHost(_settingsPage);
                 if (page == null || page.IsDisposed || card == null) { return; }
+                if (!SettingsCardShown(card)) { SetSettingsAdvancedOpen(true); }
 
                 // Top is (design position + scroll offset) and the offset reads back
                 // negative, so subtracting it recovers the design position — which is the

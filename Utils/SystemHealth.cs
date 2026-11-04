@@ -214,6 +214,14 @@ namespace AutoClicker.Utils
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX buffer);
 
+        /// <summary>Physical memory free and in all, in bytes — the "Available" and total Task Manager shows — or null
+        /// when Windows can't say.</summary>
+        public static (ulong Available, ulong Total)? PhysicalMemory()
+        {
+            var m = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
+            return GlobalMemoryStatusEx(ref m) ? (m.ullAvailPhys, m.ullTotalPhys) : ((ulong, ulong)?)null;
+        }
+
         private static void ReadMemory(HealthSnapshot s)
         {
             var m = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };

@@ -57,6 +57,35 @@ namespace AutoClicker.UI
 
         private const int LVM_SETEXTENDEDLISTVIEWSTYLE = 0x1000 + 54;
         private const int LVS_EX_DOUBLEBUFFER = 0x00010000;
+        private const int LVM_GETTOPINDEX = 0x1000 + 39;
+        private const int LVM_GETCOUNTPERPAGE = 0x1000 + 40;
+
+        /// <summary>The first row in view (0 with no window yet). Asked of the list itself: no row is made for it.</summary>
+        public int TopRowIndex
+        {
+            get
+            {
+                try { return IsHandleCreated ? (int)(long)SendMessage(Handle, LVM_GETTOPINDEX, IntPtr.Zero, IntPtr.Zero) : 0; }
+                catch { return 0; }
+            }
+        }
+
+        /// <summary>How many whole rows the list shows at once.</summary>
+        public int RowsPerPage
+        {
+            get
+            {
+                try { return IsHandleCreated ? Math.Max(1, (int)(long)SendMessage(Handle, LVM_GETCOUNTPERPAGE, IntPtr.Zero, IntPtr.Zero)) : 1; }
+                catch { return 1; }
+            }
+        }
+
+        /// <summary>Whether row <paramref name="index"/> is in view.</summary>
+        public bool RowInView(int index)
+        {
+            int top = TopRowIndex;
+            return index >= top && index < top + RowsPerPage;
+        }
 
         protected Theme _theme = Theme.ForKind(Models.ThemeKind.Dark);
         private int _highlightIndex = -1;
@@ -147,6 +176,13 @@ namespace AutoClicker.UI
 
         /// <summary>Columns drawn muted (labels rather than data).</summary>
         protected virtual bool IsMutedColumn(int column) => false;
+
+        /// <summary>One cell's own text colour — a word whose colour says something, like a session's state — or null
+        /// for the column's usual one. Made readable on its row; a selected row stays white.</summary>
+        protected virtual Color? CellColor(ListViewItem item, int column) => null;
+
+        /// <summary>Whether a cell with its own colour is bold too.</summary>
+        protected virtual bool CellBold(ListViewItem item, int column) => false;
 
         /// <summary>
         /// Whole row drawn muted. Owner-drawing ignores per-item ForeColor, so a list
@@ -275,24 +311,76 @@ namespace AutoClicker.UI
         /// </summary>
         public void FitLastColumn()
         {
+            // Never from inside itself. Setting a column's width can show or hide a scroll bar; that resizes the
+            // client area, and WinForms asks for a fit again INSIDE this one. With two fitters on the Accounts list
+            // (this and the list's own, their floors 60 and the title's width apart) each undid the other, every
+            // undo flipped a scroll bar, and the recursion ran for minutes: "Not responding" on entering the
+            // Accounts tab, 236 s after a vault unlock (2026-11-03, dotnet-stack on the hung window). Nested asks are
+            // answered here instead: a few passes, each against the client width as it now is, until it holds.
+            if (_fittingColumns) { return; }
+            _fittingColumns = true;
             try
             {
                 if (Columns.Count == 0)
                 {
                     return;
                 }
-                int used = 0;
-                for (int i = 0; i < Columns.Count - 1; i++)
+                for (int pass = 0; pass < 3; pass++)
                 {
-                    used += Columns[i].Width;
+                    int used = 0;
+                    for (int i = 0; i < Columns.Count - 1; i++)
+                    {
+                        used += Columns[i].Width;
+                    }
+                    // ALL of the room, to the pixel. The strip of header past the last column is painted by Windows,
+                    // not by OnDrawColumnHeader: a black block at the end of the Live Monitor's header in the dark
+                    // themes (2026-11-02). This left 4 px of it, and a whole scroll bar's width once the bar went away
+                    // — the client width changes then, the control's does not (OnClientSizeChanged). Never narrower
+                    // than the column's title. Columns that fill the client exactly raise no horizontal bar.
+                    ColumnHeader last = Columns[Columns.Count - 1];
+                    int width = Math.Max(HeaderTextNeed(last) + 12, ClientSize.Width - used);
+                    if (last.Width == width)
+                    {
+                        break;
+                    }
+                    last.Width = width;
                 }
-                int room = ClientSize.Width - used - 4;
-                if (room > 60)
+
+                // Windows redoes a list's scroll bars when a column's width changes. A list refilled with drawing
+                // suspended (BeginUpdate) can keep a horizontal bar sized for the columns as they WERE — on the Accounts
+                // list after a refill, a range 17 px past columns that now fit exactly: a bar for nothing — and a width
+                // that is already right sends no change to correct it. A nudge of the last column makes it redo them
+                // (scratchpad/hsbar: the stale bar stays through a refit, and goes with the nudge).
+                if (IsHandleCreated && (GetWindowLong(Handle, GWL_STYLE) & WS_HSCROLL) != 0)
                 {
-                    Columns[Columns.Count - 1].Width = room;
+                    int total = 0;
+                    foreach (ColumnHeader c in Columns) { total += c.Width; }
+                    if (total <= ClientSize.Width)
+                    {
+                        ColumnHeader last = Columns[Columns.Count - 1];
+                        int w = last.Width;
+                        last.Width = w - 1;
+                        last.Width = w;
+                    }
                 }
             }
             catch { }
+            finally
+            {
+                _fittingColumns = false;
+            }
+        }
+
+        private bool _fittingColumns;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+        private const int GWL_STYLE = -16, WS_HSCROLL = 0x00100000;
+
+        protected override void OnClientSizeChanged(EventArgs e)
+        {
+            base.OnClientSizeChanged(e);
+            FitLastColumn();
         }
 
         /// <summary>Re-fits columns and trims the control to whole rows.</summary>
@@ -455,11 +543,34 @@ namespace AutoClicker.UI
             }
 
             var textRect = new Rectangle(r.Left + HeaderTextLeft, r.Top, r.Width - HeaderTextLeft - HeaderTextRight, r.Height);
-            using (var font = new Font(Font.FontFamily, HeaderFontSize, FontStyle.Bold))
+            TextRenderer.DrawText(g, e.Header.Text, HeaderFont, textRect,
+                Readable(_theme.Accent, _theme.Surface), HeaderFlags);
+        }
+
+        // The titles' font, made once (a new Font per title, per paint and per fit was the most of each pass of the
+        // fit loop above), and what each title needs, measured once per text.
+        private Font _headerFont;
+        private readonly System.Collections.Generic.Dictionary<string, int> _headerNeed =
+            new System.Collections.Generic.Dictionary<string, int>(StringComparer.Ordinal);
+
+        private Font HeaderFont => _headerFont ??= new Font(Font.FontFamily, HeaderFontSize, FontStyle.Bold);
+
+        protected override void OnFontChanged(EventArgs e)
+        {
+            base.OnFontChanged(e);
+            _headerFont?.Dispose();
+            _headerFont = null;
+            _headerNeed.Clear();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
             {
-                TextRenderer.DrawText(g, e.Header.Text, font, textRect,
-                    Readable(_theme.Accent, _theme.Surface), HeaderFlags);
+                _headerFont?.Dispose();
+                _headerFont = null;
             }
+            base.Dispose(disposing);
         }
 
         // Where a column title is painted, shared with the layout check that measures it.
@@ -472,11 +583,12 @@ namespace AutoClicker.UI
         /// <summary>How wide <paramref name="column"/>'s title is as painted (for the layout checks).</summary>
         internal int HeaderTextNeed(ColumnHeader column)
         {
-            using (var font = new Font(Font.FontFamily, HeaderFontSize, FontStyle.Bold))
-            {
-                return TextRenderer.MeasureText(column?.Text ?? string.Empty, font, new Size(int.MaxValue, int.MaxValue),
-                    HeaderFlags & ~TextFormatFlags.EndEllipsis).Width;
-            }
+            string text = column?.Text ?? string.Empty;
+            if (_headerNeed.TryGetValue(text, out int need)) { return need; }
+            need = TextRenderer.MeasureText(text, HeaderFont, new Size(int.MaxValue, int.MaxValue),
+                HeaderFlags & ~TextFormatFlags.EndEllipsis).Width;
+            _headerNeed[text] = need;
+            return need;
         }
 
         /// <summary>The room <paramref name="column"/>'s title is painted in.</summary>
@@ -540,6 +652,11 @@ namespace AutoClicker.UI
             {
                 textColour = accent;
                 style = FontStyle.Bold;
+            }
+            else if (CellColor(item, column) is Color own)
+            {
+                textColour = Readable(own, rowBack);
+                if (CellBold(item, column)) { style = FontStyle.Bold; }
             }
             else if (IsMutedColumn(column) || RowMuted(item))
             {

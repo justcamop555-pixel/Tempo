@@ -85,13 +85,18 @@ namespace AutoClicker.UI
         /// <summary>
         /// The hours between automatic checks. "Every launch" means every launch — and, since
         /// Tempo can stay open for days, twice a day while it does.
+        ///
+        /// Daily and weekly both leave room for a launch that comes a little early: daily waits 20 h,
+        /// not 24, and weekly 6 days, not 7. Weekly waited the full 168 h, so someone who opens Tempo
+        /// once a week — Saturday 9:50 after last Saturday's check at 10:00 — got no check, and none
+        /// until the Saturday after: two weeks between checks, which looks like "weekly doesn't work".
         /// </summary>
         private double AutoCheckIntervalHours(bool atLaunch)
         {
             switch (_settings?.UpdateCheckFrequency ?? 1)
             {
                 case 0: return atLaunch ? 0 : 12;   // every launch
-                case 2: return 24 * 7;               // weekly
+                case 2: return 24 * 6;               // weekly
                 default: return 20;                  // daily (also the legacy behaviour)
             }
         }
@@ -123,6 +128,27 @@ namespace AutoClicker.UI
                             + " ago; the next automatic check is due "
                             + _nextAutoCheckUtc.ToLocalTime().ToString("d MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture) + ".");
             }
+            UpdateLastCheckedLabel();   // Settings says when
+        }
+
+        /// <summary>
+        /// "Check for updates" or how often was changed in Settings while Tempo runs: due again from the last
+        /// check, at the new pace. The schedule kept the old pace until the next check or a restart, so Weekly
+        /// switched to Daily left the next check up to a week away — and a test of the new choice saw nothing.
+        /// </summary>
+        private void RearmUpdateSchedule()
+        {
+            if (_updateCheckTask != null) { return; }   // a check is running: it re-arms the schedule when it ends
+            _nextAutoCheckUtc = _settings != null && _settings.CheckForUpdatesOnLaunch
+                ? NextAutomaticCheck(atLaunch: false)
+                : DateTime.MaxValue;
+            Logger.Info("[Update] automatic checks "
+                        + (_nextAutoCheckUtc == DateTime.MaxValue
+                            ? "off."
+                            : (_settings.UpdateCheckFrequency == 0 ? "every launch" : _settings.UpdateCheckFrequency == 2 ? "weekly" : "daily")
+                              + "; the next is due "
+                              + _nextAutoCheckUtc.ToLocalTime().ToString("d MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture) + "."));
+            RefreshUpdateUi();
         }
 
         /// <summary>When the next automatic check is due, from the last one that reached GitHub.</summary>
@@ -177,9 +203,11 @@ namespace AutoClicker.UI
                     _nextAutoCheckUtc = retryAt.Value.AddSeconds(30);
                     Logger.Info("[Update] the automatic check was refused for GitHub's rate limit; trying again after "
                                 + _nextAutoCheckUtc.ToLocalTime().ToString("HH:mm") + ".");
+                    UpdateLastCheckedLabel();
                     return;
                 }
                 Logger.Info("[Update] the automatic check didn't reach GitHub; trying again in " + minutes + " min.");
+                UpdateLastCheckedLabel();   // the retry, after the refresh that ended the check
                 return;
             }
 
@@ -647,6 +675,28 @@ namespace AutoClicker.UI
                 dlg.ShowInTaskbar = false;
                 return dlg.ShowDialog(_accountsWindow);
             }
+            // The same for any other tab up in a window of its own: over the one last used, else the first.
+            DetachedPageWindow tabWindow = DetachedPageWindow.InUse;
+            if (tabWindow == null || tabWindow.IsDisposed || !tabWindow.Visible || tabWindow.WindowState == FormWindowState.Minimized)
+            {
+                tabWindow = null;
+                foreach (TabWindow tw in _tabWindows.Values)
+                {
+                    if (tw.Window != null && !tw.Window.IsDisposed && tw.Window.Visible
+                        && tw.Window.WindowState != FormWindowState.Minimized)
+                    {
+                        tabWindow = tw.Window;
+                        break;
+                    }
+                }
+            }
+            if (tabWindow != null)
+            {
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.ShowInTaskbar = false;
+                if (tabWindow.TopMost) { dlg.TopMost = true; }
+                return dlg.ShowDialog(tabWindow);
+            }
             dlg.StartPosition = FormStartPosition.CenterScreen;
             dlg.ShowInTaskbar = true;    // the only sign of Tempo on the taskbar while it waits
             return dlg.ShowDialog();
@@ -853,7 +903,8 @@ namespace AutoClicker.UI
             GC.KeepAlive(fallback);
             _closeForHelperFallback = fallback;
 
-            Application.Exit();
+            // Not Application.Exit: see CloseForGood.
+            CloseForGood();
         }
 
         /// <summary>Held so the fallback timer is not collected before it can fire.</summary>
@@ -1032,6 +1083,24 @@ namespace AutoClicker.UI
                 if (_settings.LastUpdateCheckFailed)
                 {
                     parts.Add(Localization.T("The last check couldn't reach GitHub."));
+                }
+
+                // When the next one runs. A daily or weekly check is not due again for hours or days, and
+                // nothing said so: switching to Weekly and restarting Tempo showed no check and no sign that
+                // one was coming, which was reported as "daily and weekly don't work". "Every launch" needs
+                // no date — unless a failed check is waiting to try again.
+                if (_settings.CheckForUpdatesOnLaunch && _nextAutoCheckUtc != DateTime.MaxValue
+                    && _nextAutoCheckUtc > DateTime.UtcNow.AddMinutes(1)
+                    && (_settings.UpdateCheckFrequency != 0 || _autoCheckFailures > 0))
+                {
+                    parts.Add(Localization.F("Next check: {0}",
+                        _nextAutoCheckUtc.ToLocalTime().ToString("d MMM, HH:mm", Localization.DateCulture)));
+                    // One line: an update known AND a failed check leave no room for it in any language (762 px
+                    // of 696 in English) — and the date is the part that can go.
+                    if (TextRenderer.MeasureText(string.Join("   ·   ", parts), _lastCheckedLabel.Font).Width > _lastCheckedLabel.Width)
+                    {
+                        parts.RemoveAt(parts.Count - 1);
+                    }
                 }
             }
 

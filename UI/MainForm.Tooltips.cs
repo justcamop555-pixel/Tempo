@@ -55,23 +55,15 @@ namespace AutoClicker.UI
 
             // ── Sidebar navigation ──────────────────────────────────────────────
             // Name the keyboard shortcut for each tab. Ctrl+1…9 and Ctrl+Tab have
-            // always worked; until now nothing in the app mentioned them.
+            // always worked; until now nothing in the app mentioned them. Each tip also says
+            // where the tab opens and what the right button does, so it is set again whenever a
+            // tab moves into a window of its own or back (MainForm.TabWindows.cs).
             //
             // Put together from TRANSLATED pieces. It used to be assembled in English and then
             // looked up whole — "Open the Clicker tab  ·  Ctrl+1. Ctrl+Tab cycles…" can never be
             // a key in any table — so every tab's tip, and what a screen reader says for it, was
             // English in every language (and said "Ctrl" to German users, whose key reads Strg).
-            for (int i = 0; i < _navButtons.Count; i++)
-            {
-                string tab = i < _tabs.TabPages.Count ? _tabs.TabPages[i].Text : "";
-                string tip = Utils.Localization.F("Open the {0} tab", tab);
-                if (i < 9)
-                {
-                    tip += "  ·  " + Utils.Localization.F("Ctrl+{0}", (i + 1).ToString());
-                }
-                tip += ". " + Utils.Localization.T("Ctrl+Tab cycles through the tabs. Hold Ctrl to see each tab's number.");
-                T(_navButtons[i], tip);
-            }
+            RefreshNavTips();
 
             // ── Clicker: profile ────────────────────────────────────────────────
             T(_notifyFinishCheck, "Play a chime (and show a tray notice) when a fixed-count or fixed-duration run \u2014 or a finite macro playback \u2014 finishes by itself. Manual stops stay silent.");
@@ -178,9 +170,10 @@ namespace AutoClicker.UI
             T(_addPointBtn, "Add a point by typing its coordinates.");
             T(_capturePointBtn, "Capture a point by clicking somewhere on screen.");
             T(_editPointBtn, "Edit the selected point.");
-            T(_duplicatePointBtn, "Duplicate the selected point (Ctrl+D).");
-            T(_togglePointBtn, "Enable or disable the selected point.");
-            T(_removePointBtn, "Remove the selected point (Delete).");
+            T(_duplicatePointBtn, "Duplicate the selected points (Ctrl+D).");
+            T(_togglePointBtn, "Enable or disable the selected points.");
+            T(_removePointBtn, "Remove the selected points (Delete).");
+            T(_selectAllPointsBtn, "Select every point (Ctrl+A), so one action takes them all.");
             T(_showPointsBtn, "Flash numbered markers on screen at each point.");
             T(_clearPointsBtn, "Remove all points.");
             T(_toggleAllPointsBtn, "Enable every point, or disable them all if they're all on.");
@@ -200,6 +193,7 @@ namespace AutoClicker.UI
             T(_macroPreserveHoldsCheck, "Keep held keys/buttons at their real recorded length when speeding up — so 2× / 4× only shorten the gaps between actions, not a held movement key (WASD). Off = everything scales with speed.");
             T(_macroSmoothCheck, "Glide the pointer to each position instead of jumping. The glide happens in the wait before each move or click, so the macro keeps its recorded timing, and a recording made without mouse movement glides between its clicks too.");
             T(_pinMacroBtn, "Pin the selected macro to the top of the list.");
+            T(_liveFollowLink, "You scrolled away, so the list stopped following the macro. Click to follow it again.");
             T(_resetMacroStatsBtn, "Clear the selected macro's play count and last-played time.");
             T(_macroSearchBox, "Filter the macro list by name, notes, or what the macro does — type a key like F5, a button like right, or part of a script filename.");
             T(_exportMacroBtn, "Save the selected macro to a file you can share or back up.");
@@ -270,7 +264,7 @@ namespace AutoClicker.UI
             T(_alwaysOnTopCheck, "Keep the Tempo window above other windows.");
             T(_rememberWindowCheck, "Reopen Tempo at the same position and size it had when you last closed it.");
             T(_rememberTabCheck, "Reopen Tempo on the tab you were last using instead of always starting on Clicker. Handy after a long unattended run: if Windows reboots overnight and Tempo restarts with it, you come back to the Macros tab you left it on rather than the Clicker page.");
-            T(_opacitySlider, "Make the Tempo window see-through. 100% is solid; lower values let what's behind show through.");
+            T(_opacitySlider, "Make the Tempo window see-through. 100% is solid; lower values let what's behind show through. Double-click to go back to 100%.");
             // Greyed out with no background image (the note beside it then says "(no image)").
             T(_bgDimTrack, "Tones the background image down behind Tempo's text, towards the theme's own background colour, so it reads on any picture. 0% shows the picture as it is. Double-click to go back to 55%.");
             T(_customAccentCheck, "Use your own accent colour instead of the theme's.");
@@ -289,6 +283,7 @@ namespace AutoClicker.UI
             T(_startupDelayNum, "When Windows launches Tempo at sign-in, wait this many extra seconds before its background update check — so it doesn't fight other startup apps for the network. Has no effect when you open Tempo yourself.");
             T(_checkUpdatesCheck, "Quietly check GitHub for a newer version when Tempo starts, and again while it stays open. A check that fails is tried again a few minutes later.");
             T(_checkRobloxUpdatesCheck, "Every two hours while Roblox is installed, ask Roblox which version it hands out — the same public address Roblox itself asks — and tell you when yours is behind, so you choose when to update. Nothing about you or your accounts is sent.");
+            T(_robloxGameNamesCheck, "Tempo reads which Roblox game each client is in from Roblox's own log on this PC, and shows it — on the captions' source tag, in game mode, Live debug and the Accounts tab. This asks Roblox for the game's name, once per game, sending only the game's number. Off, nothing goes online for it and the game is known by its number.");
             // Where the log is and how big it is now — refreshed whenever the switch changes.
             RefreshLogTip();
             T(_showIndicatorCheck, "Shows a small click-through badge while the clicker runs or a macro plays, so you can tell Tempo is working even when its window is hidden. Customise… sets where it sits and what it shows. The recording badge always shows.");

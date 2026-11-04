@@ -245,6 +245,16 @@ namespace AutoClicker
                 Logger.Info("[startup] Tempo is already running (opened before the sign-in launch fired) — this start-with-Windows launch exits quietly.");
                 return;
             }
+            if (!createdNew && OtherTempoClosing())
+            {
+                // The running copy is on its way out — a restart handing over, or an Exit a moment ago. Asking it
+                // for its window would bring back one it is taking down, so wait for it to go and open as usual;
+                // when a restart's new copy takes over first, the request below brings THAT one forward.
+                Logger.Info("[startup] the running Tempo is closing — waiting for it before opening.");
+                createdNew = WaitForClosingTempo(TimeSpan.FromSeconds(30));
+                Logger.Info(createdNew ? "[startup] the closing Tempo is gone; opening as usual."
+                                       : "[startup] another Tempo took over from the closing one.");
+            }
             if (!createdNew)
             {
                 // Pull the running window forward so the user isn't left hunting the
@@ -579,10 +589,99 @@ namespace AutoClicker
         /// </summary>
         internal static volatile bool ExitProcessAfterShutdown;
 
+        /// <summary>
+        /// Set once Tempo has committed to closing: the window is going and nothing brings it back. A fault
+        /// from then on finishes the close instead of opening the crash window (<see cref="FinishCloseAfterFault"/>).
+        /// On 2026-11-01 a language restart threw inside its own exit, and the crash window that came up kept
+        /// the half-closed copy alive — the new copy waited behind it, and the user's own launches "did
+        /// nothing" for a minute and a half.
+        /// </summary>
+        internal static volatile bool ExitCommitted;
+
+        /// <summary>
+        /// Raised (and held until this process ends) once <see cref="ExitCommitted"/> is set, so a launch made
+        /// in the moments before the closing copy is gone waits for it instead of asking it for its window.
+        /// </summary>
+        internal const string ClosingEventName = @"Local\TempoClosing_v1";
+        private static EventWaitHandle _closingSignal;
+
+        /// <summary>Registered by MainForm: finishes the close after a fault (the argument counts the faults).</summary>
+        internal static Action<int> FinishCloseAfterFaultHandler;
+
+        /// <summary>Registered by MainForm: the crash window's Quit, by the main window's own close.</summary>
+        internal static Action QuitAfterCrashHandler;
+
+        private static int _closeFaults;
+        private static System.Threading.Timer _closeFaultFallback;
+
+        internal static void NoteExitCommitted()
+        {
+            if (ExitCommitted) { return; }
+            ExitCommitted = true;
+            try
+            {
+                _closingSignal = new EventWaitHandle(true, EventResetMode.ManualReset, ClosingEventName);
+                _closingSignal.Set();
+            }
+            catch (Exception ex) { Logger.Swallow("NoteExitCommitted", ex); }
+        }
+
+        /// <summary>True while another Tempo has said it is closing (<see cref="ClosingEventName"/>).</summary>
+        private static bool OtherTempoClosing()
+        {
+            try
+            {
+                if (EventWaitHandle.TryOpenExisting(ClosingEventName, out EventWaitHandle closing))
+                {
+                    using (closing) { return closing.WaitOne(0); }
+                }
+            }
+            catch { }
+            return false;
+        }
+
         private static void OnThreadException(object sender, ThreadExceptionEventArgs e)
         {
             Logger.Error("Unhandled UI thread exception.", e.Exception);
+            if (ExitCommitted)
+            {
+                FinishCloseAfterFault(e.Exception);
+                return;
+            }
             ShowCrashReport(e.Exception, "UI thread", false);
+        }
+
+        /// <summary>
+        /// A fault after Tempo committed to closing. The report is still written — the next start offers it,
+        /// as after any crash — but no window asks about it: nobody is looking at Tempo any more, and a modal
+        /// window here is what kept a closing copy alive. Whatever happens next, this process ends: the copy
+        /// taking over, or the user's next launch, is waiting for it.
+        /// </summary>
+        private static void FinishCloseAfterFault(Exception ex)
+        {
+            try { CrashReporter.WriteReportFile(CrashReporter.BuildReport(ex, "UI thread, while closing")); } catch { }
+            int fault = Interlocked.Increment(ref _closeFaults);
+            Logger.Warn("[shutdown] that fault came while Tempo was closing — finishing the close without the crash window" +
+                        (fault > 1 ? " (fault " + fault + ")" : "") + ".");
+            ExitProcessAfterShutdown = true;
+            if (fault == 1)
+            {
+                _closeFaultFallback = new System.Threading.Timer(_ =>
+                {
+                    Logger.Warn("[shutdown] the close had not finished 10 s after a fault — ending the process.");
+                    Environment.Exit(0);
+                }, null, 10000, Timeout.Infinite);
+            }
+            try
+            {
+                if (FinishCloseAfterFaultHandler != null) { FinishCloseAfterFaultHandler(fault); }
+                else { Application.ExitThread(); }
+            }
+            catch (Exception again)
+            {
+                Logger.Warn("[shutdown] finishing the close failed too: " + again.Message);
+                try { Application.ExitThread(); } catch { }
+            }
         }
 
         private static void OnDomainException(object sender, UnhandledExceptionEventArgs e)
@@ -616,7 +715,11 @@ namespace AutoClicker
                     form.ShowDialog();
                     if (form.UserChoseQuit)
                     {
-                        Application.Exit();
+                        // The main window's own close, not Application.Exit: that walks every open window
+                        // while raising FormClosing on each, and the main window's FormClosing closes some
+                        // of them — "Collection was modified", the very fault behind the 2026-11-01 crash.
+                        if (QuitAfterCrashHandler != null) { QuitAfterCrashHandler(); }
+                        else { Application.Exit(); }
                     }
                 }
             }
@@ -743,6 +846,34 @@ namespace AutoClicker
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Waits for a closing Tempo (<see cref="OtherTempoClosing"/>) to let go of the single-instance mutex.
+        /// True once this launch owns it; false when the closing copy went and another took the mutex first
+        /// (a restart's new copy), or the wait ran out.
+        /// </summary>
+        private static bool WaitForClosingTempo(TimeSpan cap)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                while (clock.Elapsed < cap)
+                {
+                    if (_singleInstanceMutex.WaitOne(250)) { return true; }
+                    if (!OtherTempoClosing())
+                    {
+                        // Its signal went with it: one short last wait for the release it made on its way out.
+                        return _singleInstanceMutex.WaitOne(500);
+                    }
+                }
+            }
+            catch (AbandonedMutexException)
+            {
+                return true;   // it ended without releasing; ownership is ours
+            }
+            catch { }
+            return false;
         }
 
         /// <summary>Whether another Tempo process — under either name — is still running.</summary>

@@ -46,10 +46,60 @@ namespace AutoClicker.UI
         {
             if (sender is Form f)
             {
+                OwnByPageWindowInUse(f);
                 KeepAboveOwner(f);
                 Fit(f);
             }
         }
+
+        /// <summary>
+        /// A dialog asked for from a tab that is out in its own window belongs to THAT window.
+        ///
+        /// The page code that opens it passes the main window as the owner — about forty
+        /// <c>ShowDialog(this)</c> calls, written when every page lived in the main window. With the
+        /// page in a window of its own, that put the dialog over a main window that may be minimised
+        /// (Windows put the dialog in the corner of the screen), in the tray, on the other monitor, or
+        /// under the page window when it is kept on top — which the dialog had just disabled. Handed to
+        /// the page window as it loads, the dialog opens centred over the page that asked for it.
+        /// Only a dialog of the main window (or of nobody) moves: one opened by another dialog stays
+        /// with that dialog.
+        /// </summary>
+        private static void OwnByPageWindowInUse(Form f)
+        {
+            try
+            {
+                if (!f.Modal || f is DetachedPageWindow || !f.IsHandleCreated) { return; }
+                DetachedPageWindow inUse = DetachedPageWindow.InUse;
+                if (inUse == null || inUse.IsDisposed || !inUse.IsHandleCreated || !inUse.Visible
+                    || inUse.WindowState == FormWindowState.Minimized)
+                {
+                    return;
+                }
+                IntPtr owner = GetWindowLongPtr(f.Handle, GWL_HWNDPARENT);
+                if (owner == inUse.Handle) { return; }
+                if (owner != IntPtr.Zero && !(Control.FromHandle(owner) is MainForm)) { return; }
+
+                SetWindowLongPtr(f.Handle, GWL_HWNDPARENT, inUse.Handle);
+                // Form.OnLoad centred it on the old owner just before this ran.
+                if (f.StartPosition == FormStartPosition.CenterParent || owner == IntPtr.Zero)
+                {
+                    Rectangle o = inUse.Bounds;
+                    f.Location = new Point(o.Left + (o.Width - f.Width) / 2, o.Top + (o.Height - f.Height) / 2);
+                }
+                // Above a page window that is kept on top, not under it.
+                if (inUse.TopMost && !f.TopMost) { f.TopMost = true; }
+                Logger.Debug("[ui] \"" + f.Text + "\" opened over the \"" + inUse.Text + "\" window, where it was asked for.");
+            }
+            catch (Exception ex) { Logger.Swallow("ScreenFit.OwnByPageWindowInUse", ex); }
+        }
+
+        private const int GWL_HWNDPARENT = -8;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+        private static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+        private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr value);
 
         /// <summary>
         /// A dialog owned by a window that is kept on top is kept on top too. An owned window should sit

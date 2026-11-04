@@ -111,8 +111,9 @@ namespace AutoClicker.UI
                 // cannot quietly send this button somewhere else.
                 try
                 {
-                    int idx = IndexOfTabKey("settings");
-                    if (idx >= 0) { _tabs.SelectedIndex = idx; }
+                    // Wherever Settings lives — its own window, or the main window brought to the front
+                    // (from the Captions tab's own window, switching the main window's tab showed nothing).
+                    ShowTab("settings");
                     // And to the Live Captions card itself: it is far down a long page, and the button said
                     // "caption settings" but left you wherever Settings had last been scrolled to. After the
                     // switch has laid the page out, or that pass would put the scroll back.
@@ -441,7 +442,9 @@ namespace AutoClicker.UI
         {
             if (_capFitBusy || _capLiveCard == null || _capActionsCard == null || _capTranscript == null) { return; }
             var page = _capLiveCard.Parent as ScrollableControl;
-            if (page == null || WindowState == FormWindowState.Minimized || page.ClientSize.Height <= 0) { return; }
+            // The window the page is in: this one, or the tab's own (MainForm.TabWindows.cs).
+            Form pageForm = page?.FindForm() ?? this;
+            if (page == null || pageForm.WindowState == FormWindowState.Minimized || page.ClientSize.Height <= 0) { return; }
             if (!IsCaptionsTabVisible()) { return; }
             if (!_autoFitBaseTop.TryGetValue(_capLiveCard, out int liveBase)) { return; }   // not laid out yet
             _capFitBusy = true;
@@ -2339,13 +2342,15 @@ namespace AutoClicker.UI
         {
             try
             {
-                if (_capTranscript == null || _tabs == null || _tabs.SelectedTab == null)
+                if (_capTranscript == null || _tabs == null)
                 {
                     return false;
                 }
+                // The page it is on is the tab, or — with Captions in a window of its own — that window's
+                // page, which is never the main window's selected tab: the transcript stopped rendering.
                 for (Control c = _capTranscript; c != null; c = c.Parent)
                 {
-                    if (c is TabPage page) { return ReferenceEquals(page, _tabs.SelectedTab); }
+                    if (c is TabPage page) { return IsHostPageShowing(page); }
                 }
                 return false;
             }

@@ -91,6 +91,14 @@ namespace AutoClicker.UI
         private double _pulse;           // 0..1 glow strength on the accent line
         private DateTime _lastTextChange = DateTime.MinValue;
 
+        // Words nobody has added to for a while are drawn fainter. The bar kept the last caption at full strength
+        // until the next one, so in a game that speaks once a round, a round whose words were not caught left the
+        // PREVIOUS round's sentence looking current — read as captions "15-30 s late" (2026-11-02, a spelling game).
+        private const int OldTextAfterMs = 10000;
+        private const double OldTextLevel = 0.5;
+        private readonly System.Windows.Forms.Timer _oldTextTimer;
+        private double _age = 1.0, _ageTarget = 1.0;   // the text's strength: 1 fresh, OldTextLevel once old
+
         // ── Per-speaker label colours ────────────────────────────────────────
         // Each "Speaker N:" gets a stable, distinct colour so following who says
         // what takes a glance, not reading. Chosen to stay clearly apart from the
@@ -348,6 +356,16 @@ namespace AutoClicker.UI
 
             _anim = new System.Windows.Forms.Timer { Interval = 33 }; // ~30 fps
             _anim.Tick += (s, e) => AnimationTick();
+            _oldTextTimer = new System.Windows.Forms.Timer { Interval = OldTextAfterMs };
+            _oldTextTimer.Tick += (s, e) =>
+            {
+                _oldTextTimer.Stop();
+                if (_text.Length > 0 && !_pending && !_captionsOff)
+                {
+                    _ageTarget = OldTextLevel;
+                    EnsureAnimating();
+                }
+            };
 
             LayoutToBottom();
         }
@@ -463,6 +481,9 @@ namespace AutoClicker.UI
                 _lastTextChange = DateTime.UtcNow;
                 _pulse = 1.0;               // kick the live accent
                 _fadeTarget = 1.0;          // make sure we're visible
+                _age = _ageTarget = 1.0;    // fresh words: the whole line at full strength again
+                _oldTextTimer.Stop();
+                if (text.Length > 0) { _oldTextTimer.Start(); }
                 EnsureAnimating();
                 Repaint();
             }
@@ -486,6 +507,8 @@ namespace AutoClicker.UI
                 _revealLagMs = -1;          // a fresh session measures its own reveal delay
                 _text = "";
                 _fadeTarget = 1.0;
+                _age = _ageTarget = 1.0;    // the listening cue is never "old"
+                _oldTextTimer.Stop();
                 EnsureAnimating();
             }
             Repaint();
@@ -831,6 +854,18 @@ namespace AutoClicker.UI
                 _fade = _fadeTarget;
             }
 
+            // Old words ease down to their fainter strength (and straight back up when new ones come).
+            double ad = _ageTarget - _age;
+            if (Math.Abs(ad) > 0.01)
+            {
+                _age += ad * 0.12;
+                busy = true;
+            }
+            else
+            {
+                _age = _ageTarget;
+            }
+
             // Decay the speaking pulse; re-energise if text changed very recently.
             if ((DateTime.UtcNow - _lastTextChange).TotalMilliseconds < 350)
             {
@@ -970,7 +1005,7 @@ namespace AutoClicker.UI
             if (globalFade <= 0 && !_movable) return;
 
             double op = _opacityPercent / 100.0;
-            int textA = (int)Math.Round(255 * op * globalFade);
+            int textA = (int)Math.Round(255 * op * globalFade * (_movable ? 1.0 : _age));
             int panelA = (int)Math.Round(255 * op * PanelAlphaFactor * globalFade);
             if (_movable) panelA = Math.Max(panelA, 160); // clearly grabbable
 
@@ -1523,6 +1558,7 @@ namespace AutoClicker.UI
             if (disposing)
             {
                 try { _anim?.Stop(); _anim?.Dispose(); } catch { }
+                try { _oldTextTimer?.Stop(); _oldTextTimer?.Dispose(); } catch { }
                 try { _surface?.Dispose(); _surface = null; } catch { }
             }
             base.Dispose(disposing);
