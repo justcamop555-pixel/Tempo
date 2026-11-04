@@ -54,12 +54,25 @@ $Repo  = 'Tempo'
 function Say  { param($m) Write-Host "  $m" }
 function Step { param($m) Write-Host ""; Write-Host "  $m" -ForegroundColor Cyan }
 function Good { param($m) Write-Host "  $m" -ForegroundColor Green }
+
+# Run the way the website says - irm ... | iex - this is not a script file. It runs INSIDE the
+# user's own PowerShell session, where `exit` ends the session itself: every failure closed the
+# window before its red message could be read, and so did a finished -Portable copy. `break`
+# stops just this script. Saved and run as a file, it still exits with a code, for scripts that
+# call it. (Never call Stop-Install inside a loop: there, `break` would only leave the loop.)
+$FromIex = -not $MyInvocation.MyCommand.Path
+function Stop-Install {
+    param([int] $Code)
+    if ($FromIex) { break }
+    exit $Code
+}
+
 function Fail {
     param($m)
     Write-Host ""
     Write-Host "  $m" -ForegroundColor Red
     Write-Host ""
-    exit 1
+    Stop-Install 1
 }
 
 Write-Host ""
@@ -168,7 +181,7 @@ if ($Portable -or (-not $zipAsset)) {
     Say "It is self-contained - double-click it and it runs. Settings live in your AppData folder."
     if (-not $NoLaunch) { Start-Process $final }
     Write-Host ""
-    exit 0
+    Stop-Install 0
 }
 
 Step "Installing..."

@@ -127,9 +127,19 @@
     Only when MISSING. Rewriting it every build would erase the stamped ID, which is the
     one thing it exists to carry. An empty stamp reports as "unstamped dev build":
     honest, and better than inventing an ID.
+
+    Writing the file is only half of it. MSBuild lists the files to compile when it first
+    reads this project, before any target runs, so a file written here is not on that
+    list: the build that wrote it still failed on the missing BuildInfo.StampUtc and
+    Channel, and only the NEXT build passed. The Compile item inside the target puts it on
+    this build's list too. No duplicate afterwards: once the file exists, the default *.cs
+    wildcard picks it up and this target does not run.
   -->
   <Target Name="EnsureBuildInfo" BeforeTargets="BeforeCompile" Condition="!Exists('$(MSBuildProjectDirectory)\Utils\BuildInfo.Generated.cs')">
     <WriteLinesToFile File="$(MSBuildProjectDirectory)\Utils\BuildInfo.Generated.cs" Overwrite="true" WriteOnlyWhenDifferent="true" Lines="// GENERATED because it was missing - do not hand-edit, and do not commit.;// stamp-build.ps1 rewrites this on every publish. Logic lives in BuildInfo.cs.;namespace AutoClicker.Utils;{;    public static partial class BuildInfo;    {;        public const string StampUtc = &quot;&quot;%3B;        public const string Channel = &quot;dev&quot;%3B;    };}" />
+    <ItemGroup>
+      <Compile Include="Utils\BuildInfo.Generated.cs" />
+    </ItemGroup>
     <Message Importance="high" Text="EnsureBuildInfo: wrote a neutral Utils\BuildInfo.Generated.cs (unstamped dev build)." />
   </Target>
 
