@@ -65,6 +65,10 @@ namespace AutoClicker.UI
         private void AddSettingsSearchRow(Control page)
         {
             _settingsSearch = UiFactory.Text(12, 14, 300);
+            // Not a tab stop (round 44, "when i switch to setting and tempo hook me to typing by itself"): a tab switch
+            // hides the focused control, WinForms then gives the focus to the next tab stop — this box, the first one on
+            // the page — and the next keys typed landed in it. A click still puts the cursor here, and so does Ctrl+F.
+            _settingsSearch.TabStop = false;
             _settingsSearch.PlaceholderText = Localization.T("Search settings…");
             _settingsSearch.TextChanged += (s, e) => ApplySettingsFilter();
             _settingsSearch.KeyDown += (s, e) =>

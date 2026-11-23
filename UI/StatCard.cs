@@ -88,6 +88,10 @@ namespace AutoClicker.UI
                 ControlStyles.ResizeRedraw |
                 ControlStyles.SupportsTransparentBackColor,
                 true);
+            // A card to read, not to use (round 44): as a plain Control it took the focus, so a switch to Statistics put
+            // the keyboard on its first card and Tab stopped at every one.
+            SetStyle(ControlStyles.Selectable, false);
+            TabStop = false;
             BackColor = Color.Transparent;
             Size = new Size(168, 78);
         }

@@ -39,21 +39,21 @@
 > **Use responsibly.** Auto-clicking may break the terms of service of some games and apps,
 > and some anti-cheat systems detect it. You are responsible for how you use Tempo.
 
-## What's new in 1.0.328
+## What's new in 1.0.329
 
-- **Rejoin after a lost connection.** When Roblox drops its connection and sits on its Disconnected
-  screen, Tempo puts the same account back into the same game once the internet is back. It never
-  rejoins a kick or a ban.
-- **Roblox brought back when it freezes,** even one that End task can't close: Tempo waits until
-  Windows lets it go, then starts it again.
-- **A redesigned Macros tab** with a bigger list, icons, quick speeds, and mouse movement recorded as
-  camera turns for games.
-- **Quick Capture for Multi-Point:** click several points in one go, with a magnifier.
-- **Nemotron streaming models** for Live Captions: word by word as people speak, in 40 languages.
-- **Two-tone themes:** every theme has a second colour of its own, with clearer hovers and borders.
-- **One Tempo on the taskbar,** and your logo (animated too) on the taskbar, the Start menu and
-  notifications.
-- **Opens at once after a download** — the first start could take a minute or two.
+- **Tempo opens when you start it.** A double-click always opens the window now; only the start at
+  sign-in waits in the tray (unless you choose "Open the window at sign-in").
+- **Opening Tempo while it is still starting** brings its window up instead of "already running".
+- **The arrow keys, Page Up/Down and Home/End scroll the page** after you click a tab, instead of
+  moving an outline around the sidebar. The outline shows only when you move with the Tab key.
+- **Settings search waits for you:** switching to Settings no longer puts the cursor in it. Press
+  Ctrl+F to search.
+- **Statistics sits under Clicker,** with Profiles and Multi-Point (Ctrl+4 Statistics, Ctrl+5 Macros).
+- **Every item in the tray menu has a tooltip** that says what it does.
+
+1.0.328 brought rejoin after a lost connection, Roblox brought back when it freezes, a redesigned
+Macros tab, Nemotron live captions and two-tone themes.
+
 The full notes are on the [release page](https://github.com/justcamop555-pixel/Tempo/releases/latest),
 and every change is in [CHANGELOG.md](CHANGELOG.md).
 
@@ -287,7 +287,7 @@ your game.
 ### 🎨 Make it yours
 **38 built-in themes** (or **Match Windows** to follow the system's light/dark setting live), your
 own accent colour, optional picture or animated GIF backdrops with a Dim slider, Tempo's own slim
-scroll bars and six languages (English, Spanish, French, German, Italian, Portuguese). A themed tray menu, start with Windows (and, if you like, open the
+scroll bars and six languages (English, Spanish, French, German, Italian, Portuguese). A themed tray menu with a tip on every item, start with Windows (and, if you like, open the
 window at sign-in), per-tab scroll memory, any tab in a window of its own (right-click it in the
 sidebar), and windows that fit laptops at 125% and 150% scaling.
 Colours stay right with HDR on.

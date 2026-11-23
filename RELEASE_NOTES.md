@@ -2,45 +2,23 @@
 
 This file always holds the notes for the most recent version. Per-version notes live in the `release-notes/` folder, and every change is in `CHANGELOG.md`.
 
-## Tempo 1.0.328
+## Tempo 1.0.329
 
-**Rejoin after a lost connection · Roblox brought back when it freezes · a redesigned Macros tab · Nemotron live captions · one Tempo on the taskbar · two-tone themes**
+**Tempo opens when you start it · the arrow keys scroll the page · tips in the tray menu · Statistics under Clicker**
 
-### Roblox and accounts
-- **Rejoin after a lost connection.** When Roblox loses its connection and stays on its Disconnected screen (a Wi-Fi or Ethernet drop, errors 277, 1025 or 256), Tempo waits until your PC and Roblox can be reached again, then puts the same account back into the same game. It never rejoins a kick, a ban or "playing on another device", and stops after 5 rejoins in 30 minutes. It has its own switch on the Roblox client card.
-- **Lost-connection notices** say what dropped and why: your PC's internet, the game's server, or Roblox.
-- **The crash & freeze guard waits for the vault.** A crash, freeze or drop while the vault is locked goes back into the game once you unlock it (within 30 minutes).
-- **A frozen Roblox that won't close** — not even with End task — is watched until Windows lets it go, then brought back. After 90 seconds Tempo tells you; with multi-instance on it starts the account again beside the stuck window. A Roblox you end yourself after it froze comes back too.
-- **Roblox's anti-cheat messages:** when Roblox closes itself with one, Tempo shows Roblox's own words and doesn't restart it — except the time-out, which asks for a restart and gets one.
-- **Anti-AFK never shows anything:** its presses no longer bring Roblox in front of what you're doing, and its status says when the last press was and when the next comes.
-- **Sessions are checked for all accounts at once,** not one by one.
-- **Accounts:** account groups (a strip of chips, rename, move, drag onto a chip); a re-login with a passkey is detected; copy usernames, passwords or both for any number of selected accounts; add an account from a cookie (checked with Roblox before it's saved).
-- **Roblox links repair themselves** when an update leaves them pointing at a version that's gone, and the version picker follows what's installed.
-- **Smoother play** for the Roblox window you're in, also with one client.
+### Opening Tempo
+- **Starting Tempo yourself always opens its window.** With "Start minimised to tray" on, a double-click showed the splash and then put Tempo in the tray. That setting is gone. When Windows starts Tempo at sign-in, it still starts quietly in the tray, unless "Open the window at sign-in" is on.
+- **Opening Tempo while it is still starting** (on a slow PC, or right after you sign in) brings its window up, instead of saying "Tempo is already running" while it went on into the tray.
+- Opening the window from the tray could hide it again after a start-up setting had changed. It stays open now.
 
-### Macros, clicker and Multi-Point
-- **A redesigned Macros tab:** a larger Saved macros list with search and sort, a Manage column with icons, Record and Playback cards, and quick speeds (0.5×, 1×, 2×, 4×).
-- **Mouse movement as camera turns** while recording, for games that steer the camera with the mouse.
-- **Quick Capture** for Multi-Point: click several points in one go, each numbered where you click, with a magnifier. Multi-Point now sits under the Clicker row, with Profiles.
-- **Disable features** you don't use (Clicker, Macros, Multi-Point, Captions): their keys are let go and nothing can start them.
-- **Second Cursor:** a hang is fixed, and one mouse can drive two cursors.
+### Keyboard and scrolling
+- **The arrow keys, Page Up/Down and Home/End scroll the page** after you click a tab. Before, they moved an outline from tab to tab in the sidebar, and the page didn't move.
+- **The focus outline on a sidebar tab shows only when you move around with the Tab key,** never after a click.
+- The arrow keys no longer switch tabs by themselves.
+- **Switching to Settings no longer puts the cursor in "Search settings",** so what you type doesn't end up there. Press Ctrl+F to search.
+- After a click on a tab, Space and Enter no longer act on the first switch or button of the page.
 
-### Live Captions
-- **Nemotron streaming models:** live captions word by word as people speak, in English or 40 languages, on the processor.
-- **Hear only the playing app** picks the right app more often, the caption bar names the source, and the bar has a background panel in three sizes.
-- **The ♪ note** no longer covers speech in a video.
-- Better recall with the large models, a Diagnose window for Windows' own captions bar, and a transcript you can copy.
-
-### Look and feel
-- **Two-tone themes:** every theme has a second colour of its own for the header, the selected tab, card headers, main buttons and progress bars, plus clearer hover colours and card borders.
-- **One Tempo on the taskbar:** About, Live debug and other windows no longer show up as a second app.
-- **Your logo everywhere:** a custom logo, animated GIFs included, shows on the taskbar button, in the Start menu and on Windows notifications.
-- **The status bar** fits CPU %, RAM and uptime at any window size.
-- **Live debug** shows earlier runs too — what happened before Tempo last restarted.
-- The safety note opens in the middle of the window, smoother animations and scrolling, a reorganised tray menu, and clearer tooltips.
-
-### Fixed
-- The first start of a downloaded Tempo could take one to two minutes. It opens at once now.
-- The Statistics tab froze while screen readers or AI tools read it.
-- Tempo now says how its last run ended (closed, Windows shut down, or ended from outside).
-- Many visual fixes: smeared scrolling, stale scroll bars after maximising, and empty spaces on some tabs.
+### Sidebar and tray
+- **Statistics sits under Clicker,** with Profiles and Multi-Point. Ctrl+4 opens Statistics and Ctrl+5 opens Macros.
+- **Every item in the tray menu has a tooltip** that says what it does, in all six languages.
+- Tempo reopens on the tab you used last, also now that the tab order has changed.

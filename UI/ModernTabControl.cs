@@ -51,11 +51,47 @@ namespace AutoClicker.UI
             Invalidate();
         }
 
+        /// <summary>
+        /// The arrow keys, Home/End and Page Up/Down are not the tab control's (round 44). It has the focus at start-up and
+        /// after a switch to a page with nothing to focus first, and there these keys changed the tab: its header is hidden,
+        /// so the page changed under the user and the sidebar highlight jumped to another row. They go to the window now,
+        /// which scrolls the open page with them (KeyScroll). With Ctrl they still change the tab, as Ctrl+Tab does.
+        /// </summary>
+        private static bool IsPlainNavKey(Keys keyData)
+        {
+            if ((keyData & (Keys.Control | Keys.Alt | Keys.Shift)) != Keys.None) { return false; }
+            switch (keyData & Keys.KeyCode)
+            {
+                case Keys.Left:
+                case Keys.Right:
+                case Keys.Up:
+                case Keys.Down:
+                case Keys.Home:
+                case Keys.End:
+                case Keys.PageUp:
+                case Keys.PageDown:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        protected override bool IsInputKey(Keys keyData) => !IsPlainNavKey(keyData) && base.IsInputKey(keyData);
+
+        private const int WM_KEYDOWN = 0x0100;
+
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == TCM_ADJUSTRECT && !DesignMode)
             {
                 m.Result = (IntPtr)1;
+                return;
+            }
+
+            // One the window did not use (nothing to scroll) still never reaches the native control's tab switching.
+            if (m.Msg == WM_KEYDOWN && IsPlainNavKey((Keys)(int)(long)m.WParam | ModifierKeys))
+            {
+                m.Result = IntPtr.Zero;
                 return;
             }
 

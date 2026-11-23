@@ -385,12 +385,15 @@ namespace AutoClicker.UI
 
             // The tray, in the right-hand column (from the Behaviour card).
             _minimizeToTrayCheck = UiFactory.Check("Minimise to tray instead of closing", 360, 58);
+            // "Start minimised to tray" is still read and saved but no longer shown (round 44): a launch you make opens the
+            // window, and the sign-in launch has "Open the window at sign-in" — the two together were the conflict that sent
+            // a double-clicked Tempo to the tray (MainForm.StartsInTray).
             _startMinimizedCheck = UiFactory.Check("Start minimised to tray", 360, 86);
+            _startMinimizedCheck.Visible = false;
             startup.Controls.Add(_minimizeToTrayCheck);
-            startup.Controls.Add(_startMinimizedCheck);
 
             // Safety: a forgotten Tempo in the tray shouldn't react to hotkeys.
-            _traySleepCheck = UiFactory.Check("Sleep in tray (pause hotkeys && cursor trail)", 360, 114);
+            _traySleepCheck = UiFactory.Check("Sleep in tray (pause hotkeys && cursor trail)", 360, 86);
             startup.Controls.Add(_traySleepCheck);
 
             // "Remember window position & size" is in the Window card — see the note in Appearance above.
@@ -5748,6 +5751,15 @@ namespace AutoClicker.UI
                 return true;
             }
 
+            // Ctrl+F on the Settings tab: into its search box (round 44). The box no longer takes the focus by itself — a
+            // switch to Settings put the cursor in it and the next keys typed there — so this is the keyboard's way in.
+            if (keyData == (Keys.Control | Keys.F) && _settingsSearch != null && !_settingsSearch.IsDisposed && _settingsSearch.CanFocus)
+            {
+                _settingsSearch.Focus();
+                _settingsSearch.SelectAll();
+                return true;
+            }
+
             // Keyboard navigation for the tabs: Ctrl+1…9 jump to a tab,
             // Ctrl+Tab / Ctrl+Shift+Tab cycle forwards / backwards.
             if (_tabs != null && _tabs.TabPages.Count > 0 &&
@@ -5795,6 +5807,26 @@ namespace AutoClicker.UI
             }
 
             return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>
+        /// The arrow keys, Page Up/Down and Home/End that the focused control does not take scroll the open page
+        /// (round 44, <see cref="KeyScroll"/>). Before, after a click on a sidebar row the arrow keys only moved that row's
+        /// focus outline from row to row. Nothing moves under the startup safety note, which lies over a frosted page.
+        /// </summary>
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            try
+            {
+                if (_safetyNote == null || _safetyNote.IsDisposed)
+                {
+                    TabPage open = _tabs?.SelectedTab;
+                    ScrollableControl page = open != null && IsPageShowing(open) && ReferenceEquals(PageHost(open), open) ? open : null;
+                    if (KeyScroll.TryScroll(keyData, KeyScroll.FocusedIn(this), page)) { return true; }
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("MainForm.ProcessDialogKey", ex); }
+            return base.ProcessDialogKey(keyData);
         }
     }
 }

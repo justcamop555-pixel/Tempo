@@ -622,6 +622,37 @@ namespace AutoClicker.UI
             return passes;
         }
 
+        /// <summary>
+        /// A step from the keyboard (<see cref="KeyScroll"/>: the arrow keys, Page Up/Down and Home/End where the focus has no
+        /// use for them), taken like a wheel turn: begun after a frame, held still and painted at once, so a held key moves
+        /// the page whole instead of smearing it. <paramref name="x"/>, <paramref name="y"/>: where to, in pixels from the top left.
+        /// </summary>
+        internal void ScrollToByKey(int x, int y)
+        {
+            if (!IsHandleCreated || !AutoScroll) { return; }
+            Point before = AutoScrollPosition;
+            if (-before.X == x && -before.Y == y) { return; }
+            long stepStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            WaitForFrameStart();
+            bool held = HoldStep();
+            try
+            {
+                AutoScrollPosition = new Point(x, y);
+                if (AutoScrollPosition == before) { return; }
+                if (ShouldShow)
+                {
+                    try { (FindForm() as IBackdropHost)?.NotifyBackdropScroll(); } catch { }
+                    Invalidate(true);
+                }
+                PaintNow();
+                NoteStep(stepStart, 0, held);
+            }
+            finally
+            {
+                if (held) { _scrollHold.HoldEnd(); }
+            }
+        }
+
         /// <summary>Scrolls sideways by <paramref name="right"/> pixels (negative: left), within the page's range.</summary>
         private void ScrollSideways(int right)
         {

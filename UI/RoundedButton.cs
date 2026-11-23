@@ -459,7 +459,12 @@ namespace AutoClicker.UI
         }
         protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
         protected override void OnResize(EventArgs e) { base.OnResize(e); UpdateRegion(); }
-        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); UpdateRegion(); }
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            UpdateRegion();
+            if (NavRow) { NavKeyboardCue.Install(); }   // before the first Tab into the rail, so that one counts too
+        }
 
         /// <summary>
         /// The narrowest width at which this button draws its caption WITHOUT cutting it —
@@ -639,7 +644,7 @@ namespace AutoClicker.UI
             // Where the keyboard is, when it is being used: an accent outline. A nav row had
             // no focus cue at all, so tabbing into the rail left you guessing which row Enter
             // would open.
-            if (NavRow && Focused && ShowFocusCues && Enabled)
+            if (NavRow && Focused && ShowFocusCues && NavKeyboardCue.Active && Enabled)
             {
                 using (var pen = new Pen(AccentColor, 1.5f))
                 using (var path = Rounded(Rectangle.Inflate(rect, -1, -1), Math.Max(2, CornerRadius - 1)))
@@ -1056,8 +1061,71 @@ namespace AutoClicker.UI
             }
         }
 
-        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); if (NavRow) { Invalidate(); } }
+        protected override void OnGotFocus(EventArgs e)
+        {
+            base.OnGotFocus(e);
+            if (NavRow) { NavKeyboardCue.Focused(this); Invalidate(); }
+        }
+
         protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); if (NavRow) { Invalidate(); } }
+
+        /// <summary>
+        /// When a nav row shows its focus outline (round 44: "i see outline and my real mouse dont touch it. fix outline select
+        /// any tab"). WinForms' ShowFocusCues stays on for good once ANY key has been pressed in the window — a hotkey, a
+        /// letter typed in a box — so the row that last had the focus (Profiles, after the Clicker group opened) kept an
+        /// accent outline while the pointer was elsewhere and another row was the open tab. Now the outline shows only while
+        /// the keyboard moves through the window and goes at the next click. That means Tab and Shift+Tab, not Ctrl+Tab
+        /// (it changes the tab, not the focus). The arrow keys no longer count: after a click they scroll the page
+        /// (KeyScroll), and after Tab they step from row to row with the outline already on.
+        /// One message filter on the UI thread, watching two kinds of message; installed with the first nav row.
+        /// </summary>
+        internal static class NavKeyboardCue
+        {
+            private static bool _installed;
+            private static WeakReference<RoundedButton> _focused;
+
+            /// <summary>The keyboard was the last way the focus moved.</summary>
+            public static bool Active { get; private set; }
+
+            public static void Focused(RoundedButton row)
+            {
+                _focused = new WeakReference<RoundedButton>(row);
+                Install();
+            }
+
+            /// <summary>Puts the filter on the calling (UI) thread once.</summary>
+            public static void Install()
+            {
+                if (_installed) { return; }
+                _installed = true;
+                try { Application.AddMessageFilter(new Filter()); } catch { _installed = false; }
+            }
+
+            private static void Set(bool on)
+            {
+                if (Active == on) { return; }
+                Active = on;
+                if (_focused != null && _focused.TryGetTarget(out RoundedButton row) && !row.IsDisposed) { row.Invalidate(); }
+            }
+
+            private sealed class Filter : IMessageFilter
+            {
+                public bool PreFilterMessage(ref Message m)
+                {
+                    switch (m.Msg)
+                    {
+                        case 0x0100:   // WM_KEYDOWN: Tab or Shift+Tab, the keys that move the focus
+                            int vk = (int)m.WParam & 0xFF;
+                            if (vk == 0x09 && (Control.ModifierKeys & (Keys.Control | Keys.Alt)) == Keys.None) { Set(true); }
+                            break;
+                        case 0x0201: case 0x0204: case 0x0207: case 0x00A1:   // a click (left, right, middle, title area)
+                            Set(false);
+                            break;
+                    }
+                    return false;   // only watching: every message goes on as before
+                }
+            }
+        }
 
         // Crisp little line/solid glyphs for the action buttons, drawn inside box.
         private static void DrawActionGlyph(Graphics g, ActionGlyph glyph, RectangleF box, Color color)

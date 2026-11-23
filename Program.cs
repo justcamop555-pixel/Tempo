@@ -122,16 +122,42 @@ namespace AutoClicker
 
                 // Made before the request goes out, so the answer cannot arrive first.
                 using (var shown = new EventWaitHandle(false, EventResetMode.AutoReset, MainForm.ShownAckEventName))
+                // And kept up while this launch waits (round 44): a copy still starting — whose window doesn't exist yet, so
+                // the broadcast never reaches it — reads it when it decides between its window and the tray.
+                using (var pending = new EventWaitHandle(false, EventResetMode.ManualReset, MainForm.ShowPendingEventName))
                 {
+                    pending.Set();
                     int msg = RegisterWindowMessage(MainForm.ShowInstanceMessageName);
                     if (msg != 0)
                     {
                         PostMessage(HWND_BROADCAST, msg, IntPtr.Zero, IntPtr.Zero);
                     }
-                    return waitMs > 0 && msg != 0 && shown.WaitOne(waitMs);
+                    if (waitMs <= 0) { return false; }
+                    if (shown.WaitOne(waitMs)) { return true; }
+                    if (!OtherTempoReady())
+                    {
+                        // Still starting (a sign-in start on a slow PC takes a while): its answer comes when its window does.
+                        Logger.Info("[startup] the running Tempo is still starting — waiting for its window.");
+                        return shown.WaitOne(30000);
+                    }
+                    return false;
                 }
             }
             catch { return false; }
+        }
+
+        /// <summary>Whether the running Tempo has come up (its window shown, or in the tray) — see MainForm.ReadyEventName.</summary>
+        private static bool OtherTempoReady()
+        {
+            try
+            {
+                if (EventWaitHandle.TryOpenExisting(MainForm.ReadyEventName, out EventWaitHandle ready))
+                {
+                    using (ready) { return ready.WaitOne(0); }
+                }
+            }
+            catch { }
+            return false;
         }
 
         /// <summary>

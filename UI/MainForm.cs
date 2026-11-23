@@ -868,6 +868,52 @@ namespace AutoClicker.UI
         /// </summary>
         internal const string ShownAckEventName = @"Local\TempoShownExistingInstance_v1";
 
+        /// <summary>
+        /// Set by a second launch for as long as it waits (round 44): "the window, please". The broadcast alone was lost when
+        /// it came while this copy was still starting — before its window existed, or during a slow sign-in start — and the
+        /// copy went on into the tray while the second launch said "Tempo is already running". Read once, when this copy
+        /// decides between its window and the tray (<see cref="StartsInTray"/>).
+        /// </summary>
+        internal const string ShowPendingEventName = @"Local\TempoShowPending_v1";
+
+        /// <summary>Set once this copy has come up — its window on screen, or in the tray: a second launch that finds it unset
+        /// waits longer for its answer, as this copy is still starting.</summary>
+        internal const string ReadyEventName = @"Local\TempoReady_v1";
+
+        private static System.Threading.EventWaitHandle _readyEvent;
+        private bool _openedForShowRequest;
+
+        /// <summary>This copy is up (window or tray): said once, for a second launch's patience.</summary>
+        private static void MarkStartupReady()
+        {
+            try
+            {
+                if (_readyEvent == null)
+                {
+                    _readyEvent = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.ManualReset, ReadyEventName);
+                }
+                _readyEvent.Set();
+            }
+            catch { /* a second launch just waits its usual few seconds */ }
+        }
+
+        /// <summary>A second launch is waiting for the window (<see cref="ShowPendingEventName"/>): taken, so it answers once.</summary>
+        private static bool TakeShowRequest()
+        {
+            try
+            {
+                if (System.Threading.EventWaitHandle.TryOpenExisting(ShowPendingEventName, out var pending))
+                {
+                    using (pending)
+                    {
+                        if (pending.WaitOne(0)) { pending.Reset(); return true; }
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
         // Settings → Apps' Uninstall button runs "Tempo.exe --uninstall". With Tempo already
         // running — the normal case — that second process cannot uninstall anything, so it asks
         // THIS instance to, over the same broadcast path as the "show me" message above (which a
@@ -6577,10 +6623,15 @@ namespace AutoClicker.UI
                 // debounce — clicking through tabs must not cost a full settings-file
                 // write per click (that's why this was dropped before), but the value
                 // still has to survive a reboot or a force-kill, not just a clean exit.
-                if (_tabs.SelectedIndex >= 0 && _settings.LastTabIndex != _tabs.SelectedIndex)
+                // The key decides, not the index alone: a tab moved in the order (Statistics went ahead of Macros in round
+                // 44) has the index another tab had, and a switch to it then kept the old key, so the next launch reopened
+                // on the tab that used to be there.
+                string openKey = CurrentTabKey();
+                if (_tabs.SelectedIndex >= 0
+                    && (_settings.LastTabIndex != _tabs.SelectedIndex || !string.Equals(_settings.LastTabKey, openKey, StringComparison.Ordinal)))
                 {
                     _settings.LastTabIndex = _tabs.SelectedIndex;
-                    _settings.LastTabKey = CurrentTabKey();
+                    _settings.LastTabKey = openKey;
                     QueueLastTabSave();
                 }
                 UpdateBackdropActivePage();
@@ -7606,7 +7657,8 @@ namespace AutoClicker.UI
         /// </summary>
         private static readonly string[] TabOrder =
         {
-            "clicker", "profiles", "multipoint", "macros", "statistics",
+            // Statistics folds under Clicker with Profiles and Multi-Point (round 44), so it follows them, ahead of Macros.
+            "clicker", "profiles", "multipoint", "statistics", "macros",
             "accounts", "captions", "keybinds", "settings"
         };
 
@@ -7627,7 +7679,7 @@ namespace AutoClicker.UI
         /// <summary>The rows held under <see cref="NavGroupParent"/>, by tab key; they follow it in <see cref="TabOrder"/>.
         /// Multi-Point joined Profiles there in round 40 ("Multi-Point needs move to clicker expand"): both shape what the
         /// clicker does.</summary>
-        private static readonly string[] NavGroupChildren = { "profiles", "multipoint" };
+        private static readonly string[] NavGroupChildren = { "profiles", "multipoint", "statistics" };   // + Statistics, round 44
 
         /// <summary>How open the group is: 0 folded, 1 open — between while it slides.</summary>
         private float _navGroupT;
@@ -7976,6 +8028,11 @@ namespace AutoClicker.UI
                         // The sidebar changes SelectedIndex programmatically, which does
                         // NOT raise Deselecting, so this is where we must capture it.
                         SaveActiveTabScroll();
+                        // The row keeps the keyboard focus it took with the click (round 44). WinForms puts the focus on
+                        // the first control of a page selected in code: a toggle on Clicker, Save Settings on Settings, and
+                        // the search box there before it stopped being a tab stop. The next key acted on that control,
+                        // and with the focus on the tab control itself the arrow keys changed the tab.
+                        bool rowHadFocus = nav.Focused;
                         // Plain selection change. The native tab control briefly exposes
                         // its LIGHT visual-styles body while it swaps pages — the "labels
                         // and buttons flash light on every tab change" report — but that
@@ -7985,6 +8042,7 @@ namespace AutoClicker.UI
                         // re-sets WS_VISIBLE on the hidden pages when unfrozen and leaves
                         // the wrong page showing (the same mechanism as the grind bug).
                         _tabs.SelectedIndex = index;
+                        if (rowHadFocus && !nav.Focused && !nav.IsDisposed && nav.CanFocus) { nav.Focus(); }
                     }
                 };
                 // Clicker holds Profiles: a chevron on Clicker shows or hides it; Profiles sits set in under it.
@@ -7992,8 +8050,13 @@ namespace AutoClicker.UI
                 {
                     nav.HasExpander = true;
                     nav.ExpanderClicked += (s, e) => ToggleNavGroup();
-                    // ← and → on the focused row fold and open it, as in a tree.
-                    nav.PreviewKeyDown += (s, e) => { if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right) { e.IsInputKey = true; } };
+                    // ← and → on the focused row fold and open it, as in a tree, for someone moving through the window by
+                    // keyboard (Tab). After a click they scroll the page sideways instead (KeyScroll, round 44): a click on
+                    // Clicker and then → folded the rows open under the pointer.
+                    nav.PreviewKeyDown += (s, e) =>
+                    {
+                        if ((e.KeyCode == Keys.Left || e.KeyCode == Keys.Right) && RoundedButton.NavKeyboardCue.Active) { e.IsInputKey = true; }
+                    };
                     nav.KeyDown += (s, e) =>
                     {
                         if (e.KeyCode == Keys.Right && !_navGroupOpen) { SetNavGroupOpen(true, animate: true, remember: true); e.Handled = true; }
@@ -10273,6 +10336,47 @@ namespace AutoClicker.UI
             _trayIcon.BalloonTipClosed += (s, e) => _balloonClickAction = null;
 
             StyleTraySubmenus();
+
+            // What each row does, on hover (round 44: "missing tooltips on tray menus"). Set once here: a language change
+            // restarts Tempo, so the tips are always in the language the menu is.
+            // Wrapped like every other menu's tips: a strip's tooltip never breaks a line by itself, and the longest of these
+            // ran across half the screen.
+            void Tip(ToolStripItem item, string english) { if (item != null) { item.ToolTipText = TipStyle.Wrap(Utils.Localization.T(english)); } }
+            Tip(_trayShowHideItem, "Show Tempo's window, or hide it to the tray.");
+            Tip(_trayStartStopItem, "Start or stop the clicker with its current settings.");
+            Tip(_trayStopMacroItem, "Stop the macro that is playing.");
+            Tip(_trayProfileItem, "Switch to another profile.");
+            Tip(_trayOpenTabItem, "Open one of Tempo's tabs.");
+            Tip(_trayAccountsItem, "Open the Roblox account manager.");
+            Tip(_trayAntiAfkItem, "Press a key in Roblox every few minutes, so it doesn't disconnect you for idling.");
+            Tip(_trayRejoinItem, "When Roblox loses its connection, put the account back into the same game.");
+            Tip(_trayCrashGuardItem, "Start a crashed or frozen Roblox client again, as the same account in the same game.");
+            Tip(_trayLockVaultItem, "Lock the account vault now: the master password is asked for again.");
+            Tip(_trayCaptionsItem, "Turn live captions on or off.");
+            Tip(_trayCaptionHistoryItem, "Show or hide the window with earlier captions.");
+            Tip(_trayMoveCaptionsItem, "Drag the caption bar where you want it; switch this off when it is placed.");
+            Tip(_trayNotificationsMenu, "Missed notifications, and the notification switches.");
+            Tip(_trayNotifyHistoryItem, "See the notifications you missed.");
+            Tip(_trayNotifyItem, "Show Tempo's own pop-up notifications.");
+            Tip(_trayScreenshotItem, "Tell me when a screenshot is copied to the clipboard.");
+            Tip(_trayWindowMenu, "Always on top, Windows' shortcuts and the running badges.");
+            Tip(_trayAlwaysOnTopItem, "Keep Tempo's window above other windows.");
+            Tip(_trayGuardShortcutsItem, "Hold back Windows' own shortcuts, like the Windows key, while the clicker or a macro runs.");
+            Tip(_trayOverlaysItem, "The small badges Tempo shows on screen while the clicker runs or a macro plays.");
+            Tip(_trayOverlayMoveItem, "Put the badges on screen so you can drag them where you want; switch this off when they are placed.");
+            Tip(_trayOverlayShowItem, "Show a small badge on screen while the clicker runs or a macro plays.");
+            Tip(_trayOverlayOpacityItem, "How see-through the badges are.");
+            Tip(_trayOverlayResetItem, "Put every badge back in its corner.");
+            Tip(traySettings, "Open Tempo's settings.");
+            Tip(trayUpdate, "Look for a newer Tempo on GitHub.");
+            Tip(traySource, "Open Tempo's page on GitHub in your browser.");
+            Tip(trayRestart, "Close Tempo and open it again, the way it is now.");
+            Tip(trayExit, "Close Tempo completely: its hotkeys stop too.");
+            _trayMenu.ShowItemToolTips = true;
+            foreach (ToolStripMenuItem holder in new[] { _trayProfileItem, _trayOpenTabItem, _trayNotificationsMenu, _trayWindowMenu, trayOverlays, _trayOverlayOpacityItem })
+            {
+                if (holder != null) { holder.DropDown.ShowItemToolTips = true; }
+            }
         }
 
         /// <summary>
@@ -18743,6 +18847,13 @@ HookSystemEvents();
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            MarkStartupReady();
+            if (_openedForShowRequest)
+            {
+                // Opened for a launch that waited (StartsInTray): tell it the window is up, and it leaves quietly.
+                _openedForShowRequest = false;
+                AcknowledgeShowRequest();
+            }
             StartCoverAudit();
 
             try
@@ -20004,10 +20115,22 @@ HookSystemEvents();
         /// </summary>
         private bool StartsInTray()
         {
+            // Another launch asked for the window while this copy was starting (round 44): it gets it, whatever this launch
+            // was — the sign-in start included (see ShowPendingEventName).
+            if (TakeShowRequest())
+            {
+                _openedForShowRequest = true;
+                Utils.Logger.Info("[startup] another launch asked for the window while Tempo was starting — opening it.");
+                return false;
+            }
             if (_launchedToTray) { return true; }
             if (_launchedForRestart) { return false; }
             if (_launchedAtStartup) { return _settings == null || !_settings.OpenWindowAtSignIn; }
-            return _settings != null && _settings.StartMinimizedToTray;
+            // A launch the user made — a double-click, the Start menu, the taskbar — opens the window (round 44: "it should
+            // open as always"). "Start minimised to tray" sent these to the tray too: opening Tempo showed the splash and
+            // then nothing, with the window in the tray. The sign-in launch has its own choice, "Open the window at sign-in",
+            // so the old setting no longer decides anything and Settings no longer shows it.
+            return false;
         }
 
         /// <summary>
@@ -20025,16 +20148,21 @@ HookSystemEvents();
             // started straight into the tray, and from the user's side the app simply quit
             // when they clicked a button labelled "Restart". The preference is about how
             // Tempo comes up at SIGN-IN, which this is not.
-            if (!_startMinimizedApplied && value && !_launchedForUninstall && StartsInTray())
+            // Decided ONCE, at the first show (round 44). It used to be asked again at every show for as long as the window
+            // path had been taken, so a later Show (the tray's Open) could be sent to the tray instead: a sign-in start
+            // whose window another launch had asked for, or one whose "Open the window at sign-in" was turned off meanwhile,
+            // hid itself again each time the user opened it from the tray.
+            bool firstShow = !_startMinimizedApplied && value && !_launchedForUninstall;
+            if (firstShow) { _startMinimizedApplied = true; }
+            if (firstShow && StartsInTray())
             {
-                _startMinimizedApplied = true;
-
                 if (!IsHandleCreated)
                 {
                     CreateHandle();
                 }
 
                 base.SetVisibleCore(false);
+                MarkStartupReady();   // up, in the tray: a second launch from now on gets its answer at once
 
                 // OnShown never fires for a suppressed tray start, so dismiss the splash
                 // here (it would otherwise linger until its safety timeout) and open the

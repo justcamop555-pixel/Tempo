@@ -145,6 +145,17 @@ namespace AutoClicker.UI
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
+        /// <summary>The arrow keys, Page Up/Down and Home/End that the focused control does not take scroll the page (KeyScroll).</summary>
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            try
+            {
+                if (KeyScroll.TryScroll(keyData, KeyScroll.FocusedIn(this), Page)) { return true; }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("DetachedPageWindow.ProcessDialogKey", ex); }
+            return base.ProcessDialogKey(keyData);
+        }
+
         public DetachedPageWindow(string title, Theme theme, Icon icon, NavIconKind glyph = NavIconKind.None)
         {
             _theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);

@@ -2,6 +2,25 @@
 
 All notable changes to Tempo. Newest first. Per-release notes are also in the `release-notes/` folder and on the [Releases page](https://github.com/justcamop555-pixel/Tempo/releases).
 
+### 1.0.329
+
+#### Opening Tempo
+- **Starting Tempo yourself always opens its window.** With "Start minimised to tray" on, a double-click showed the splash and then put Tempo in the tray. That setting is gone. When Windows starts Tempo at sign-in, it still starts quietly in the tray, unless "Open the window at sign-in" is on.
+- **Opening Tempo while it is still starting** (on a slow PC, or right after you sign in) brings its window up, instead of saying "Tempo is already running" while it went on into the tray. The second launch waits for the first one to come up.
+- Opening the window from the tray could hide it again after a start-up setting had changed. How Tempo comes up is now decided once, when it starts.
+
+#### Keyboard and scrolling
+- **The arrow keys, Page Up/Down and Home/End scroll the page** after you click a tab, the way they scroll a web page. Before, they moved an outline from tab to tab in the sidebar, and the page didn't move. Text boxes, lists, drop-downs, sliders and number boxes keep these keys.
+- **The focus outline on a sidebar tab shows only when you move around with the Tab key,** never after a click. After Tab, the arrow keys still step from tab to tab, and ← / → still fold and open the Clicker group.
+- The arrow keys, Home and End no longer switch tabs by themselves.
+- **Switching to Settings no longer puts the cursor in "Search settings",** so what you type doesn't end up there. Press Ctrl+F to search.
+- A click on a sidebar tab keeps the keyboard on that tab. Before, it went to the first switch or button of the page, where Space and Enter acted on it. The Statistics cards no longer take the keyboard either.
+
+#### Sidebar and tray
+- **Statistics sits under Clicker,** with Profiles and Multi-Point. Ctrl+4 opens Statistics and Ctrl+5 opens Macros.
+- **Every item in the tray menu has a tooltip** that says what it does, the Overlays submenu included, in all six languages.
+- Tempo reopens on the tab you used last, also now that the tab order has changed.
+
 ### 1.0.328
 
 #### Roblox and accounts

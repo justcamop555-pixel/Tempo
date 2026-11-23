@@ -285,7 +285,7 @@ namespace AutoClicker.UI
             T(_chooseAccentBtn, "Pick a custom accent colour.");
             T(_hdrCompensateCheck, "With HDR on, Windows shows Tempo and other non-HDR apps with lighter shadows than an ordinary screen: near-blacks turn charcoal and dark themes look milky. This darkens Tempo's colours by exactly that difference so they look as designed. It follows the window between screens and updates by itself when HDR is switched on or off. Untick it if a colour profile already corrects SDR apps under HDR — correcting twice makes shadows too dark.");
             T(_launchStartupCheck, "Start Tempo automatically every time you sign in to Windows - it opens quietly in the system tray, ready for your hotkeys, or with its window if you tick the option below. Tempo keeps this working even if it's moved to another folder, and it respects Windows' own Startup list: if you switch Tempo off in Task Manager > Startup apps, this box turns itself off to match.");
-            T(_openAtSignInCheck, "When Windows starts Tempo at sign-in, open its window instead of starting quietly in the tray. Only the sign-in launch: opening Tempo yourself follows \"Start minimised to tray\".");
+            T(_openAtSignInCheck, "When Windows starts Tempo at sign-in, open its window instead of starting quietly in the tray. Opening Tempo yourself always opens its window.");
             T(_minimizeToTrayCheck, "Closing the window hides it to the tray instead of quitting.");
             T(_startMinimizedCheck, "Start with the window hidden in the tray.");
             T(_trayNotifyCheck, "Show small notifications from the tray icon.");
