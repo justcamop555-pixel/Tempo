@@ -20,7 +20,9 @@ namespace AutoClicker.UI
     {
         None, Clock, Cursor, Target, Repeat, Bolt, Wave, Gauge, Shield,
         List, Play, Chart, Keyboard, Gear, Caption, Folder, Star, Pin, People,
-        Key, Lock
+        Key, Lock,
+        // Round 40: the Macros tab's library line ("18 macros • 4,121 steps total").
+        Database
     }
 
     public sealed class CardGroupBox : GroupBox, IPaintedText
@@ -29,10 +31,35 @@ namespace AutoClicker.UI
         private Color _border = Color.FromArgb(64, 64, 64);
         private Color _title = Color.Gainsboro;
         private Color _accent = Color.DodgerBlue;
+        private Color _accent2 = Color.DodgerBlue;   // the theme's second accent (round 42): where the card's gradients run to
+        private Theme _theme;
         private const int Radius = 14;
 
         /// <summary>Optional glyph drawn before the title, in the accent colour.</summary>
         public CardIcon Icon { get; set; } = CardIcon.None;
+
+        /// <summary>
+        /// A soft band of the accent across the title row, fading into the card by the row's foot, with a hairline under
+        /// it (round 40, the Macros tab: "purple accents, subtle gradients"). Only the title row: the controls on a card
+        /// stand on solid squares of its colour, which a gradient running behind them would show up as patches.
+        /// </summary>
+        public bool HeaderTint { get; set; }
+
+        /// <summary>
+        /// A status dot at the right end of the title row, in the colour this gives for the theme — the Record card's red
+        /// while recording, green while ready. Null, or an empty colour: none. Read at every paint (<see cref="Invalidate"/>
+        /// after the state it shows changes).
+        /// </summary>
+        public Func<Theme, Color> HeaderDot { get; set; }
+
+        /// <summary>
+        /// Room at the right end of the title row, in 100% pixels, kept for a control that sits there (the Saved macros
+        /// card's search box): the title stops short of it, and gives up its badge first, as it does for the card's edge.
+        /// </summary>
+        public int HeaderReserve { get; set; }
+
+        /// <summary>The title row's height in 100% pixels: the band <see cref="HeaderTint"/> paints, and where content may start.</summary>
+        internal const int HeaderRowHeight = 28;
 
         public CardGroupBox()
         {
@@ -52,10 +79,12 @@ namespace AutoClicker.UI
             {
                 return;
             }
+            _theme = theme;
             _surface = theme.Surface;
             _border = theme.Border;
             _title = theme.Text;
             _accent = theme.Accent;
+            _accent2 = theme.Accent2.IsEmpty ? theme.AccentHover : theme.Accent2;
             BackColor = theme.Surface; // so transparent child labels blend with the card
             UpdateRegion();
             Invalidate();
@@ -99,10 +128,59 @@ namespace AutoClicker.UI
                 g.FillPath(fill, path);
             }
 
+            if (HeaderTint && Height > Px(HeaderRowHeight) + 2)
+            {
+                // The accent at the top of the title row, the card's own colour by its foot (clipped to the rounded
+                // shape, so the corners stay round), and a hairline where the content starts.
+                int band = Px(HeaderRowHeight);
+                // Round 42: two-tone across the row — the accent at the left, the theme's second accent at the right —
+                // then faded into the card by the row's foot.
+                using (var path = Rounded(rect, Radius))
+                using (var across = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(2, Width), band + 1),
+                           Blend(_accent, _surface, 0.17f), Blend(_accent2, _surface, 0.17f), LinearGradientMode.Horizontal))
+                using (var fade = new LinearGradientBrush(new Rectangle(0, 0, Math.Max(1, Width), band + 1),
+                           Color.FromArgb(0, _surface), _surface, LinearGradientMode.Vertical))
+                {
+                    Region old = g.Clip;
+                    try
+                    {
+                        g.SetClip(path, CombineMode.Intersect);
+                        g.SetClip(new Rectangle(0, 0, Width, band), CombineMode.Intersect);
+                        g.FillRectangle(across, 0, 0, Width, band);
+                        g.FillRectangle(fade, 0, 0, Width, band);
+                    }
+                    finally
+                    {
+                        g.Clip = old;
+                        old.Dispose();
+                    }
+                }
+                using (var line = new Pen(Blend(_border, _surface, 0.6f), 1))
+                {
+                    g.DrawLine(line, Px(12), band - 1, Width - Px(12), band - 1);
+                }
+            }
+
             using (var path = Rounded(rect, Radius))
             using (var pen = new Pen(_border, 1))
             {
                 g.DrawPath(pen, path);
+            }
+
+            // The status dot at the right of the title row (the Record card: recording or ready).
+            Color dot = _theme != null && HeaderDot != null ? HeaderDot(_theme) : Color.Empty;
+            if (!dot.IsEmpty && dot.A > 0)
+            {
+                float d = Px(9);
+                float cxDot = Width - Px(18), cyDot = Px(13);
+                using (var halo = new SolidBrush(Color.FromArgb(60, dot)))
+                {
+                    g.FillEllipse(halo, cxDot - d * 0.9f, cyDot - d * 0.9f, d * 1.8f, d * 1.8f);
+                }
+                using (var b = new SolidBrush(dot))
+                {
+                    g.FillEllipse(b, cxDot - d / 2f, cyDot - d / 2f, d, d);
+                }
             }
 
             // Title: drawn UPPERCASE with light letter-spacing (tracking) for a clean
@@ -114,17 +192,21 @@ namespace AutoClicker.UI
                 bool badge = TitleGeometry(g, out Rectangle mark, out PointF at);
                 if (!badge)
                 {
+                    // The accent at the top of the bar, the theme's second accent at its foot (round 42).
                     using (var barPath = Rounded(mark, 1))
-                    using (var accentBar = new SolidBrush(_accent))
+                    using (var accentBar = new LinearGradientBrush(Rectangle.Inflate(mark, 0, 1), _accent, _accent2,
+                                                                   LinearGradientMode.Vertical))
                     {
                         g.FillPath(accentBar, barPath);
                     }
                 }
                 else
                 {
-                    // A rounded icon badge with a tinted accent fill, then the title.
+                    // A rounded icon badge with a tinted accent fill — a touch of the second accent at its far corner —
+                    // then the title.
                     using (var chipPath = Rounded(mark, 7))
-                    using (var chipFill = new SolidBrush(Blend(_accent, _surface, 0.28f)))
+                    using (var chipFill = new LinearGradientBrush(Rectangle.Inflate(mark, 1, 1), Blend(_accent, _surface, 0.28f),
+                                                                  Blend(_accent2, _surface, 0.28f), LinearGradientMode.ForwardDiagonal))
                     {
                         g.FillPath(chipFill, chipPath);
                     }
@@ -173,7 +255,7 @@ namespace AutoClicker.UI
             float th = Font.GetHeight(g);
             // Painting, the card is its real size in pixels; the layout check can decide for itself in
             // the window's units (see PaintedTexts) and say so here.
-            bool badge = withBadge ?? (Icon != CardIcon.None && BadgeRowWidth + TitleTextWidth(g) <= Width - Px(8));
+            bool badge = withBadge ?? (Icon != CardIcon.None && BadgeRowWidth + TitleTextWidth(g) <= Width - Px(8) - RightRoomPx);
             if (!badge)
             {
                 mark = new Rectangle(Px(12), Px(5), Px(3), Px(14));
@@ -193,6 +275,19 @@ namespace AutoClicker.UI
         /// <summary>The badge, its margin and the gap before the title's words, in pixels.</summary>
         private int BadgeRowWidth => Px(12) + Px(20) + Px(9);
 
+        /// <summary>The title row's right end kept for something else, in pixels: <see cref="HeaderReserve"/>, or the dot's room.</summary>
+        private int RightRoomPx => Px(Math.Max(0, HeaderReserve)) + (HeaderDot != null ? Px(22) : 0);
+
+        /// <summary>
+        /// How far the title row reaches from the card's left edge, in pixels at this screen's scale — with its badge, or with
+        /// the plain bar it falls back to. For a builder deciding whether a control fits beside the title (round 40).
+        /// </summary>
+        internal float TitleRowWidthPx(Graphics g, bool withBadge)
+        {
+            if (g == null) { return 0f; }
+            return (withBadge ? BadgeRowWidth : Px(22)) + TitleTextWidth(g);
+        }
+
         /// <summary>
         /// The title row's numbers are pixels at 100%, scaled with the screen like everything WinForms lays out
         /// around it: at 150% the badge stayed 22 px beside 1.5× words, 12 px in where the card's content starts 24.
@@ -211,13 +306,15 @@ namespace AutoClicker.UI
             float u = unitsPerPixel > 0f ? unitsPerPixel : 1f;
             // The badge (or bar) and the title are painted in pixels; the card's width is a layout number.
             int badgeRoom = (int)Math.Ceiling((BadgeRowWidth + TitleTextWidth(g)) * u);
-            bool badge = Icon != CardIcon.None && badgeRoom <= Width - (int)Math.Ceiling(Px(8) * u);
+            // The right end of the row kept for a control or the status dot is no room for the title either.
+            int rightKeep = (int)Math.Ceiling((Px(8) + RightRoomPx) * u);
+            bool badge = Icon != CardIcon.None && badgeRoom <= Width - rightKeep;
             TitleGeometry(g, out Rectangle mark, out PointF at, badge);
             float th = Font.GetHeight(g);
             float right = at.X + TitleTextWidth(g);
             var ink = Rectangle.FromLTRB((int)(mark.Left * u), (int)Math.Floor(Math.Min(mark.Top, at.Y) * u),
                                          (int)Math.Ceiling(right * u), (int)Math.Ceiling(Math.Max(mark.Bottom, at.Y + th) * u));
-            var room = Rectangle.FromLTRB(ink.Left, 0, Math.Max(ink.Left, Width - (int)Math.Ceiling(Px(8) * u)), ink.Bottom + 2);
+            var room = Rectangle.FromLTRB(ink.Left, 0, Math.Max(ink.Left, Width - rightKeep), ink.Bottom + 2);
             yield return new PaintedText(title, ink, room);
         }
 
@@ -397,6 +494,17 @@ namespace AutoClicker.UI
                         var shackle = new RectangleF(cx - sw / 2f, r.Top, sw, (bodyTop - r.Top) * 2f);
                         g.DrawArc(pen, shackle, 180, 180);
                         g.FillEllipse(br, cx - 1.2f, body.Y + body.Height * 0.38f, 2.4f, 2.4f);
+                        break;
+                    }
+                    case CardIcon.Database:
+                    {
+                        // A stack of discs: the top ellipse, the two sides, the bottom curve and one band between.
+                        float eh = Math.Max(3f, r.Height * 0.32f);
+                        g.DrawEllipse(pen, r.Left, r.Top, r.Width, eh);
+                        g.DrawLine(pen, r.Left, r.Top + eh / 2f, r.Left, r.Bottom - eh / 2f);
+                        g.DrawLine(pen, r.Right, r.Top + eh / 2f, r.Right, r.Bottom - eh / 2f);
+                        g.DrawArc(pen, r.Left, r.Bottom - eh, r.Width, eh, 0, 180);
+                        g.DrawArc(pen, r.Left, cy - eh / 2f + 1f, r.Width, eh, 0, 180);
                         break;
                     }
                 }

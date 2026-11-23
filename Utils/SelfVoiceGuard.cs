@@ -58,6 +58,16 @@ namespace AutoClicker.Utils
         /// <summary>Name of the microphone being monitored, for status/debug.</summary>
         public string DeviceName { get; private set; } = "";
 
+        /// <summary>
+        /// Where the mic matched the speakers best at the last look, in ms: negative = the mic first (the user's own voice
+        /// played back), zero or positive = the mic hearing the speakers. For Live debug and the harness.
+        /// </summary>
+        public int LastLagMs { get; private set; }
+
+        /// <summary>Steps where the mic matched the speakers only because it HEARD them (kept, not skipped).</summary>
+        public int EchoMatches => _echoMatches;
+        private int _echoMatches;
+
         public bool Start()
         {
             if (_running) { return true; }
@@ -254,6 +264,7 @@ namespace AutoClicker.Utils
                 // Normalized cross-correlation over the lag scan; envelopes are
                 // mean-subtracted so a merely-loud mic can't fake a match.
                 double best = 0;
+                int bestLag = 0;
                 for (int lag = -LagScanFrames; lag <= LagScanFrames; lag++)
                 {
                     int off = LagScanFrames + lag;
@@ -269,7 +280,20 @@ namespace AutoClicker.Utils
                     }
                     if (na <= 1e-12 || nb <= 1e-12) { continue; }
                     double c = dot / Math.Sqrt(na * nb);
-                    if (c > best) { best = c; }
+                    if (c > best) { best = c; bestLag = lag; }
+                }
+                LastLagMs = bestLag * FrameMs;
+                // WHICH WAY the sound went (round 27, 2026-11-15). The user's own voice reaches the microphone FIRST and
+                // the speakers after it (Windows' "Listen to this device", a chat app monitoring the mic: the mic leads by
+                // tens of ms). A microphone that simply HEARS the speakers — a webcam mic by the monitor — gets the video's
+                // sound AFTER the speakers play it, and matches just as well: every stretch of a loud video then read as
+                // "own voice" and was cut from the captions (the user's OPM review: words missing, with this on and the
+                // EMEET webcam mic beside the speakers). Own voice only when the mic leads; the same sound arriving at the
+                // same moment or later is the speakers, and is captioned.
+                if (bestLag >= 0)
+                {
+                    if (best >= 0.55) { Interlocked.Increment(ref _echoMatches); }
+                    return 0;
                 }
                 return best;
             }

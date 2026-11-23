@@ -117,12 +117,49 @@ namespace AutoClicker.UI
             _showElapsed = showElapsed;
 
             RepositionForCorner();
-            if (IsHandleCreated)
-            {
-                try { SetLayeredWindowAttributes(Handle, 0, _alpha, LWA_ALPHA); } catch { }
-            }
+            ApplyAlpha();
             Invalidate();
         }
+
+        // ── Never on screen unpainted ──────────────────────────────────────────────────────────────
+        // A layered window shows whatever its surface holds, and until its first WM_PAINT that is nothing — white, which
+        // at the badge's 90% read as a blank grey box (the user's screenshot, during a 1 ms run). WM_PAINT only comes when
+        // nothing else is waiting in the queue, and with a run's clicks pouring into Tempo's window that was never. So the
+        // badge stays fully see-through until it has been painted once — painted at once, not when the queue empties —
+        // and every change of size is painted at once too.
+        private bool _painted;
+
+        /// <summary>The badge's opacity — or none at all while it has not been painted yet.</summary>
+        private void ApplyAlpha()
+        {
+            if (!IsHandleCreated) { return; }
+            try { SetLayeredWindowAttributes(Handle, 0, _painted ? _alpha : (byte)0, LWA_ALPHA); } catch { }
+        }
+
+        /// <summary>Paints the badge (and nothing else) now, without waiting for the message queue.</summary>
+        private void PaintNow()
+        {
+            if (!IsHandleCreated || !Visible) { return; }
+            try { RedrawWindow(Handle, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN); } catch { }
+        }
+
+        protected override void SetVisibleCore(bool value)
+        {
+            base.SetVisibleCore(value);
+            if (value && !_painted && IsHandleCreated)
+            {
+                PaintNow();
+                _painted = true;
+                ApplyAlpha();
+            }
+        }
+
+        /// <summary>For the tests: painted once and showing at its opacity.</summary>
+        internal bool Painted => _painted;
+
+        [DllImport("user32.dll")]
+        private static extern bool RedrawWindow(IntPtr hWnd, IntPtr rect, IntPtr region, uint flags);
+        private const uint RDW_INVALIDATE = 0x0001, RDW_ALLCHILDREN = 0x0080, RDW_UPDATENOW = 0x0100;
 
         // ── Where the user put it (Overlays ▸ Move overlays in the tray) ─────────────────────────
 
@@ -166,10 +203,7 @@ namespace AutoClicker.UI
         public void SetOpacity(int opacityPct)
         {
             _alpha = (byte)Math.Round(Math.Max(40, Math.Min(100, opacityPct)) * 255.0 / 100.0);
-            if (IsHandleCreated)
-            {
-                try { SetLayeredWindowAttributes(Handle, 0, _alpha, LWA_ALPHA); } catch { }
-            }
+            ApplyAlpha();
         }
 
         private void SetClickThrough(bool through)
@@ -359,6 +393,8 @@ namespace AutoClicker.UI
                     // The right- and centre-anchored corners are measured from the badge
                     // width, so a resize has to re-place it or it drifts off its corner.
                     RepositionForCorner();
+                    // A resized layered window has a new, empty surface: filled now, not when the queue is free.
+                    PaintNow();
                 }
             }
             catch { /* measuring must never take the overlay down */ }
@@ -405,9 +441,9 @@ namespace AutoClicker.UI
         {
             base.OnHandleCreated(e);
             // WS_EX_LAYERED windows stay invisible until their layered attributes are
-            // set. Apply the user's chosen opacity so the painted badge shows (while
-            // still being click-through via WS_EX_TRANSPARENT).
-            try { SetLayeredWindowAttributes(Handle, 0, _alpha, LWA_ALPHA); } catch { }
+            // set. The user's chosen opacity once the badge has been painted (see _painted);
+            // fully see-through until then. Click-through either way (WS_EX_TRANSPARENT).
+            ApplyAlpha();
             ReclipRegion();
             OverlayTopmost.Register(Handle);   // stay above fullscreen games / video
         }
@@ -441,6 +477,7 @@ namespace AutoClicker.UI
         {
             _hint = hint ?? "";
             int targetH = D(string.IsNullOrEmpty(_hint) ? 46 : 62);
+            bool resized = false;
             if (Height != targetH)
             {
                 Height = targetH;
@@ -449,9 +486,11 @@ namespace AutoClicker.UI
                 // for the hint line pushed it 16 px further down — towards the taskbar
                 // it was meant to clear — until something else happened to re-place it.
                 RepositionForCorner();
+                resized = true;
             }
             FitToContent();
             Invalidate();
+            if (resized) { PaintNow(); }
         }
 
         private const int WS_EX_TRANSPARENT = 0x00000020; // mouse events pass through

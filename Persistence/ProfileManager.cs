@@ -192,7 +192,8 @@ namespace AutoClicker.Persistence
                 bool ok = PersistenceHelper.WriteAtomic(GetProfilesPath(), json);
                 if (ok)
                 {
-                    Logger.Info("[Profiles] saved.");
+                    // Once a session in the file (it was every run's start, 34 times in a day); a failure still logs as an error.
+                    Logger.InfoIfChanged("profiles.saved", "[Profiles] saved.");
                 }
                 SaveRecycleBin();
                 return ok;

@@ -324,7 +324,7 @@ namespace AutoClicker.UI
 
             // What the cursor LOOKS like, so it is here — moved from the Behaviour card (and before that the
             // Macros tab, where it never belonged). Its state is loaded in LoadSettingsIntoUi's tail.
-            _cursorTrailCheck = UiFactory.Check("Colorful cursor trail (just for fun)", 16, 176);
+            _cursorTrailCheck = UiFactory.Check("Colourful cursor trail (just for fun)", 16, 176);
             _cursorTrailCheck.Checked = _settings != null && _settings.CursorTrailEnabled;
             _cursorTrailCheck.CheckedChanged += OnCursorTrailChanged;
             appearance.Controls.Add(_cursorTrailCheck);
@@ -933,8 +933,27 @@ namespace AutoClicker.UI
             captions.Controls.Add(linesHint);
 
             _captionBackgroundCheck = UiFactory.Check("Show background panel", 16, 248);
-            _captionBackgroundCheck.CheckedChanged += (sF, eF) => OnCaptionLookChanged();
+            _captionBackgroundCheck.CheckedChanged += (sF, eF) =>
+            {
+                if (_captionPanelSizeCombo != null) { _captionPanelSizeCombo.Enabled = _captionBackgroundCheck.Checked && _captionBackgroundCheck.Enabled; }
+                OnCaptionLookChanged();
+            };
             captions.Controls.Add(_captionBackgroundCheck);
+
+            // How big that panel is (round 40, "need small or medium than big"): it filled the whole bar — 80 % of the
+            // screen wide, every kept line tall — around one line of words. Small hugs the words; Medium (the default) is
+            // a calm, steady width only as tall as the lines shown; Large is the whole bar, as before. A row of its own
+            // under "Show background panel", set in under it (it means something only while the panel shows); every row
+            // below moves down by it (see the end of this card). It first sat on the right half of the background row,
+            // which the "Models folder…" and "Download model" buttons hold — the start-up layout check's find.
+            var panelSizeLabel = UiFactory.Label("Panel size:", 36, 284);
+            captions.Controls.Add(panelSizeLabel);
+            _captionPanelSizeCombo = UiFactory.Combo(Math.Max(130, LayoutRight(panelSizeLabel) + 8), 277, 120,
+                Localization.T("Small"), Localization.T("Medium"), Localization.T("Large"));
+            _captionPanelSizeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            _captionPanelSizeCombo.SelectedIndex = 1;
+            _captionPanelSizeCombo.SelectedIndexChanged += (sP, eP) => OnCaptionLookChanged();
+            captions.Controls.Add(_captionPanelSizeCombo);
 
             // Own-voice filter: skip captioning the USER's voice when it comes back
             // through the speakers (sidetone / "Listen to this device" / chat
@@ -960,6 +979,11 @@ namespace AutoClicker.UI
             {
                 if (_suppressSettingsEvents) { return; }
                 _settings.CaptionShowSourceTag = _captionSourceTagCheck.Checked;
+                // The chip on the bar goes (or comes back) now, not at the next caption.
+                if (_captionOverlay != null && !_captionOverlay.IsDisposed)
+                {
+                    _captionOverlay.SetSource(CaptionChipText(_lastVoiceSource));
+                }
             };
             captions.Controls.Add(_captionSourceTagCheck);
 
@@ -968,12 +992,14 @@ namespace AutoClicker.UI
             // if the GPU can't keep pace, that SESSION uses Windows Live Captions and
             // this stays on (see OnTempoModelTooSlow — a busy GPU is not a broken one).
             // A row of its own (in the old card it shared one at x = 420, and ended in "…" in four languages).
-            _captionGpuCheck = UiFactory.Check("Try GPU engine (experimental · needs restart)", 16, 58);
+            // Round 24 (2026-11-15): ticked by itself on a PC with a graphics card of its own — the box shows what the
+            // next start uses (CaptionGpuPreferred), and only a click is a choice (ApplyCaptionGpuChoice).
+            _captionGpuCheck = UiFactory.Check("Use the graphics card for captions (GPU · needs restart)", 16, 58);
             _captionGpuCheck.AutoSize = true;
             _captionGpuCheck.CheckedChanged += (sGpu, eGpu) =>
             {
                 if (_suppressSettingsEvents) { return; }
-                _settings.CaptionTryGpu = _captionGpuCheck.Checked;
+                if (!ApplyCaptionGpuChoice(_captionGpuCheck.Checked)) { return; }   // showing the state, not changing it
                 // The speech engine's CPU/GPU choice is fixed the first time a model
                 // loads and CANNOT change until Tempo restarts. Ticking this box while
                 // captions had already run therefore did NOTHING, silently — you'd sit
@@ -1045,6 +1071,19 @@ namespace AutoClicker.UI
             };
             captions.Controls.Add(_captionLyricsCheck);
 
+            // Round 27 (2026-11-15): hear only the app that plays (AppAudioCapture), so other apps' pings and music stay
+            // out of the words. On by default; applies at once and is saved at once, like the lyrics switch above.
+            _captionOnlyAppCheck = UiFactory.Check("Hear only the app that's playing (other apps' sounds are left out)", 16, 464);
+            _captionOnlyAppCheck.AutoSize = true;
+            _captionOnlyAppCheck.CheckedChanged += (sOa, eOa) =>
+            {
+                if (_suppressSettingsEvents || _settings == null) { return; }
+                _settings.CaptionOnlyPlayingApp = _captionOnlyAppCheck.Checked;
+                ApplyHearOnlyApp();
+                PersistNotificationSettings();   // the shared "save settings now" helper
+            };
+            captions.Controls.Add(_captionOnlyAppCheck);
+
             // Same menu as the Captions tab's "Models…" button — one place to change, and
             // the two surfaces cannot drift apart on what a model source can be.
             var openModelsBtn = UiFactory.Button("Models folder…", 356, 244, 156, 28);
@@ -1063,10 +1102,16 @@ namespace AutoClicker.UI
             moreCaptions.Controls.Add(captionDiagBtn);
             moreCaptions.Height = captionDiagBtn.Bottom + 12;
 
+            // The panel-size row (277-307) pushes every row under it down by one row of 32 (round 40).
+            foreach (Control c in captions.Controls)
+            {
+                if (c.Top >= 278 && !ReferenceEquals(c, panelSizeLabel) && !ReferenceEquals(c, _captionPanelSizeCombo)) { c.Top += 32; }
+            }
+
             // The face/transcripts row (156) went with them: everything from the font row down moves up
             // by it. 24, not the 32 rows are apart — the model status above is two lines tall.
             foreach (Control c in captions.Controls) { if (c.Top >= 181) { c.Top -= 24; } }
-            captions.Height = 444;
+            captions.Height = 476 + 32;
 
             // ── Data ───────────────────────────────────────────────────────────
             // Data, and only data: the tamper check is in Updates & privacy, the bug reports and the
@@ -1231,11 +1276,15 @@ namespace AutoClicker.UI
             _settingsAdvancedBtn = UiFactory.Button("Show advanced settings", 476, 26, 204, 30);
             LayoutFitter.DeclareCaptions(_settingsAdvancedBtn,
                 Localization.T("Show advanced settings"), Localization.T("Hide advanced settings"));
-            // In the window's units (MeasureLayout): built before the window is scaled.
-            FitButtonToText(_settingsAdvancedBtn, 204, 30);
+            // A chevron that points the way the section will move (round 40); 24 more for it, so it fits beside the
+            // longer caption in every language. In the window's units (MeasureLayout): built before the window is scaled.
+            SetGlyph(_settingsAdvancedBtn, ActionGlyph.ChevronDown);
+            FitButtonToText(_settingsAdvancedBtn, 204, 54);
             _settingsAdvancedBtn.Left = 680 - _settingsAdvancedBtn.Width;
-            _settingsAdvancedBtn.Click += (s, e) => SetSettingsAdvancedOpen(!SettingsAdvancedOpen);
+            _settingsAdvancedBtn.Click += (s, e) => SetSettingsAdvancedOpen(!SettingsAdvancedOpen, animate: true);
             advanced.Controls.Add(_settingsAdvancedBtn);
+            // The whole header card opens and closes the section too, not only its button (round 40).
+            MakeFoldHeader(advanced, () => SetSettingsAdvancedOpen(!SettingsAdvancedOpen, animate: true));
 
             var advancedNote = UiFactory.Caption(
                 "HDR colours, the logo animation, experimental caption options and camera-relative movement — most people never need them.",
@@ -1333,10 +1382,15 @@ namespace AutoClicker.UI
             // So the Y here is measured from the lowest card's bottom, 12 below it. It was a
             // fixed 1866 — 12 below where the last card used to end — and the recorded "gap"
             // came out negative the moment that card grew: the whole row sat 24 px inside it.
+            // ── Disable features ───────────────────────────────────────────────
+            // A switch per feature that lets go of its hotkeys (MainForm.Features.cs). After "While running" (316),
+            // before Notifications (556): the Y only sets that order.
+            GroupBox features = BuildDisableFeaturesCard(330);
+
             // In the order they stack (their Y says only that): the everyday cards, then the Advanced section.
             var cards = new Control[]
             {
-                appearance, startup, windowGroup, behaviour, notify, captions, updates, data, help,
+                appearance, startup, windowGroup, behaviour, features, notify, captions, updates, data, help,
                 advanced, display, moreCaptions, movement
             };
             int tail0 = 0;
@@ -1520,7 +1574,7 @@ namespace AutoClicker.UI
         /// people said they could not read. And it was no longer true. "The only network use is the update
         /// check" left out the release check — IntegrityCheck asks GitHub once per version with a switch
         /// of its own, so it still ran with "Check for updates" off — and everything that goes online when
-        /// used: speech models, a logo from a web address, the Roblox account manager.
+        /// used: speech models, the face recognition model (round 26), a logo from a web address, the Roblox account manager.
         /// </summary>
         private int BuildPrivacyPanel(Control page, int top)
         {
@@ -1590,7 +1644,13 @@ namespace AutoClicker.UI
                  + "Roblox game you're playing” in Updates & privacy."),
                  t => PrivacyTeal),
                 (Localization.T("When you use them"),
-                 Localization.T("Downloading a speech model (from Hugging Face), setting a logo from a web address, and the Roblox "
+                 // Round 26: the face recognition model (SFace) is fetched from Hugging Face the first time caption face
+                 // analysis runs (Utils/FaceAi.cs). Round 34: the speaker recognition model (WeSpeaker) from the sherpa-onnx
+                 // releases on GitHub the first time speaker labels run (Utils/VoicePrint.cs). Round 35: the Nemotron streaming
+                 // models from the same sherpa-onnx releases, when one is downloaded (WhisperModelManager.Download).
+                 Localization.T("Downloading a speech model (Whisper models from Hugging Face, Nemotron models from GitHub), the face recognition model the first time caption "
+                 + "face analysis runs (also from Hugging Face), the speaker recognition model the first time speaker labels run "
+                 + "(from GitHub), setting a logo from a web address, and the Roblox "
                  + "account manager, which signs in, checks sessions and launches games through Roblox."),
                  t => t.WarningText),
                 (Localization.T("Local API"),
@@ -1713,6 +1773,9 @@ namespace AutoClicker.UI
                 _hdrCompensateCheck.Enabled = Utils.DisplayColorInfo.SdrIsToneMapped;
                 RefreshDisplayColourNote();
 
+                // Disable features: the switches and the keys each would let go of.
+                SyncFeatureControls();
+
                 int langIndex = (int)_settings.Language;
                 if (langIndex < 0 || langIndex >= _languageCombo.Items.Count) langIndex = 0;
                 _languageCombo.SelectedIndex = langIndex;
@@ -1747,6 +1810,10 @@ namespace AutoClicker.UI
                 {
                     _captionLyricsCheck.Checked = _settings.CaptionLyrics;
                 }
+                if (_captionOnlyAppCheck != null)
+                {
+                    _captionOnlyAppCheck.Checked = _settings.CaptionOnlyPlayingApp;
+                }
                 _captionFaceCheck.Checked = _settings.CaptionFaceAnalysis;
                 _captionTranscriptCheck.Checked = _settings.CaptionSaveTranscripts;
                 _captionAutoStartCheck.Checked = _settings.CaptionAutoStart;
@@ -1767,8 +1834,12 @@ namespace AutoClicker.UI
                 }
                 UpdateCaptionSourceUi();
                 _captionBackgroundCheck.Checked = _settings.CaptionShowBackground;
+                if (_captionPanelSizeCombo != null)
+                {
+                    _captionPanelSizeCombo.SelectedIndex = Math.Max(0, Math.Min(2, _settings.CaptionPanelSize));
+                }
                 _captionSourceTagCheck.Checked = _settings.CaptionShowSourceTag;
-                _captionGpuCheck.Checked = _settings.CaptionTryGpu;
+                _captionGpuCheck.Checked = CaptionGpuPreferred();
                 // Reflect the bar switch on load, not only when it is toggled.
                 UpdateCaptionControlsEnabled();
 
@@ -2019,9 +2090,9 @@ namespace AutoClicker.UI
                 _followSystemThemeCheck.Checked = false;
             }
 
-            // Live-preview the theme as soon as it is chosen.
+            // Live-preview the theme as soon as it is chosen — the window cross-fading to it.
             _settings.Theme = (ThemeKind)_themeCombo.SelectedIndex;
-            ApplyThemeToEverything();
+            ApplyThemeFaded();
             RefreshThemePreview();
         }
 
@@ -2035,7 +2106,7 @@ namespace AutoClicker.UI
             _settings.FollowSystemTheme = _followSystemThemeCheck.Checked;
             // The manual picker is meaningless while the OS drives the theme.
             if (_themeCombo != null) { _themeCombo.Enabled = !_settings.FollowSystemTheme; }
-            ApplyThemeToEverything();
+            ApplyThemeFaded();
             RefreshThemePreview();
         }
 
@@ -2081,10 +2152,12 @@ namespace AutoClicker.UI
         /// </summary>
         private void OfferRestartForLanguage()
         {
-            bool restart = AskToRestart(
-                Localization.T("Language changed"),
-                Localization.T("Your choice is already saved — nothing is lost either way."),
-                Localization.T("Some text is built when Tempo starts, so a restart is needed for the new language to appear everywhere."));
+            // Asked in the language just chosen, not the one being left: someone switching to the language they read was
+            // asked, in the one they could not, whether to restart.
+            bool restart = AskToRestartIn(_settings.Language,
+                "Language changed",
+                "Your choice is already saved — nothing is lost either way.",
+                "Some text is built when Tempo starts, so a restart is needed for the new language to appear everywhere.");
 
             if (restart)
             {
@@ -2232,19 +2305,91 @@ namespace AutoClicker.UI
                 string screen = PaletteScreenName();
                 if (!displayChanged && string.Equals(screen, _paletteScreen, StringComparison.OrdinalIgnoreCase)) { return; }
                 _paletteScreen = screen;
-                if (displayChanged) { Utils.DisplayColorInfo.Invalidate(); }
+                if (displayChanged)
+                {
+                    // Windows is asked OFF the UI thread (2026-11-10). A display change is reported while Windows is
+                    // still switching modes, and the query waits for it: asked here, a monitor waking with HDR on held
+                    // this window — hotkeys and all — for 3.3 s (the stall note of 2026-11-08 12:39, straight after "HDR
+                    // colour correction on"). The old answer stays in use until the new one is in; a newer change
+                    // overtakes an older one's answer.
+                    int asked = ++_hdrAsked;
+                    System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        // And only once the display has settled (2026-11-16): a monitor coming back reports its changes
+                        // over a second or two while Windows is still switching modes, and the theme pass that followed
+                        // at once took 5.7 s (11-14 12:47, Tempo in the tray). A newer change asks for itself.
+                        await System.Threading.Tasks.Task.Delay(HdrSettleMs).ConfigureAwait(false);
+                        if (asked != System.Threading.Volatile.Read(ref _hdrAsked)) { return; }
+                        try { Utils.DisplayColorInfo.Refresh(); }
+                        catch (Exception ex) { Utils.Logger.Swallow("RefreshHdrPalette.query", ex); }
+                        try
+                        {
+                            if (IsDisposed || !IsHandleCreated) { return; }
+                            BeginInvoke((Action)(() => { if (asked == _hdrAsked) { ApplyHdrPalette(PaletteScreenName()); } }));
+                        }
+                        catch { }
+                    });
+                    return;
+                }
+                ApplyHdrPalette(screen);
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("RefreshHdrPalette", ex); }
+        }
 
+        /// <summary>Counts display changes asked about, so only the newest one's answer is applied.</summary>
+        private int _hdrAsked;
+
+        /// <summary>How long a display change is left to settle before Windows is asked what it is now.</summary>
+        internal static int HdrSettleMs = 1200;
+
+        /// <summary>
+        /// The HDR correction changed while no Tempo window was on screen: the theme pass waits for one to show
+        /// (OnVisibleChanged). Nothing would have been seen to change, and run at once — the display often still
+        /// switching modes — it once held the window 5.7 s.
+        /// </summary>
+        private bool _hdrPalettePending;
+
+        /// <summary>Whether any of Tempo's windows is on screen (shown and not minimised).</summary>
+        private static bool AnyTempoWindowShowing()
+        {
+            try
+            {
+                foreach (Form f in Application.OpenForms)
+                {
+                    if (f != null && !f.IsDisposed && f.Visible && f.WindowState != FormWindowState.Minimized) { return true; }
+                }
+                return false;
+            }
+            catch { return true; }   // can't tell: as before, at once
+        }
+
+        /// <summary>The second half of <see cref="RefreshHdrPalette"/>: the palette for what the display is now.</summary>
+        private void ApplyHdrPalette(string screen)
+        {
+            try
+            {
+                if (_settings == null || _shuttingDown || IsDisposed) { return; }
                 if (ApplyHdrCompensationSetting())
                 {
+                    bool showing = AnyTempoWindowShowing();
                     Utils.Logger.Info("[Display] HDR colour correction " + (Theme.CompensateForHdr ? "on" : "off")
-                                      + " for " + (screen ?? "the primary screen") + ".");
-                    ApplyThemeToEverything();
-                    RefreshThemePreview();
+                                      + " for " + (screen ?? "the primary screen")
+                                      + (showing ? "." : " — the colours follow when Tempo's window is next shown."));
+                    if (showing)
+                    {
+                        _hdrPalettePending = false;
+                        ApplyThemeFaded();
+                        RefreshThemePreview();
+                    }
+                    else
+                    {
+                        _hdrPalettePending = true;
+                    }
                 }
                 if (_hdrCompensateCheck != null) { _hdrCompensateCheck.Enabled = Utils.DisplayColorInfo.SdrIsToneMapped; }
                 RefreshDisplayColourNote();
             }
-            catch (Exception ex) { Utils.Logger.Swallow("RefreshHdrPalette", ex); }
+            catch (Exception ex) { Utils.Logger.Swallow("ApplyHdrPalette", ex); }
         }
 
         /// <summary>"Open the window at sign-in" only means something while Tempo launches at sign-in.</summary>
@@ -2265,7 +2410,7 @@ namespace AutoClicker.UI
             if (_suppressSettingsEvents || _settings == null) { return; }
             _settings.CompensateForHdr = _hdrCompensateCheck.Checked;
             ApplyHdrCompensationSetting();
-            ApplyThemeToEverything();     // live: rebuild every surface with the new palette
+            ApplyThemeFaded();            // live: rebuild every surface with the new palette
             RefreshThemePreview();
             RefreshDisplayColourNote();
         }
@@ -2447,7 +2592,7 @@ namespace AutoClicker.UI
 
             _settings.CustomAccentEnabled = _customAccentCheck.Checked;
             UpdateAccentControlsEnabled();
-            ApplyThemeToEverything();
+            ApplyThemeFaded();
             RefreshThemePreview();
         }
 
@@ -2588,7 +2733,8 @@ namespace AutoClicker.UI
                 string verdict = ratio >= 4.5 ? "AA" : (ratio >= 3.0 ? "AA large" : "low");
                 _accentContrastLabel.Text = ratio.ToString("0.0",
                     System.Globalization.CultureInfo.InvariantCulture) + ":1  " + verdict;
-                _accentContrastLabel.ForeColor = ratio >= 3.0 ? _theme.TextMuted : _theme.Warning;
+                // WarningText: a warning about low contrast had better not be low contrast itself.
+                _accentContrastLabel.ForeColor = ratio >= 3.0 ? _theme.TextMuted : _theme.WarningText;
             }
 
             if (_previewButton != null)
@@ -2676,6 +2822,15 @@ namespace AutoClicker.UI
         private void UpdateCaptionSourceUi()
         {
             if (_captionSourceCombo == null) return;
+            // The GPU box follows the Vulkan probe's answer (CaptionGpuPreferred reads unticked until it is in): shown, not
+            // chosen — or a Save Settings with the box still unticked would record "processor only" nobody picked.
+            if (_captionGpuCheck != null && _captionGpuCheck.Checked != CaptionGpuPreferred())
+            {
+                bool was = _suppressSettingsEvents;
+                _suppressSettingsEvents = true;
+                try { _captionGpuCheck.Checked = CaptionGpuPreferred(); }
+                finally { _suppressSettingsEvents = was; }
+            }
             // Both "Tempo" and "Auto" run Tempo's own engine (Auto just adds a
             // Windows fallback), so the model + capture controls apply to both.
             int idx = _captionSourceCombo.SelectedIndex;
@@ -2703,7 +2858,9 @@ namespace AutoClicker.UI
 
             string language = model.EnglishOnly
                 ? Localization.T("English only")
-                : Localization.T("understands any language (auto-detected)");
+                : model.IsStreaming
+                    ? Localization.T("understands 40 languages (auto-detected)")
+                    : Localization.T("understands any language (auto-detected)");
 
             // A chosen model FILE overrides this combo entirely, so the combo must not be
             // left implying otherwise. Reporting "Large-v3 is installed and ready" while
@@ -2730,14 +2887,14 @@ namespace AutoClicker.UI
             {
                 // Real size on disk beats the approximate note once the file exists.
                 string size = "";
-                try
+                // A streaming model is a folder: its files together (InstalledBytes; 0 when unreadable).
+                long bytes = Utils.WhisperModelManager.InstalledBytes(model);
+                if (bytes > 0)
                 {
-                    long bytes = new System.IO.FileInfo(Utils.WhisperModelManager.PathFor(model)).Length;
                     size = bytes >= 1024L * 1024 * 1024
                         ? (bytes / (1024.0 * 1024 * 1024)).ToString("0.0") + " GB"
                         : (bytes / (1024.0 * 1024)).ToString("0") + " MB";
                 }
-                catch { }
                 _captionModelStatus.Text = "\u2713 " + Localization.T(model.Label) + " " + Localization.T("is installed and ready") +
                     (size.Length > 0 ? " \u00b7 " + size + " " + Localization.T("on disk") : "") +
                     " \u00b7 " + language + ".";
@@ -2760,9 +2917,9 @@ namespace AutoClicker.UI
                     {
                         string now = ShortModelName(Localization.T(model.Label));
                         string bigger = ShortModelName(Localization.T(better.Label));
-                        _captionModelStatus.Text = _settings != null && _settings.CaptionTryGpu
+                        _captionModelStatus.Text = CaptionGpuPreferred()
                             ? Localization.F("\u2713 {0} is ready. {1} is downloaded too and mishears far fewer words \u2014 your GPU engine runs it live.", now, bigger)
-                            : Localization.F("\u2713 {0} is ready. {1} is downloaded too and mishears far fewer words \u2014 tick \u201cTry GPU engine\u201d and your graphics card runs it live.", now, bigger);
+                            : Localization.F("\u2713 {0} is ready. {1} is downloaded too and mishears far fewer words \u2014 tick \u201cUse the graphics card for captions\u201d and your graphics card runs it live.", now, bigger);
                     }
                 }
             }
@@ -2780,6 +2937,8 @@ namespace AutoClicker.UI
         private static int ModelRank(string key)
         {
             key = key ?? "";
+            // Nemotron streaming (round 35) hears at least as well as Large Turbo, live: nothing is suggested over it.
+            if (key.StartsWith("nemotron", StringComparison.Ordinal)) { return 6; }
             if (key.StartsWith("large-v3", StringComparison.Ordinal)) { return 4; }
             if (key.StartsWith("large", StringComparison.Ordinal)) { return 5; }
             if (key.StartsWith("medium", StringComparison.Ordinal)) { return 3; }
@@ -2797,6 +2956,9 @@ namespace AutoClicker.UI
             foreach (var m in Utils.WhisperModelManager.Available)
             {
                 int r = ModelRank(m.Key);
+                // The suggestion is the GPU engine's ("your graphics card runs it live"): a streaming model runs on the
+                // processor, so it is not what the line can offer.
+                if (m.IsStreaming) { continue; }
                 if (r <= bar || !Utils.WhisperModelManager.IsInstalled(m)) { continue; }
                 if (best == null || r > ModelRank(best.Key)) { best = m; }
             }
@@ -2897,6 +3059,11 @@ namespace AutoClicker.UI
             bool bar = _captionOverlayCheck.Checked;
             if (_captionBackgroundCheck != null) { _captionBackgroundCheck.Enabled = bar; }
             if (_captionSourceTagCheck != null) { _captionSourceTagCheck.Enabled = bar; }
+            // The panel's size means something only with the panel on.
+            if (_captionPanelSizeCombo != null)
+            {
+                _captionPanelSizeCombo.Enabled = bar && (_captionBackgroundCheck == null || _captionBackgroundCheck.Checked);
+            }
         }
 
         /// <summary>
@@ -3500,6 +3667,10 @@ namespace AutoClicker.UI
             if (_captionFontNum != null) { _settings.CaptionFontSize = (int)_captionFontNum.Value; }
             if (_captionOpacityNum != null) { _settings.CaptionOpacity = (int)_captionOpacityNum.Value; }
             if (_captionBackgroundCheck != null) { _settings.CaptionShowBackground = _captionBackgroundCheck.Checked; }
+            if (_captionPanelSizeCombo != null && _captionPanelSizeCombo.SelectedIndex >= 0)
+            {
+                _settings.CaptionPanelSize = _captionPanelSizeCombo.SelectedIndex;
+            }
             if (_captionFontCombo?.SelectedItem != null) { _settings.CaptionFontFamily = _captionFontCombo.SelectedItem.ToString(); }
             ApplyCaptionSettingsToOverlays();
             PersistCaptionLookSoon();
@@ -3676,10 +3847,11 @@ namespace AutoClicker.UI
             _settings.CaptionSpeakerTurns = _captionSpeakerCheck.Checked;
             _settings.CaptionFilterOwnVoice = _captionOwnVoiceCheck != null ? _captionOwnVoiceCheck.Checked : _settings.CaptionFilterOwnVoice;
             _settings.CaptionLyrics = _captionLyricsCheck != null ? _captionLyricsCheck.Checked : _settings.CaptionLyrics;
+            _settings.CaptionOnlyPlayingApp = _captionOnlyAppCheck != null ? _captionOnlyAppCheck.Checked : _settings.CaptionOnlyPlayingApp;
             _settings.CaptionFaceAnalysis = _captionFaceCheck.Checked;
             _settings.CaptionSaveTranscripts = _captionTranscriptCheck.Checked;
             _settings.CaptionShowSourceTag = _captionSourceTagCheck.Checked;
-            _settings.CaptionTryGpu = _captionGpuCheck.Checked;
+            ApplyCaptionGpuChoice(_captionGpuCheck.Checked);   // a change only when the box differs from what it showed
             _settings.CaptionAutoStart = _captionAutoStartCheck.Checked;
             _settings.CaptionSource = (CaptionSource)Math.Max(0, _captionSourceCombo.SelectedIndex);
             _settings.CaptionModelKey = WhisperModelKeyFromIndex(_captionModelCombo.SelectedIndex);
@@ -3702,6 +3874,10 @@ namespace AutoClicker.UI
             ReadMovementControls();
 
             _settings.CaptionShowBackground = _captionBackgroundCheck.Checked;
+            if (_captionPanelSizeCombo != null && _captionPanelSizeCombo.SelectedIndex >= 0)
+            {
+                _settings.CaptionPanelSize = _captionPanelSizeCombo.SelectedIndex;
+            }
             if (_captionFontCombo.SelectedItem != null)
                 _settings.CaptionFontFamily = _captionFontCombo.SelectedItem.ToString();
             _settings.ShowTrayNotifications = _trayNotifyCheck.Checked;
@@ -4052,6 +4228,8 @@ namespace AutoClicker.UI
 
             ApplyThemeToEverything();
             ApplyHotkeysFromSettings();
+            // What the new settings turn off stops, and its tab is covered (its keys went with the line above).
+            ApplyFeatureStates("settings replaced");
             RefreshTraySleepNotice();
             ReassertTopMost();
             ApplyBackgroundGif();
@@ -4137,8 +4315,10 @@ namespace AutoClicker.UI
             a.AccountsEnabled != b.AccountsEnabled
             || a.RobloxMultiInstance != b.RobloxMultiInstance
             || a.RobloxCrashGuard != b.RobloxCrashGuard
+            || a.RobloxRejoinOnDrop != b.RobloxRejoinOnDrop
             || a.RobloxGameNotices != b.RobloxGameNotices
             || a.RobloxSmootherPlay != b.RobloxSmootherPlay
+            || a.RobloxRepairLinks != b.RobloxRepairLinks
             || a.AccountApiEnabled != b.AccountApiEnabled
             || a.AccountApiPort != b.AccountApiPort
             || !string.Equals(a.AccountApiToken ?? "", b.AccountApiToken ?? "", StringComparison.Ordinal);
@@ -4153,7 +4333,7 @@ namespace AutoClicker.UI
             // Says what is KEPT. "Reset all settings?" alone read as if statistics, keybinds and
             // the account manager went too — and until CreateResetFrom, they did.
             var confirm = MessageBox.Show(this,
-                Localization.T("Reset all settings to their defaults?\n\nYour profiles, macros, keybinds, statistics, Roblox accounts and language are kept."),
+                Localization.T("Reset all settings to their defaults?\n\nYour profiles, macros, keybinds, statistics, Roblox accounts and language are kept, and so are the features you turned off."),
                 "Tempo",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
@@ -4463,7 +4643,7 @@ namespace AutoClicker.UI
             switch (choice)
             {
                 case EmailReportChannel.GitHub:
-                    sent = OpenExternal(CrashReporter.IssueUrlFromBody(body), "browser");
+                    sent = OpenWebCompose(CrashReporter.IssueUrlFromBody, body);
                     break;
                 case EmailReportChannel.EmailApp:
                     // A mailto: longer than the command line allows is silently cut
@@ -4486,16 +4666,16 @@ namespace AutoClicker.UI
                         choice = EmailReportChannel.Copy;
                         break;
                     }
-                    sent = OpenExternal(CrashReporter.BuildMailtoUrlFor(body), "email app");
+                    sent = OpenExternal(CrashReporter.BuildMailtoUrlFor(body), emailApp: true);
                     break;
                 case EmailReportChannel.Gmail:
-                    sent = OpenExternal(CrashReporter.BuildGmailComposeUrlFor(body), "browser");
+                    sent = OpenWebCompose(CrashReporter.BuildGmailComposeUrlFor, body);
                     break;
                 case EmailReportChannel.Outlook:
-                    sent = OpenExternal(CrashReporter.BuildOutlookComposeUrlFor(body), "browser");
+                    sent = OpenWebCompose(CrashReporter.BuildOutlookComposeUrlFor, body);
                     break;
                 case EmailReportChannel.Yahoo:
-                    sent = OpenExternal(CrashReporter.BuildYahooComposeUrlFor(body), "browser");
+                    sent = OpenWebCompose(CrashReporter.BuildYahooComposeUrlFor, body);
                     break;
                 case EmailReportChannel.Copy:
                     sent = CopyReportToClipboard(body);
@@ -4533,7 +4713,7 @@ namespace AutoClicker.UI
         /// Returns false when nothing could be opened, so the caller can tell a
         /// completed hand-off from a failed one.
         /// </summary>
-        private bool OpenExternal(string url, string what)
+        private bool OpenExternal(string url, bool emailApp = false)
         {
             try
             {
@@ -4546,14 +4726,55 @@ namespace AutoClicker.UI
             }
             catch (Exception ex)
             {
-                Logger.Warn("[UI] could not open " + what + ": " + ex.Message);
-                ShowInfo(Localization.F("Couldn't open your {0}. You can email bug reports to:\n\n{1}", what, CrashReporter.SupportEmail));
+                Logger.Warn("[UI] could not open the " + (emailApp ? "email app" : "browser") + ": " + ex.Message);
+                // Whole sentences. "Couldn't open your {0}" was handed the English word "browser" or "email app", so
+                // every language read "No se pudo abrir tu browser" — and German needs a different "your" for each.
+                ShowInfo(Localization.F(emailApp
+                        ? "Couldn't open your email app. You can email bug reports to:\n\n{0}"
+                        : "Couldn't open your browser. You can email bug reports to:\n\n{0}",
+                    CrashReporter.SupportEmail));
                 return false;
             }
         }
 
+        /// <summary>
+        /// A compose page in the browser (a GitHub issue, Gmail, Outlook, Yahoo) with the report in it — or, when the
+        /// report is too long for a link (the activity log makes it so), the report on the clipboard and the page opened
+        /// with a line asking to paste it. Too long, the sites refused the link outright ("URI too long") and the
+        /// report was lost with the browser tab.
+        /// </summary>
+        private bool OpenWebCompose(Func<string, string> urlFor, string body)
+        {
+            string url = urlFor(body);
+            if (!CrashReporter.WebUrlTooLong(url)) { return OpenExternal(url); }
+            try
+            {
+                Clipboard.SetText(CrashReporter.BuildReportTextFor(body));
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[UI] clipboard copy failed: " + ex.Message);
+                ShowInfo(Localization.F("Couldn't copy to the clipboard. You can email bug reports to:\n\n{0}", CrashReporter.SupportEmail));
+                return false;
+            }
+            Logger.Info("[UI] bug report too long for a link (" + url.Length + " characters): copied, page opened to paste it.");
+            ShowInfo(Localization.T("This report is too long to fill in by itself, so it is on your clipboard. "
+                                    + "When the page opens, click in the message box and paste it with Ctrl+V."));
+            return OpenExternal(urlFor(CrashReporter.PasteHereBody()));
+        }
+
         /// <summary>Re-runs the tamper check on demand and shows the result.</summary>
-        private void OnRecheckIntegrity(object sender, EventArgs e) => RecheckIntegrity(null);
+        private void OnRecheckIntegrity(object sender, EventArgs e)
+        {
+            // The button spins its ring while the check reads and hashes Tempo's files (a few seconds on a slow disk).
+            var button = sender as RoundedButton;
+            if (button != null) { button.Busy = true; }
+            _integrityBusyButton = button;
+            RecheckIntegrity(null);
+        }
+
+        /// <summary>The Re-check button spinning for a check in progress; RefreshIntegrityStatus stops it with the result.</summary>
+        private RoundedButton _integrityBusyButton;
 
         /// <summary>Re-runs the tamper check; <paramref name="then"/> runs on the UI thread once the result is shown.</summary>
         private void RecheckIntegrity(Action then)
@@ -4575,6 +4796,7 @@ namespace AutoClicker.UI
                             // A manual check still records a fresh fingerprint when
                             // there wasn't one, and still warns — same path as start-up,
                             // so the two can't disagree about what they found.
+                            StopIntegrityBusy();
                             OnIntegrityResult(verdict);
                             RefreshIntegrityStatus();
                             try { then?.Invoke(); } catch (Exception ex) { Logger.Swallow("RecheckIntegrity.then", ex); }
@@ -4583,7 +4805,18 @@ namespace AutoClicker.UI
                     catch (Exception ex) { Logger.Swallow("OnRecheckIntegrity.post", ex); }
                 });
             }
-            catch (Exception ex) { Logger.Swallow("OnRecheckIntegrity", ex); }
+            catch (Exception ex)
+            {
+                Logger.Swallow("OnRecheckIntegrity", ex);
+                StopIntegrityBusy();
+            }
+        }
+
+        private void StopIntegrityBusy()
+        {
+            RoundedButton b = _integrityBusyButton;
+            _integrityBusyButton = null;
+            if (b != null && !b.IsDisposed) { b.Busy = false; }
         }
 
         /// <summary>
@@ -5309,10 +5542,11 @@ namespace AutoClicker.UI
             _settings.CaptionSpeakerTurns = _captionSpeakerCheck.Checked;
             _settings.CaptionFilterOwnVoice = _captionOwnVoiceCheck != null ? _captionOwnVoiceCheck.Checked : _settings.CaptionFilterOwnVoice;
             _settings.CaptionLyrics = _captionLyricsCheck != null ? _captionLyricsCheck.Checked : _settings.CaptionLyrics;
+            _settings.CaptionOnlyPlayingApp = _captionOnlyAppCheck != null ? _captionOnlyAppCheck.Checked : _settings.CaptionOnlyPlayingApp;
             _settings.CaptionFaceAnalysis = _captionFaceCheck.Checked;
             _settings.CaptionSaveTranscripts = _captionTranscriptCheck.Checked;
             _settings.CaptionShowSourceTag = _captionSourceTagCheck.Checked;
-            _settings.CaptionTryGpu = _captionGpuCheck.Checked;
+            ApplyCaptionGpuChoice(_captionGpuCheck.Checked);   // a change only when the box differs from what it showed
             _settings.CaptionAutoStart = _captionAutoStartCheck.Checked;
             _settings.CaptionSource = (CaptionSource)Math.Max(0, _captionSourceCombo.SelectedIndex);
             _settings.CaptionModelKey = WhisperModelKeyFromIndex(_captionModelCombo.SelectedIndex);
@@ -5335,6 +5569,10 @@ namespace AutoClicker.UI
             ReadMovementControls();
 
             _settings.CaptionShowBackground = _captionBackgroundCheck.Checked;
+            if (_captionPanelSizeCombo != null && _captionPanelSizeCombo.SelectedIndex >= 0)
+            {
+                _settings.CaptionPanelSize = _captionPanelSizeCombo.SelectedIndex;
+            }
             if (_captionFontCombo.SelectedItem != null)
                 _settings.CaptionFontFamily = _captionFontCombo.SelectedItem.ToString();
             _settings.ShowTrayNotifications = _trayNotifyCheck.Checked;
@@ -5382,10 +5620,63 @@ namespace AutoClicker.UI
 
         private void OpenAbout()
         {
-            using (var about = new AboutForm(_theme))
+            Action after = null;
+            using (var about = new AboutForm(_theme, AboutUpdateLine()))
             {
                 about.ShowDialog(this);
+                after = about.AfterClose;
             }
+            // The update button's request, now About is gone: a check answers with dialogs of its own, which must
+            // not open over (and re-enable the window under) another modal one.
+            try { after?.Invoke(); }
+            catch (Exception ex) { Logger.Swallow("OpenAbout/after", ex); }
+        }
+
+        /// <summary>About Tempo's update line: the last check's answer, when it was, and what to do next.</summary>
+        private AboutForm.UpdateLine AboutUpdateLine()
+        {
+            var line = new AboutForm.UpdateLine
+            {
+                ButtonText = Localization.T("Check for updates"),
+                Act = () => OnCheckForUpdatesClicked(this, EventArgs.Empty)
+            };
+            if (_updateCheckTask != null)
+            {
+                line.State = Localization.T("Checking for updates…");
+                line.ButtonText = null;
+                line.Act = null;
+                return line;
+            }
+            if (_settings == null || _settings.LastUpdateCheckUtc == null)
+            {
+                // Never answered: either never asked, or every check so far failed (offline, GitHub out of reach) —
+                // "not checked yet" would have been untrue for the second.
+                line.Failed = _settings != null && _settings.LastUpdateCheckFailed;
+                line.State = line.Failed ? Localization.T("The last check couldn't reach GitHub.")
+                                         : Localization.T("Updates haven't been checked yet.");
+                return line;
+            }
+            line.When = Localization.F("Last checked for updates: {0}",
+                _settings.LastUpdateCheckUtc.Value.ToLocalTime().ToString("d MMM yyyy, HH:mm", Localization.DateCulture));
+            if (KnownUpdateVersion(out string latest))
+            {
+                bool skipped = UpdateChecker.IsSameVersion(_settings.SkippedUpdateVersion, latest);
+                line.State = skipped ? Localization.F("Skipping version {0}", latest)
+                                     : Localization.F("Update available: v{0}", latest);
+                line.UpdateKnown = !skipped;
+                line.ButtonText = Localization.T("Show the update");
+                line.Act = () => OpenKnownUpdate("about");
+            }
+            else if (_settings.LastUpdateCheckFailed)
+            {
+                line.State = Localization.T("The last check couldn't reach GitHub.");
+                line.Failed = true;
+            }
+            else
+            {
+                line.State = Localization.T("You're up to date.");
+            }
+            return line;
         }
 
         // ── Escape-as-emergency-stop support ───────────────────────────────────
@@ -5416,6 +5707,23 @@ namespace AutoClicker.UI
             {
                 EmergencyStop();
                 return true;
+            }
+
+            // The startup safety note over its frosted window: Escape closes it wherever the focus is (the header, say),
+            // and the tab keys (Ctrl+1…9, Ctrl+Tab) don't change the page hidden under the frost.
+            if (_safetyNote != null && !_safetyNote.IsDisposed)
+            {
+                if ((keyData & Keys.KeyCode) == Keys.Escape)
+                {
+                    _safetyNote.Dismiss("Esc");
+                    return true;
+                }
+                Keys code = keyData & Keys.KeyCode;
+                if ((keyData & Keys.Control) == Keys.Control
+                    && (code == Keys.Tab || (code >= Keys.D1 && code <= Keys.D9) || (code >= Keys.NumPad1 && code <= Keys.NumPad9)))
+                {
+                    return true;
+                }
             }
 
             // Otherwise, Escape while editing a hotkey field releases it. This is the

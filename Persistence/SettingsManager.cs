@@ -55,15 +55,27 @@ namespace AutoClicker.Persistence
         }
 
         private static string _resolvedDir;
+        private static readonly object _resolveLock = new object();
 
         public static string GetSettingsDirectory()
         {
             // Resolve once and cache so every caller agrees on the same folder.
-            if (_resolvedDir != null)
+            string known = _resolvedDir;
+            if (known != null)
             {
-                return _resolvedDir;
+                return known;
             }
+            // Once, whichever thread asks first: the splash reads the settings for its colours on a thread of its own
+            // while start-up goes on (Program.Main, since 2026-11-14 before the restore point), and two first callers
+            // must not both run the legacy migration below.
+            lock (_resolveLock)
+            {
+                return _resolvedDir ?? ResolveSettingsDirectory();
+            }
+        }
 
+        private static string ResolveSettingsDirectory()
+        {
             string roaming = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "AutoClicker");

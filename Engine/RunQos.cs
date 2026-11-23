@@ -58,7 +58,9 @@ namespace AutoClicker.Engine
                     string qos = ApplyThrottling(highQos: false);
                     _state = "Windows decides (idle) — " + qos;
                 }
-                Logger.Info("[perf] " + _state + ".");
+                // Every run said both lines again, word for word: a third of the log on a day of short runs (2026-11-14,
+                // 64 of 368 lines). Each state is written to the file once a session; Live debug still sees every one.
+                Logger.InfoIfChanged(running ? "perf.run" : "perf.idle", "[perf] " + _state + ".");
             }
         }
 

@@ -35,16 +35,28 @@ namespace AutoClicker.Utils
         /// engine. Call IMMEDIATELY before the load — the whole point is that the file
         /// survives an uncatchable crash.
         /// </summary>
-        public static void MarkLoading(string modelKey)
+        public static void MarkLoading(string modelKey, bool onGpu = false)
         {
             try
             {
                 string path = MarkerPath;
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
-                File.WriteAllText(path, (modelKey ?? "?") + "\n" + DateTime.UtcNow.ToString("o"));
+                File.WriteAllText(path, (modelKey ?? "?") + "\n" + DateTime.UtcNow.ToString("o") + (onGpu ? "\ngpu" : ""));
             }
             catch { /* diagnostics must never break captions */ }
         }
+
+        /// <summary>
+        /// True when the previous run died starting the GPU engine (the marker says "gpu"). The GPU path is what failed
+        /// then — a graphics driver, not the model — so the model is NOT quarantined; captions start on the CPU engine
+        /// instead (MainForm.WantGpuCaptionEngine), and a second such crash turns the automatic GPU choice off.
+        /// </summary>
+        public static bool CrashedOnGpu
+        {
+            get { TakeCrashedModel(); return _crashedOnGpu; }
+        }
+
+        private static bool _crashedOnGpu;
 
         /// <summary>Clears the marker — the model loaded and warmed without crashing.</summary>
         public static void MarkLoaded()
@@ -77,8 +89,15 @@ namespace AutoClicker.Utils
                 {
                     string[] lines = File.ReadAllLines(path);
                     _crashed = lines.Length > 0 ? lines[0].Trim() : null;
+                    _crashedOnGpu = lines.Length > 2 && string.Equals(lines[2].Trim(), "gpu", StringComparison.OrdinalIgnoreCase);
                     File.Delete(path);
-                    if (!string.IsNullOrEmpty(_crashed))
+                    if (_crashedOnGpu)
+                    {
+                        Logger.Warn("[Captions] previous run died starting the GPU speech engine (with the '" + _crashed +
+                                    "' model) — captions use the CPU engine this session; the model is not blamed.");
+                        _crashed = null;
+                    }
+                    else if (!string.IsNullOrEmpty(_crashed))
                     {
                         Logger.Warn("[Captions] previous run died loading the '" + _crashed +
                                     "' speech model — quarantining it for this session.");

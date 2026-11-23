@@ -159,6 +159,8 @@ namespace AutoClicker.UI
             MinimumSize = new Size(D(800), D(480));
             ClientSize = new Size(D(820), D(720));
             ShowInTaskbar = true;
+            // Grouped with the main window on the taskbar, under the same identity (the logo plays on it too).
+            Utils.TaskbarIdentity.Follow(this);
             KeyPreview = true;
             BackColor = _theme.Background;
             ForeColor = _theme.Text;
@@ -366,10 +368,22 @@ namespace AutoClicker.UI
         private const int HTCAPTION = 2;
         private const int HTTRANSPARENT = -1;
 
+        private const int WM_QUERYOPEN = 0x0013;
+
+        /// <summary>
+        /// Raised when Windows is about to restore this window from minimised (WM_QUERYOPEN), before anything on the screen
+        /// changes: the owner cloaks it here so the restore never shows its old picture (MainForm.TabWindows).
+        /// </summary>
+        public event EventHandler RestoreAsked;
+
         protected override void WndProc(ref Message m)
         {
             switch (m.Msg)
             {
+                case WM_QUERYOPEN:
+                    try { RestoreAsked?.Invoke(this, EventArgs.Empty); } catch { }
+                    break;   // and the restore goes ahead as asked (the default answer)
+
                 case WM_ENTERSIZEMOVE:
                     BeginMoveLoop();
                     break;

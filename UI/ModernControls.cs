@@ -812,14 +812,13 @@ namespace AutoClicker.UI
             if (m.Msg == WmPaint)
             {
                 PAINTSTRUCT ps;
-                BeginPaint(m.HWnd, out ps);   // fetch + validate the update region
+                IntPtr hdc = BeginPaint(m.HWnd, out ps);   // fetch + validate the update region
                 try
                 {
-                    using (var g = Graphics.FromHwnd(Handle))
-                    {
-                        PaintClosedCombo(g);
-                    }
+                    // In memory, then one copy (PaintBuffer): straight onto the window it cost ~4.5 ms a box.
+                    if (hdc != IntPtr.Zero) { PaintBuffer.Paint(hdc, Width, Height, PaintClosedCombo); }
                 }
+                catch { /* cosmetic; never let painting throw */ }
                 finally { EndPaint(m.HWnd, ref ps); }
                 m.Result = IntPtr.Zero;
                 return;
@@ -1192,7 +1191,8 @@ namespace AutoClicker.UI
             Color trackCol = th != null ? th.Surface2 : Color.FromArgb(45, 45, 52);
             Color tickCol = Color.FromArgb(80, th != null ? th.Border : Color.Gray);
             Color accent = th != null ? th.Accent : Color.DodgerBlue;
-            Color accent2 = th != null ? th.AccentHover : Color.CornflowerBlue;
+            // The filled part runs into the theme's second accent (round 42).
+            Color accent2 = th == null ? Color.CornflowerBlue : (th.Accent2.IsEmpty ? th.AccentHover : th.Accent2);
             if (!Enabled)
             {
                 accent = accent2 = th != null ? th.TextMuted : Color.Gray;
@@ -1368,7 +1368,9 @@ namespace AutoClicker.UI
             if (hdc == IntPtr.Zero) { return; }
             try
             {
-                using (var g = Graphics.FromHdc(hdc))
+                // Over a copy of what the box shows (PaintBuffer.Overlay): the text stays, and GDI+ never draws on the
+                // window itself — anti-aliasing straight onto it read the window back for every edge (~10 ms a box).
+                PaintBuffer.Overlay(hdc, Width, Height, g =>
                 {
                     // Cover the square frame first, so none of it shows through the anti-aliased
                     // edge of the rounded outline.
@@ -1382,7 +1384,7 @@ namespace AutoClicker.UI
                     {
                         g.DrawPath(pen, path);
                     }
-                }
+                });
             }
             catch { /* the outline is cosmetic; never let painting throw */ }
             finally
@@ -1560,21 +1562,20 @@ namespace AutoClicker.UI
             if (!IsHandleCreated || _theme == null || Width <= 2 || Height <= 2) { return; }
             try
             {
-                using (var g = Graphics.FromHwnd(Handle))
+                // In memory, then one copy onto the window's DC (PaintBuffer): drawn straight onto it, the outline
+                // and fill cost ~3 ms a box.
+                PaintBuffer.PaintWindow(Handle, Width, Height, g =>
                 {
                     // UpDownBase is an Opaque control: it paints its border strips and a 1 px ring round the edit
                     // box and leaves everything else to its two children. With the edit box seated lower and cut
                     // short (SeatEdit), the strip it moved off and the rows under it kept whatever was on screen
                     // there before — orange and blue ClearType scraps above the digits in the real Clicker tab
                     // (build 261018-2335), which a freshly shown test window could not show. The children are
-                    // clipped out of this DC (WS_CLIPCHILDREN), so the fill reaches exactly the box's own pixels.
+                    // clipped out of the window's DC (WS_CLIPCHILDREN), so the copy reaches exactly the box's own
+                    // pixels — the whole client area filled here, its rounded region cutting the corners.
                     using (var fill = new SolidBrush(BackColor))
                     {
-                        g.FillRectangle(fill, ClientRectangle);
-                    }
-                    using (var cover = new Pen(BackColor, 2f))
-                    {
-                        g.DrawRectangle(cover, 0, 0, Width - 1, Height - 1);
+                        g.FillRectangle(fill, 0, 0, Width, Height);
                     }
                     g.SmoothingMode = SmoothingMode.AntiAlias;
                     Color edge = ContainsFocus && Enabled
@@ -1585,15 +1586,15 @@ namespace AutoClicker.UI
                     {
                         g.DrawPath(pen, path);
                     }
-                }
+                });
             }
             catch { /* the outline is cosmetic; never let painting throw */ }
         }
 
-        // The outline follows the focus, which lives in the edit box inside.
-        protected override void OnEnter(EventArgs e) { base.OnEnter(e); Invalidate(); }
-        protected override void OnLeave(EventArgs e) { base.OnLeave(e); Invalidate(); }
-        protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
+        // The outline follows the focus, which lives in the edit box inside — and part of it is drawn by the arrow buttons.
+        protected override void OnEnter(EventArgs e) { base.OnEnter(e); Invalidate(); _buttons?.Invalidate(); }
+        protected override void OnLeave(EventArgs e) { base.OnLeave(e); Invalidate(); _buttons?.Invalidate(); }
+        protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); _buttons?.Invalidate(); }
 
         // Where the digits sit. UpDownBase puts its edit box 2 px inside the edge at the full height, and an edit
         // box writes on its TOP line. While ThemeManager gave that edit box a frame of its own, the frame was the
@@ -1711,15 +1712,20 @@ namespace AutoClicker.UI
             HookButtons();
         }
 
-        private void PaintSpin(IntPtr handle)
+        private void PaintSpin(IntPtr hdc)
         {
-            if (_buttons == null) return;
+            if (_buttons == null || hdc == IntPtr.Zero) return;
+            // In memory, then one copy (PaintBuffer): straight onto the window, the arrows cost ~3.3 ms a box.
+            PaintBuffer.Paint(hdc, _buttons.Width, _buttons.Height, PaintSpinTo);
+        }
+
+        private void PaintSpinTo(Graphics g)
+        {
             Theme th = _theme;
             Color input = th != null ? th.InputBackground : Color.White;
             Color border = th != null ? th.Border : Color.Gray;
             Color glyph = th != null ? th.TextMuted : Color.Gray;
 
-            using (var g = Graphics.FromHwnd(handle))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 int w = _buttons.Width;
@@ -1739,6 +1745,22 @@ namespace AutoClicker.UI
                     g.DrawLines(pen, new[] { new Point(cx - 3, upY + 1), new Point(cx, upY - 2), new Point(cx + 3, upY + 1) });
                     int dnY = h * 3 / 4;
                     g.DrawLines(pen, new[] { new Point(cx - 3, dnY - 2), new Point(cx, dnY + 1), new Point(cx + 3, dnY - 2) });
+                }
+
+                // The box's rounded outline where it runs under these buttons: they are a square child window, so the
+                // outline's top and bottom edges stopped short at them and its right-hand corners were never seen —
+                // every spinner ended in a bare vertical line (seen 2026-11-12 on the Clicker tab's 15). Drawn here in
+                // the box's own coordinates; the box's rounded region clips what lies outside it.
+                if (th != null)
+                {
+                    Color edge = ContainsFocus && Enabled
+                        ? Theme.Readable(th.Accent, th.InputBackground, 3.0)
+                        : Theme.Readable(th.Border, th.InputBackground, 3.0);
+                    using (var path = ModernPaint.Rounded(new Rectangle(-_buttons.Left, -_buttons.Top, Width - 1, Height - 1), 7))
+                    using (var pen = new Pen(edge, 1.4f))
+                    {
+                        g.DrawPath(pen, path);
+                    }
                 }
             }
         }
@@ -1780,8 +1802,9 @@ namespace AutoClicker.UI
                 if (m.Msg == WmPaint)
                 {
                     PAINTSTRUCT ps;
-                    BeginPaint(m.HWnd, out ps);   // fetch + validate the update region
-                    try { _owner.PaintSpin(m.HWnd); }
+                    IntPtr hdc = BeginPaint(m.HWnd, out ps);   // fetch + validate the update region
+                    try { _owner.PaintSpin(hdc); }
+                    catch { /* cosmetic; never let painting throw */ }
                     finally { EndPaint(m.HWnd, ref ps); }
                     m.Result = IntPtr.Zero;
                     return;
@@ -1798,6 +1821,80 @@ namespace AutoClicker.UI
                 _painter = null;
             }
             base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// One memory picture for the controls that paint their own WM_PAINT (the spinners, their arrows, the combo boxes):
+    /// they draw into it and it goes onto the window in a single BitBlt.
+    ///
+    /// They drew straight onto the window's DC with anti-aliasing, and GDI+ reads the window's pixels back to blend each
+    /// edge — a Clicker repaint spent ~115 ms in its 15 spinners and 5 combo boxes (paintcost, 2026-11-11), about a
+    /// third of the time a return from the tray waited before it could show anything. In memory the same drawing is a
+    /// fraction of that, and the copy is a plain block of pixels.
+    /// </summary>
+    internal static class PaintBuffer
+    {
+        [ThreadStatic] private static GdiDib _dib;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hwnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+        /// <summary>
+        /// Runs <paramref name="paint"/> on a memory picture <paramref name="width"/> × <paramref name="height"/>, then copies
+        /// it onto <paramref name="hdc"/> at (0, 0) — clipped as that DC is (the update region, the children, the window's
+        /// region). The picture starts with whatever the last paint left: <paramref name="paint"/> fills it first.
+        /// </summary>
+        public static void Paint(IntPtr hdc, int width, int height, Action<Graphics> paint)
+        {
+            if (hdc == IntPtr.Zero || width <= 0 || height <= 0 || paint == null) { return; }
+            GdiDib dib = _dib;
+            if (dib == null || dib.Width < width || dib.Height < height)
+            {
+                int w = Math.Max(width, dib?.Width ?? 0), h = Math.Max(height, dib?.Height ?? 0);
+                dib?.Dispose();
+                dib = _dib = new GdiDib(w, h);
+            }
+            using (var g = Graphics.FromHdc(dib.Dc))
+            {
+                g.SetClip(new Rectangle(0, 0, width, height));
+                paint(g);
+            }
+            GdiDib.BitBlt(hdc, 0, 0, width, height, dib.Dc, 0, 0, GdiDib.SRCCOPY);
+        }
+
+        /// <summary>
+        /// Draws OVER what <paramref name="hdc"/> already shows: its pixels are copied into the memory picture first,
+        /// <paramref name="paint"/> draws on them there (anti-aliased edges blend with what is really there), and the
+        /// result goes back in one copy. For an outline on top of a control Windows has painted — its text stays.
+        /// </summary>
+        public static void Overlay(IntPtr hdc, int width, int height, Action<Graphics> paint)
+        {
+            if (hdc == IntPtr.Zero || width <= 0 || height <= 0 || paint == null) { return; }
+            GdiDib dib = _dib;
+            if (dib == null || dib.Width < width || dib.Height < height)
+            {
+                int w = Math.Max(width, dib?.Width ?? 0), h = Math.Max(height, dib?.Height ?? 0);
+                dib?.Dispose();
+                dib = _dib = new GdiDib(w, h);
+            }
+            GdiDib.BitBlt(dib.Dc, 0, 0, width, height, hdc, 0, 0, GdiDib.SRCCOPY);
+            using (var g = Graphics.FromHdc(dib.Dc))
+            {
+                g.SetClip(new Rectangle(0, 0, width, height));
+                paint(g);
+            }
+            GdiDib.BitBlt(hdc, 0, 0, width, height, dib.Dc, 0, 0, GdiDib.SRCCOPY);
+        }
+
+        /// <summary>The same onto a window's own DC (GetDC): for drawing over what its default painting left.</summary>
+        public static void PaintWindow(IntPtr hwnd, int width, int height, Action<Graphics> paint)
+        {
+            if (hwnd == IntPtr.Zero) { return; }
+            IntPtr hdc = GetDC(hwnd);
+            if (hdc == IntPtr.Zero) { return; }
+            try { Paint(hdc, width, height, paint); }
+            finally { ReleaseDC(hwnd, hdc); }
         }
     }
 

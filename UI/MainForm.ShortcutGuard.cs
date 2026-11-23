@@ -1,4 +1,6 @@
+using System;
 using System.Windows.Forms;
+using AutoClicker.Models;
 using AutoClicker.Native;
 using AutoClicker.Utils;
 
@@ -145,24 +147,58 @@ namespace AutoClicker.UI
             return clicking || playing || _liveRecording;
         }
 
+        /// <summary>When the last "[Guard] held back …" line was written (Environment.TickCount64), and what it named.</summary>
+        private long _shortcutHeldLoggedTick;
+        private string _shortcutHeldLogged;
+
+        /// <summary>How long the status bar names a shortcut that was just held back.</summary>
+        private const int ShortcutHeldShownMs = 4000;
+
         /// <summary>
         /// Something was held back. Raised on the guard's thread INSIDE the keyboard hook, so this only
         /// queues: the key waits for the callback to return.
         /// </summary>
         private void OnShortcutHeldBack()
         {
-            if (_shortcutGuardNoticeShown)
-            {
-                return;
-            }
-            _shortcutGuardNoticeShown = true;
             UiInvoke(() =>
             {
-                Logger.Info("[Guard] a Windows shortcut was held back during a run — said so once this session.");
+                string what = ShortcutHeldBackText(false);
+                // Which one, in the log too: "Win+D did nothing" had no answer there. Not every press of it.
+                long now = Environment.TickCount64;
+                if (what != null && (what != _shortcutHeldLogged || now - _shortcutHeldLoggedTick > 10000))
+                {
+                    _shortcutHeldLogged = what;
+                    _shortcutHeldLoggedTick = now;
+                    Logger.Info("[Guard] held back " + what + " during a run (" + (_shortcutGuard?.HeldBackCount ?? 0)
+                                + " this session); Windows' screenshot and recording keys are let through.");
+                }
+                // Said where the user is looking: the status bar names it for a few seconds.
+                UpdateStatusHint();
+                if (_shortcutGuardNoticeShown) { return; }
+                _shortcutGuardNoticeShown = true;
                 TempoNotify(6000, "Tempo",
-                    Localization.T("A Windows shortcut was held back: while Tempo clicks, plays a macro or records one, only Tempo's keybinds work. You can turn this off in Settings ▸ While running."),
+                    Localization.T("A Windows shortcut was held back: while Tempo clicks, plays a macro or records one, only Tempo's keybinds work. You can turn this off in Settings ▸ While running.")
+                    + " " + Localization.T("Screenshot keys (Win+Shift+S, Win+Print Screen) still work."),
                     ToolTipIcon.Info);
             });
+        }
+
+        /// <summary>
+        /// The shortcut held back in the last few seconds of the guard being on — "Win + D", "Win" (the key on its own,
+        /// which opens Start), "Ctrl + Esc" — or null. <paramref name="recentOnly"/> false: the last one, however old.
+        /// </summary>
+        private string ShortcutHeldBackText(bool recentOnly = true)
+        {
+            if (_shortcutGuard == null) { return null; }
+            ShortcutGuard.HeldBackKey key = _shortcutGuard.LastHeldBack(out long tick);
+            if (tick == 0) { return null; }
+            if (recentOnly && (!_shortcutGuard.Active || Environment.TickCount64 - tick > ShortcutHeldShownMs)) { return null; }
+            if (key.IsLoneWindowsKey) { return "Win"; }
+            try
+            {
+                return new HotkeyDefinition((Keys)key.VirtualKey, key.Control, key.Alt, key.Shift, key.Win).ToDisplayString();
+            }
+            catch { return null; }
         }
     }
 }

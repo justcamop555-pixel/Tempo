@@ -699,6 +699,7 @@ namespace AutoClicker.UI
             }
             dlg.StartPosition = FormStartPosition.CenterScreen;
             dlg.ShowInTaskbar = true;    // the only sign of Tempo on the taskbar while it waits
+            Utils.TaskbarIdentity.Follow(dlg);   // under Tempo's taskbar identity, as the main window is
             return dlg.ShowDialog();
         }
 
@@ -898,6 +899,7 @@ namespace AutoClicker.UI
             var fallback = new System.Threading.Timer(_ =>
             {
                 Logger.Warn("[shutdown] the close for the helper did not finish in 15 s — ending the process.");
+                Utils.LastRunCheck.MarkExited();   // still Tempo's own exit, not one from outside
                 Environment.Exit(0);
             }, null, 15000, System.Threading.Timeout.Infinite);
             GC.KeepAlive(fallback);
@@ -993,12 +995,13 @@ namespace AutoClicker.UI
                                           onClick ?? ShowFromTrayAndActivate);
                     return;
                 }
-                // The plain balloon, for anyone who switched Tempo's cards off. It carries the same
-                // click: these notices all say "click to …", and a balloon that did nothing when
-                // clicked made that a sentence with nothing behind it.
-                _balloonClickAction = onClick ?? ShowFromTrayAndActivate;
-                _trayIcon?.ShowBalloonTip(8000, title, body,
-                                          kind == ToastKind.Warning ? ToolTipIcon.Warning : ToolTipIcon.Info);
+                // Windows' own notification, for anyone who switched Tempo's cards off (a toast under
+                // Tempo's Start-menu entry, or the tray balloon). It carries the same click: these notices
+                // all say "click to …", and one that did nothing when clicked made that a sentence with
+                // nothing behind it.
+                ShowWindowsNotification(8000, title, body,
+                                        kind == ToastKind.Warning ? ToolTipIcon.Warning : ToolTipIcon.Info,
+                                        onClick ?? ShowFromTrayAndActivate);
                 Logger.Info("[Update] notice shown as a Windows notification: " + title);
             }
             catch (Exception ex) { Logger.Swallow("NotifyUpdate", ex); }
@@ -1030,6 +1033,8 @@ namespace AutoClicker.UI
                 {
                     _checkUpdatesBtn.Enabled = !checking && !_updateInProgress;
                     _checkUpdatesBtn.Text = Localization.T(checking ? "Checking…" : "Check for updates");
+                    // A ring spins before "Checking…" while it runs: greyed out alone, it read as "unavailable".
+                    if (_checkUpdatesBtn is RoundedButton round) { round.Busy = checking; }
                 }
                 UpdateLastCheckedLabel();
                 RefreshTrayUpdateItem();

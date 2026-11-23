@@ -270,6 +270,37 @@ namespace AutoClicker.Utils
             }
         }
 
+        /// <summary>
+        /// The custom logo as a multi-size .ico file's bytes (its first frame, as the still icon everywhere), or null.
+        /// The same bytes the window icon is made from, kept in the same cache — for <see cref="ShellLogo"/>, which
+        /// hands them to Windows as a file for Tempo's shortcuts. Safe off the UI thread: reads the file, draws into
+        /// bitmaps of its own.
+        /// </summary>
+        internal static byte[] CustomLogoIcoBytes(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { return null; }
+                byte[] cached = ReadIconCache(path);
+                if (cached != null) { return cached; }
+
+                byte[] bytes;
+                // Read into memory first: Image.FromFile holds the file open for the life of the Image.
+                using (var ms = new System.IO.MemoryStream(System.IO.File.ReadAllBytes(path)))
+                using (var src = Image.FromStream(ms))
+                {
+                    bytes = BuildIcoBytes(src);
+                }
+                WriteIconCache(path, bytes);
+                return bytes;
+            }
+            catch (Exception ex)
+            {
+                Logger.Swallow("AppIcon.CustomLogoIcoBytes", ex);
+                return null;
+            }
+        }
+
         // ── The custom logo's icon, kept from last time ───────────────────────────────
         //
         // Building it — decode the image, find where its ink is, render and encode every size —
@@ -283,10 +314,18 @@ namespace AutoClicker.Utils
         private static string IconCachePath =>
             System.IO.Path.Combine(Persistence.SettingsManager.GetSettingsDirectory(), "logo-icon.cache");
 
+        /// <summary>
+        /// The version of how <see cref="BuildIcoBytes"/> draws an icon. Bump it when that drawing changes, so the kept icon
+        /// is built again. It used to be the build itself (the module's id), so EVERY update rebuilt the icon on its first
+        /// start — from the user's 1.5 MB photo, 377 ms before the splash could appear (2026-11-14, the start-up steps line);
+        /// longer on a slow laptop, and on exactly the start people watch most closely.
+        /// </summary>
+        private const string IconDrawVersion = "1";
+
         private static byte[] IconCacheKey(string logoPath)
         {
             var fi = new System.IO.FileInfo(logoPath);
-            string key = "TempoIcon|" + typeof(AppIcon).Assembly.ManifestModule.ModuleVersionId.ToString("N") + "|"
+            string key = "TempoIcon|draw " + IconDrawVersion + "|"
                        + fi.Name + "|" + fi.Length + "|" + fi.LastWriteTimeUtc.Ticks + "\n";
             return System.Text.Encoding.UTF8.GetBytes(key);
         }

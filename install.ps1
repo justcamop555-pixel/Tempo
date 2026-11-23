@@ -62,6 +62,60 @@ function Fail {
     exit 1
 }
 
+# Starts Tempo and stays until it is up. The first start after a download is the slow one: Windows unpacks
+# Tempo into its temp folder and the antivirus checks every file, which on a slower PC can take a minute or
+# more with nothing on screen - long enough that people started it again, or decided it had failed.
+# "Up" is any of: a window of its own (the loading splash comes first), "[startup] window built" in its
+# log (a start in the tray has no window), or the process gone (another Tempo was already running and
+# was brought forward instead).
+function Start-Tempo {
+    param([string] $Exe)
+    $log  = Join-Path $env:LOCALAPPDATA 'Tempo\logs\autoclicker.log'
+    $from = 0
+    if (Test-Path $log) { $from = (Get-Item $log).Length }
+    try {
+        $p = Start-Process -FilePath $Exe -PassThru
+    } catch {
+        Say ("Tempo could not be started: " + $_.Exception.Message)
+        return
+    }
+    Write-Host ""
+    Write-Host "  Starting Tempo" -NoNewline
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $told  = $false
+    while ($clock.Elapsed.TotalSeconds -lt 240) {
+        Start-Sleep -Milliseconds 500
+        $up = $false
+        try { $p.Refresh(); $up = $p.HasExited -or ($p.MainWindowHandle -ne [IntPtr]::Zero) } catch { }
+        if (-not $up -and (Test-Path $log)) {
+            try {
+                $fs = [IO.File]::Open($log, 'Open', 'Read', 'ReadWrite, Delete')
+                try {
+                    if ($fs.Length -lt $from) { $from = 0 }
+                    [void]$fs.Seek($from, 'Begin')
+                    $text = (New-Object IO.StreamReader($fs)).ReadToEnd()
+                } finally { $fs.Dispose() }
+                $up = $text -match '\[startup\] window built' -or $text -match 'already running'
+            } catch { }
+        }
+        if ($up) {
+            Write-Host ""
+            Good "Tempo is up."
+            return
+        }
+        Write-Host "." -NoNewline
+        if (-not $told -and $clock.Elapsed.TotalSeconds -ge 8) {
+            $told = $true
+            Write-Host ""
+            Say "The first start is the slow one: Windows unpacks Tempo and your antivirus checks it."
+            Say "On a slower PC that can take a minute or two. There is no need to start it again."
+            Write-Host "  Still starting" -NoNewline
+        }
+    }
+    Write-Host ""
+    Say "Tempo is still starting and will open by itself. There is no need to start it again."
+}
+
 Write-Host ""
 Write-Host "  Tempo" -ForegroundColor Yellow -NoNewline
 Write-Host "  ::  precision auto-clicker for Windows"
@@ -166,7 +220,7 @@ if ($Portable -or (-not $zipAsset)) {
     Step "Done."
     Say ("TempoClicker.exe is in " + $target)
     Say "It is self-contained - double-click it and it runs. Settings live in your AppData folder."
-    if (-not $NoLaunch) { Start-Process $final }
+    if (-not $NoLaunch) { Start-Tempo $final }
     Write-Host ""
     exit 0
 }
@@ -212,5 +266,5 @@ Good ("Tempo " + $tag.TrimStart('v') + " is installed.")
 Say "Start it from the Start Menu, or from:"
 Say ("  " + $installed)
 Say "Uninstall any time from Settings > Apps."
-if (-not $NoLaunch) { Start-Process $installed }
+if (-not $NoLaunch) { Start-Tempo $installed }
 Write-Host ""

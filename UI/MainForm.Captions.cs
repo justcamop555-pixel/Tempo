@@ -24,6 +24,46 @@ namespace AutoClicker.UI
     public partial class MainForm
     {
         private Label _capStatePill;
+
+        /// <summary>
+        /// A ring spinning just after the status while it waits — "◌ Loading the speech model…" (up to ~20 s on the large
+        /// model) and "◌ Waiting for Windows captions…" (2026-11-08, "animation for … loading"). The words keep their ◌; the
+        /// ring is what says the wait is moving. Made on first use, hidden the rest of the time (and then takes no frames).
+        /// </summary>
+        private SpinnerControl _capWaitRing;
+
+        private void ShowCaptionWaitRing(bool waiting, Color colour)
+        {
+            try
+            {
+                if (_capStatePill == null || _capStatePill.IsDisposed || _capStatePill.Parent == null) { return; }
+                if (!waiting)
+                {
+                    if (_capWaitRing != null && _capWaitRing.Visible) { _capWaitRing.Visible = false; }
+                    return;
+                }
+                Control card = _capStatePill.Parent;
+                int size = Math.Max(12, (int)Math.Round(_capStatePill.Font.GetHeight() * 0.62));
+                if (_capWaitRing == null || _capWaitRing.IsDisposed || _capWaitRing.Parent != card)
+                {
+                    _capWaitRing = new SpinnerControl { Size = new Size(size, size), TabStop = false };
+                    LayoutFitter.DeclareOverlay(_capWaitRing, "the captions status's waiting ring, drawn just after its words");
+                    card.Controls.Add(_capWaitRing);
+                }
+                // After the words, on their middle line; the status label sizes itself to its text.
+                Size text = TextRenderer.MeasureText(_capStatePill.Text, _capStatePill.Font);
+                int gap = Math.Max(6, size / 2);
+                _capWaitRing.Size = new Size(size, size);
+                _capWaitRing.Location = new Point(_capStatePill.Left + text.Width + gap - 4,
+                                                  _capStatePill.Top + (Math.Max(_capStatePill.Height, text.Height) - size) / 2);
+                _capWaitRing.RingColor = _theme != null ? Theme.Blend(colour, _theme.Accent, 0.55) : colour;
+                // See-through: the card paints its own rounded surface, which its BackColor need not be.
+                _capWaitRing.BackColor = Color.Transparent;
+                _capWaitRing.BringToFront();
+                if (!_capWaitRing.Visible) { _capWaitRing.Visible = true; }
+            }
+            catch (Exception ex) { Logger.Swallow("ShowCaptionWaitRing", ex); }
+        }
         private Button _capStartStopBtn;
         private Label _capEngineLine;
         private Label _capSourceLine;
@@ -410,6 +450,19 @@ namespace AutoClicker.UI
             // No room for the "why pin it" hint on this row — the engine line above
             // already reports what the language is doing, and Settings carries the hint.
 
+            // What each button does that its caption does not say. None of these had a tip.
+            void Tip(Control c, string text) { if (c != null) { TipStyle.Set(_capTip, c, Localization.T(text)); } }
+            Tip(settingsLink, "Open Settings at the Live Captions card, with every caption option.");
+            Tip(_capFasterModelBtn, "Captions are falling behind the speech. This switches to something that keeps up on this PC: a smaller model, or the graphics card where that is faster.");
+            Tip(_capCopyBtn, "Copy the transcript to the clipboard — only the lines the filter shows, while one is typed.");
+            Tip(srtBtn, "Save the transcript as subtitles (SRT or WebVTT) with each line's timing.");
+            Tip(clearBtn, "Empty the transcript. With \"Save transcripts to disk\" on, it is saved to a file first; otherwise Tempo asks.");
+            Tip(_capOverlayBtn, "Show or hide the caption bar across the bottom of the screen.");
+            Tip(_capHistoryBtn, "A window with the recent caption lines, to scroll back through what was said.");
+            Tip(_capMoveBtn, "Lets you drag the caption bar and the history window where you want them. Press again when they are in place.");
+            Tip(modelsBtn, "Speech models: download one, open their folder, get more from the official site, or use a model file from anywhere.");
+            Tip(_capLangCombo, "The language being spoken. Auto-detect suits most videos; pick the language if captions come out in the wrong one.");
+
             page.Controls.Add(status);
             page.Controls.Add(speakers);
             page.Controls.Add(live);
@@ -490,8 +543,10 @@ namespace AutoClicker.UI
         private string CaptionEngineText(TempoTranscriber tr)
         {
             if (_settings == null) { return "CPU"; }
+            // A Nemotron streaming model runs on the processor whatever the GPU setting (sherpa-onnx's CPU runtime).
+            if (tr != null && tr.IsRunning && tr.IsStreamingEngine) { return "CPU · Nemotron streaming"; }
             string runtime = tr != null && (tr.IsRunning || tr.IsStarting) ? tr.RuntimeDescription : null;
-            bool gpuWanted = _settings.CaptionTryGpu;
+            bool gpuWanted = CaptionGpuPreferred();
             if (gpuWanted && TempoTranscriber.GpuUnavailableReason != null)
             {
                 // Asked for, and declined at load: restarting would not change that.
@@ -572,6 +627,11 @@ namespace AutoClicker.UI
                 else if (fa == null || !fa.Running)
                 {
                     status = Localization.T("faces: not watching");
+                }
+                else if (fa.SkippedBecause != null)
+                {
+                    // The video plays in a tab nobody can see (round 32): voices only, and the card says why.
+                    status = fa.SkippedBecause;
                 }
                 else
                 {
@@ -693,6 +753,7 @@ namespace AutoClicker.UI
                 // suite once its check ran after that refresh.
                 _capStatePill.Text = Localization.T(pill);
                 _capStatePill.ForeColor = pillColor;
+                ShowCaptionWaitRing(pill.StartsWith("◌", StringComparison.Ordinal), pillColor);
 
                 if (_capStartStopBtn != null)
                 {
@@ -764,7 +825,7 @@ namespace AutoClicker.UI
                                 : Localization.T("auto-detect");
                         }
                         sb.Append("   ·   ").Append(Localization.F("Language: {0}", language));
-                        if (TempoTranscriber.GpuWouldHelp && !_settings.CaptionTryGpu)
+                        if (TempoTranscriber.GpuWouldHelp && !TempoTranscriber.RuntimeGpuRequested)
                         {
                             sb.Append("  — ").Append(Localization.T("running behind; the GPU engine would help"));
                         }
@@ -1458,7 +1519,8 @@ namespace AutoClicker.UI
             {
                 bool gpuAvailable = false;
                 try { gpuAvailable = VulkanProbe.HasUsableDevice; } catch { }
-                bool offerGpu = gpuAvailable && _settings != null && !_settings.CaptionTryGpu;
+                // Not running on the GPU now (the box may already be ticked: then the click is the restart that applies it).
+                bool offerGpu = gpuAvailable && _settings != null && !TempoTranscriber.RuntimeGpuRequested;
 
                 _capFasterModelBtn.Visible = cannotKeepUp;
                 _capFasterModelBtn.Text = Localization.T(offerGpu
@@ -1551,8 +1613,16 @@ namespace AutoClicker.UI
             if (rtf >= 1.0)
             {
                 sb.Append("    → '").Append(_captionModelActiveKey ?? "?")
-                  .Append("' cannot hold pace on this PC. A smaller model (small/base) or the GPU engine fixes the drift.")
+                  .Append(t.IsStreamingEngine
+                      ? "' cannot hold pace on this PC's processor (Nemotron never uses the GPU). A Whisper model fixes the drift — on the GPU engine if this PC has one."
+                      : "' cannot hold pace on this PC. A smaller model (small/base) or the GPU engine fixes the drift.")
                   .AppendLine();
+            }
+            if (t.IsStreamingEngine)
+            {
+                // The streaming engine's own line (round 35): what a "decode" above is here, and how its lines go.
+                sb.Append("    streaming: ").Append(t.StreamingDetail)
+                  .Append(" · a decode above is one feed of the audio that arrived").AppendLine();
             }
         }
 
@@ -1571,22 +1641,23 @@ namespace AutoClicker.UI
                 Logger.Info("[Captions] GPU engine enabled from the Captions tab" +
                     (gpu.Length > 0 ? " (" + gpu + ")" : "") + " — takes effect on restart.");
 
-                // Drive the Settings checkbox rather than writing the setting here. Its
-                // CheckedChanged is the owner: it stores the value AND runs the restart
-                // prompt. Doing both meant two messages about the same thing — my own
-                // notification and that prompt — and two places that could drift apart.
-                if (_captionGpuCheck != null)
+                // An explicit choice, even when the box already showed the GPU (chosen by itself on a PC with a graphics
+                // card): then nothing changed in the settings, and the click is the restart that puts it to work. The box
+                // only shows the state (events held), and the one restart prompt follows.
+                _settings.CaptionTryGpu = true;
+                _settings.CaptionCpuOnly = false;
+                _settings.CaptionGpuCrashes = 0;
+                if (_captionGpuCheck != null && !_captionGpuCheck.Checked)
                 {
-                    _captionGpuCheck.Checked = true;      // fires the owning handler
+                    bool was = _suppressSettingsEvents;
+                    _suppressSettingsEvents = true;
+                    try { _captionGpuCheck.Checked = true; }
+                    finally { _suppressSettingsEvents = was; }
                 }
-                else
-                {
-                    _settings.CaptionTryGpu = true;       // no Settings page yet — write directly
-                }
-                // Persist now: the checkbox handler only updates the in-memory setting,
-                // and this choice should survive even if Save Settings is never pressed.
+                // Persist now: this choice should survive even if Save Settings is never pressed.
                 try { Persistence.SettingsManager.Save(_settings); } catch { }
                 RefreshCaptionsTab();
+                PromptGpuRestartIfNeeded();
             }
             catch (Exception ex) { Logger.Warn("[Captions tab] enabling the GPU engine failed: " + ex.Message); }
         }
@@ -1617,8 +1688,13 @@ namespace AutoClicker.UI
                 // The next smaller model that is DOWNLOADED. The next rung of the ladder may not be, and
                 // the engine then loaded whatever was installed instead — often the same slow model.
                 // (Not NextFasterInstalled for a key it doesn't know: it would start from the heaviest.)
+                // The ladder the engine itself uses (PickFasterCaptionModel): the most accurate model that is faster on the
+                // engine running now, as far down as the measured pace needs. One rung of the processor's speed order took
+                // the GPU from Large Turbo Compact towards Medium Compact, which is slower there.
+                // A Nemotron streaming model goes through the same ladder (it stands in as a Whisper model of its weight).
                 string next = Utils.WhisperModelManager.IndexInSpeedOrder(current) >= 0
-                    ? Utils.WhisperModelManager.NextFasterInstalled(current)
+                              || Utils.WhisperModelManager.IsStreamingKey(current)
+                    ? PickFasterCaptionModel(current)
                     : InstalledModelKeyOrNull(NextFasterModelKey(current));
                 if (next == null)
                 {
@@ -1761,7 +1837,14 @@ namespace AutoClicker.UI
             }
             if (state.StartsWith("locked: ", StringComparison.Ordinal))
             {
-                return Localization.F("{0} (detected)", CaptionLanguageName(state.Substring(8)));
+                // "locked: es (as last time)" — a session that started in the last one's language — is the code, then a
+                // note for the log: the code alone is the language (it read "es (as last time) (detected)", untranslated).
+                return Localization.F("{0} (detected)", CaptionLanguageName(LeadingCode(state.Substring(8))));
+            }
+            if (state.StartsWith("hearing: ", StringComparison.Ordinal))
+            {
+                // Nemotron's 40-language model (round 35): the language it heard on the latest line — nothing is locked.
+                return Localization.F("{0} (detected)", CaptionLanguageName(LeadingCode(state.Substring(9))));
             }
             if (state.StartsWith("detecting: ", StringComparison.Ordinal))
             {
@@ -1782,11 +1865,19 @@ namespace AutoClicker.UI
         {
             if (string.IsNullOrEmpty(state)) { return null; }
             if (state == "English model") { return "en"; }
-            foreach (string prefix in new[] { "pinned: ", "locked: " })
+            foreach (string prefix in new[] { "pinned: ", "locked: ", "hearing: " })
             {
-                if (state.StartsWith(prefix, StringComparison.Ordinal)) { return state.Substring(prefix.Length).Trim(); }
+                if (state.StartsWith(prefix, StringComparison.Ordinal)) { return LeadingCode(state.Substring(prefix.Length)); }
             }
             return null;
+        }
+
+        /// <summary>The language code at the start of a state's rest ("es (as last time)" → "es").</summary>
+        private static string LeadingCode(string rest)
+        {
+            string t = (rest ?? "").Trim();
+            int space = t.IndexOf(' ');
+            return space > 0 ? t.Substring(0, space) : t;
         }
 
         /// <summary>
@@ -2063,13 +2154,20 @@ namespace AutoClicker.UI
             {
                 // --- Settings page ---
                 if (_captionOverlayCheck != null) { _captionOverlayCheck.Checked = _settings.CaptionOverlayEnabled; }
-                if (_captionGpuCheck != null) { _captionGpuCheck.Checked = _settings.CaptionTryGpu; }
+                // What the next start uses (a no-op through the box's handler when it already shows it).
+                if (_captionGpuCheck != null) { _captionGpuCheck.Checked = CaptionGpuPreferred(); }
                 if (_captionAutoStartCheck != null) { _captionAutoStartCheck.Checked = _settings.CaptionAutoStart; }
                 if (_captionFaceCheck != null) { _captionFaceCheck.Checked = _settings.CaptionFaceAnalysis; }
                 if (_captionSpeakerCheck != null) { _captionSpeakerCheck.Checked = _settings.CaptionSpeakerTurns; }
                 if (_captionTranscriptCheck != null) { _captionTranscriptCheck.Checked = _settings.CaptionSaveTranscripts; }
                 if (_captionSourceTagCheck != null) { _captionSourceTagCheck.Checked = _settings.CaptionShowSourceTag; }
                 if (_captionBackgroundCheck != null) { _captionBackgroundCheck.Checked = _settings.CaptionShowBackground; }
+                if (_captionPanelSizeCombo != null)
+                {
+                    _captionPanelSizeCombo.SelectedIndex = Math.Max(0, Math.Min(2, _settings.CaptionPanelSize));
+                    _captionPanelSizeCombo.Enabled = _settings.CaptionShowBackground
+                                                     && (_captionOverlayCheck == null || _captionOverlayCheck.Checked);
+                }
                 if (_captionSourceCombo != null)
                 {
                     int si = (int)_settings.CaptionSource;
@@ -2256,7 +2354,8 @@ namespace AutoClicker.UI
             _capCountLabel.Cursor = show ? Cursors.Hand : Cursors.Default;
             if (_theme != null)
             {
-                _capCountLabel.ForeColor = show ? _theme.Accent : _theme.TextMuted;
+                // AccentText, not the accent itself: that is a fill, below 4.5:1 as text in many themes.
+                _capCountLabel.ForeColor = show ? _theme.AccentText : _theme.TextMuted;
             }
         }
 

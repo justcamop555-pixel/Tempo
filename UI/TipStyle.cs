@@ -37,6 +37,16 @@ namespace AutoClicker.UI
         private static Color _back = Color.FromArgb(45, 45, 48);
         private static Color _fore = Color.WhiteSmoke;
         private static Color _border = Color.FromArgb(70, 70, 74);
+        private static Color _accent = Color.FromArgb(139, 92, 246);
+
+        // Round 40 ("improve for tip tool"): room around the words and a thin accent strip at the left, as the cards'
+        // title rows have. Windows sizes a tip to its text with a few pixels to spare; a tip whose text Tempo set is
+        // made this much larger when it pops up (OnPopup), in 100% pixels.
+        private const int PadX = 10, PadY = 7, StripRoom = 6;
+
+        // The size each tooltip component was last given in OnPopup, so OnDraw knows a tip has that room (a tip Tempo did
+        // not size — a tool strip's — keeps Windows' size and is drawn as before, without the strip).
+        private static readonly ConditionalWeakTable<ToolTip, object> Padded = new ConditionalWeakTable<ToolTip, object>();
 
         // The font Windows draws tooltips in, and a line about 28 of its line-heights wide —
         // some 60–70 characters, a comfortable measure, and it scales with the display.
@@ -70,6 +80,7 @@ namespace AutoClicker.UI
             _back = theme.Surface2;
             _fore = theme.Text;
             _border = theme.Border;
+            _accent = theme.Accent;
         }
 
         /// <summary>Draws <paramref name="tip"/> in the theme. Safe to call more than once.</summary>
@@ -79,6 +90,35 @@ namespace AutoClicker.UI
             tip.OwnerDraw = true;
             tip.Draw -= OnDraw;
             tip.Draw += OnDraw;
+            tip.Popup -= OnPopup;
+            tip.Popup += OnPopup;
+        }
+
+        /// <summary>
+        /// A tip whose text Tempo set (through <see cref="Set"/>) pops up with room around its words and for the accent strip.
+        /// Only then: the text is known to be the one Windows measured, so the new size fits it exactly.
+        /// </summary>
+        private static void OnPopup(object sender, PopupEventArgs e)
+        {
+            try
+            {
+                if (!(sender is ToolTip tip)) { return; }
+                Padded.Remove(tip);
+                Control c = e.AssociatedControl;
+                if (c == null || !ByControl.TryGetValue(c, out Parts parts) || !ReferenceEquals(parts.Shown, tip)) { return; }
+                string text = Wrap(Compose(parts, out _));
+                if (string.IsNullOrEmpty(text)) { return; }
+                float scale = c.DeviceDpi / 96f;
+                const TextFormatFlags flags = TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak | TextFormatFlags.NoPadding;
+                Size block = TextRenderer.MeasureText(text, TipFont, new Size(int.MaxValue, int.MaxValue), flags);
+                var size = new Size(block.Width + (int)Math.Round((PadX * 2 + StripRoom) * scale) + 2,
+                                    block.Height + (int)Math.Round(PadY * 2 * scale) + 2);
+                // Never smaller than Windows' own (its font may be larger than the one measured here).
+                size = new Size(Math.Max(size.Width, e.ToolTipSize.Width), Math.Max(size.Height, e.ToolTipSize.Height));
+                e.ToolTipSize = size;
+                Padded.AddOrUpdate(tip, size);
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("TipStyle.OnPopup", ex); }
         }
 
         /// <summary>
@@ -394,14 +434,30 @@ namespace AutoClicker.UI
             {
                 g.DrawRectangle(p, new Rectangle(e.Bounds.X, e.Bounds.Y, e.Bounds.Width - 1, e.Bounds.Height - 1));
             }
+            // The room OnPopup gave this tip, if it did: the accent strip at the left, the words beside it.
+            bool padded = sender is ToolTip tip && Padded.TryGetValue(tip, out object given)
+                          && given is Size s && s.Width == e.Bounds.Width && s.Height == e.Bounds.Height;
+            Rectangle area = e.Bounds;
+            if (padded)
+            {
+                float scale = e.AssociatedControl != null ? e.AssociatedControl.DeviceDpi / 96f : 1f;
+                int strip = Math.Max(2, (int)Math.Round(3 * scale));
+                int inset = (int)Math.Round(5 * scale);
+                using (var a = new SolidBrush(_accent))
+                {
+                    g.FillRectangle(a, e.Bounds.X + inset, e.Bounds.Y + inset, strip, Math.Max(1, e.Bounds.Height - inset * 2));
+                }
+                int left = (int)Math.Round(StripRoom * scale);
+                area = new Rectangle(e.Bounds.X + left, e.Bounds.Y, e.Bounds.Width - left, e.Bounds.Height);
+            }
             // The lines as a block, centred in the tip: each line centred on its own made a
             // paragraph ragged down both sides. GDI text, like everything else in the window.
             const TextFormatFlags flags = TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak | TextFormatFlags.NoPadding;
             string text = e.ToolTipText ?? string.Empty;
-            Size block = TextRenderer.MeasureText(g, text, e.Font, new Size(e.Bounds.Width, int.MaxValue), flags);
-            int w = Math.Min(e.Bounds.Width, block.Width + 2);
-            int h = Math.Min(e.Bounds.Height, block.Height + 2);
-            var r = new Rectangle(e.Bounds.X + (e.Bounds.Width - w) / 2, e.Bounds.Y + (e.Bounds.Height - h) / 2, w, h);
+            Size block = TextRenderer.MeasureText(g, text, e.Font, new Size(area.Width, int.MaxValue), flags);
+            int w = Math.Min(area.Width, block.Width + 2);
+            int h = Math.Min(area.Height, block.Height + 2);
+            var r = new Rectangle(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
             TextRenderer.DrawText(g, text, e.Font, r, _fore, flags | TextFormatFlags.Left | TextFormatFlags.Top);
         }
     }

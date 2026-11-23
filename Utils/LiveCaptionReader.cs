@@ -938,6 +938,42 @@ namespace AutoClicker.Utils
             }
         }
 
+        /// <summary>Whether the Windows Live Captions bar is on screen now (a cheap window lookup, no UI Automation).</summary>
+        public static bool WindowsBarVisible()
+        {
+            try { return FindVisible() != IntPtr.Zero; }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Closes the Windows Live Captions bar (its window, as its X does) and starts it again — the cure for a bar whose
+        /// text Windows' accessibility service has stopped handing out. Blocks up to 2 s while the old one goes: call it off
+        /// the UI thread. False when Live Captions isn't on this version of Windows or couldn't be started.
+        /// </summary>
+        public static bool RestartWindowsCaptions()
+        {
+            try
+            {
+                IntPtr h = FindVisible();
+                if (h != IntPtr.Zero)
+                {
+                    PostMessage(h, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    while (clock.ElapsedMilliseconds < 2000 && FindVisible() != IntPtr.Zero)
+                    {
+                        System.Threading.Thread.Sleep(50);
+                    }
+                    Logger.Info("[Captions] restarting Windows Live Captions: the bar closed in " + clock.ElapsedMilliseconds + " ms.");
+                }
+                return LaunchWindowsCaptions();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[Captions] couldn't restart Windows Live Captions: " + ex.Message);
+                return false;
+            }
+        }
+
         /// <summary>
         /// Starts Windows Live Captions by launching its executable, for when the
         /// keyboard shortcut is being ignored. Returns false if it isn't present on this

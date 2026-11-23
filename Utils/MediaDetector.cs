@@ -99,6 +99,33 @@ namespace AutoClicker.Utils
         /// <summary>Callback deciding whether detection should run at all (setting gate).</summary>
         public Func<bool> Enabled { get; set; } = () => true;
 
+        /// <summary>
+        /// Whether Windows' media controls list a program (lower-case process name: "msedge", "spotify") as PLAYING — set by
+        /// the host from MediaTitleWatcher while captions run; null = no such signal, loudness alone decides (as before).
+        ///
+        /// Round 40 ("hear only that's playing is sometimes not work … prevent wrong source"): the loudest app named the
+        /// source and was the one captions heard alone, so a game, a Discord call or a ping out-sounding the video took
+        /// both — the bar said "♪ Roblox" over a YouTube video and the video's words were left out. An app Windows says is
+        /// playing media now wins over a louder one that is not, takes over in 2 looks rather than 5, and keeps the
+        /// isolation through its quiet stretches while it still plays.
+        /// </summary>
+        public Func<string, bool> MediaPlaying { get; set; }
+
+        // The audible app Windows lists as playing media at the latest look (0 = none) — timer thread only.
+        private uint _mediaNow;
+
+        /// <summary>Whether the process is one Windows lists as playing media (false while there is no such signal).</summary>
+        private bool PidPlaysMedia(uint pid)
+        {
+            Func<string, bool> playing = MediaPlaying;
+            if (pid == 0 || playing == null) { return false; }
+            try { return playing(ProcessNameOf(pid)); }
+            catch { return false; }
+        }
+
+        /// <summary>For the harness: whether a process plays media, in place of Windows' media controls (StepIsolation).</summary>
+        internal Func<uint, bool> PlaysMediaForTest;
+
         /// <summary>True while the foreground app is making sound.</summary>
         public bool IsActive => _active;
 
@@ -164,6 +191,118 @@ namespace AutoClicker.Utils
 
         private volatile int _audibleAppCount;
         private volatile float _sourceDominance = 1f;
+
+        // ── Which app captions hear alone (round 27, 2026-11-15) ─────────────────────────────────────────────────────
+        //
+        // AppAudioCapture lets captions hear ONE app, so other apps' pings, music and games stay out of the words (the
+        // user's "my apps play random [sounds] that interrupt live caption"). Which app is decided here, and more
+        // carefully than the source TAG, because a wrong pick costs words, not just a label:
+        //  • nothing picked → the source app, once it has been the LOUDEST app for IsolateAfterLooks looks running. A
+        //    notification's ping from an app that happened to become the first source is one look, and is never picked.
+        //  • the picked app is audible → kept, unless the (already debounced) source has moved to another app that leads.
+        //  • the picked app is quiet while another app plays, ReleaseAfterQuietLooks looks running → every app again, so
+        //    whatever plays now is heard at once (the source it settles on is picked in its turn).
+        //  • the picked app has closed → every app at once.
+        // "Every app" is always the safe answer: it is exactly what captions heard before.
+
+        /// <summary>The process captions should hear alone, or 0 for every app on the speaker.</summary>
+        public int IsolationPid => _isolationPid;
+
+        /// <summary>Raised (on the detector's timer thread) when <see cref="IsolationPid"/> changes.</summary>
+        public event Action<int> IsolationChanged;
+
+        /// <summary>Why <see cref="IsolationPid"/> last changed, in a few words for the log ("" before the first change).</summary>
+        public string IsolationReason { get; private set; } = "";
+
+        internal const int IsolateAfterLooks = 2;
+        internal const int ReleaseAfterQuietLooks = 3;
+        private volatile int _isolationPid;
+        private long _isoCandidate = -1;   // -1 none; 0 = every app; else a process id
+        private int _isoCandidateLooks;
+        private int _isoQuietLooks;
+        // The apps audible at the latest look (timer thread only), and whether that look could read the session list.
+        private readonly HashSet<uint> _audibleNow = new HashSet<uint>();
+        private bool _lookedNow;
+        private uint _loudestNow;
+
+        /// <summary>
+        /// One look's worth of the isolation rules above. <paramref name="loudest"/> = the loudest audible app this look
+        /// (after the switching margin), <paramref name="source"/> = the debounced source's process, <paramref name="audible"/>
+        /// = every audible app. Internal and static-free of Windows so the harness can drive it look by look.
+        /// </summary>
+        internal void StepIsolation(uint loudest, uint source, HashSet<uint> audible, Func<uint, bool> alive)
+        {
+            uint iso = (uint)_isolationPid;
+            // An app still PLAYING media (Windows' media controls) counts as heard through its quiet stretches — a pause
+            // between sentences, a quiet scene — so a game going on underneath does not take its place (round 40).
+            Func<uint, bool> playsMedia = PlaysMediaForTest ?? PidPlaysMedia;
+            bool isoAudible = iso != 0 && (audible.Contains(iso) || playsMedia(iso));
+            bool sourceLeads = source != 0 && loudest == source && audible.Contains(source);
+
+            long want = iso;
+            int need = IsolateAfterLooks;
+            string why = null;
+            if (iso != 0 && !alive(iso))
+            {
+                want = 0;
+                need = 1;
+                why = "the app it heard closed";
+            }
+            else if (iso == 0)
+            {
+                if (sourceLeads)
+                {
+                    want = source;
+                    why = playsMedia(source) ? "Windows lists it as playing" : "the loudest app for " + IsolateAfterLooks + " looks";
+                }
+            }
+            else if (sourceLeads && source != iso)
+            {
+                want = source;   // the source itself moved on to an app that leads now
+                why = "the sound moved to it" + (playsMedia(source) ? " (Windows lists it as playing)" : "");
+            }
+            else if (isoAudible)
+            {
+                _isoQuietLooks = 0;
+            }
+            else
+            {
+                _isoQuietLooks = audible.Count > 0 ? _isoQuietLooks + 1 : 0;
+                if (_isoQuietLooks >= ReleaseAfterQuietLooks)
+                {
+                    want = 0;
+                    need = 1;
+                    why = "the app it heard went quiet (and is not playing media) while another one played";
+                }
+            }
+
+            if (want == iso)
+            {
+                _isoCandidate = -1;
+                _isoCandidateLooks = 0;
+                return;
+            }
+            if (want == _isoCandidate) { _isoCandidateLooks++; }
+            else { _isoCandidate = want; _isoCandidateLooks = 1; }
+            if (_isoCandidateLooks < need) { return; }
+
+            IsolationReason = why ?? "";
+            _isolationPid = (int)want;
+            _isoCandidate = -1;
+            _isoCandidateLooks = 0;
+            _isoQuietLooks = 0;
+            try { IsolationChanged?.Invoke((int)want); } catch { }
+        }
+
+        private static bool ProcessAlive(uint pid)
+        {
+            try
+            {
+                using (var p = Process.GetProcessById((int)pid)) { return !p.HasExited; }
+            }
+            catch (ArgumentException) { return false; }
+            catch { return true; }   // running, just not ours to inspect
+        }
 
         // ── Smoothed per-app loudness ──────────────────────────────────────────
         // WASAPI reports MasterPeakValue for the instant you ask, and the poll runs
@@ -266,12 +405,19 @@ namespace AutoClicker.Utils
                     // debounce), since a plain window-title flip can't be a known site.
                     bool sameProcess = loudPid != 0 && loudPid == _audioSourcePid && _audioSource.Length > 0;
                     bool movedToNewKnownSite = sameProcess && live != _audioSource && IsKnownSiteName(live);
+                    // The same NAME from another process is the incumbent only when it is the same program (a browser
+                    // restarting its audio process) or the old process has gone quiet. Two browsers both on "YouTube",
+                    // or two of "this website", used to hand the source — and now which app captions hear alone — to
+                    // whichever was louder for one look (round 27).
+                    bool sameNameTakesOver = live == _audioSource &&
+                        (_audioSourcePid == 0 || !_audibleNow.Contains(_audioSourcePid) ||
+                         string.Equals(ProcessNameOf(loudPid), ProcessNameOf(_audioSourcePid), StringComparison.Ordinal));
                     if (sameProcess && !movedToNewKnownSite)
                     {
                         _pendingSource = null;
                         _pendingTicks = 0;
                     }
-                    else if (_audioSource.Length == 0 || live == _audioSource)
+                    else if (_audioSource.Length == 0 || sameNameTakesOver)
                     {
                         // First source, or the incumbent held the lead (same name). Lock
                         // the owning PID so future tab switches stay pinned to it. The
@@ -289,7 +435,8 @@ namespace AutoClicker.Utils
                         // A DIFFERENT app/process is loudest. Only hand over the source once
                         // it has stayed loudest for several ticks in a row — a genuine
                         // switch does, two apps trading peaks back and forth doesn't.
-                        if (live == _pendingSource)
+                        // (Keyed by process as well as name: two processes with one name are two challengers.)
+                        if (live == _pendingSource && loudPid == _pendingPid)
                         {
                             _pendingTicks++;
                         }
@@ -300,7 +447,14 @@ namespace AutoClicker.Utils
                         }
                         _pendingWindow = liveWindow;
                         _pendingPid = loudPid;
-                        if (_pendingTicks >= SourceSwitchTicks)
+                        // Media first (round 40): an app Windows says is playing takes over from one that is not in 2 looks;
+                        // one that is not takes over from an app still playing only after 15 (its quiet scenes and pauses
+                        // between sentences are not the end of it). Otherwise the usual 5.
+                        bool challengerPlays = PidPlaysMedia(loudPid), incumbentPlays = PidPlaysMedia(_audioSourcePid);
+                        int needTicks = challengerPlays && !incumbentPlays ? 2
+                                      : incumbentPlays && !challengerPlays ? SourceSwitchTicks * 3
+                                      : SourceSwitchTicks;
+                        if (_pendingTicks >= needTicks)
                         {
                             _audioSource = live;
                             _audioWindow = _pendingWindow;
@@ -318,6 +472,11 @@ namespace AutoClicker.Utils
                     _audioSourcePid = 0;
                     _pendingSource = null;
                     _pendingTicks = 0;
+                }
+
+                if (_lookedNow)
+                {
+                    StepIsolation(_loudestNow, _audioSourcePid, _audibleNow, ProcessAlive);
                 }
 
                 string reason = enabled ? DetectForegroundMedia() : "";
@@ -585,6 +744,8 @@ namespace AutoClicker.Utils
         {
             window = IntPtr.Zero;
             loudPidOut = 0;
+            _lookedNow = false;
+            _loudestNow = 0;
             try
             {
                 if (_audio == null)
@@ -606,6 +767,8 @@ namespace AutoClicker.Utils
                     int audible = 0;
                     float runnerUpPeak = 0f;
                     var seen = new HashSet<uint>();
+                    // Every audible app's smoothed level, for the media-playing preference below.
+                    var levelsNow = new List<KeyValuePair<uint, float>>();
                     for (int i = 0; i < sessions.Count; i++)
                     {
                         var s = sessions[i];
@@ -650,6 +813,7 @@ namespace AutoClicker.Utils
                         // actually listening to. Averaging over the last few seconds names
                         // what is sustaining the mix instead of what spiked in it.
                         float level = Smoothed(spid, peak);
+                        levelsNow.Add(new KeyValuePair<uint, float>(spid, level));
                         if (level > loudPeak)
                         {
                             if (loudPid != 0) { runnerUpPeak = loudPeak; }
@@ -690,7 +854,29 @@ namespace AutoClicker.Utils
                             loudPeak = inc;
                         }
                     }
+                    // The app Windows says is PLAYING media, when one is audible, ahead of a louder one that is not
+                    // (round 40, see MediaPlaying): the video under a game's soundtrack, not the game.
+                    uint mediaPid = 0;
+                    float mediaLevel = 0f;
+                    if (MediaPlaying != null)
+                    {
+                        foreach (var kv in levelsNow)
+                        {
+                            if (kv.Value > mediaLevel && PidPlaysMedia(kv.Key)) { mediaPid = kv.Key; mediaLevel = kv.Value; }
+                        }
+                    }
+                    _mediaNow = mediaPid;
+                    if (mediaPid != 0 && loudPid != mediaPid)
+                    {
+                        loudPid = mediaPid;
+                        loudPeak = mediaLevel;
+                    }
                     if (loudPid != 0) { _incumbentPid = loudPid; }
+
+                    _audibleNow.Clear();
+                    foreach (uint p in seen) { _audibleNow.Add(p); }
+                    _loudestNow = loudPid;
+                    _lookedNow = true;
                 }
                 if (loudPid == 0)
                 {
@@ -794,7 +980,7 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>True when the process name belongs to a known browser.</summary>
-        private static bool IsBrowserProc(string procName)
+        internal static bool IsBrowserProc(string procName)
         {
             foreach (string b in Browsers)
             {

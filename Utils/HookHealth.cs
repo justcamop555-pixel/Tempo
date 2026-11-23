@@ -105,6 +105,40 @@ namespace AutoClicker.Utils
             catch { /* measuring must never be the thing that breaks a hook */ }
         }
 
+        // ── which hook the UI thread is inside ────────────────────────────────────
+        //
+        // For UiStallWatch. A low-level hook callback runs with every mouse movement or key press of the whole PC waiting on
+        // it, so a window that stops answering INSIDE one is the worst kind of stall — and on 2026-11-11 the second cursor's
+        // mouse hook held Tempo for thirteen minutes while nothing in the log said where (the watcher waited for an answer
+        // that never came). Noted for one thread only, the window's (set by UiStallWatch.Start): hooks on threads of their
+        // own (KeyboardHookThread) would otherwise overwrite it. A volatile string swap per callback: no lock, no allocation.
+
+        private static int _watchedThread;
+        private static string _inside;
+
+        /// <summary>The thread whose hook callbacks <see cref="InsideOnWatchedThread"/> reports: the window's.</summary>
+        internal static void WatchThread(int managedThreadId) => Volatile.Write(ref _watchedThread, managedThreadId);
+
+        /// <summary>The hook callback the watched thread is inside right now ("second-cursor mouse"), or null.</summary>
+        internal static string InsideOnWatchedThread => Volatile.Read(ref _inside);
+
+        /// <summary>A hook callback named <paramref name="hook"/> starts on this thread. Returns what to put back on <see cref="Leave"/>
+        /// (callbacks nest: SendInput from inside one runs another).</summary>
+        public static string Enter(string hook)
+        {
+            if (Environment.CurrentManagedThreadId != Volatile.Read(ref _watchedThread)) { return null; }
+            string was = Volatile.Read(ref _inside);
+            Volatile.Write(ref _inside, hook);
+            return was;
+        }
+
+        /// <summary>The callback <see cref="Enter"/> noted has returned.</summary>
+        public static void Leave(string was)
+        {
+            if (Environment.CurrentManagedThreadId != Volatile.Read(ref _watchedThread)) { return; }
+            Volatile.Write(ref _inside, was);
+        }
+
         /// <summary>One line for Live debug: what the hooks cost against what they are allowed.</summary>
         public static string Describe()
         {

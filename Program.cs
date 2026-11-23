@@ -183,9 +183,52 @@ namespace AutoClicker
             }
         }
 
+        /// <summary>When this process's own code began (Main's first line), for the start-up timing (SplashForm).</summary>
+        internal static readonly DateTime MainEnteredUtc = DateTime.UtcNow;
+
+        /// <summary>
+        /// How long the process had existed when Main began, in ms: Windows and .NET starting it — for a single-file
+        /// copy run for the first time, unpacking it, with an antivirus scanning each file it unpacks. -1 if unknown.
+        /// </summary>
+        internal static double MsBeforeMain()
+        {
+            try
+            {
+                DateTime started = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
+                return Math.Max(0, (MainEnteredUtc - started).TotalMilliseconds);
+            }
+            catch { return -1; }
+        }
+
+        // The start-up steps up to the main window, each with the time since Main began — one log line (LogStartSteps), so
+        // a start that "never popped up" says where its time went.
+        private static readonly System.Diagnostics.Stopwatch _startClock = System.Diagnostics.Stopwatch.StartNew();
+        private static readonly System.Text.StringBuilder _startSteps = new System.Text.StringBuilder();
+        private static long _lastStepMs;
+
+        private static void NoteStartStep(string step)
+        {
+            long now = _startClock.ElapsedMilliseconds;
+            if (_startSteps.Length > 0) { _startSteps.Append(" · "); }
+            _startSteps.Append(step).Append(' ').Append(now - _lastStepMs).Append(" ms");
+            _lastStepMs = now;
+        }
+
+        private static void LogStartSteps()
+        {
+            try
+            {
+                Logger.Info("[startup] before the window: " + _startSteps + " (" + _startClock.ElapsedMilliseconds + " ms since Tempo's code began).");
+            }
+            catch { }
+        }
+
         [STAThread]
         private static void Main()
         {
+            // The clocks for the start-up timing: read here, first, so they start when Main began.
+            _ = MainEnteredUtc;
+            _startClock.Restart();
             // Tempo's native speech-engine libraries (Whisper) now live in the tidy
             // runtimes\<rid>\native subfolder instead of loose next to the exe. Whisper.net
             // already searches that standard layout; this also adds it to the OS DLL search
@@ -420,6 +463,12 @@ namespace AutoClicker
             Logger.Info("[startup] Tempo starting (version " + Utils.AppVersion.Text
                         + ", " + Utils.BuildInfo.Short + ").");
 
+            // Started from inside another program's process group (a terminal, an app that launched it)? Windows then
+            // closes Tempo with that program — on 2026-11-09 an update of the app that had launched it did, after 18 hours
+            // of anti-AFK, and nothing said why. Noted now, before Tempo starts any program of its own (they would join
+            // the group), so Live debug can show it and the next start can tie an ending to it (Utils/LastRunCheck.cs).
+            try { Utils.LastRunCheck.NoteProcessGroup(); } catch { }
+
             // Discord showed Tempo users as playing the Steam game "Tempo": its detection list names
             // that game's program tempo.exe. An install still called Tempo.exe is renamed once, here, to
             // TempoClicker.exe (DeploymentInfo.RenameInstalledExe) — and this process hands over to the
@@ -459,49 +508,16 @@ namespace AutoClicker
                 }
             }
 
-            Utils.SelfCheck.Run();   // does the single-file bundle actually work here?
-
-            // Every build Tempo has ever run left ~263 MB of unpacked natives in TEMP and
-            // nothing removed them. Sweep the stale ones on a background thread — after
-            // SelfCheck, which is what establishes the folder we're running from and must
-            // therefore be kept. Never blocks startup, never throws.
-            Utils.BundleCleanup.SweepInBackground();
-
-            // The user's data, before this build touches any of it: apply a restore that was scheduled
-            // from Settings, then keep a restore point if this is not the build that ran last. Here and
-            // not later — MainForm saves settings within moments of loading them, and only this instance
-            // owns the mutex, so a second launch can never take a point of its own.
-            Persistence.DataSnapshots.OnStartup();
-
-            // Keep the version Windows shows in sync with the exe that is running.
-            // Self-updates replace Tempo.exe without touching the registry, so the number
-            // in Settings > Apps drifts further behind with every release. Off-thread and
-            // best-effort: it is a cosmetic value and must never delay startup.
-            System.Threading.ThreadPool.QueueUserWorkItem(
-                _ => Utils.Uninstaller.RefreshRegisteredVersion());
-
-            // The Uninstall button of a zip install runs the uninstall.cmd that was copied into the
-            // install folder on day one, and an update only ever replaces Tempo.exe — so those users
-            // never received a single fix to it. Bring that file up to the version this build carries.
-            // Same slot and same rules as the line above: off-thread, best-effort, never delays
-            // startup, and it only ever touches a script that is already there.
-            System.Threading.ThreadPool.QueueUserWorkItem(
-                _ => Utils.UninstallScriptRefresh.Run());
-
-            // And what earlier installs left in the install folder that only misleads now (an out-of-date
-            // setup note, an install stopped half-way). Same rules: off-thread, the installed copy only.
-            System.Threading.ThreadPool.QueueUserWorkItem(
-                _ => Utils.InstallFolderTidy.RunAtStartup());
-
-            // Shortcuts, pins and the sign-in entry still aimed at the installed copy's old name (see the
-            // rename above; install.cmd renames by installing the new name) move to this file.
-            Utils.DeploymentInfo.RepointLeftoversOfOldNameInBackground();
+            NoteStartStep("single instance, hand-over and rename checks");
 
             // Prime WinForms and put the splash on screen FIRST, before any other
             // startup work, so there's instant visible feedback. Everything below this
-            // point (monitor enumeration, prerequisite check, the heavy MainForm
-            // construction) then happens *behind* a window that's already up — which is
-            // what closes the "sometimes it takes a moment to open" gap.
+            // point (the bundle check, the restore point, the prerequisite check, the heavy
+            // MainForm construction) then happens *behind* a window that's already up — which
+            // is what closes the "sometimes it takes a moment to open" gap. Here, right after
+            // the checks that can still send this launch away (another copy, a hand-over to
+            // the renamed file): the bundle check and a new build's restore point used to run
+            // first, and on 2026-11-14 the splash came 672 ms after Tempo's own code began.
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -528,6 +544,62 @@ namespace AutoClicker
                 splashThread.Start();
             }
             catch { /* if the splash can't start, the app still launches normally */ }
+            NoteStartStep("splash started");
+
+            // What the last run left in its heartbeat (read before this run writes its own), then this run's: a note once a
+            // minute that Tempo is running, "exited" when it closes down — so the next start can date and explain an end
+            // that came from outside (Utils/LastRunCheck.cs). Here, past the hand-over above, which leaves for another copy.
+            Utils.LastRunCheck.StartHeartbeat();
+            NoteStartStep("heartbeat");
+
+            Utils.SelfCheck.Run();   // does the single-file bundle actually work here?
+            NoteStartStep("bundle check");
+
+            // Every build Tempo has ever run left ~263 MB of unpacked natives in TEMP and
+            // nothing removed them. Sweep the stale ones on a background thread — after
+            // SelfCheck, which is what establishes the folder we're running from and must
+            // therefore be kept. Never blocks startup, never throws.
+            Utils.BundleCleanup.SweepInBackground();
+
+            // The user's data, before this build touches any of it: apply a restore that was scheduled
+            // from Settings, then keep a restore point if this is not the build that ran last. Here and
+            // not later — MainForm saves settings within moments of loading them, and only this instance
+            // owns the mutex, so a second launch can never take a point of its own.
+            Persistence.DataSnapshots.OnStartup();
+            NoteStartStep("restore point check");
+
+            // Keep the version Windows shows in sync with the exe that is running.
+            // Self-updates replace Tempo.exe without touching the registry, so the number
+            // in Settings > Apps drifts further behind with every release. Off-thread and
+            // best-effort: it is a cosmetic value and must never delay startup.
+            System.Threading.ThreadPool.QueueUserWorkItem(
+                _ => Utils.Uninstaller.RefreshRegisteredVersion());
+
+            // The Uninstall button of a zip install runs the uninstall.cmd that was copied into the
+            // install folder on day one, and an update only ever replaces Tempo.exe — so those users
+            // never received a single fix to it. Bring that file up to the version this build carries.
+            // Same slot and same rules as the line above: off-thread, best-effort, never delays
+            // startup, and it only ever touches a script that is already there.
+            System.Threading.ThreadPool.QueueUserWorkItem(
+                _ => Utils.UninstallScriptRefresh.Run());
+
+            // And what earlier installs left in the install folder that only misleads now (an out-of-date
+            // setup note, an install stopped half-way). Same rules: off-thread, the installed copy only.
+            System.Threading.ThreadPool.QueueUserWorkItem(
+                _ => Utils.InstallFolderTidy.RunAtStartup());
+
+            // Shortcuts, pins and the sign-in entry still aimed at the installed copy's old name (see the
+            // rename above; install.cmd renames by installing the new name) move to this file.
+            Utils.DeploymentInfo.RepointLeftoversOfOldNameInBackground();
+
+            // Whether a taskbar pin holds Tempo, looked at now so the window has the answer when it is made: without
+            // one, Tempo's windows carry an ID of their own and the taskbar button plays an animated logo (round 39b).
+            Utils.TaskbarIdentity.BeginCheck();
+            // And every window this thread makes carries the same identity as the main one — About, Live debug, the
+            // Recycle bin and every other dialog WinForms puts on the taskbar — or Windows shows a second Tempo (round 42).
+            Utils.TaskbarIdentity.WatchThisThread();
+            NoteStartStep("background jobs queued");
+            LogStartSteps();
 
             // Environment details are for the log only — nothing downstream waits on
             // them — so gather them off the startup path instead of stalling the open.
@@ -545,6 +617,7 @@ namespace AutoClicker
                 SplashForm.RequestClose(); // don't leave the splash floating over the advice dialog
                 PrerequisiteChecker.ReportAndAdvise(prereq);
                 Logger.Info("[shutdown] exiting: prerequisites not satisfied.");
+                Utils.LastRunCheck.MarkExited();
                 ReleaseMutex();
                 return;
             }
@@ -569,8 +642,13 @@ namespace AutoClicker
             {
                 try { AutoClicker.Engine.RunQos.SetRunning(false); } catch { }
                 Logger.Info("[shutdown] Tempo exiting.");
+                Utils.LastRunCheck.MarkExited();
                 ReleaseMutex();
             }
+
+            // The window's exit animation plays on a thread of its own (UI/WindowMotion.cs); a quick clean-up would end
+            // the process under it half-way. At most the rest of its 200 ms — usually it is long over.
+            AutoClicker.UI.WindowMotion.WaitForExitAnimation(400);
 
             // A helper is waiting for this PROCESS to end before it touches Tempo.exe (the updater's
             // swap, the unpacked-copy repair). The normal shutdown above has already saved and
@@ -669,6 +747,7 @@ namespace AutoClicker
                 _closeFaultFallback = new System.Threading.Timer(_ =>
                 {
                     Logger.Warn("[shutdown] the close had not finished 10 s after a fault — ending the process.");
+                    Utils.LastRunCheck.MarkExited();   // still Tempo's own exit, not one from outside
                     Environment.Exit(0);
                 }, null, 10000, Timeout.Infinite);
             }

@@ -23,10 +23,24 @@ namespace AutoClicker.Utils
         /// <summary>
         /// True for the ".en" models, which only understand English. Multilingual
         /// models (no ".en" in the file name) auto-detect the spoken language, so
-        /// they can caption anything.
+        /// they can caption anything. A streaming model says so itself.
         /// </summary>
-        public bool EnglishOnly => FileName != null &&
-            FileName.IndexOf(".en.", StringComparison.OrdinalIgnoreCase) >= 0;
+        public bool EnglishOnly => IsStreaming
+            ? _englishOnly
+            : FileName != null && FileName.IndexOf(".en.", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        /// <summary>
+        /// True for a Nemotron streaming model (round 35): <see cref="FileName"/> is then a FOLDER of ONNX files, run by
+        /// sherpa-onnx (NemotronStreaming) on the processor, and the download is a .tar.bz2 archive that is checked against
+        /// <see cref="ArchiveSha256"/> before it is unpacked.
+        /// </summary>
+        public bool IsStreaming { get; }
+
+        /// <summary>A streaming model's archive: its SHA-256 (lower-case hex) and size in bytes, as published.</summary>
+        public string ArchiveSha256 { get; }
+        public long DownloadBytes { get; }
+
+        private readonly bool _englishOnly;
 
         public WhisperModelInfo(string key, string fileName, string label, string note, string downloadUrl)
         {
@@ -35,6 +49,17 @@ namespace AutoClicker.Utils
             Label = label;
             Note = note;
             DownloadUrl = downloadUrl;
+        }
+
+        /// <summary>A Nemotron streaming model: <paramref name="dirName"/> is the folder its archive unpacks to.</summary>
+        public WhisperModelInfo(string key, string dirName, string label, string note, string archiveUrl,
+                                string archiveSha256, long downloadBytes, bool englishOnly)
+            : this(key, dirName, label, note, archiveUrl)
+        {
+            IsStreaming = true;
+            ArchiveSha256 = archiveSha256;
+            DownloadBytes = downloadBytes;
+            _englishOnly = englishOnly;
         }
     }
 
@@ -115,7 +140,56 @@ namespace AutoClicker.Utils
             new WhisperModelInfo("large-v3", "ggml-large-v3.bin", "Large v3 (most accurate, GPU recommended)",
                 "2.9 GB \u00b7 hears the most, decodes the slowest. Realistic only on the GPU engine. 90+ languages.",
                 Repo + "ggml-large-v3.bin"),
+            // Round 35 (2026-11-17, the user: "add Nemotron streaming \u2026 because it is strongest overall for local model"):
+            // NVIDIA's streaming models in sherpa-onnx's int8 exports \u2014 folders, run by NemotronStreaming on the processor,
+            // whatever the GPU setting. Their words come out ~0.6 s after they are said and never change (Whisper: 1.7\u20133 s,
+            // rewritten at the seams). Sizes and SHA-256 as published on the sherpa-onnx release (asr-models), checked
+            // against the archives downloaded 2026-11-17. Outside the speed and accuracy ladders: those are Whisper's.
+            new WhisperModelInfo("nemotron-en", "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25",
+                "Nemotron Streaming (live, English)",
+                "442 MB download \u00b7 NVIDIA's live captions: each word about half a second after it's said, punctuated. On the processor. English only.",
+                SherpaReleases + "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2",
+                "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358", 463945051, englishOnly: true),
+            new WhisperModelInfo("nemotron-ml", "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11",
+                "Nemotron 3.5 Streaming (live, 40 languages)",
+                "453 MB download \u00b7 the same live captions in 40 languages, detected line by line. On the processor.",
+                SherpaReleases + "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11.tar.bz2",
+                "c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a", 475271763, englishOnly: false),
         };
+
+        // The sherpa-onnx project's model releases on GitHub (k2-fsa/sherpa-onnx, tag asr-models).
+        private const string SherpaReleases = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/";
+
+        /// <summary>True when <paramref name="key"/> names a Nemotron streaming model.</summary>
+        public static bool IsStreamingKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) { return false; }
+            foreach (var m in Available)
+            {
+                if (m.IsStreaming && string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase)) { return true; }
+            }
+            return false;
+        }
+
+        /// <summary>True when <paramref name="path"/> is where a streaming model lives (a folder).</summary>
+        public static bool IsStreamingPath(string path)
+        {
+            try { return !string.IsNullOrEmpty(path) && Directory.Exists(path); }
+            catch { return false; }
+        }
+
+        /// <summary>Bytes an installed model takes on disk (a streaming model: its folder), or 0.</summary>
+        public static long InstalledBytes(WhisperModelInfo model)
+        {
+            try
+            {
+                string p = PathFor(model);
+                if (model != null && model.IsStreaming) { return NemotronStreaming.BytesOnDisk(p); }
+                var fi = new FileInfo(p);
+                return fi.Exists ? fi.Length : 0;
+            }
+            catch { return 0; }
+        }
 
         /// <summary>
         /// Every model key from slowest/most accurate to fastest — the order the
@@ -144,12 +218,39 @@ namespace AutoClicker.Utils
             return -1;
         }
 
+        /// <summary>
+        /// Every model key from the most accurate to the least — the order the too-slow ladder CHOOSES in (FastEnoughInstalled)
+        /// and climbs back in (MainForm.OnTempoEngineHeadroom); <see cref="SpeedOrder"/> is how fast they run on a processor.
+        /// The two disagree where it matters: Medium decodes slower than Large Turbo everywhere and hears less (Turbo is the
+        /// distilled Large v3, about Large v2's accuracy), yet sat above it in the speed order — so on the GPU the ladder took
+        /// Large v3 to Medium (English-only, at that) where Large Turbo keeps up six times over (2026-11-15). The English-only
+        /// build of a size sits just above its multilingual twin: it hears English a little better, and is skipped anyway
+        /// wherever English-only models are not allowed.
+        /// </summary>
+        public static readonly IReadOnlyList<string> AccuracyOrder = new List<string>
+        {
+            "large-v3", "large-v3-q5", "large", "large-q5", "medium", "medium-ml", "medium-q5",
+            "small", "small-ml", "small-q5", "base", "base-ml", "tiny", "tiny-ml",
+        };
+
+        /// <summary>Position in <see cref="AccuracyOrder"/> (0 = the most accurate), or -1 for an unknown key.</summary>
+        public static int IndexInAccuracyOrder(string key)
+        {
+            for (int i = 0; i < AccuracyOrder.Count; i++)
+            {
+                if (string.Equals(AccuracyOrder[i], key, StringComparison.OrdinalIgnoreCase)) { return i; }
+            }
+            return -1;
+        }
+
+        /// <summary>The engine's speed table: <see cref="RelativeSpeedGpu"/> on the GPU, <see cref="RelativeSpeed"/> on the processor.</summary>
+        public static double SpeedOn(string key, bool gpu) => gpu ? RelativeSpeedGpu(key) : RelativeSpeed(key);
+
         /// <summary>True when this model key is an English-only (".en") build.</summary>
         public static bool IsEnglishOnly(string key)
         {
             var m = FindByKey(key);
-            return m != null && m.FileName != null &&
-                   m.FileName.IndexOf(".en.", StringComparison.OrdinalIgnoreCase) >= 0;
+            return m != null && m.EnglishOnly;
         }
 
         /// <summary>
@@ -161,7 +262,126 @@ namespace AutoClicker.Utils
         /// language being listened to — before the multilingual builds existed that was
         /// unavoidable below Large, and the ladder simply did it.
         /// </summary>
-        public static string NextFasterInstalled(string currentKey)
+        /// <summary>
+        /// Roughly how many times faster than Large v3 a model decodes (the same order as <see cref="SpeedOrder"/>): a
+        /// guide for how far down the ladder to jump, not a promise. 0 for an unknown key.
+        /// </summary>
+        public static double RelativeSpeed(string key)
+        {
+            switch ((key ?? "").ToLowerInvariant())
+            {
+                case "large-v3": return 1.0;
+                case "medium-ml": case "medium": return 1.3;
+                case "large-v3-q5": return 1.5;
+                case "large": return 2.0;
+                case "large-q5": return 2.5;
+                case "medium-q5": return 2.8;
+                case "small-ml": case "small": return 6.0;
+                case "small-q5": return 7.0;
+                case "base-ml": case "base": return 14.0;
+                case "tiny-ml": case "tiny": return 28.0;
+                default: return 0;
+            }
+        }
+
+        /// <summary>
+        /// The model to move to when <paramref name="currentKey"/> decodes <paramref name="realTimeFactor"/> times slower
+        /// than the audio: the most accurate installed model expected to keep pace with a margin, or — when none is —
+        /// the fastest installed one. Stepping one rung at a time took minutes on a slow PC (2026-11-14: large-v3 → large
+        /// → large-q5, each a model load plus a language detection, all of them still far too slow), and dropped the
+        /// speech all that time. Unknown pace (≤ 0): the most accurate faster model. English-only models only when
+        /// <paramref name="allowEnglishOnly"/> (English pinned) or the current model is English-only itself.
+        /// </summary>
+        public static string FastEnoughInstalled(string currentKey, double realTimeFactor, bool allowEnglishOnly)
+            => FastEnoughInstalled(currentKey, realTimeFactor, allowEnglishOnly, gpu: false);
+
+        /// <summary>
+        /// The same on the GPU engine (<paramref name="gpu"/>), where the speeds differ: the CPU spends most of a chunk in the
+        /// ENCODER, which every Large shares, while the GPU runs the encoder fast and spends it in the DECODER — 32 layers in
+        /// Large v3, 4 in Large Turbo. Measured on the user's RTX 5060 (2026-11-15): Large v3 2.3× slower than the speech,
+        /// Large Turbo Compact 0.33–0.42× (round 21). The CPU table sent that Large v3 straight to Base, the least accurate
+        /// model there is, where Large Turbo would have kept up with nearly the same words.
+        /// </summary>
+        public static string FastEnoughInstalled(string currentKey, double realTimeFactor, bool allowEnglishOnly, bool gpu)
+            => FastEnoughInstalled(currentKey, realTimeFactor, allowEnglishOnly, gpu, englishLastResort: false);
+
+        /// <summary>
+        /// Round 25 (2026-11-15): chosen by ACCURACY among the installed models that are faster here (<see cref="AccuracyOrder"/>),
+        /// the first expected to keep pace with a margin; unknown pace, the most accurate faster one. English-only models only
+        /// when <paramref name="allowEnglishOnly"/> (English pinned) or the current model is English-only itself — and with
+        /// <paramref name="englishLastResort"/> (English detected, not pinned) only when no model for every language keeps
+        /// pace: auto-detected English locked the user's session onto Medium (English-only), and the next video in another
+        /// language could only have come out as English.
+        /// </summary>
+        public static string FastEnoughInstalled(string currentKey, double realTimeFactor, bool allowEnglishOnly, bool gpu,
+                                                 bool englishLastResort)
+        {
+            double from = SpeedOn(currentKey, gpu);
+            if (from <= 0)
+            {
+                return NextFasterInstalled(currentKey, allowEnglishOnly);   // a key with no speed: one rung, as before
+            }
+            bool currentEnglishOnly = currentKey != null && IsEnglishOnly(currentKey);
+            bool paceKnown = realTimeFactor > 0;
+            double need = Math.Max(1.0, realTimeFactor) * 1.25;   // down to ~0.8 of real time
+            string pick = null, fastest = null, pickEn = null, fastestEn = null;
+            double fastestSpeed = 0, fastestEnSpeed = 0;
+            foreach (string key in AccuracyOrder)
+            {
+                var m = FindByKey(key);
+                if (m == null || m.Key != key || !IsInstalled(m)) { continue; }
+                // Only something actually faster on this engine (on the GPU the speed order is not the processor's).
+                double s = SpeedOn(key, gpu);
+                if (s <= from) { continue; }
+                bool keepsPace = !paceKnown || s / from >= need;
+                if (!IsEnglishOnly(key) || allowEnglishOnly || currentEnglishOnly)
+                {
+                    if (pick == null && keepsPace) { pick = key; }
+                    if (s > fastestSpeed) { fastestSpeed = s; fastest = key; }
+                }
+                else if (englishLastResort)
+                {
+                    if (pickEn == null && keepsPace) { pickEn = key; }
+                    if (s > fastestEnSpeed) { fastestEnSpeed = s; fastestEn = key; }
+                }
+            }
+            if (pick != null) { return pick; }
+            // Nothing for every language keeps pace: English that keeps up beats captions that cannot (the English is what
+            // is being said); failing that, whatever is fastest.
+            if (pickEn != null) { return pickEn; }
+            return fastestEnSpeed > fastestSpeed ? fastestEn : fastest;
+        }
+
+        /// <summary>
+        /// Roughly how many times faster than Large v3 a model decodes on the GPU engine (see above). Measured on the user's
+        /// RTX 5060 (scratchpad/langcheck, 3 s of speech, greedy, 2026-11-15): Large v3 2.25–2.79 s, Medium (English)
+        /// 0.28–0.32 s, Large Turbo 0.23–0.24 s, Large Turbo Compact 0.22 s, Base 0.14–0.15 s. Large v3 is far slower than
+        /// its decoder alone explains (Medium's 24 layers to its 32 are not 8×) — it is the one model whose weights crowd
+        /// the card — so the table now says what was measured, not what the layer counts suggest (Medium 1.6 and Turbo 6
+        /// before; the climb back up took Turbo at 0.15× for Large v3 at 0.9×, where it runs at 0.8–1.1×).
+        /// </summary>
+        public static double RelativeSpeedGpu(string key)
+        {
+            switch ((key ?? "").ToLowerInvariant())
+            {
+                case "large-v3": return 1.0;
+                case "large-v3-q5": return 1.3;
+                case "medium-ml": case "medium": return 8.0;
+                case "medium-q5": return 8.5;
+                case "large": return 10.0;
+                case "large-q5": return 11.0;
+                case "small-ml": case "small": return 14.0;
+                case "small-q5": return 15.0;
+                case "base-ml": case "base": return 18.0;
+                case "tiny-ml": case "tiny": return 30.0;
+                default: return 0;
+            }
+        }
+
+        public static string NextFasterInstalled(string currentKey) => NextFasterInstalled(currentKey, false);
+
+        /// <summary>The next faster installed model; English-only ones too when <paramref name="allowEnglishOnly"/>.</summary>
+        public static string NextFasterInstalled(string currentKey, bool allowEnglishOnly)
         {
             int cur = -1;
             for (int i = 0; i < SpeedOrder.Count; i++)
@@ -172,7 +392,7 @@ namespace AutoClicker.Utils
                     break;
                 }
             }
-            bool keepMultilingual = currentKey != null && !IsEnglishOnly(currentKey);
+            bool keepMultilingual = currentKey != null && !IsEnglishOnly(currentKey) && !allowEnglishOnly;
             for (int i = cur + 1; i < SpeedOrder.Count; i++)
             {
                 string key = SpeedOrder[i];
@@ -190,6 +410,14 @@ namespace AutoClicker.Utils
         /// </summary>
         public static bool Download(WhisperModelInfo model, Action<long, long> onProgress,
             Func<bool> isCancelled, out string error)
+            => Download(model, onProgress, isCancelled, out error, null);
+
+        /// <summary>
+        /// The same, telling <paramref name="onPhase"/> (English, to translate) when a streaming model's archive moves on
+        /// from downloading to being checked and unpacked.
+        /// </summary>
+        public static bool Download(WhisperModelInfo model, Action<long, long> onProgress,
+            Func<bool> isCancelled, out string error, Action<string> onPhase)
         {
             error = null;
             if (model == null || string.IsNullOrWhiteSpace(model.DownloadUrl))
@@ -197,11 +425,225 @@ namespace AutoClicker.Utils
                 error = "No download link for this model.";
                 return false;
             }
+            if (model.IsStreaming)
+            {
+                return DownloadStreaming(model, onProgress, isCancelled, onPhase, out error);
+            }
 
             string finalPath = PathFor(model);
             string tempPath = finalPath + ".part";
 
             try
+            {
+                if (!Fetch(model.DownloadUrl, tempPath, onProgress, isCancelled, out error)) { return false; }
+
+                // A real model is tens of MB; reject an obvious error page.
+                var info = new FileInfo(tempPath);
+                if (!info.Exists || info.Length < 1024 * 1024)
+                {
+                    error = "The downloaded model looks incomplete.";
+                    TryDelete(tempPath);
+                    return false;
+                }
+
+                // Atomic-ish swap into place.
+                try { if (File.Exists(finalPath)) File.Delete(finalPath); } catch { }
+                File.Move(tempPath, finalPath);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // A network failure leaves the partial file in place so the next attempt
+                // resumes rather than restarting. Only a file that turned out to be
+                // GARBAGE (above) is deleted.
+                error = "Couldn't download the model: " + ex.Message +
+                        " — press Download again to carry on from where it stopped.";
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// A Nemotron streaming model (round 35): its .tar.bz2 archive fetched (resumable, like a Whisper file), checked
+        /// against the SHA-256 published with it, unpacked by Windows' own tar into a scratch folder of the models folder and
+        /// moved into place in one step — a folder that is there is a whole model. The archive goes once it is unpacked; a
+        /// cancel while unpacking keeps it, so Download picks up from the check instead of fetching 450 MB again.
+        /// </summary>
+        private static bool DownloadStreaming(WhisperModelInfo model, Action<long, long> onProgress, Func<bool> isCancelled,
+                                              Action<string> onPhase, out string error)
+        {
+            error = null;
+            string models = GetModelsDirectory();
+            string archiveName = Path.GetFileName(new Uri(model.DownloadUrl).AbsolutePath);
+            string tempPath = Path.Combine(models, archiveName + ".part");
+            string unpackDir = Path.Combine(models, ".unpack-" + model.Key);
+            string finalDir = PathFor(model);
+            try
+            {
+                // An unpack Tempo was closed in the middle of (any model's) leaves a scratch folder of up to 700 MB.
+                foreach (string stale in Directory.GetDirectories(models, ".unpack-*")) { TryDeleteDir(stale); }
+                var part = new FileInfo(tempPath);
+                // Longer than the archive is never a good start (a resume would ask for bytes past its end).
+                if (part.Exists && model.DownloadBytes > 0 && part.Length > model.DownloadBytes) { TryDelete(tempPath); part.Refresh(); }
+                bool whole = part.Exists && part.Length == model.DownloadBytes;
+                if (whole) { onProgress?.Invoke(part.Length, part.Length); }
+                else if (!Fetch(model.DownloadUrl, tempPath, onProgress, isCancelled, out error)) { return false; }
+
+                onPhase?.Invoke("Checking the download…");
+                string sha = Sha256Of(tempPath, isCancelled);
+                if (sha == null)
+                {
+                    error = "The download was cancelled.";
+                    return false;
+                }
+                if (!string.Equals(sha, model.ArchiveSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    TryDelete(tempPath);
+                    Logger.Warn("[Model] " + archiveName + ": SHA-256 " + sha + " where " + model.ArchiveSha256 + " was published — deleted.");
+                    error = "The downloaded model isn't the one that was published (its checksum differs), so it was deleted. Press Download to try again.";
+                    return false;
+                }
+
+                // Room to unpack: the folder is about half as big again as the archive (442 MB → 662 MB).
+                try
+                {
+                    long free = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(models))).AvailableFreeSpace;
+                    long need = model.DownloadBytes * 3 / 2 + 64L * 1024 * 1024;
+                    if (free < need)
+                    {
+                        error = "There isn't room to unpack the model: it needs about " + (need / 1048576) + " MB free on the drive with "
+                                + "Tempo's models folder, and " + (free / 1048576) + " MB are. The download is kept — free some space and "
+                                + "press Download again.";
+                        return false;
+                    }
+                }
+                catch { /* a drive that can't say: try anyway */ }
+
+                onPhase?.Invoke("Unpacking the model — about a minute…");
+                if (!Unpack(tempPath, unpackDir, isCancelled, out error))
+                {
+                    TryDeleteDir(unpackDir);
+                    return false;
+                }
+                string inner = Path.Combine(unpackDir, model.FileName);
+                if (!NemotronStreaming.IsModelDir(inner))
+                {
+                    TryDeleteDir(unpackDir);
+                    error = "The downloaded archive didn't hold the model's files.";
+                    return false;
+                }
+                // The model's own sample recordings: not needed.
+                TryDeleteDir(Path.Combine(inner, "test_wavs"));
+                if (Directory.Exists(finalDir)) { TryDeleteDir(finalDir); }
+                Directory.Move(inner, finalDir);
+                TryDeleteDir(unpackDir);
+                TryDelete(tempPath);
+                Logger.Info("[Model] " + model.Key + " unpacked into the models folder (" + (NemotronStreaming.BytesOnDisk(finalDir) / 1048576) + " MB).");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                TryDeleteDir(unpackDir);
+                error = "Couldn't download the model: " + ex.Message +
+                        " — press Download again to carry on from where it stopped.";
+                return false;
+            }
+        }
+
+        /// <summary>The file's SHA-256 (lower-case hex), or null when cancelled part-way.</summary>
+        private static string Sha256Of(string path, Func<bool> isCancelled)
+        {
+            using (var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256))
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, FileOptions.SequentialScan))
+            {
+                var buf = new byte[1 << 20];
+                int n;
+                while ((n = fs.Read(buf, 0, buf.Length)) > 0)
+                {
+                    if (isCancelled != null && isCancelled()) { return null; }
+                    hash.AppendData(buf, 0, n);
+                }
+                return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+            }
+        }
+
+        /// <summary>
+        /// Unpacks a .tar.bz2 into <paramref name="intoDir"/> with Windows' own tar (bsdtar, in System32 since Windows 10
+        /// 1803; .NET reads tar but not bzip2). Its window is never shown; a cancel stops it.
+        /// </summary>
+        private static bool Unpack(string archive, string intoDir, Func<bool> isCancelled, out string error)
+        {
+            error = null;
+            string tar = Path.Combine(Environment.SystemDirectory, "tar.exe");
+            if (!File.Exists(tar))
+            {
+                error = "Windows' own tar (tar.exe) is missing, so the model can't be unpacked here. Unpack "
+                        + Path.GetFileName(archive) + " into the models folder with 7-Zip instead.";
+                return false;
+            }
+            TryDeleteDir(intoDir);
+            Directory.CreateDirectory(intoDir);
+            var psi = new System.Diagnostics.ProcessStartInfo(tar)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                // The folders are given to tar as its working directory, never on its command line: a user name with
+                // letters outside the ANSI code page (C:\Users\José…) would not survive tar's own argument decoding, and
+                // the archive sits right beside the scratch folder under a name that is plain ASCII.
+                WorkingDirectory = intoDir,
+            };
+            string relativeArchive = Path.GetDirectoryName(Path.GetFullPath(archive))
+                                         .Equals(Path.GetDirectoryName(Path.GetFullPath(intoDir).TrimEnd('\\')), StringComparison.OrdinalIgnoreCase)
+                ? Path.Combine("..", Path.GetFileName(archive))
+                : archive;
+            psi.ArgumentList.Add("-xjf");
+            psi.ArgumentList.Add(relativeArchive);
+            var errText = new System.Text.StringBuilder();
+            using (var p = System.Diagnostics.Process.Start(psi))
+            {
+                if (p == null) { error = "Windows' tar didn't start."; return false; }
+                p.ErrorDataReceived += (s, e) => { if (e.Data != null) { lock (errText) { errText.AppendLine(e.Data); } } };
+                p.OutputDataReceived += (s, e) => { };
+                p.BeginErrorReadLine();
+                p.BeginOutputReadLine();
+                while (!p.WaitForExit(250))
+                {
+                    if (isCancelled != null && isCancelled())
+                    {
+                        try { p.Kill(true); } catch { }
+                        try { p.WaitForExit(5000); } catch { }
+                        error = "The download was cancelled.";
+                        return false;
+                    }
+                }
+                p.WaitForExit();
+                if (p.ExitCode != 0)
+                {
+                    string why;
+                    lock (errText) { why = errText.ToString().Trim(); }
+                    if (why.Length > 300) { why = why.Substring(0, 300) + "…"; }
+                    error = "Unpacking the model failed (tar exit " + p.ExitCode + ")" + (why.Length > 0 ? ": " + why : ".");
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static void TryDeleteDir(string dir)
+        {
+            try { if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) { Directory.Delete(dir, true); } }
+            catch { }
+        }
+
+        /// <summary>
+        /// Fetches <paramref name="url"/> into <paramref name="tempPath"/>, resuming what an earlier attempt left there.
+        /// True when the whole file is in; false (with <paramref name="error"/>) when cancelled or cut short — the partial
+        /// file is kept for the next attempt. Network errors are thrown to the caller.
+        /// </summary>
+        private static bool Fetch(string url, string tempPath, Action<long, long> onProgress, Func<bool> isCancelled, out string error)
+        {
+            error = null;
             {
                 ServicePointManager.Expect100Continue = false;
 
@@ -221,12 +663,12 @@ namespace AutoClicker.Utils
                 }
                 catch { already = 0; }
 
-                var request = (HttpWebRequest)WebRequest.Create(model.DownloadUrl);
+                var request = (HttpWebRequest)WebRequest.Create(url);
                 request.Method = "GET";
                 request.UserAgent = "Tempo/" + (UpdateChecker.CurrentVersion?.ToString() ?? "1.0");
                 request.Timeout = 20000;
                 request.ReadWriteTimeout = 120000;
-                request.AllowAutoRedirect = true; // HuggingFace redirects to a CDN.
+                request.AllowAutoRedirect = true; // HuggingFace and GitHub both redirect to a CDN.
                 // A proxy set in Windows is used; automatic discovery (WPAD) on its own is not — it
                 // hung on networks without a proxy. "No proxy" outright meant a network whose only
                 // way out is a proxy could never download a model.
@@ -294,29 +736,7 @@ namespace AutoClicker.Utils
                     }
                 }
                 }
-
-                // A real model is tens of MB; reject an obvious error page.
-                var info = new FileInfo(tempPath);
-                if (!info.Exists || info.Length < 1024 * 1024)
-                {
-                    error = "The downloaded model looks incomplete.";
-                    TryDelete(tempPath);
-                    return false;
-                }
-
-                // Atomic-ish swap into place.
-                try { if (File.Exists(finalPath)) File.Delete(finalPath); } catch { }
-                File.Move(tempPath, finalPath);
                 return true;
-            }
-            catch (Exception ex)
-            {
-                // A network failure leaves the partial file in place so the next attempt
-                // resumes rather than restarting. Only a file that turned out to be
-                // GARBAGE (below) is deleted.
-                error = "Couldn't download the model: " + ex.Message +
-                        " — press Download again to carry on from where it stopped.";
-                return false;
             }
         }
 
@@ -733,7 +1153,10 @@ namespace AutoClicker.Utils
             try
             {
                 string p = PathFor(model);
-                return !string.IsNullOrEmpty(p) && File.Exists(p) && new FileInfo(p).Length > 1024;
+                if (string.IsNullOrEmpty(p)) { return false; }
+                // A streaming model is a folder: installed when all its files are there.
+                if (model.IsStreaming) { return NemotronStreaming.IsModelDir(p); }
+                return File.Exists(p) && new FileInfo(p).Length > 1024;
             }
             catch { return false; }
         }

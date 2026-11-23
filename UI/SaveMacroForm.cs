@@ -50,7 +50,7 @@ namespace AutoClicker.UI
             {
                 Text = Utils.Localization.T("Save your recording"),
                 Font = new Font("Segoe UI", 14f, FontStyle.Bold),
-                ForeColor = theme.Accent,
+                ForeColor = theme.AccentText,
                 AutoSize = false,
                 Location = new Point(24, 20),
                 Size = new Size(392, 30)

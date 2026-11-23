@@ -70,6 +70,117 @@ namespace AutoClicker.UI
         /// <summary>The skin covering <paramref name="c"/>'s bars, or null (for tests and Live debug).</summary>
         internal static ScrollSkin For(Control c) => c != null && _byControl.TryGetValue(c, out ScrollSkin s) ? s : null;
 
+        /// <summary>
+        /// Every skin of a control in <paramref name="form"/> reads its bars again and puts its covers where they are now —
+        /// after the window was maximised or restored. Each skin follows its own control's messages, and a cover beside a
+        /// page lies in front of the whole tab area: one whose control was not told of the change stayed where the old
+        /// size had its bar. Two GetScrollBarInfo calls a skin. Returns how many covers moved or went.
+        /// </summary>
+        internal static int SyncAll(Form form)
+        {
+            if (form == null || form.IsDisposed) { return 0; }
+            var skins = new List<ScrollSkin>();
+            lock (_all)
+            {
+                for (int i = _all.Count - 1; i >= 0; i--)
+                {
+                    if (_all[i].TryGetTarget(out ScrollSkin s) && !s.IsDead) { skins.Add(s); }
+                    else { _all.RemoveAt(i); }
+                }
+            }
+            int changed = 0;
+            foreach (ScrollSkin s in skins)
+            {
+                try { if (s.BelongsTo(form)) { changed += s.Resync(); } }
+                catch (Exception ex) { Utils.Logger.Swallow("ScrollSkins.SyncAll", ex); }
+            }
+            return changed;
+        }
+
+        /// <summary>
+        /// Every skin of a control inside <paramref name="root"/> (not its own) reads its bars again: <paramref name="root"/>
+        /// has just come out of a freeze, through which everything in it read as hidden (see ScrollSkin's WM_SETREDRAW).
+        /// </summary>
+        internal static void SyncWithin(Control root)
+        {
+            if (root == null || root.IsDisposed || !root.HasChildren) { return; }
+            List<ScrollSkin> inside = null;
+            lock (_all)
+            {
+                for (int i = _all.Count - 1; i >= 0; i--)
+                {
+                    if (!_all[i].TryGetTarget(out ScrollSkin s) || s.IsDead) { _all.RemoveAt(i); continue; }
+                    Control c = s.Target;
+                    if (c != null && !ReferenceEquals(c, root) && !c.IsDisposed && root.Contains(c)) { (inside ??= new List<ScrollSkin>()).Add(s); }
+                }
+            }
+            if (inside == null) { return; }
+            foreach (ScrollSkin s in inside)
+            {
+                try { s.Sync(); }
+                catch (Exception ex) { Utils.Logger.Swallow("ScrollSkins.SyncWithin", ex); }
+            }
+        }
+
+        /// <summary>
+        /// The cover audit (MainForm runs it twice a second while it is on screen): every skin of a control in
+        /// <paramref name="form"/> compares its covers with its bars as Windows has them now and puts right what does not
+        /// match (ScrollSkin.Audit), and a cover in the form that no skin has any more is taken away. Returns how many things
+        /// were put right; <paramref name="found"/>, when given, gets a line for the log about each. Cheap: a hidden page
+        /// costs a flag or two, a control on show two GetScrollBarInfo calls.
+        /// </summary>
+        internal static int Audit(Form form, List<string> found = null)
+        {
+            if (form == null || form.IsDisposed || !form.IsHandleCreated) { return 0; }
+            var skins = new List<ScrollSkin>();
+            lock (_all)
+            {
+                for (int i = _all.Count - 1; i >= 0; i--)
+                {
+                    if (_all[i].TryGetTarget(out ScrollSkin s) && !s.IsDead) { skins.Add(s); }
+                    else { _all.RemoveAt(i); }
+                }
+            }
+            int put = 0;
+            foreach (ScrollSkin s in skins)
+            {
+                try
+                {
+                    if (!s.BelongsTo(form)) { continue; }
+                    string what = s.Audit();
+                    if (what == null) { continue; }
+                    put++;
+                    found?.Add(what);
+                }
+                catch (Exception ex) { Utils.Logger.Swallow("ScrollSkins.Audit", ex); }
+            }
+            // A page's covers live in the form itself. One its skin no longer has (made again somewhere else, or the skin
+            // gone) would stay wherever it was last put, for good.
+            try
+            {
+                List<ScrollCover> leftover = null;
+                foreach (Control c in form.Controls)
+                {
+                    if (c is ScrollCover cover && !cover.IsDisposed && !cover.Owned) { (leftover ??= new List<ScrollCover>()).Add(cover); }
+                }
+                if (leftover != null)
+                {
+                    foreach (ScrollCover cover in leftover)
+                    {
+                        bool shown = cover.Visible;
+                        Rectangle was = cover.Bounds;
+                        cover.Dispose();
+                        if (!shown) { continue; }
+                        put++;
+                        found?.Add((cover.VerticalBar ? "an upright" : "a sideways") + " bar cover no skin has any more, at "
+                                   + was.X + "," + was.Y + " " + was.Width + "x" + was.Height + " — taken away");
+                    }
+                }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("ScrollSkins.Audit leftovers", ex); }
+            return put;
+        }
+
         /// <summary>The skin covering <paramref name="combo"/>'s open list, or null.</summary>
         internal static ScrollSkin ForList(ComboBox combo) => combo != null && _byList.TryGetValue(combo, out ScrollSkin s) ? s : null;
 
@@ -91,7 +202,9 @@ namespace AutoClicker.UI
                     _byList.AddOrUpdate(combo, skin);
                     Track(skin);
                 }
-                skin.Sync();
+                // Posted from OnDropDown, so this runs once the call that opened the list has returned — Windows' slide
+                // has played by then (it plays inside that call). The bar is covered from now until the list closes.
+                skin.ListOpened();
             }
             catch (Exception ex) { Utils.Logger.Swallow("ScrollSkins.CoverDropDown", ex); }
         }
@@ -219,6 +332,8 @@ namespace AutoClicker.UI
         private ScrollPopup _popupV, _popupH;   // popup covers, for a top-level window
         private ScrollBarState _v, _h;
         private bool _syncing, _dead, _coversPending, _trackingLeave, _redrawHeld;
+        /// <summary>When the window's painting was last frozen (WM_SETREDRAW(FALSE)), Environment.TickCount64; for the cover audit.</summary>
+        private long _heldSince;
         private ScrollPart _hot = ScrollPart.None, _pressed = ScrollPart.None;
         private bool _hotVertical, _pressedVertical;
         private bool _thumbTracking;             // Windows is dragging the pressed thumb (SB_THUMBTRACK seen)
@@ -234,8 +349,220 @@ namespace AutoClicker.UI
             control.Disposed += OnDisposed;
             control.VisibleChanged += OnVisibleChanged;
             control.ParentChanged += OnParentChanged;
+            WatchTabControl();
             if (control.IsHandleCreated) { Hook(control.Handle); }
         }
+
+        /// <summary>The tab control whose open tab decides whether this page's covers show, when the control is a page.</summary>
+        private TabControl _tabs;
+
+        /// <summary>
+        /// A tab page's covers show while it is the open tab and at no other time: the selection is followed, not only the
+        /// page's own window — a page left natively visible after it was switched away from (a stray WM_SETREDRAW(TRUE)
+        /// sets the visible bit) sits out of sight behind the open one, while its covers, beside the tab control, lie in
+        /// front of everything.
+        /// </summary>
+        private void WatchTabControl()
+        {
+            TabControl now = _control is TabPage ? _control.Parent as TabControl : null;
+            if (ReferenceEquals(now, _tabs)) { return; }
+            if (_tabs != null) { _tabs.SelectedIndexChanged -= OnTabSelected; }
+            _tabs = now;
+            if (_tabs != null)
+            {
+                _tabs.SelectedIndexChanged += OnTabSelected;
+                _tabOpen = ReferenceEquals(_tabs.SelectedTab, _control);
+            }
+        }
+
+        /// <summary>
+        /// Whether this page was the open tab when the tab control last said its selection changed. SelectedIndexChanged
+        /// comes once the pages have been swapped; SelectedTab read live does not wait for that. WinForms moves the
+        /// selection (TCM_SETCURSEL) BEFORE it hides the page being left, so all through a switch the old page is still on
+        /// screen while SelectedTab already names the new one. Read live, the old page's covers came off at the start of
+        /// every switch and Windows' own light bar showed through; the switch's picture took it, and it faded out with the
+        /// old page (filmed by animcheck, Macros → Settings, 2026-11-11).
+        /// </summary>
+        private bool _tabOpen;
+
+        private void OnTabSelected(object sender, EventArgs e)
+        {
+            _tabOpen = _tabs != null && ReferenceEquals(_tabs.SelectedTab, _control);
+            PostSync();
+        }
+
+        /// <summary>
+        /// The page this skin covers is a tab that is not the open one: it was not open at the last selection change, and it
+        /// is not the selected tab now either (should the selection ever move without the event, the page counts as open the
+        /// moment it is chosen).
+        /// </summary>
+        private bool IsTabNotOpen => _tabs != null && _control is TabPage page && !_tabs.IsDisposed
+                                     && !_tabOpen && !ReferenceEquals(_tabs.SelectedTab, page);
+
+        /// <summary>The skin's control is in <paramref name="form"/> (a combo's list: its combo is).</summary>
+        internal bool BelongsTo(Form form)
+        {
+            Control c = _control ?? _colourFrom;
+            return c != null && !c.IsDisposed && ReferenceEquals(c.FindForm(), form);
+        }
+
+        /// <summary>Reads the bars afresh, whatever was read last; how many covers moved or went (see ScrollSkins.SyncAll).</summary>
+        internal int Resync()
+        {
+            Rectangle v = _coverV != null && !_coverV.IsDisposed && _coverV.Visible ? _coverV.Bounds : Rectangle.Empty;
+            Rectangle h = _coverH != null && !_coverH.IsDisposed && _coverH.Visible ? _coverH.Bounds : Rectangle.Empty;
+            _v = default;
+            _h = default;
+            Sync();
+            Rectangle v2 = _coverV != null && !_coverV.IsDisposed && _coverV.Visible ? _coverV.Bounds : Rectangle.Empty;
+            Rectangle h2 = _coverH != null && !_coverH.IsDisposed && _coverH.Visible ? _coverH.Bounds : Rectangle.Empty;
+            return (v != v2 ? 1 : 0) + (h != h2 ? 1 : 0);
+        }
+
+        /// <summary>
+        /// The safety net under every path that moves a bar (ScrollSkins.Audit, twice a second while the main window is on
+        /// screen). Reads both bars afresh and compares them with what the covers show: a cover shown with no bar under it,
+        /// a cover somewhere its bar is not, a bar that shows with no cover over it. What it finds is put right and returned
+        /// for the log; null when everything is as it should be.
+        ///
+        /// The user's screenshot of 2026-11-11 (10:44) was the one of the day before again — a maximised window, with
+        /// covers where the restored one has its bars — after every repair made for it, and with the check after each
+        /// maximise finding nothing to move. Whatever path leaves a cover behind, it does not stay behind for longer than
+        /// this takes to come round, and the log line says which control, which bar, where, and what state this skin was
+        /// in, so that the path can be found.
+        ///
+        /// A window frozen this very moment (its painting off for a batch) is left as it is: holding its covers where they
+        /// were is what the hold is for (WM_SETREDRAW in WndProc). Not a tab page that is not the open tab — nothing of
+        /// that is on show, frozen or not.
+        /// </summary>
+        internal string Audit()
+        {
+            if (_dead || _syncing || _pressed != ScrollPart.None) { return null; }   // a press on a bar: Windows' own loop has it
+            IntPtr hwnd = Handle;
+            bool notOnShow = IsPageNotSelected;
+            // Between messages no switch is under way, so the page is the open tab exactly when it is the selected one.
+            bool openWas = _tabOpen;
+            if (_tabs != null) { _tabOpen = !notOnShow; }
+            bool frozen = _redrawHeld && hwnd != IntPtr.Zero && !ScrollNative.HasVisibleBit(hwnd);
+            if (frozen && !notOnShow) { return null; }
+            Expect(out ScrollBarState v, out ScrollBarState h, notOnShow);
+            string wrongV = Wrong(true, v, h), wrongH = Wrong(false, h, v);
+            if (wrongV == null && wrongH == null) { return null; }
+
+            var said = new System.Text.StringBuilder(Who);
+            if (wrongV != null) { said.Append("'s upright bar cover ").Append(wrongV); }
+            if (wrongH != null) { said.Append(wrongV != null ? ", and its sideways one " : "'s sideways bar cover ").Append(wrongH); }
+            said.Append(" (");
+            said.Append(_redrawHeld ? "held for " + (Environment.TickCount64 - _heldSince) + " ms" + (frozen ? ", painting frozen" : ", though it paints")
+                                    : "not held");
+            if (_tabs != null)
+            {
+                said.Append(notOnShow ? "; not the open tab" : "; the open tab");
+                if (openWas == notOnShow) { said.Append(", which the skin had the other way round"); }
+            }
+            if (hwnd == IntPtr.Zero) { said.Append("; its window not watched"); }
+            said.Append(')');
+
+            // Put right. A hold over a window that paints again is over; a page that is not the open tab shows nothing.
+            if (!frozen) { _redrawHeld = false; }
+            if (hwnd == IntPtr.Zero || notOnShow) { HideCovers(); }
+            else
+            {
+                _v = default;
+                _h = default;
+                Sync();
+            }
+            // Still wrong — a cover Sync could not place where the bar is: none at all is better than a wrong one. (A cover
+            // still to be made is not wrong: MakeCovers comes on the next message turn.)
+            Expect(out v, out h, notOnShow);
+            bool stillV = Shows(true) && Wrong(true, v, h) != null, stillH = Shows(false) && Wrong(false, h, v) != null;
+            if (stillV || stillH)
+            {
+                HideCovers();
+                said.Append(" — could not be put where the bar is, so hidden");
+            }
+            else { said.Append(" — put right"); }
+            return said.ToString();
+        }
+
+        /// <summary>
+        /// This skin's page is not the selected tab, read live: for the audit, which runs between messages and so never in
+        /// the middle of a switch, where SelectedTab already names the new page while the old one is still on screen (see
+        /// <see cref="_tabOpen"/>).
+        /// </summary>
+        private bool IsPageNotSelected => _tabs != null && _control is TabPage page && !_tabs.IsDisposed
+                                          && !ReferenceEquals(_tabs.SelectedTab, page);
+
+        /// <summary>The bars as the covers should show them now: none for a window that is not on show.</summary>
+        private void Expect(out ScrollBarState v, out ScrollBarState h, bool notOnShow)
+        {
+            v = default;
+            h = default;
+            IntPtr hwnd = Handle;
+            if (_dead || hwnd == IntPtr.Zero || notOnShow || !ScrollNative.IsWindowVisible(hwnd)
+                || (TopLevelTarget && ScrollNative.IsIconic(hwnd)) || ListNotOpenYet)
+            {
+                return;
+            }
+            v = ScrollBarState.Read(hwnd, true);
+            h = ScrollBarState.Read(hwnd, false);
+        }
+
+        /// <summary>Whether the cover over the vertical/horizontal bar is on show.</summary>
+        private bool Shows(bool vertical)
+        {
+            if (TopLevelTarget)
+            {
+                ScrollPopup p = vertical ? _popupV : _popupH;
+                return p != null && p.Visible;
+            }
+            ScrollCover c = vertical ? _coverV : _coverH;
+            return c != null && !c.IsDisposed && c.Visible;
+        }
+
+        /// <summary>What one cover shows that its bar, as it is now (<paramref name="s"/>), does not — or null.</summary>
+        private string Wrong(bool vertical, ScrollBarState s, ScrollBarState other)
+        {
+            bool shows = Shows(vertical);
+            if (TopLevelTarget)
+            {
+                ScrollPopup p = vertical ? _popupV : _popupH;
+                if (!s.Visible) { return shows ? "shown at " + Where(p.Bounds) + " with no bar under it" : null; }
+                Rectangle want = CoverRect(s, other, vertical);
+                if (!shows) { return "missing: its bar shows at " + Where(want) + " uncovered"; }
+                return p.Bounds == want ? null : "at " + Where(p.Bounds) + " while its bar is at " + Where(want);
+            }
+            ScrollCover c = vertical ? _coverV : _coverH;
+            if (!s.Visible) { return shows ? "shown at " + Where(c.Bounds) + " with no bar under it" : null; }
+            Control host = HostOf(out _);
+            if (host == null || host.IsDisposed || !host.IsHandleCreated) { return null; }   // nowhere to put one yet
+            Rectangle at = host.RectangleToClient(CoverRect(s, other, vertical));
+            if (!shows) { return "missing: its bar shows at " + Where(at) + " uncovered"; }
+            if (c.Parent != host) { return "in another window than its bar"; }
+            return c.Bounds == at ? null : "at " + Where(c.Bounds) + " while its bar is at " + Where(at);
+        }
+
+        private static string Where(Rectangle r) => r.X + "," + r.Y + " " + r.Width + "x" + r.Height;
+
+        /// <summary>The control, as the log names it: "the Keybinds page", "_macroListBox on the Macros page".</summary>
+        internal string Who
+        {
+            get
+            {
+                Control c = _control ?? _colourFrom;
+                if (c == null) { return "a control"; }
+                if (c is TabPage page) { return "the " + page.Text + " page"; }
+                string name = (string.IsNullOrEmpty(c.Name) ? c.GetType().Name : c.Name) + (_control == null ? "'s open list" : "");
+                for (Control p = c.Parent; p != null; p = p.Parent)
+                {
+                    if (p is TabPage tp) { return name + " on the " + tp.Text + " page"; }
+                }
+                return name;
+            }
+        }
+
+        /// <summary>Whether <paramref name="cover"/> is one of this skin's own (a cover no skin has is a leftover).</summary>
+        internal bool Owns(ScrollCover cover) => !_dead && (ReferenceEquals(_coverV, cover) || ReferenceEquals(_coverH, cover));
 
         /// <summary>For a combo's open list: a native top-level window, its colours from the combo.</summary>
         internal ScrollSkin(IntPtr list, ComboBox combo)
@@ -246,7 +573,29 @@ namespace AutoClicker.UI
             Hook(list);
         }
 
+        /// <summary>
+        /// A combo's list skin covers the bar only from <see cref="ListOpened"/> until the list closes. Windows slides the
+        /// list open (the combo-box animation, on by default) for about 0.2 s, and the list's own messages during the slide
+        /// made the skin show its bar at once and at full length: a 30-row bar stood over the page beside a list still
+        /// showing a few rows — the user's screenshot of the Theme list, the bar reaching on down past the window. On every
+        /// open but the first, when the skin did not exist yet. Filmed by scratchpad/combodrop from a second thread.
+        /// </summary>
+        private bool _listOpen;
+
+        /// <summary>The list has finished opening (ScrollSkins.CoverDropDown, posted from the combo's OnDropDown).</summary>
+        internal void ListOpened()
+        {
+            _listOpen = true;
+            Sync();
+        }
+
+        /// <summary>A combo's list, opening or closed: its bar is not covered (see <see cref="_listOpen"/>).</summary>
+        private bool ListNotOpenYet => _control == null && !_listOpen;
+
         internal bool IsDead => _dead;
+
+        /// <summary>The control whose bars this skin covers; null for a combo's open list.</summary>
+        internal Control Target => _control;
 
         /// <summary>The bars as last read (for tests).</summary>
         internal ScrollBarState Vertical => _v;
@@ -290,6 +639,7 @@ namespace AutoClicker.UI
         {
             // Covers live in the parent: a new parent wants new ones (made at the next look).
             DisposeChildCovers();
+            WatchTabControl();
             PostSync();
         }
 
@@ -299,6 +649,11 @@ namespace AutoClicker.UI
         {
             if (_dead) { return; }
             _dead = true;
+            if (_tabs != null)
+            {
+                try { _tabs.SelectedIndexChanged -= OnTabSelected; } catch { }
+                _tabs = null;
+            }
             if (_control != null)
             {
                 _control.HandleCreated -= OnHandleCreated;
@@ -429,8 +784,18 @@ namespace AutoClicker.UI
                 // covers as they are instead; nothing under them paints meanwhile.
                 case ScrollNative.WM_SETREDRAW:
                     base.WndProc(ref m);
+                    if (m.WParam == IntPtr.Zero && !_redrawHeld) { _heldSince = Environment.TickCount64; }
                     _redrawHeld = m.WParam == IntPtr.Zero;
-                    if (!_redrawHeld) { Sync(); }
+                    if (!_redrawHeld)
+                    {
+                        Sync();
+                        // Everything inside read as hidden all through the freeze (an ancestor's visible bit was gone),
+                        // so a control in it that had a message meanwhile — moved by a re-centre, a list refilled — took
+                        // its covers down, and only its next message brings them back. One below the fold never gets the
+                        // repaint the thaw asks for: the Statistics page's history list kept Windows' own bar after a
+                        // restore until it was scrolled to (found by the cover audit, layoutglitch stale, 2026-11-11).
+                        ScrollSkins.SyncWithin(_control);
+                    }
                     return;
                 case ScrollNative.WM_SHOWWINDOW:
                     if (m.WParam != IntPtr.Zero) { _redrawHeld = false; }   // shown outright: nothing is held any more
@@ -491,7 +856,18 @@ namespace AutoClicker.UI
         /// <summary>Reads both bars and puts the covers where they are, redrawing the ones that changed.</summary>
         internal void Sync()
         {
+            // A hold whose window paints again is over, however it came back: a frozen window has its visible bit cleared
+            // (WM_SETREDRAW(FALSE) does that), so one that has it set is not frozen — and a hold that outlived its freeze
+            // left the covers where they were for good.
+            if (_redrawHeld && Handle != IntPtr.Zero && ScrollNative.HasVisibleBit(Handle)) { _redrawHeld = false; }
+            // Frozen, and no longer the open tab (switched away from mid-freeze): nothing of it is on show, held or not.
+            if (_redrawHeld && !_dead && IsTabNotOpen) { HideCovers(); return; }
             if (_syncing || _dead || _redrawHeld || Handle == IntPtr.Zero) { return; }
+            // The whole window is hidden — sent to the tray: its covers, child windows of it, went with it and come back
+            // with it. Hiding them as well (its bars read as hidden then) made every return from the tray show each one
+            // again: a SetWindowPos apiece, synchronous, with the repaints it set off beneath them — profiled 2026-11-12,
+            // most of what Show() cost. The first Sync after the window is back puts right anything that changed meanwhile.
+            if (!TopLevelTarget && !ScrollNative.IsWindowVisible(ScrollNative.Root(Handle))) { return; }
             _syncing = true;
             try
             {
@@ -504,8 +880,12 @@ namespace AutoClicker.UI
                     if (_pressedVertical && v.Visible) { ScrollNative.TrackedThumb(hwnd, true, ref v); }
                     else if (!_pressedVertical && h.Visible) { ScrollNative.TrackedThumb(hwnd, false, ref h); }
                 }
-                // A hidden page, a closed list, a minimised dialog: nothing to cover.
-                if (!ScrollNative.IsWindowVisible(hwnd) || (TopLevelTarget && ScrollNative.IsIconic(hwnd)))
+                // A hidden page, a closed list, a minimised dialog: nothing to cover. Nor a tab page that is not the open
+                // tab, even one whose window says it shows (see WatchTabControl).
+                bool shown = ScrollNative.IsWindowVisible(hwnd);
+                // A combo's list that has closed is opening next time: not covered until it has finished (_listOpen).
+                if (!shown && _control == null) { _listOpen = false; }
+                if (!shown || (TopLevelTarget && ScrollNative.IsIconic(hwnd)) || IsTabNotOpen || ListNotOpenYet)
                 {
                     v.Visible = false;
                     h.Visible = false;
@@ -883,6 +1263,9 @@ namespace AutoClicker.UI
         private readonly ScrollSkin _skin;
         internal readonly bool VerticalBar;
 
+        /// <summary>Whether a live skin still has this cover: one that none has is a leftover that nothing moves any more.</summary>
+        internal bool Owned => _skin != null && _skin.Owns(this);
+
         internal ScrollCover(ScrollSkin skin, bool vertical)
         {
             _skin = skin;
@@ -1119,6 +1502,14 @@ namespace AutoClicker.UI
         [DllImport("user32.dll")] internal static extern bool GetScrollBarInfo(IntPtr hwnd, int idObject, ref SCROLLBARINFO psbi);
         [DllImport("user32.dll")] internal static extern bool IsWindowVisible(IntPtr hwnd);
         [DllImport("user32.dll")] internal static extern bool IsIconic(IntPtr hwnd);
+        [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+        /// <summary>The top-level window <paramref name="hwnd"/> is in (itself, for a top-level one).</summary>
+        internal static IntPtr Root(IntPtr hwnd)
+        {
+            IntPtr root = hwnd == IntPtr.Zero ? IntPtr.Zero : GetAncestor(hwnd, 2 /* GA_ROOT */);
+            return root == IntPtr.Zero ? hwnd : root;
+        }
         [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hwnd, int index);
         [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr hwnd, int index, int value);
         [DllImport("user32.dll")] private static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT tme);
@@ -1144,6 +1535,14 @@ namespace AutoClicker.UI
         internal static bool IsTopMost(IntPtr hwnd)
         {
             try { return hwnd != IntPtr.Zero && (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0; }
+            catch { return false; }
+        }
+
+        /// <summary>The window's OWN visible bit (not its parents'): WM_SETREDRAW(FALSE) clears it, (TRUE) sets it.</summary>
+        internal static bool HasVisibleBit(IntPtr hwnd)
+        {
+            const int WS_VISIBLE = 0x10000000;
+            try { return hwnd != IntPtr.Zero && (GetWindowLong(hwnd, GWL_STYLE) & WS_VISIBLE) != 0; }
             catch { return false; }
         }
 

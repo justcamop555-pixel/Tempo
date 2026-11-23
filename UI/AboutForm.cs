@@ -14,7 +14,30 @@ namespace AutoClicker.UI
     {
         private System.IO.Stream _gifStream; // kept alive so the GIF keeps animating
 
-        public AboutForm(Theme theme)
+        /// <summary>
+        /// The update line About shows: where this copy stands, as the last check found it, and the one thing to do
+        /// about it. <see cref="Act"/> runs after About has closed (a check answers with dialogs of its own).
+        /// </summary>
+        public sealed class UpdateLine
+        {
+            /// <summary>The verdict: "You're up to date.", "Update available: v1.0.328", …</summary>
+            public string State;
+            /// <summary>When it was found, or empty: "Last checked for updates: 12 Nov 2026, 08:32".</summary>
+            public string When;
+            /// <summary>An update is known: the line is drawn in the accent and the button shows it.</summary>
+            public bool UpdateKnown;
+            /// <summary>The last check failed: the line is drawn as a warning.</summary>
+            public bool Failed;
+            public string ButtonText;
+            public Action Act;
+        }
+
+        /// <summary>What the update button asked for; run by the owner once About has closed.</summary>
+        public Action AfterClose { get; private set; }
+
+        public AboutForm(Theme theme) : this(theme, null) { }
+
+        public AboutForm(Theme theme, UpdateLine update)
         {
             // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             theme = theme ?? Theme.ForKind(Models.ThemeKind.Dark);
@@ -82,11 +105,9 @@ namespace AutoClicker.UI
             dropHint.AutoSize = false;
             dropHint.Width = 410;
             // As tall as its words: three lines in French and Portuguese, where a fixed two
-            // stopped drawing before "…even from a web page". Everything below it moves down
-            // by what it grew (`shift`, further down), and so does the window's bottom.
+            // stopped drawing before "…even from a web page". Placed in the flow further down.
             // (In 100% units: the window is scaled after it is built — UiFactory.Measure96.)
             dropHint.Height = Math.Max(30, UiFactory.Measure96(dropHint.Text, dropHint.Font, dropHint.Width, TextFormatFlags.Default).Height + 2);
-            int shift = dropHint.Height - 30;
 
             var chooseLogo = UiFactory.Button("Choose image…", 330, 128, 104, 26);
             // As wide as its caption needs, keeping the column's right edge at 434 ("Choisir un
@@ -112,7 +133,7 @@ namespace AutoClicker.UI
                 Top = 158,
                 Width = 104,
                 LinkColor = theme.TextMuted,
-                ActiveLinkColor = theme.Accent,
+                ActiveLinkColor = theme.AccentText,
                 Visible = CustomLogo.Exists()
             };
             resetLogo.Height = UiFactory.Measure96(resetLogo.Text, resetLogo.Font, resetLogo.Width, TextFormatFlags.Default).Height + 2;
@@ -225,17 +246,66 @@ namespace AutoClicker.UI
                 });
             };
 
-            var title = UiFactory.Label("Tempo", 24, 28, FontStyle.Bold, 18f);
-            // Read the real version from the assembly so this never goes stale. The
-            // csproj <Version> flows into the assembly version, so a single bump there
-            // updates the About box automatically.
+            var tips = new ToolTip();
+            Disposed += (s, e) => tips.Dispose();
+
+            var title = UiFactory.Label("Tempo", 24, 18, FontStyle.Bold, 18f);
+
+            // What Tempo is, under its name. It sat below the facts and a rule, where it read as small print.
+            // The old text described a mouse auto-clicker and nothing else — accurate in about 2021.
+            var lead = UiFactory.Label(
+                "A clicking, macro and accessibility tool that runs entirely on your PC.",
+                24, 54, FontStyle.Regular, 9.5f);
+            lead.AutoSize = false;
+            lead.Width = 296;   // beside the logo column, which starts at 330
+            lead.Height = UiFactory.Measure96(lead.Text, lead.Font, lead.Width, TextFormatFlags.WordBreak).Height + 2;
+
+            // The facts a bug report asks for, each under its own name. They were English lines put together at run time
+            // ("Version …", "Display: … scaling", "Installed · … built …", "Data: …"), so no language ever saw them
+            // translated. Names in the left column (muted), values in the right; a value too long for its row is cut
+            // with "…" and shown whole in its tip.
+            int y = lead.Top + lead.Height + 10;
+            const int KeyLeft = 24, KeyWidth = 88, ValueLeft = 116, ValueWidth = 204;
+            Font rowFont = UiFactory.FontFor(9f, FontStyle.Regular);
+            Label Row(string key, string value, string tip = null, Color? colour = null)
+            {
+                var k = UiFactory.Label(key, KeyLeft, y, FontStyle.Regular, 9f);
+                k.AutoSize = false;
+                k.Width = KeyWidth;
+                k.Height = 18;
+                k.AutoEllipsis = true;
+                k.ForeColor = theme.TextMuted;
+                var v = new Label
+                {
+                    Text = value ?? "",
+                    Left = ValueLeft,
+                    Top = y,
+                    Width = ValueWidth,
+                    Height = 18,
+                    AutoSize = false,
+                    AutoEllipsis = true,
+                    UseMnemonic = false,
+                    Font = rowFont,
+                    ForeColor = colour ?? theme.Text,
+                    BackColor = Color.Transparent
+                };
+                if (!string.IsNullOrEmpty(tip)) { TipStyle.Set(tips, v, tip); }
+                Controls.Add(k);
+                Controls.Add(v);
+                y += 20;
+                return v;
+            }
+
+            // Read the real version from the assembly so this never goes stale: the csproj <Version> flows into it.
+            string versionNumber = "?";
             string verText = "Version ?";
             try
             {
                 var asmVer = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
                 if (asmVer != null)
                 {
-                    verText = "Version " + asmVer.Major + "." + asmVer.Minor + "." + asmVer.Build;
+                    versionNumber = asmVer.Major + "." + asmVer.Minor + "." + asmVer.Build;
+                    verText = "Version " + versionNumber;
                 }
                 // The version alone cannot say which copy this is — a test build shares
                 // it with the release it was cut from. The build ID can, so it goes
@@ -246,8 +316,15 @@ namespace AutoClicker.UI
                 verText += "   ·   " + Utils.BuildInfo.Short;
             }
             catch { }
-            var version = UiFactory.Label(verText, 24, 64, FontStyle.Regular, 9.5f);
-            version.ForeColor = theme.TextMuted;
+            // On screen: the number and the build, under the translated name. (verText, in English, is for Copy details.)
+            string versionLine = versionNumber + "   ·   " + Utils.BuildInfo.Short;
+            var version = Row("Version", versionLine, versionLine);
+
+            string netVerRow;
+            try { netVerRow = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription; }
+            catch { netVerRow = ".NET"; }
+            Row("Edition", Localization.T(Utils.DeploymentInfo.IsInstalled ? "Installed" : "Portable") + "   ·   " + netVerRow);
+            if (Utils.BuildInfo.BuiltUtcText.Length > 0) { Row("Built", Utils.BuildInfo.BuiltUtcText); }
 
             int hz = Utils.EnvironmentInfo.GetPrimaryRefreshHz();
             string scale = Utils.EnvironmentInfo.GetDisplayScaleText();
@@ -256,29 +333,18 @@ namespace AutoClicker.UI
                 ? $"Display: {ps.Bounds.Width}\u00d7{ps.Bounds.Height}" + (hz > 0 ? $" @ {hz} Hz" : "") +
                   (scale != null ? $" \u00b7 {scale} scaling" : "")
                 : (hz > 0 ? $"Display: {hz} Hz" : "Display: unknown");
-            var sysInfo = UiFactory.Label(disp, 24, 86, FontStyle.Regular, 9f);
-            sysInfo.ForeColor = theme.TextMuted;
+            // The row's value: no English around the numbers ("Display: …", "… scaling" were never translated).
+            string dispValue = ps != null
+                ? ps.Bounds.Width + "×" + ps.Bounds.Height + (hz > 0 ? " @ " + hz + " Hz" : "") + (scale != null ? "   ·   " + scale : "")
+                : (hz > 0 ? hz + " Hz" : "—");
 
-            // App details: how it's running, the .NET runtime, plus where data lives.
-            // Handy when someone files a bug report.
+            // For Copy details, which stays in English for a report: how it's running, the runtime, when it was built.
             string edition = Utils.DeploymentInfo.IsInstalled ? "Installed" : "Portable";
-            string netVer;
-            try { netVer = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription; }
-            catch { netVer = ".NET"; }
+            string netVer = netVerRow;
             string builtAt = Utils.BuildInfo.BuiltUtcText;
             if (builtAt.Length > 0) { builtAt = "  \u00b7  built " + builtAt; }
-            var buildInfo = UiFactory.Label($"{edition}  \u00b7  {netVer}{builtAt}", 24, 104, FontStyle.Regular, 9f);
-            buildInfo.ForeColor = theme.TextMuted;
 
             string dataDir = Persistence.SettingsManager.GetSettingsDirectory();
-            var dataInfo = UiFactory.Label("Data: " + dataDir, 24, 122, FontStyle.Regular, 9f);
-            dataInfo.ForeColor = theme.TextMuted;
-            dataInfo.Width = 264;
-            dataInfo.AutoSize = false;
-            // One line, like the OS row under it. Left at its auto-sized 23px, this box ran 3px
-            // into that row.
-            dataInfo.Height = 18;
-            dataInfo.AutoEllipsis = true;
 
             // Name the operating system. About listed the display, the runtime and the
             // data folder but never Windows itself, so "which Windows are you on?" — the
@@ -297,35 +363,32 @@ namespace AutoClicker.UI
 
             if (!string.IsNullOrEmpty(osText))
             {
-                var osInfo = UiFactory.Label(osText, 24, 142, FontStyle.Regular, 9f);
-                osInfo.ForeColor = Utils.WindowsVersion.Status == Utils.WindowsVersion.Support.Supported
-                    ? theme.TextMuted : theme.Warning;
-                osInfo.AutoSize = false;
-                // 300, not the full 410: the right-hand column from x=330 down to ~176
-                // belongs to the logo, its "Choose image…" button and the reset link.
-                // A full-width label here ran straight underneath them. And never past the
-                // button itself: it is fitted to its caption and right-aligned at 434, so in
-                // French and German it starts at 321–323 — under this label's end at 324,
-                // which, added first and so on top, covered the button's left edge.
-                osInfo.Width = Math.Max(120, Math.Min(300, chooseLogo.Left - 6 - osInfo.Left));
-                osInfo.Height = 16;
-                osInfo.AutoEllipsis = true;
-                if (Utils.WindowsVersion.SupportNote().Length > 0)
-                {
-                    TipStyle.Set(new ToolTip(), osInfo, Utils.WindowsVersion.SupportNote());
-                }
-                Controls.Add(osInfo);
+                // In the warning colour (the readable one: plain Warning is a fill and was used here) when this Windows
+                // is not fully supported, with why in the tip; the whole name there too, as a long one is cut.
+                string note = "";
+                try { note = Utils.WindowsVersion.SupportNote() ?? ""; } catch { }
+                bool supported = Utils.WindowsVersion.Status == Utils.WindowsVersion.Support.Supported;
+                Row("Windows", osText, note.Length > 0 ? osText + "\n\n" + note : osText,
+                    supported ? (Color?)null : theme.WarningText);
             }
-            // The Official ID: the one line in this dialog anyone can check without trusting Tempo.
-            Controls.Add(BuildOfficialIdRow(theme, sysInfo.Font));
+            Row("Display", dispValue, dispValue);
+            Row("Data folder", dataDir, dataDir);
+
+            // The Official ID: the one line in this dialog anyone can check without trusting Tempo. Below the logo
+            // column now, so it has the dialog's whole width.
+            Control officialId = BuildOfficialIdRow(theme, rowFont);
+            officialId.Top = y + 4;
+            officialId.Width = 410;
+            Controls.Add(officialId);
+            y = officialId.Top + officialId.Height + 6;
 
             var openData = new LinkLabel
             {
                 Text = Localization.T("Open data folder"),
                 AutoSize = true,
-                Location = new Point(24, 180),
-                LinkColor = theme.Accent,
-                ActiveLinkColor = theme.Accent,
+                Location = new Point(24, y),
+                LinkColor = theme.AccentText,
+                ActiveLinkColor = theme.AccentText,
                 BackColor = Color.Transparent
             };
             openData.LinkClicked += (s, e) =>
@@ -360,9 +423,9 @@ namespace AutoClicker.UI
                 AutoSize = true,
                 // After "Open data folder", by its width in 100% units: its Right is screen pixels while this
                 // window is built (see the links at the bottom).
-                Location = new Point(openData.Left + UiFactory.Measure96(openData.Text, openData.Font, 0, TextFormatFlags.Default).Width + 18, 180),
-                LinkColor = theme.Accent,
-                ActiveLinkColor = theme.Accent,
+                Location = new Point(openData.Left + UiFactory.Measure96(openData.Text, openData.Font, 0, TextFormatFlags.Default).Width + 18, y),
+                LinkColor = theme.AccentText,
+                ActiveLinkColor = theme.AccentText,
                 BackColor = Color.Transparent
             };
             var copiedTimer = new Timer { Interval = 1500 };
@@ -379,12 +442,73 @@ namespace AutoClicker.UI
                 Localization.T("Copies the version, build, Official ID, Windows and display — paste it into a bug report."));
             Controls.Add(copyDetails);
 
-            // Which code this build is: the commit it was made from, and whether it carried changes on top.
+            // Which code this build is: the commit it was made from, and whether it carried changes on top — in the
+            // version row's tip, after the version itself (one tip per control: the row already has one).
             if (Utils.BuildInfo.SourceCommit.Length > 0)
             {
-                TipStyle.Set(new ToolTip(), version, Utils.BuildInfo.SourceChanged
+                TipStyle.Set(tips, version, versionLine + "\n\n" + (Utils.BuildInfo.SourceChanged
                     ? Localization.F("Built from commit {0}, plus changes that were not committed yet.", Utils.BuildInfo.SourceCommit)
-                    : Localization.F("Built from commit {0}.", Utils.BuildInfo.SourceCommit));
+                    : Localization.F("Built from commit {0}.", Utils.BuildInfo.SourceCommit)));
+            }
+            y += 26;
+
+            // Where this copy stands: the last update check's answer, and the one thing to do about it (check again,
+            // or see the update it found). The button closes About first; the check answers with its own dialogs.
+            if (update != null)
+            {
+                Button act = null;
+                if (!string.IsNullOrEmpty(update.ButtonText) && update.Act != null)
+                {
+                    act = update.UpdateKnown
+                        ? UiFactory.PrimaryButton(update.ButtonText, 0, y, 150, 30, theme)
+                        : UiFactory.Button(update.ButtonText, 0, y, 150, 30);
+                    UiFactory.FitToText96(act, 120, 26);
+                    act.Left = 434 - act.Width;
+                    if (!update.UpdateKnown)
+                    {
+                        act.BackColor = theme.Surface2;
+                        act.ForeColor = theme.Text;
+                    }
+                    act.Name = "aboutUpdate";
+                    act.Click += (s, e) => { AfterClose = update.Act; Close(); };
+                    Controls.Add(act);
+                }
+                int textWidth = (act != null ? act.Left - 12 : 434) - 24;
+                var state = new Label
+                {
+                    Name = "aboutUpdateState",
+                    Text = update.State ?? "",
+                    Left = 24,
+                    Top = y,
+                    Width = textWidth,
+                    AutoSize = false,
+                    UseMnemonic = false,
+                    Font = UiFactory.FontFor(9.5f, FontStyle.Bold),
+                    ForeColor = update.UpdateKnown ? theme.AccentText : update.Failed ? theme.WarningText : theme.SuccessText,
+                    BackColor = Color.Transparent
+                };
+                state.Height = UiFactory.Measure96(state.Text, state.Font, state.Width, TextFormatFlags.WordBreak).Height + 2;
+                Controls.Add(state);
+                int textBottom = state.Top + state.Height;
+                if (!string.IsNullOrEmpty(update.When))
+                {
+                    var when = new Label
+                    {
+                        Text = update.When,
+                        Left = 24,
+                        Top = textBottom,
+                        Width = textWidth,
+                        AutoSize = false,
+                        UseMnemonic = false,
+                        Font = rowFont,
+                        ForeColor = theme.TextMuted,
+                        BackColor = Color.Transparent
+                    };
+                    when.Height = UiFactory.Measure96(when.Text, when.Font, when.Width, TextFormatFlags.WordBreak).Height + 2;
+                    Controls.Add(when);
+                    textBottom = when.Top + when.Height;
+                }
+                y = Math.Max(textBottom, act != null ? act.Top + act.Height : 0) + 12;
             }
 
             // A thin rule between the identity block and the blurb, so the dialog reads
@@ -392,7 +516,7 @@ namespace AutoClicker.UI
             var rule = new Panel
             {
                 Left = 24,
-                Top = 204,
+                Top = y,
                 Width = 410,
                 Height = 1,
                 // Surface2, not Border: on the darker themes Border sits so close to the
@@ -401,26 +525,13 @@ namespace AutoClicker.UI
                 BackColor = theme.Surface2
             };
             Controls.Add(rule);
+            y += 12;
 
-            // The old text described a mouse auto-clicker and nothing else — accurate in
-            // about 2021. Captions, notifications and the movement engine are most of
-            // what Tempo is now, and none of them were mentioned.
-            var lead = UiFactory.Label(
-                "A clicking, macro and accessibility tool that runs entirely on your PC.",
-                24, 254 + shift, FontStyle.Bold, 9.5f);
-            lead.AutoSize = false;
-            lead.Width = 410;
-            // Two lines of room, not one. At 9.5pt bold this sentence needs ~490px and
-            // the label is 410 wide, so a single 20px line clipped it mid-word ("…runs
-            // entirely on"). Sizing for the wrap keeps it correct at other DPIs and font
-            // scales too, where the break lands somewhere else again.
-            lead.Height = 36;
-            Controls.Add(lead);
-
+            // What Tempo does. Captions, notifications and the movement engine are most of what Tempo is now.
             var description = new Label
             {
                 Left = 24,
-                Top = 296 + shift,
+                Top = y,
                 Width = 410,
                 Height = 128,
                 AutoSize = false,
@@ -438,52 +549,59 @@ namespace AutoClicker.UI
             // line was not drawn.
             description.Height = Math.Max(128, UiFactory.Measure96(description.Text, description.Font, description.Width,
                 TextFormatFlags.Default).Height + 2);
-            shift += description.Height - 128;
-            Height += shift;
+            y += description.Height + 10;
 
-            var openLog = UiFactory.Button("Open Log Folder", 24, 436 + shift, 150, 32);
+            // "Want your own logo?" — small print, after what Tempo does.
+            dropHint.Top = y;
+            y += dropHint.Height + 12;
+
+            // Where to read more: the site, the code, this version's notes, and the licences of what is inside.
+            // Left to right, each measured in 100% units (a link's Right is the screen's pixels while this window is
+            // built), onto a second line where a language needs the room.
+            int linkX = 24;
+            LinkLabel AddLink(string text, Action open)
+            {
+                var link = new LinkLabel
+                {
+                    Text = text,
+                    AutoSize = true,
+                    LinkColor = theme.AccentText,
+                    ActiveLinkColor = theme.AccentText,
+                    BackColor = Color.Transparent
+                };
+                int w = UiFactory.Measure96(link.Text, link.Font, 0, TextFormatFlags.Default).Width;
+                if (linkX > 24 && linkX + w > 434) { linkX = 24; y += 22; }
+                link.Location = new Point(linkX, y);
+                linkX += w + 16;
+                link.LinkClicked += (s, e) => open();
+                Controls.Add(link);
+                return link;
+            }
+            AddLink(Localization.T("Website"), () => OpenUrl(SafetyNoteCard.WebsiteUrl));
+            // Not translated, deliberately: a brand name, like "Tempo" itself.
+            AddLink("GitHub", () => OpenUrl(SafetyNoteCard.GitHubUrl));
+            // This version's release page once GitHub has confirmed this copy; every release otherwise (a test build's
+            // number may have no page yet).
+            AddLink(Localization.T("Release notes"), () => OpenUrl(Utils.IntegrityCheck.OfficialReleaseUrl
+                ?? "https://github.com/" + UpdateChecker.Repository + "/releases"));
+            LinkLabel licences = AddLink(Localization.T("Open-source licences"), () => Utils.ThirdPartyNotices.Open());
+            TipStyle.Set(tips, licences, Localization.T("The open-source parts inside Tempo and their licences, as a text file."));
+            y += 30;
+
+            var openLog = UiFactory.Button("Open Log Folder", 24, y, 150, 32);
             openLog.BackColor = theme.Surface2;
             openLog.ForeColor = theme.Text;
             openLog.Click += (s, e) => OpenLogFolder();
-            // "Ouvrir le dossier des journaux" needs 170 px; the two links after it move along
-            // with it (below) instead of being covered.
+            // "Ouvrir le dossier des journaux" needs 170 px.
             UiFactory.FitToText96(openLog, 150, 22);
 
-            var ok = UiFactory.PrimaryButton("Close", 344, 436 + shift, 90, 32, theme);
+            var ok = UiFactory.PrimaryButton("Close", 344, y, 90, 32, theme);
             ok.Click += (s, e) => Close();
+            y += 32 + 20;
 
-            var siteLink = new LinkLabel
-            {
-                Text = Localization.T("Website"),
-                AutoSize = true,
-                Location = new Point(190, 444 + shift),
-                LinkColor = theme.Accent,
-                ActiveLinkColor = theme.Accent,
-                BackColor = Color.Transparent
-            };
-            siteLink.LinkClicked += (s, e) => OpenUrl(OfficialSourceForm.WebsiteUrl);
-            Controls.Add(siteLink);
-
-            var ghLink = new LinkLabel
-            {
-                // Not translated, deliberately: a brand name, like "Tempo" itself.
-                Text = "GitHub",
-                AutoSize = true,
-                Location = new Point(258, 444 + shift),
-                LinkColor = theme.Accent,
-                ActiveLinkColor = theme.Accent,
-                BackColor = Color.Transparent
-            };
-            ghLink.LinkClicked += (s, e) => OpenUrl(OfficialSourceForm.GitHubUrl);
-            Controls.Add(ghLink);
-
-            // The links follow the (measured) Open Log Folder button rather than fixed x's. The first link's
-            // width in 100% units, as the row is: its Right is the screen's pixels while this window is
-            // built, and on a 150% screen GitHub landed on the Close button in Spanish and French.
-            siteLink.Left = Math.Max(190, openLog.Right + 16);
-            ghLink.Left = siteLink.Left + UiFactory.Measure96(siteLink.Text, siteLink.Font, 0, TextFormatFlags.Default).Width + 14;
-
-            Controls.AddRange(new Control[] { logo, dropHint, chooseLogo, resetLogo, title, version, sysInfo, buildInfo, dataInfo, description, openLog, ok });
+            // As tall as what it holds (in 100% units; UiFactory.ScaleToScreen scales it with everything else).
+            ClientSize = new Size(454, y);
+            Controls.AddRange(new Control[] { logo, dropHint, chooseLogo, resetLogo, title, lead, description, openLog, ok });
 
             AcceptButton = ok;
             UiFactory.ScaleToScreen(this);
@@ -512,7 +630,7 @@ namespace AutoClicker.UI
                     Text = Localization.F("✓ Official ID {0}", id),
                     LinkColor = theme.SuccessText,
                     VisitedLinkColor = theme.SuccessText,
-                    ActiveLinkColor = theme.Accent,
+                    ActiveLinkColor = theme.AccentText,
                     LinkBehavior = LinkBehavior.HoverUnderline
                 };
                 link.LinkClicked += (s, e) => OpenUrl(url);

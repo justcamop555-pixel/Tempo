@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -34,9 +34,9 @@
     <NoWarn>$(NoWarn);WFO1000</NoWarn>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\tempo.ico</ApplicationIcon>
-    <Version>1.0.327</Version>
-    <AssemblyVersion>1.0.327.0</AssemblyVersion>
-    <FileVersion>1.0.327.0</FileVersion>
+    <Version>1.0.328</Version>
+    <AssemblyVersion>1.0.328.0</AssemblyVersion>
+    <FileVersion>1.0.328.0</FileVersion>
     <Company>Tempo Project</Company>
     <Product>Tempo</Product>
     <AssemblyTitle>Tempo</AssemblyTitle>
@@ -102,20 +102,47 @@
       invocations identical, so it is both the correctness fix and the speed fix.
     -->
     <PublishReadyToRun>true</PublishReadyToRun>
+    <!--
+      NOT composite. The SDK turns composite ReadyToRun ON by itself for every single-file
+      publish since .NET 7 (Microsoft.NET.CrossGen.targets), and composite REWRITES the whole
+      framework: all ~250 runtime DLLs came out as unsigned IL stubs beside one unsigned
+      139 MB Tempo.r2r.dll, with hashes no PC had ever seen. Every first start unpacks them to
+      %TEMP%\.net, and antivirus scans and cloud-checks each unknown unsigned file — users
+      who downloaded Tempo.exe waited 1-2 minutes with nothing on screen (reported 2026-11-10).
+      Off, the runtime ships as Microsoft built and SIGNED it (already precompiled by
+      Microsoft), and only Tempo.dll is compiled here.
+    -->
+    <PublishReadyToRunComposite>false</PublishReadyToRunComposite>
   </PropertyGroup>
 
   <!--
-    A publish that quietly lost ReadyToRun is the failure this project has actually
-    shipped, three times. The symptom is only ever the file size, so that is what
-    gets checked — automatically, at the end of every publish, instead of by
-    remembering to look.
-
-    The floor is deliberately well below the real figure (~101 MB) so ordinary
-    growth and shrinkage never trip it; only losing the ~17 MB of precompiled
-    native code can. If a deliberate change ever takes the exe legitimately below
-    this, move the floor in the same commit — that keeps the number meaningful
-    instead of something to be silenced.
+    For the same reason, Microsoft's own SIGNED libraries that Tempo brings along are not
+    recompiled: compiling them rewrites them, and the signature goes. The Windows SDK
+    projection alone came out as a 52.8 MB unsigned file (Microsoft's signed original is
+    23.7 MB). None of them runs at start-up — the WinRT accent read only with "Match
+    Windows", WebView2 only for the experimental web settings page — so a few methods
+    compile on first use instead, once.
   -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <PublishReadyToRunExclude Include="Microsoft.Windows.SDK.NET.dll;WinRT.Runtime.dll;Microsoft.Web.WebView2.Core.dll;Microsoft.Web.WebView2.WinForms.dll;Microsoft.Web.WebView2.Wpf.dll" />
+  </ItemGroup>
+
+  <!--
+    Whisper.net's runtime packages add EVERY platform's native libraries to the output,
+    whatever the target: a win-x64 Tempo.exe carried the Linux Vulkan build
+    (libggml-vulkan-whisper.so, 20.6 MB) and the win-x86 and win-arm64 CPU builds — 24 MB
+    unpacked on every first start, for nothing. On x64 Windows Whisper.net loads only
+    runtimes\win-x64 and runtimes\vulkan\win-x64. Left out of the published bundle here
+    (only for win-x64, the RID that ships).
+  -->
+  <Target Name="DropOtherPlatformNatives" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <ItemGroup>
+      <_TempoOtherPlatform Include="@(ResolvedFileToPublish)" Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '(?i)^runtimes[\\/](vulkan[\\/])?(linux|osx|android|ios|tvos|maccatalyst|browser|win-x86|win-arm64)'))" />
+      <ResolvedFileToPublish Remove="@(_TempoOtherPlatform)" />
+    </ItemGroup>
+    <Message Importance="high" Text="  Left out of the bundle (other platforms' native libraries): @(_TempoOtherPlatform->Count()) file(s)." />
+  </Target>
+
   <!--
     Utils\BuildInfo.Generated.cs carries the build number and is git-ignored, because it
     changes on every publish and a file that churns on every build has no place in
@@ -133,30 +160,75 @@
     <Message Importance="high" Text="EnsureBuildInfo: wrote a neutral Utils\BuildInfo.Generated.cs (unstamped dev build)." />
   </Target>
 
-  <Target Name="VerifyReadyToRun" AfterTargets="Publish" Condition="'$(RuntimeIdentifier)' != '' And '$(PublishSingleFile)' == 'true'">
-    <PropertyGroup>
-      <_TempoExe>$(PublishDir)$(AssemblyName).exe</_TempoExe>
-      <_R2RFloorBytes>95000000</_R2RFloorBytes>
-    </PropertyGroup>
-    <Error Condition="!Exists('$(_TempoExe)')" Text="Publish finished but $(_TempoExe) is not there." />
-    <!--
-      The size is read by PowerShell rather than MSBuild item metadata: MSBuild has
-      no well-known FileSize metadata (FullPath, ModifiedTime and friends, but not
-      length), and asking for %(FileSize) silently yields an empty string, which
-      then fails the numeric COMPARISON rather than the build — a check that errors
-      for the wrong reason is no better than one that never fires.
+  <!--
+    A publish that quietly lost ReadyToRun is the failure this project has actually
+    shipped, three times (1.0.314-.316). It used to be caught by the exe's SIZE, a 95 MB
+    floor: with composite ReadyToRun the precompiled code was ~17 MB of it. Composite is
+    off now (PublishReadyToRunComposite above), and then the runtime arrives precompiled
+    by Microsoft either way — only Tempo.dll's own native code (~5 MB) hangs on this
+    flag, too little for any size to tell. So the check asks the very Tempo.dll this
+    publish bundles: a ReadyToRun image carries a native header (IMAGE_COR20_HEADER.
+    ManagedNativeHeader), an IL-only one has none. Read by hand from the PE headers,
+    so the inline task needs nothing beyond System.IO.
+  -->
+  <UsingTask TaskName="TempoIsReadyToRun" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <AssemblyPath ParameterType="System.String" Required="true" />
+      <Compiled ParameterType="System.Boolean" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        using (FileStream s = File.OpenRead(AssemblyPath))
+        using (BinaryReader r = new BinaryReader(s))
+        {
+            s.Position = 0x3C;
+            int pe = r.ReadInt32();                       // "PE\0\0", then the COFF header
+            s.Position = pe + 6;
+            int sections = r.ReadUInt16();
+            s.Position = pe + 20;
+            int optionalSize = r.ReadUInt16();
+            int optional = pe + 24;
+            s.Position = optional;
+            int magic = r.ReadUInt16();                   // 0x20B = PE32+, else PE32
+            s.Position = optional + (magic == 0x20B ? 112 : 96) + 14 * 8;   // data directory 14: the CLI header
+            uint cliRva = r.ReadUInt32();
+            long cli = -1;
+            for (int i = 0; i < sections && cli < 0; i++)
+            {
+                s.Position = optional + optionalSize + i * 40 + 8;
+                uint virtualSize = r.ReadUInt32(), virtualAddress = r.ReadUInt32();
+                uint rawSize = r.ReadUInt32(), rawPointer = r.ReadUInt32();
+                if (cliRva >= virtualAddress && cliRva < virtualAddress + Math.Max(virtualSize, rawSize))
+                {
+                    cli = (long)cliRva - virtualAddress + rawPointer;
+                }
+            }
+            Compiled = false;
+            if (cli >= 0)
+            {
+                s.Position = cli + 64 + 4;                // IMAGE_COR20_HEADER.ManagedNativeHeader.Size
+                Compiled = r.ReadUInt32() > 0;
+            }
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
 
-      PowerShell only prints the number; the verdict is an MSBuild <Error> below.
-      Letting Exec fail on its own exit code worked, but MSBuild then reports the
-      whole command line as the error, and the sentence explaining what went wrong
-      is lost in the middle of it. This way the message IS the error.
-    -->
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;(Get-Item -LiteralPath '$(_TempoExe)').Length&quot;" ConsoleToMSBuild="true" StandardOutputImportance="low">
-      <Output TaskParameter="ConsoleOutput" PropertyName="_TempoExeBytes" />
-    </Exec>
-    <Error Condition="'$(_TempoExeBytes)' == ''" Text="Could not read the size of $(_TempoExe) to verify ReadyToRun." />
-    <Error Condition="'$(_TempoExeBytes)' &lt; '$(_R2RFloorBytes)'" Text="ReadyToRun did NOT apply. $(AssemblyName).exe is $(_TempoExeBytes) bytes, under the $(_R2RFloorBytes) floor — a correct build is ~101 MB, and ~84 MB means the precompiled native code is missing and start-up will be slower. PublishReadyToRun is set in AutoClicker.csproj; check nothing on the command line overrode it to false." />
-    <Message Importance="high" Text="  ReadyToRun verified: $(AssemblyName).exe is $(_TempoExeBytes) bytes." />
+  <!-- Just before the bundle is put together: by the end of a single-file publish the bundled
+       files are no longer listed, and by here ReadyToRun (CreateReadyToRunImages) has swapped
+       each compiled assembly's entry for its image. -->
+  <Target Name="VerifyReadyToRun" BeforeTargets="_ComputeFilesToBundle" Condition="'$(RuntimeIdentifier)' != '' And '$(PublishSingleFile)' == 'true'">
+    <ItemGroup>
+      <_TempoBundledMain Include="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == '$(AssemblyName).dll'" />
+    </ItemGroup>
+    <Error Condition="'@(_TempoBundledMain)' == ''" Text="Could not find $(AssemblyName).dll among the files to bundle, to verify ReadyToRun." />
+    <TempoIsReadyToRun AssemblyPath="%(_TempoBundledMain.FullPath)">
+      <Output TaskParameter="Compiled" PropertyName="_TempoMainIsR2R" />
+    </TempoIsReadyToRun>
+    <Error Condition="'$(_TempoMainIsR2R)' != 'True'" Text="ReadyToRun did NOT apply: the $(AssemblyName).dll bundled into $(AssemblyName).exe has no precompiled code, so every start JIT-compiles all of Tempo. PublishReadyToRun is set in AutoClicker.csproj; check nothing on the command line overrode it to false." />
+    <Message Importance="high" Text="  ReadyToRun verified: the bundled $(AssemblyName).dll is precompiled." />
   </Target>
 
   <!-- Embed the app icon so the window and tray can load it at runtime. -->
@@ -169,6 +241,13 @@
       has VAD from 1.9.1, the version pinned away from below. MIT (Silero Team; the ggml authors).
     -->
     <EmbeddedResource Include="Assets\ggml-silero-v5.1.2.bin" LogicalName="Tempo.ggml-silero-v5.1.2.bin" />
+    <!-- The caption speakers' face detector (round 26): OpenCV Zoo's YuNet 2023mar, MIT, 232,589 bytes,
+         SHA-256 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4 (as published on
+         huggingface.co/opencv/face_detection_yunet). Run by Utils/FaceAi.cs on Windows' own ML engine. The
+         recognizer (SFace, 36.9 MB) is not built in: it is fetched on first use. -->
+    <EmbeddedResource Include="Assets\face_detection_yunet_2023mar.onnx" LogicalName="Tempo.face_detection_yunet_2023mar.onnx" />
+    <!-- The Apache License 2.0 text (SFace and the ported OpenCV code), shown with About Tempo's licences. -->
+    <EmbeddedResource Include="Assets\licences\Apache-2.0.txt" LogicalName="Tempo.Apache-2.0.txt" />
     <!-- Embedded, not copied beside the exe: publish is single-file. -->
     <EmbeddedResource Include="UI\Web\settings.html" />
     <!--
@@ -216,6 +295,15 @@
       this way; CPU behaviour is untouched when the box is unticked.
     -->
     <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.8.1" />
+    <!--
+      sherpa-onnx (k2-fsa, Apache-2.0; brings ONNX Runtime, MIT): the engine for NVIDIA's Nemotron streaming speech
+      models (Utils/NemotronStreaming.cs, round 35, user-approved 2026-11-17). Nemotron needs 1.13.4 or later to decode
+      correctly (an older runtime transcribes badly without failing). Its runtime packages carry every platform's
+      native libraries; DropOtherPlatformNatives above leaves all but win-x64 out of the bundle. Its onnxruntime.dll must
+      be loaded BEFORE Windows' in-box machine learning brings System32's (NemotronStreaming.Prepare) — the other way
+      round, sherpa-onnx bound to System32's ORT 1.17 and crashed (scratchpad nemotron harness, "winml-first" mode).
+    -->
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="2.0.1" />
   </ItemGroup>
 
 </Project>

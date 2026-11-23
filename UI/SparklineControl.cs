@@ -51,13 +51,24 @@ namespace AutoClicker.UI
                 value = 0;
             }
 
+            // A full chart of one value given that value again (idle: zeros, five times a second) shifts to the same
+            // picture — no repaint. Everything else moves the line.
+            bool samePicture = _samples.Count >= Capacity;
+            if (samePicture)
+            {
+                foreach (double v in _samples)
+                {
+                    if (v != value) { samePicture = false; break; }
+                }
+            }
+
             _samples.Enqueue(value);
             while (_samples.Count > Capacity)
             {
                 _samples.Dequeue();
             }
 
-            Invalidate();
+            if (!samePicture) { Invalidate(); }
         }
 
         public void Clear()

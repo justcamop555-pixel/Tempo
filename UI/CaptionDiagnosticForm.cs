@@ -42,6 +42,9 @@ namespace AutoClicker.UI
         private readonly Action _turnOnWindowsCaptions;
         private readonly Func<bool> _canUseTempoCaptions;
         private readonly Action _useTempoCaptions;
+        private readonly Func<bool> _restartWindowsCaptions;
+        private readonly Func<bool> _barVisible;
+        private readonly Timer _buttonReset = new Timer { Interval = 2000 };
 
         private readonly Label _headline;
         private readonly Label _detail;
@@ -71,14 +74,28 @@ namespace AutoClicker.UI
         /// <param name="turnOnWindowsCaptions">Starts Windows Live Captions.</param>
         /// <param name="canUseTempoCaptions">Whether switching to Tempo's own engine would change anything (the source is Windows).</param>
         /// <param name="useTempoCaptions">Switches the caption source to Tempo's own engine.</param>
+        /// <param name="restartWindowsCaptions">Closes the Windows bar and starts it again (off the UI thread; blocks a moment). Default: LiveCaptionReader's.</param>
+        /// <param name="barVisible">Whether the Windows bar is on screen (cheap). Default: LiveCaptionReader's.</param>
         public CaptionDiagnosticForm(Theme theme, Func<Result> diagnose, Action turnOnWindowsCaptions,
-                                     Func<bool> canUseTempoCaptions, Action useTempoCaptions)
+                                     Func<bool> canUseTempoCaptions, Action useTempoCaptions,
+                                     Func<bool> restartWindowsCaptions = null, Func<bool> barVisible = null)
         {
             _theme = theme ?? Theme.ForKind(ThemeKind.Dark);
             _diagnose = diagnose;
             _turnOnWindowsCaptions = turnOnWindowsCaptions;
             _canUseTempoCaptions = canUseTempoCaptions ?? (() => false);
             _useTempoCaptions = useTempoCaptions;
+            _restartWindowsCaptions = restartWindowsCaptions ?? LiveCaptionReader.RestartWindowsCaptions;
+            _barVisible = barVisible ?? LiveCaptionReader.WindowsBarVisible;
+            // "Copied" / "Saved" say so for a moment, then the buttons read as buttons again.
+            _buttonReset.Tick += (s, e) =>
+            {
+                _buttonReset.Stop();
+                if (IsDisposed) { return; }
+                _copy.Text = Localization.T("Copy all");
+                _save.Text = Localization.T("Save…");
+            };
+            Disposed += (s, e) => _buttonReset.Dispose();
 
             // Built in 100% units; scaled with the screen at the end (UiFactory.ScaleToScreen).
             Text = Localization.T("Windows Live Captions — diagnostic");
@@ -120,8 +137,15 @@ namespace AutoClicker.UI
             _again = UiFactory.Button("Try again", x0 + 390, 102, 120, 30);
             _again.Click += (s, e) => RunCheck();
             Controls.Add(_again);
-            // Each sized from its own words (German and French need more), then laid side by side.
+            // Each sized from its own words (German and French need more), then laid side by side. The first button says
+            // "Turn on" or "Restart" depending on the verdict: as wide as the wider of the two.
+            _primary.Text = Localization.T("Restart Live Captions");
             UiFactory.FitToText96(_primary, 180, 24);
+            int restartWidth = _primary.Width;
+            _primary.Text = Localization.T("Turn on Live Captions");
+            UiFactory.FitToText96(_primary, 180, 24);
+            _primary.Width = Math.Max(_primary.Width, restartWidth);
+            LayoutFitter.DeclareCaptions(_primary, Localization.T("Turn on Live Captions"), Localization.T("Restart Live Captions"));
             UiFactory.FitToText96(_secondary, 160, 24);
             UiFactory.FitToText96(_again, 110, 24);
             _secondary.Left = _primary.Right + 10;
@@ -168,6 +192,7 @@ namespace AutoClicker.UI
             _copy.Click += (s, e) => CopyReport();
             Controls.Add(_copy);
             _save = UiFactory.Button("Save…", x0 + 120, 512, 100, 30);
+            LayoutFitter.DeclareCaptions(_save, Localization.T("Save…"), Localization.T("Saved  ✓"));
             _save.Click += (s, e) => SaveReport();
             Controls.Add(_save);
             var close = UiFactory.PrimaryButton("Close", 600, 512, 100, 30, _theme);
@@ -203,6 +228,9 @@ namespace AutoClicker.UI
             for (int i = 0; i < _rows.Length; i++) { SetRow(i, null, Localization.T(RowLabels[i])); }
             _primary.Visible = _secondary.Visible = false;
             _again.Enabled = _copy.Enabled = _save.Enabled = false;
+            _buttonReset.Stop();
+            _copy.Text = Localization.T("Copy all");
+            _save.Text = Localization.T("Save…");
             _box.Text = "";
         }
 
@@ -251,13 +279,24 @@ namespace AutoClicker.UI
                     break;
                 case "off":
                     Say("Live Captions isn't on", "Turn it on and check again, or let Tempo caption by itself.", warn);
-                    if (_turnOnWindowsCaptions != null) { _primaryAction = TurnOnAndRecheck; }
+                    if (_turnOnWindowsCaptions != null)
+                    {
+                        _primaryAction = TurnOnAndRecheck;
+                        _primary.Text = Localization.T("Turn on Live Captions");
+                    }
                     if (offerTempo) { _secondaryAction = UseTempo; }
                     break;
                 case "uia":
+                    // A fix to press, not only advice: closing the bar and starting it again is what usually makes Windows
+                    // hand its text out again — signing out of Windows was the only way offered.
                     Say("Windows won't share the captions",
-                        "The bar is there, but Windows' accessibility service won't hand its text to Tempo. "
-                        + "Signing out of Windows and back in usually fixes it.", warn);
+                        "The bar is there, but Windows won't hand its text to Tempo. Restarting Live Captions usually "
+                        + "fixes it; if not, sign out of Windows and back in.", warn);
+                    if (_restartWindowsCaptions != null)
+                    {
+                        _primaryAction = RestartAndRecheck;
+                        _primary.Text = Localization.T("Restart Live Captions");
+                    }
                     if (offerTempo) { _secondaryAction = UseTempo; }
                     break;
                 case "unsupported":
@@ -265,8 +304,14 @@ namespace AutoClicker.UI
                         "Live Captions comes with Windows 11 (version 22H2 and later). Tempo's own captions work without it.", warn);
                     if (offerTempo) { _secondaryAction = UseTempo; }
                     break;
-                default:
+                case "timeout":
                     Say("The check didn't finish", "Windows didn't answer within 20 seconds. Try again in a moment.", _theme.Danger);
+                    break;
+                default:
+                    // A check that failed is not one Windows was slow to answer: it said "didn't answer within 20 seconds"
+                    // about an error that happened at once.
+                    Say("The check failed", "Something went wrong while checking — the details below say what. Try again, "
+                        + "or copy them into a bug report.", _theme.Danger);
                     break;
             }
             // Side by side from the left, the offered ones first. Decided from the actions, not from Visible: a
@@ -334,9 +379,42 @@ namespace AutoClicker.UI
         private async void TurnOnAndRecheck()
         {
             try { _turnOnWindowsCaptions?.Invoke(); } catch (Exception ex) { Logger.Swallow("CaptionDiagnostic.TurnOn", ex); }
+            await WaitForBarThenCheck();
+        }
+
+        private async void RestartAndRecheck()
+        {
             _primary.Enabled = false;
-            // Live Captions takes a moment to put its bar up (longer the first time, while it fetches its speech pack).
-            await Task.Delay(3500);
+            _headline.Text = Localization.T("Restarting Live Captions…");
+            _headline.ForeColor = _theme.Text;
+            bool started = false;
+            try { started = await Task.Run(_restartWindowsCaptions); }
+            catch (Exception ex) { Logger.Swallow("CaptionDiagnostic.Restart", ex); }
+            if (IsDisposed) { return; }
+            if (!started) { _primary.Enabled = true; RunCheck(); return; }
+            await WaitForBarThenCheck();
+        }
+
+        /// <summary>
+        /// Until the Windows bar is up (at most 12 s), then the check again. A fixed 3.5 s wait was too short the first
+        /// time Live Captions starts — it fetches its speech pack — and the check said "isn't on" about a bar on its way.
+        /// </summary>
+        private async Task WaitForBarThenCheck()
+        {
+            _primary.Enabled = false;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            await Task.Delay(800);
+            while (!IsDisposed && clock.ElapsedMilliseconds < 12000)
+            {
+                bool up = false;
+                try { up = await Task.Run(_barVisible); } catch { }
+                if (up)
+                {
+                    await Task.Delay(700);   // a moment for it to start captioning before it is read
+                    break;
+                }
+                await Task.Delay(400);
+            }
             if (IsDisposed) { return; }
             _primary.Enabled = true;
             RunCheck();
@@ -356,6 +434,9 @@ namespace AutoClicker.UI
                 _copy.Text = Localization.T("Copied");
             }
             catch { _copy.Text = Localization.T("Copy failed"); }
+            // It said "Copied" for good: a second copy, after Try again, looked like it had already happened.
+            _buttonReset.Stop();
+            _buttonReset.Start();
         }
 
         private void SaveReport()
@@ -365,15 +446,24 @@ namespace AutoClicker.UI
                 using (var dlg = new SaveFileDialog
                 {
                     FileName = "Tempo - Windows Live Captions check.txt",
-                    Filter = "Text (*.txt)|*.txt",
+                    Filter = Localization.T("Text file (*.txt)|*.txt"),
                     OverwritePrompt = true,
                 })
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK) { return; }
                     System.IO.File.WriteAllText(dlg.FileName, FullReport(), System.Text.Encoding.UTF8);
+                    _save.Text = Localization.T("Saved  ✓");
+                    _buttonReset.Stop();
+                    _buttonReset.Start();
                 }
             }
-            catch (Exception ex) { Logger.Warn("[Captions] could not save the diagnostic: " + ex.Message); }
+            catch (Exception ex)
+            {
+                // It only went to the log: the save looked done when it was not.
+                Logger.Warn("[Captions] could not save the diagnostic: " + ex.Message);
+                MessageBox.Show(this, Localization.F("Couldn't save: {0}", ex.Message), "Tempo",
+                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
 
         /// <summary>What is copied or saved: the verdict and checklist as shown, then the details.</summary>

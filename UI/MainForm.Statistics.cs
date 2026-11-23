@@ -769,7 +769,8 @@ namespace AutoClicker.UI
             _goalProgressBar.Value = pct;
 
             bool reached = done >= goal;
-            _goalProgressLabel.ForeColor = reached ? _theme.Success : _theme.Text;
+            // SuccessText: the plain Success is a fill, 2.7:1 as text in some themes.
+            _goalProgressLabel.ForeColor = reached ? _theme.SuccessText : _theme.Text;
 
             if (reached)
             {
@@ -815,52 +816,58 @@ namespace AutoClicker.UI
             string filter = _historyProfileFilter != null && _historyProfileFilter.SelectedIndex > 0
                 ? _historyProfileFilter.SelectedItem as string
                 : null;
-
-            _sessionHistoryList.BeginUpdate();
-            _sessionHistoryList.Items.Clear();
-
-            long shownCount = 0;
-            long shownClicks = 0;
-
             string search = (_historySearchText ?? "").Trim();
 
-            foreach (SessionRecord r in _history.Records)
+            // The rows stand while what they are made from does: the history, the profile filter and the search.
+            // Every visit to the tab used to make all of them again (see SessionHistoryListView).
+            string rowsKey = _history.Version + "\u0001" + (filter ?? "") + "\u0001" + search;
+            if (!string.Equals(rowsKey, _historyRowsKey, StringComparison.Ordinal))
             {
-                string profile = string.IsNullOrEmpty(r.Profile) ? "—" : r.Profile;
-                if (filter != null && !string.Equals(profile, filter, StringComparison.Ordinal))
+                var rows = new System.Collections.Generic.List<ListViewItem>(_history.Records.Count);
+                long clicks = 0;
+                foreach (SessionRecord r in _history.Records)
                 {
-                    continue;
-                }
-
-                DateTime local = r.WhenUtc.ToLocalTime();
-
-                // Free-text search over date and profile.
-                if (search.Length > 0)
-                {
-                    string haystack = local.ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture) + " " + profile;
-                    if (haystack.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0)
+                    string profile = string.IsNullOrEmpty(r.Profile) ? "—" : r.Profile;
+                    if (filter != null && !string.Equals(profile, filter, StringComparison.Ordinal))
                     {
                         continue;
                     }
+
+                    DateTime local = r.WhenUtc.ToLocalTime();
+                    string when = local.ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture);
+
+                    // Free-text search over date and profile.
+                    if (search.Length > 0 && (when + " " + profile).IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        continue;
+                    }
+
+                    var item = new ListViewItem(when);
+                    item.SubItems.Add(profile);
+                    item.SubItems.Add(r.Clicks.ToString("N0"));
+                    item.SubItems.Add(FormatDuration(TimeSpan.FromSeconds(r.DurationSeconds)));
+                    item.SubItems.Add(r.AverageCps.ToString("0.0"));
+                    item.SubItems.Add(r.PeakCps.ToString("0.0"));
+                    item.Tag = r;
+                    rows.Add(item);
+                    clicks += r.Clicks;
                 }
 
-                var item = new ListViewItem(local.ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture));
-                item.SubItems.Add(profile);
-                item.SubItems.Add(r.Clicks.ToString("N0"));
-                item.SubItems.Add(FormatDuration(TimeSpan.FromSeconds(r.DurationSeconds)));
-                item.SubItems.Add(r.AverageCps.ToString("0.0"));
-                item.SubItems.Add(r.PeakCps.ToString("0.0"));
-                item.Tag = r;
-                _sessionHistoryList.Items.Add(item);
-
-                shownCount++;
-                shownClicks += r.Clicks;
+                _historyRowsKey = rowsKey;
+                _historyShownClicks = clicks;
+                _sessionHistoryList.SetRows(rows.ToArray());
+                // The order picked with a column header holds across refreshes.
+                if (_histSortColumn >= 0)
+                {
+                    _sessionHistoryList.SortRows(new HistoryColumnComparer(_histSortColumn, _histSortAsc));
+                }
+                ApplyThemeToSessionList();
+                // After the rows exist, so the column fit accounts for the scrollbar.
+                _sessionHistoryList.RefreshLayout();
             }
 
-            _sessionHistoryList.EndUpdate();
-            ApplyThemeToSessionList();
-            // After the rows exist, so the column fit accounts for the scrollbar.
-            _sessionHistoryList.RefreshLayout();
+            long shownCount = _sessionHistoryList.RowCount;
+            long shownClicks = _historyShownClicks;
 
             if (_historySummaryLabel != null)
             {
@@ -1413,11 +1420,8 @@ namespace AutoClicker.UI
 
         private SessionRecord SelectedHistoryRecord()
         {
-            if (_sessionHistoryList.SelectedItems.Count == 0)
-            {
-                return null;
-            }
-            return _sessionHistoryList.SelectedItems[0].Tag as SessionRecord;
+            // A virtual list (SessionHistoryListView): its selection is by index, never SelectedItems.
+            return _sessionHistoryList?.SelectedRow?.Tag as SessionRecord;
         }
 
         private void OnSessionHistoryDetails(object sender, EventArgs e)
@@ -1522,15 +1526,15 @@ namespace AutoClicker.UI
                 _histSortAsc = true;
             }
 
-            _sessionHistoryList.ListViewItemSorter =
-                new HistoryColumnComparer(e.Column, _histSortAsc);
-            _sessionHistoryList.Sort();
+            // The rows are kept by the list (virtual), so it sorts them itself.
+            _sessionHistoryList.SortRows(new HistoryColumnComparer(e.Column, _histSortAsc));
 
-            // Show which column drives the order, and which way.
+            // Show which column drives the order, and which way. Translated: the English titles went back in after
+            // the first click, in every language.
             string[] baseTitles = { "When", "Profile", "Clicks", "Duration", "Avg CPS", "Peak CPS" };
             for (int i = 0; i < _sessionHistoryList.Columns.Count && i < baseTitles.Length; i++)
             {
-                string t = baseTitles[i];
+                string t = Utils.Localization.T(baseTitles[i]);
                 if (i == _histSortColumn)
                 {
                     t += _histSortAsc ? " \u25B2" : " \u25BC";

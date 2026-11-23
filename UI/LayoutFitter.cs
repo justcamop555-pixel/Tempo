@@ -2141,12 +2141,44 @@ namespace AutoClicker.UI
         /// </summary>
         private static IEnumerable<Control> Containers(Control parent)
         {
+            // A container hidden whole behind an overlay of its own — a turned-off feature's cover (Settings › Disable
+            // features) — shows nothing of what is in it: nothing there can collide, spill or be cut where anyone sees it.
+            // Walked, the start-up check logged ~50 "STILL OVERLAPPING" lines against the cover and "OVERFLOWS" for a
+            // page whose scrolling the cover had switched off, at every start with a feature off (mainscan failed on it).
+            if (CoveredWhole(parent)) { yield break; }
             if (parent.HasChildren) { yield return parent; }
             foreach (Control c in parent.Controls)
             {
                 foreach (Control inner in Containers(c)) { yield return inner; }
             }
         }
+
+        /// <summary>Whether a declared overlay docked over all of <paramref name="container"/> is shown in it.</summary>
+        private static bool CoveredWhole(Control container)
+        {
+            foreach (Control c in container.Controls)
+            {
+                if (c.Dock != DockStyle.Fill || !IsOverlay(c)) { continue; }
+                // A feature's cover says itself whether it is covering: on a tab not yet visited there is no window to ask.
+                if (c is FeatureOffCover cover ? cover.Covering : OwnVisible(c)) { return true; }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Shown as far as the control itself goes: its own WS_VISIBLE, which a page that is not on screen leaves set on its
+        /// children (Control.Visible answers false for every child of a hidden page).
+        /// </summary>
+        private static bool OwnVisible(Control c)
+        {
+            try { return c.IsHandleCreated ? (GetWindowLong(c.Handle, GWL_STYLE) & WS_VISIBLE) != 0 : c.Visible; }
+            catch { return false; }
+        }
+
+        private const int GWL_STYLE = -16, WS_VISIBLE = 0x10000000;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern int GetWindowLong(IntPtr hwnd, int index);
 
         /// <summary>
         /// How a control is named in a fault line: its caption, or — for the sliders, meters

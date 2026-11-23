@@ -82,6 +82,9 @@ namespace AutoClicker.Native
 
         public bool IsRunning => _hookHandle != IntPtr.Zero;
 
+        /// <summary>Whose hook this is, for the log and the stall watch ("second-cursor mouse"): there are several.</summary>
+        public string Name { get; set; } = "mouse";
+
         public LowLevelMouseHook()
         {
             _proc = HookCallback;
@@ -189,8 +192,10 @@ namespace AutoClicker.Native
                         // The mouse hook is the busier of the two (every movement), so a slow
                         // listener here costs the hook first.
                         long started = System.Diagnostics.Stopwatch.GetTimestamp();
-                        MouseEvent?.Invoke(this, args);
-                        HookHealth.NoteCallback("mouse", started);
+                        string was = HookHealth.Enter(Name);   // what a stall line names as the place it is stuck
+                        try { MouseEvent?.Invoke(this, args); }
+                        finally { HookHealth.Leave(was); }
+                        HookHealth.NoteCallback(Name, started);
                         if (args.Handled)
                         {
                             // Swallow: don't pass this event to the window beneath.

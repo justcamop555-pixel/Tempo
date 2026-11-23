@@ -78,6 +78,9 @@ namespace AutoClicker.Native
         /// </summary>
         public bool Quiet { get; set; }
 
+        /// <summary>Whose hook this is, for the log and the stall watch ("hotkey keyboard"): there are several.</summary>
+        public string Name { get; set; } = "keyboard";
+
         public LowLevelKeyboardHook()
         {
             _proc = HookCallback;
@@ -143,8 +146,10 @@ namespace AutoClicker.Native
                         // TIMED: Windows judges this callback against LowLevelHooksTimeout and
                         // removes the hook without a word when it is missed — see HookHealth.
                         long started = System.Diagnostics.Stopwatch.GetTimestamp();
-                        KeyEvent?.Invoke(this, args);
-                        HookHealth.NoteCallback("keyboard", started);
+                        string was = HookHealth.Enter(Name);
+                        try { KeyEvent?.Invoke(this, args); }
+                        finally { HookHealth.Leave(was); }
+                        HookHealth.NoteCallback(Name, started);
 
                         // A listener claimed this key. Returning non-zero (instead of
                         // chaining) is what actually stops it reaching the focused app.

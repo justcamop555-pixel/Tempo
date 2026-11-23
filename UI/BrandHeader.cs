@@ -94,6 +94,9 @@ namespace AutoClicker.UI
             }
         }
 
+        /// <summary>Where the header's gradients run to: the theme's second accent, or its hover shade without one.</summary>
+        private Color Second => _theme.Accent2.IsEmpty ? _theme.AccentHover : _theme.Accent2;
+
         // ── Custom caption buttons ─────────────────────────────────────────────
         // The window is borderless (see MainForm.CreateParams/WndProc) so this header IS
         // the title bar. Windows won't let an app restyle the system caption buttons, so
@@ -321,10 +324,11 @@ namespace AutoClicker.UI
                 }
             }
 
-            // Accent hairline along the bottom edge — a full true-colour sweep.
+            // Accent hairline along the bottom edge — a full true-colour sweep, from the accent into the theme's second
+            // accent (round 42: each theme's two-tone signature).
             var underline = new Rectangle(0, Height - 3, Width, 3);
             using (var ub = new LinearGradientBrush(underline,
-                       _theme.Accent, _theme.AccentHover, LinearGradientMode.Horizontal))
+                       _theme.Accent, Second, LinearGradientMode.Horizontal))
             {
                 g.FillRectangle(ub, underline);
             }
@@ -338,10 +342,11 @@ namespace AutoClicker.UI
             {
                 var glowRect = new Rectangle(tile.Left - 14, tile.Top - 14, tile.Width + 28, tile.Height + 28);
                 glowPath.AddEllipse(glowRect);
+                Color glowColor = Blend(_theme.Accent, Second, 0.35);
                 using (var glow = new PathGradientBrush(glowPath)
                 {
-                    CenterColor = Color.FromArgb(70, _theme.Accent),
-                    SurroundColors = new[] { Color.FromArgb(0, _theme.Accent) },
+                    CenterColor = Color.FromArgb(70, glowColor),
+                    SurroundColors = new[] { Color.FromArgb(0, glowColor) },
                     CenterPoint = new PointF(tile.Left + tile.Width / 2f, tile.Top + tile.Height / 2f)
                 })
                 {
@@ -388,7 +393,7 @@ namespace AutoClicker.UI
                 else
                 {
                     using (var tileBrush = new LinearGradientBrush(tile,
-                               _theme.Accent, _theme.AccentHover, LinearGradientMode.ForwardDiagonal))
+                               _theme.Accent, Second, LinearGradientMode.ForwardDiagonal))
                     {
                         g.FillPath(tileBrush, tilePath);
                     }
@@ -421,13 +426,20 @@ namespace AutoClicker.UI
 
                 var textRect = new RectangleF(textLeft, ty, size.Width + 2, size.Height);
                 using (var grad = new LinearGradientBrush(textRect,
-                           _theme.Accent, _theme.AccentHover, LinearGradientMode.Horizontal))
+                           _theme.Accent, Second, LinearGradientMode.Horizontal))
                 {
-                    // Brighten the gradient stops for a vivid, true-colour wordmark.
+                    // The accent into the theme's second accent (round 42) — each stop kept readable on the header as
+                    // large text (3:1), where a pale second accent on a light theme would otherwise fade out.
+                    Color ground = _theme.Surface;
                     grad.InterpolationColors = new ColorBlend
                     {
-                        Colors = new[] { _theme.Accent, _theme.AccentHover, Brighten(_theme.AccentHover, 0.25) },
-                        Positions = new[] { 0f, 0.6f, 1f }
+                        Colors = new[]
+                        {
+                            Theme.Readable(_theme.Accent, ground, 3.0),
+                            Theme.Readable(Blend(_theme.Accent, Second, 0.5), ground, 3.0),
+                            Theme.Readable(Second, ground, 3.0),
+                        },
+                        Positions = new[] { 0f, 0.5f, 1f }
                     };
                     g.DrawString(word, titleFont, grad, textLeft, ty);
                 }

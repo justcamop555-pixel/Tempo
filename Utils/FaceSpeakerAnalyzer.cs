@@ -76,7 +76,9 @@ namespace AutoClicker.Utils
         private const double SpeakMotion = 2.6;     // NET mouth-motion EMA that counts as talking
         private const double SpeakLead = 1.5;       // must lead other faces by this factor
         private const int SlotTimeoutMs = 3000;      // forget a face unseen this long
-        private const int MaxSlots = 4;
+        // 6 (was 4): a panel of five — four guests and a moderator — left one person untracked in every wide shot
+        // (round 26, NASA footage), the one most likely to be the person just seen in close-up.
+        private const int MaxSlots = 6;
         // Faces narrower than this (analysis pixels) are too small to lip-read —
         // their mouth region is a handful of pixels of compression noise.
         private const int MinFaceWidth = 30;
@@ -201,6 +203,12 @@ namespace AutoClicker.Utils
             // A poster / thumbnail / UI portrait, not a living head: excluded
             // from the talking verdict, flagged in DebugDetail.
             public bool IsStatic;
+            // A face with no colour in it — a drawing on a black-and-white page (manga, a comic), or a black-and-white
+            // picture: not a person on camera. Excluded like a static one, even while the page scrolls or zooms (round 27:
+            // the user's OPM manga review, whose drawn characters were taken for the unseen reviewer's face).
+            public bool IsDrawn;
+            public double ChromaEma = -1;       // mean max(R,G,B)−min(R,G,B) over the face's middle, smoothed; -1 = not yet
+            public int ChromaSamples;
             // When the CURRENT occupant took this slot. The slot index IS the face's
             // speaker number, and an expired slot is handed to the next new face — so
             // someone arriving after a speaker left inherits that speaker's number.
@@ -220,6 +228,15 @@ namespace AutoClicker.Utils
             // whether it is someone seen before (see ResolvePendingFaces).
             public FaceLook PendingLook;
             public int PendingLooks, PendingSeen;
+            // The face AI (round 26, Utils/FaceAi.cs): the occupant's fingerprint — a running mean of SFace prints, with
+            // how many went into it and how wide (analysis px) the face was — and where its mouth and eyes are, relative
+            // to the box (from YuNet's landmarks), with when they were found.
+            public float[] Print;
+            public int PrintCount;
+            public float PrintSize;
+            public DateTime PrintUtc;
+            public RectangleF MouthRel, UpperRel;
+            public DateTime MarksUtc;
         }
 
         /// <summary>
@@ -232,7 +249,55 @@ namespace AutoClicker.Utils
             public long OccupantId;
             public FaceLook BigLook, SmallLook;
             public DateTime LastSeenUtc;
+            public float[] Print;
+            public int PrintCount;
+            public float PrintSize;
         }
+
+        // ── The face AI (round 26, 2026-11-15) ──────────────────────────────────
+        // One man cut from a wide shot to a close-up became TWO speakers on the user's Speakers card (22.png): the wide
+        // shot's face kept "coasting" for up to 3 s after the cut, the close-up was compared only with people who had
+        // LEFT (the gallery) — so it was a stranger — and with both "on screen" and both linked to his voice, the linker
+        // took them for two people sharing a voice. Fixed three ways: faces not found again at a cut are retired there
+        // (no coasting across a cut); a new face is compared with faces still coasting too, and takes the occupant over
+        // when it is the same person; and the linker only splits faces DETECTED together that are not the same person.
+        //
+        // "The same person" now comes from SFace fingerprints wherever there are some (Utils/FaceAi.cs). Measured on
+        // public-domain NASA footage (four astronauts in one red shirt before one backdrop, plus moderator and reporters:
+        // scratchpad/faceai, 324 faces hand-labelled): close-up against close-up, one person 0.52–1.00 (median 0.84),
+        // two people at most 0.39; close-up against a ~17 px wide-shot face, one person ≥ 0.40 in 87 % of pairs, two
+        // people in 0.14 %; two tiny faces 78 % / 0.34 %. So: the same person from 0.40; different people only below
+        // 0.30 and only between faces at least PrintBigFace wide — a tiny face's print says little against.
+        // Test switch (scratchpad/facetrack: the behaviour before round 26, faces coasting across a cut).
+        internal static bool RetireAtCut = true;
+        private FaceAi _ai;
+        private bool _aiTried;
+        private volatile bool _recognizerArrived;
+        private DateTime _lastAiPassUtc = DateTime.MinValue;
+        private bool _aiWantSoon;
+        private byte[] _fullRaw;
+        private int _fullRawStride;
+        private volatile string _aiState = "";
+        private volatile int _aiPasses, _printsTaken, _ghostMerges, _printReids, _printChanges;
+        private sealed class OccupantPrint
+        {
+            public float[] Print;
+            public float Size;
+        }
+        // Every occupant's latest fingerprint, for SamePerson (the linker asks about faces that may have left).
+        private readonly Dictionary<long, OccupantPrint> _prints = new Dictionary<long, OccupantPrint>();
+        private const int PrintsKept = 64;
+        private const int AiPassMs = 900;           // landmarks and prints about once a second
+        private const int AiSoonMs = 250;           // ...sooner when a new face is waiting for a print
+        private const int PrintRefreshMs = 2000;
+        internal const float PrintSame = 0.40f;
+        internal const float PrintDifferent = 0.30f;
+        private const float PrintBigFace = 60f;     // analysis px
+        private const float AiMinScore = 0.6f;
+        private const double MarksFreshSec = 3.0;
+        // A face whose new print disagrees this strongly with its occupant's, both big enough to judge, is somebody else:
+        // a cut between two people framed alike that the colours took for one.
+        private const float PrintChanged = 0.25f;
 
         private readonly List<KnownFace> _knownFaces = new List<KnownFace>();
         private const int KnownFacesKept = 24;
@@ -260,7 +325,12 @@ namespace AutoClicker.Utils
         /// <summary>Forgets everyone seen so far (new audio: new people).</summary>
         public void ForgetFaces()
         {
-            lock (_slotLock) { _knownFaces.Clear(); }
+            lock (_slotLock)
+            {
+                _knownFaces.Clear();
+                // Their fingerprints too (the faces on screen print again within a couple of seconds).
+                _prints.Clear();
+            }
         }
 
         private static long _nextOccupant;
@@ -290,6 +360,45 @@ namespace AutoClicker.Utils
 
         /// <summary>Occupant ids of the living (not static) faces on screen in the last frame.</summary>
         public long[] VisibleOccupants => _visibleOccupants;
+
+        /// <summary>
+        /// Occupant ids of the faces the detector actually FOUND in the last frame — not the ones coasting on their last
+        /// box (a head turned away, or a face that has just gone). Two faces in here at once are two faces on screen.
+        /// </summary>
+        public long[] DetectedOccupants => _detectedOccupants;
+        private volatile long[] _detectedOccupants = new long[0];
+
+        /// <summary>
+        /// Are these two occupants the same person, by their face fingerprints (Utils/FaceAi.cs)? +1 the same (cosine ≥
+        /// PrintSame), −1 different (below PrintDifferent, both faces big enough to judge), 0 cannot say (no prints yet,
+        /// a face too small, or in between). Thread-safe.
+        /// </summary>
+        public int SamePerson(long a, long b)
+        {
+            if (a <= 0 || b <= 0) { return 0; }
+            if (a == b) { return 1; }
+            lock (_slotLock)
+            {
+                if (!_prints.TryGetValue(a, out OccupantPrint pa) || !_prints.TryGetValue(b, out OccupantPrint pb)) { return 0; }
+                float sim = FaceAi.Similarity(pa.Print, pb.Print);
+                if (float.IsNaN(sim)) { return 0; }
+                if (sim >= PrintSame) { return 1; }
+                if (sim < PrintDifferent && pa.Size >= PrintBigFace && pb.Size >= PrintBigFace) { return -1; }
+                return 0;
+            }
+        }
+
+        /// <summary>The face AI's state in a line, for Live debug.</summary>
+        public string FaceAiState
+        {
+            get
+            {
+                string s = _aiState;
+                if (FaceAi.Downloading) { s += " · fingerprint model downloading (" + FaceAi.DownloadedBytes / 1048576 + " of 37 MB)"; }
+                return s + (_aiPasses > 0 ? " · " + _aiPasses + " looks, " + _printsTaken + " prints, " + _ghostMerges
+                            + " ghost(s) merged, " + _printReids + " re-identified by print, " + _printChanges + " identity change(s) caught" : "");
+            }
+        }
 
         /// <summary>
         /// A copy of the latest picture of <paramref name="occupant"/>'s face, or null. The caller
@@ -382,27 +491,59 @@ namespace AutoClicker.Utils
                 double score = Math.Min(src.Width, 400) * (0.5 + Sharpness(thumb));
                 bool stale = s.ThumbUtc == DateTime.MinValue || (now - s.ThumbUtc).TotalMilliseconds >= ThumbMaxAgeMs;
                 bool have = _thumbs.ContainsKey(s.OccupantId);
+                // Seen just now: the newest in the keeping order, whether or not this picture replaces the kept one.
+                _thumbOrder.Remove(s.OccupantId);
+                _thumbOrder.Add(s.OccupantId);
                 if (have && !stale && score < s.ThumbScore * ThumbKeepBetterShare)
                 {
                     thumb.Dispose();
                     return;
                 }
                 if (_thumbs.TryGetValue(s.OccupantId, out Bitmap old)) { try { old?.Dispose(); } catch { } }
-                else { _thumbOrder.Add(s.OccupantId); }
                 _thumbs[s.OccupantId] = thumb;
                 _thumbScores[s.OccupantId] = score;
                 s.ThumbUtc = now;
                 s.ThumbScore = score;
-                while (_thumbOrder.Count > ThumbsKept)
-                {
-                    long gone = _thumbOrder[0];
-                    _thumbOrder.RemoveAt(0);
-                    if (_thumbs.TryGetValue(gone, out Bitmap g2)) { try { g2?.Dispose(); } catch { } }
-                    _thumbs.Remove(gone);
-                    _thumbScores.Remove(gone);
-                }
+                TrimPictures(_thumbOrder, _thumbs, _thumbScores, _keepPictures, ThumbsKept);
             }
             catch { }
+        }
+
+        // The faces speakers are linked to (MainForm passes them about once a second): their pictures are the last to go.
+        private volatile HashSet<long> _keepPictures = new HashSet<long>();
+
+        /// <summary>
+        /// The faces a speaker on the Speakers card is linked to, so their pictures outlast those of passers-by. Safe from any
+        /// thread (the set is replaced whole, never changed).
+        /// </summary>
+        public void KeepPicturesOf(IEnumerable<long> occupants)
+        {
+            _keepPictures = occupants != null ? new HashSet<long>(occupants) : new HashSet<long>();
+        }
+
+        /// <summary>
+        /// Drops pictures beyond <paramref name="cap"/>: the face seen longest ago first, but not one a speaker is linked to
+        /// (<paramref name="keep"/>) while another can go. Round 27: they went by FIRST-seen order, so in a reaction stream —
+        /// dozens of faces in the video, cut after cut — the streamer's and the early speakers' pictures were the first
+        /// dropped, and a speaker on the card read "voice + face" with no picture (the user's 23.png).
+        /// </summary>
+        internal static void TrimPictures(List<long> order, Dictionary<long, Bitmap> thumbs, Dictionary<long, double> scores,
+                                          HashSet<long> keep, int cap)
+        {
+            while (order.Count > cap)
+            {
+                int at = 0;
+                if (keep != null && keep.Count > 0)
+                {
+                    at = order.FindIndex(o => !keep.Contains(o));
+                    if (at < 0) { at = 0; }   // every one is a speaker's: the longest unseen goes
+                }
+                long gone = order[at];
+                order.RemoveAt(at);
+                if (thumbs.TryGetValue(gone, out Bitmap b)) { try { b?.Dispose(); } catch { } }
+                thumbs.Remove(gone);
+                scores.Remove(gone);
+            }
         }
 
         // ── Recognising returning faces ─────────────────────────────────────
@@ -465,7 +606,7 @@ namespace AutoClicker.Utils
         /// <summary>Ends a slot's occupancy; the occupant is remembered in case they come back.</summary>
         private void RetireOccupant(Slot s, DateTime now)
         {
-            if (s.OccupantId > 0 && (s.BigLook != null || s.SmallLook != null))
+            if (s.OccupantId > 0 && (s.BigLook != null || s.SmallLook != null || s.Print != null))
             {
                 _knownFaces.RemoveAll(k => k.OccupantId == s.OccupantId);
                 _knownFaces.Add(new KnownFace
@@ -474,6 +615,9 @@ namespace AutoClicker.Utils
                     BigLook = s.BigLook,
                     SmallLook = s.SmallLook,
                     LastSeenUtc = s.LastSeenUtc,
+                    Print = s.Print,
+                    PrintCount = s.PrintCount,
+                    PrintSize = s.PrintSize,
                 });
                 while (_knownFaces.Count > KnownFacesKept)
                 {
@@ -490,6 +634,11 @@ namespace AutoClicker.Utils
             s.PendingLook = null;
             s.PendingLooks = 0;
             s.PendingSeen = 0;
+            // The print went to the gallery with the person; the slot's next occupant starts without one.
+            s.Print = null;
+            s.PrintCount = 0;
+            s.PrintSize = 0;
+            s.MarksUtc = DateTime.MinValue;
         }
 
         /// <summary>
@@ -499,45 +648,78 @@ namespace AutoClicker.Utils
         /// </summary>
         private void ResolvePendingFaces(DateTime now)
         {
+            // With fingerprints on, a new face waits for its first print (asked for at once: _aiWantSoon) — up to
+            // SeenToName detections, as for a face with too few usable looks.
+            FaceAi ai = _ai;
+            bool printsOn = ai != null && ai.CanRecognize;
             List<Slot> ready = null;
             foreach (var s in _slots)
             {
-                if (s.Alive && s.OccupantId == 0 && (s.PendingLooks >= LooksToName || s.PendingSeen >= SeenToName))
+                if (!s.Alive || s.OccupantId != 0) { continue; }
+                bool looksDone = s.PendingLooks >= LooksToName && (!printsOn || s.Print != null);
+                if (looksDone || s.PendingSeen >= SeenToName)
                 {
                     (ready ?? (ready = new List<Slot>())).Add(s);
                 }
             }
             if (ready == null) { return; }
 
-            var options = new List<KeyValuePair<double, KeyValuePair<Slot, KnownFace>>>();
+            // Who each new face might be: someone who has left (the gallery), or someone still COASTING on screen on the
+            // box they had — the same person found again in another place or shot, beside their own ghost.
+            var options = new List<(double Score, Slot S, KnownFace K, Slot Ghost)>();
             foreach (Slot s in ready)
             {
-                if (s.PendingLook == null) { continue; }
                 foreach (KnownFace k in _knownFaces)
                 {
-                    double score = ScoreAgainst(k.BigLook, k.SmallLook, s.PendingLook);
-                    if (!double.IsNaN(score))
-                    {
-                        options.Add(new KeyValuePair<double, KeyValuePair<Slot, KnownFace>>(score, new KeyValuePair<Slot, KnownFace>(s, k)));
-                    }
+                    double score = IdentityScore(s, k.Print, k.PrintSize, k.BigLook, k.SmallLook);
+                    if (!double.IsNaN(score)) { options.Add((score, s, k, null)); }
+                }
+                foreach (Slot g in _slots)
+                {
+                    if (g == s || !g.Alive || g.MatchedThisFrame || g.OccupantId <= 0) { continue; }
+                    double score = IdentityScore(s, g.Print, g.PrintSize, g.BigLook, g.SmallLook);
+                    if (!double.IsNaN(score)) { options.Add((score, s, null, g)); }
                 }
             }
-            options.Sort((a, b) => b.Key.CompareTo(a.Key));
+            options.Sort((a, b) => b.Score.CompareTo(a.Score));
             var named = new HashSet<Slot>();
-            var claimed = new HashSet<KnownFace>();
+            var claimed = new HashSet<object>();
             foreach (var o in options)
             {
-                Slot s = o.Value.Key;
-                KnownFace k = o.Value.Value;
-                if (named.Contains(s) || claimed.Contains(k)) { continue; }
-                named.Add(s);
-                claimed.Add(k);
-                s.OccupantId = k.OccupantId;
-                s.BigLook = k.BigLook;
-                s.SmallLook = k.SmallLook;
+                object who = (object)o.K ?? o.Ghost;
+                if (named.Contains(o.S) || claimed.Contains(who)) { continue; }
+                named.Add(o.S);
+                claimed.Add(who);
+                Slot s = o.S;
+                if (o.K != null)
+                {
+                    s.OccupantId = o.K.OccupantId;
+                    s.BigLook = o.K.BigLook;
+                    s.SmallLook = o.K.SmallLook;
+                    TakePrint(s, o.K.Print, o.K.PrintCount, o.K.PrintSize, o.Score >= IdentityByPrint);
+                    _knownFaces.Remove(o.K);
+                    _reidentified++;
+                    if (o.Score >= IdentityByPrint) { _printReids++; }
+                }
+                else
+                {
+                    // The ghost's identity moves to the face found again; the ghost is gone (not retired to the gallery:
+                    // that person is on screen).
+                    Slot g = o.Ghost;
+                    s.OccupantId = g.OccupantId;
+                    s.BigLook = g.BigLook;
+                    s.SmallLook = g.SmallLook;
+                    TakePrint(s, g.Print, g.PrintCount, g.PrintSize, o.Score >= IdentityByPrint);
+                    s.ThumbUtc = g.ThumbUtc;
+                    s.ThumbScore = g.ThumbScore;
+                    g.Alive = false;
+                    g.OccupantId = 0;
+                    g.MotionEma = 0;
+                    g.Print = null;
+                    g.PrintCount = 0;
+                    _ghostMerges++;
+                }
                 AddLook(ref s.BigLook, ref s.SmallLook, s.PendingLook);
-                _knownFaces.Remove(k);
-                _reidentified++;
             }
             foreach (Slot s in ready)
             {
@@ -548,10 +730,437 @@ namespace AutoClicker.Utils
                     s.SmallLook = null;
                     AddLook(ref s.BigLook, ref s.SmallLook, s.PendingLook);
                 }
+                if (s.Print != null) { RememberPrint(s.OccupantId, s.Print, s.PrintSize); }
                 s.PendingLook = null;
                 s.PendingLooks = 0;
                 s.PendingSeen = 0;
             }
+        }
+
+        // An identity score at or above this came from fingerprints (they outrank colours: see IdentityScore).
+        private const double IdentityByPrint = 10.0;
+
+        /// <summary>
+        /// How surely a new face (<paramref name="s"/>, its pending look and print) is the person with this print and these
+        /// looks — NaN when not them. Fingerprints decide when both have one and the answer is clear: the same person
+        /// scores IdentityByPrint + cosine (above every colour score), different people are NaN. In between, or without
+        /// prints, the colours decide as they did (FaceAppearance.MatchScore).
+        /// </summary>
+        private static double IdentityScore(Slot s, float[] print, float printSize, FaceLook big, FaceLook small)
+        {
+            if (s.Print != null && print != null)
+            {
+                float sim = FaceAi.Similarity(s.Print, print);
+                if (!float.IsNaN(sim))
+                {
+                    if (sim >= PrintSame) { return IdentityByPrint + sim; }
+                    // Between faces big enough to print well the print has the last word both ways: one person's
+                    // close-ups score 0.52 and up, so under PrintSame it is somebody else, whatever the colours say (the
+                    // same red shirt before the same backdrop matched four people as one).
+                    if (s.PrintSize >= PrintBigFace && printSize >= PrintBigFace) { return double.NaN; }
+                    if (sim < PrintDifferent && (s.PrintSize >= PrintBigFace || printSize >= PrintBigFace)) { return double.NaN; }
+                }
+            }
+            // No prints to go by, or a tiny face's: the colours, as before.
+            return s.PendingLook != null ? ScoreAgainst(big, small, s.PendingLook) : double.NaN;
+        }
+
+        /// <summary>
+        /// The print a re-identified face carries on: both blended when the PRINTS said it is the same person
+        /// (<paramref name="byPrint"/>); otherwise never blended — the better one kept (the bigger face's) — since a match
+        /// made on colours may be somebody else, and a blend of two people matches everyone.
+        /// </summary>
+        private static void TakePrint(Slot s, float[] print, int count, float size, bool byPrint)
+        {
+            if (print == null) { return; }
+            if (byPrint || s.Print == null) { MergePrint(s, print, count, size); return; }
+            if (size > s.PrintSize)
+            {
+                s.Print = (float[])print.Clone();
+                s.PrintCount = Math.Max(1, count);
+                s.PrintSize = size;
+            }
+        }
+
+        /// <summary>Folds another print of the same person (a gallery entry's, a ghost's) into the slot's own.</summary>
+        private static void MergePrint(Slot s, float[] print, int count, float size)
+        {
+            if (print == null) { return; }
+            if (s.Print == null)
+            {
+                s.Print = (float[])print.Clone();
+                s.PrintCount = Math.Max(1, count);
+                s.PrintSize = size;
+                return;
+            }
+            // Weighted by how many prints each holds, back to unit length.
+            int a = Math.Max(1, s.PrintCount), b = Math.Max(1, count);
+            var m = new float[s.Print.Length];
+            double sq = 0;
+            for (int i = 0; i < m.Length && i < print.Length; i++)
+            {
+                m[i] = (s.Print[i] * a + print[i] * b) / (a + b);
+                sq += m[i] * (double)m[i];
+            }
+            float inv = sq > 0 ? (float)(1.0 / Math.Sqrt(sq)) : 0f;
+            for (int i = 0; i < m.Length; i++) { m[i] *= inv; }
+            s.Print = m;
+            s.PrintCount = Math.Min(40, a + b);
+            s.PrintSize = Math.Max(s.PrintSize, size);
+        }
+
+        /// <summary>Keeps <paramref name="occupant"/>'s latest print for SamePerson (bounded; living faces are kept).</summary>
+        private void RememberPrint(long occupant, float[] print, float size)
+        {
+            if (occupant <= 0 || print == null) { return; }
+            _prints[occupant] = new OccupantPrint { Print = print, Size = size };
+            if (_prints.Count <= PrintsKept) { return; }
+            var living = new HashSet<long>();
+            foreach (var s in _slots) { if (s.Alive && s.OccupantId > 0) { living.Add(s.OccupantId); } }
+            long drop = 0;
+            foreach (long k in _prints.Keys)
+            {
+                if (!living.Contains(k) && (drop == 0 || k < drop)) { drop = k; }   // the oldest id that has left
+            }
+            if (drop != 0) { _prints.Remove(drop); }
+        }
+
+        /// <summary>
+        /// Ends a slot's occupant and starts it again as a new face waiting to be named, on the same box — what the
+        /// tracker does for a new face, minus the position (ApplyFaceAi: the print says someone else is in it).
+        /// </summary>
+        private void RestartAsNewFace(Slot s, DateTime now)
+        {
+            RetireOccupant(s, now);
+            s.Alive = true;
+            s.MatchedThisFrame = true;
+            s.LastSeenUtc = now;
+            s.OccupiedSinceUtc = now;
+            s.OccupantId = 0;
+            s.BigLook = null; s.SmallLook = null;
+            s.PendingLook = null; s.PendingLooks = 0; s.PendingSeen = 0;
+            s.ThumbUtc = DateTime.MinValue; s.ThumbTriedUtc = DateTime.MinValue; s.ThumbScore = 0;
+            s.MotionEma = 0; s.FreshMotion = true;
+            s.TotalMotionEma = 0; s.FreshTotal = true;
+            s.QuietSinceUtc = DateTime.MinValue; s.QuietSamples = 0;
+            s.IsStatic = false;
+            s.IsDrawn = false; s.ChromaEma = -1; s.ChromaSamples = 0;
+            s.Print = null; s.PrintCount = 0; s.PrintSize = 0;
+            s.MarksUtc = DateTime.MinValue;
+        }
+
+        // ── Drawn faces (round 27) ────────────────────────────────────────────────────────────────────────────────────
+        // A real face on camera always carries colour — skin, lips, eyes, the light on them: 15–80 of max−min(R,G,B) even
+        // under cool or faded grading. A face drawn on a black-and-white page (manga, a comic) or a black-and-white
+        // picture has next to none, compression noise only. Under DrawnChromaMax for DrawnMinSamples detections = drawn;
+        // colour over DrawnChromaClear gives it back (a cut to a colour shot on the same spot). Faces too dark to judge
+        // (mean luma under DrawnDarkLuma) are not measured either way.
+        internal const double DrawnChromaMax = 8, DrawnChromaClear = 12;
+        private const int DrawnMinSamples = 3;
+        internal const double DrawnDarkLuma = 25;
+        private bool _drawnLogged;
+
+        /// <summary>Updates <see cref="Slot.IsDrawn"/> from this frame's colour in the face's middle.</summary>
+        private void NoteFaceColour(Slot s)
+        {
+            try
+            {
+                byte[] raw = _rawBuf;
+                if (raw == null || _rawStride <= 0) { return; }
+                double chroma = MeanChroma(raw, _rawStride, _frameW, _frameH, s.X, s.Y, s.W, s.H, out double luma);
+                if (chroma < 0 || luma < DrawnDarkLuma) { return; }
+                s.ChromaEma = s.ChromaEma < 0 ? chroma : s.ChromaEma * 0.75 + chroma * 0.25;
+                s.ChromaSamples++;
+                if (!s.IsDrawn && s.ChromaSamples >= DrawnMinSamples && s.ChromaEma < DrawnChromaMax)
+                {
+                    s.IsDrawn = true;
+                    if (!_drawnLogged)
+                    {
+                        _drawnLogged = true;
+                        Logger.Info("[Face] a face with no colour in it (" + s.ChromaEma.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+                                    + ") — a drawing on a black-and-white page (manga, a comic) or a black-and-white picture: "
+                                    + "left out of the speakers, like a still picture.");
+                    }
+                }
+                else if (s.IsDrawn && s.ChromaEma > DrawnChromaClear)
+                {
+                    s.IsDrawn = false;
+                }
+            }
+            catch (Exception ex) { Logger.Swallow("NoteFaceColour", ex); }
+        }
+
+        /// <summary>
+        /// Mean max(R,G,B)−min(R,G,B) over the middle 60 % of a box in a 24-bit BGR frame (every other pixel), and its mean
+        /// luma; -1 when the box is too small or off the frame. Internal for the harness.
+        /// </summary>
+        internal static double MeanChroma(byte[] bgr, int stride, int frameW, int frameH, double x, double y, double w, double h,
+                                          out double meanLuma)
+        {
+            meanLuma = 0;
+            int x0 = (int)Math.Max(0, x + w * 0.2), x1 = (int)Math.Min(frameW, x + w * 0.8);
+            int y0 = (int)Math.Max(0, y + h * 0.2), y1 = (int)Math.Min(frameH, y + h * 0.8);
+            if (x1 - x0 < 4 || y1 - y0 < 4 || bgr == null) { return -1; }
+            double sumChroma = 0, sumLuma = 0;
+            int n = 0;
+            for (int yy = y0; yy < y1; yy += 2)
+            {
+                int row = yy * stride;
+                for (int xx = x0; xx < x1; xx += 2)
+                {
+                    int p = row + xx * 3;
+                    if (p + 2 >= bgr.Length) { break; }
+                    int b = bgr[p], g = bgr[p + 1], r = bgr[p + 2];
+                    int mx = Math.Max(r, Math.Max(g, b)), mn = Math.Min(r, Math.Min(g, b));
+                    sumChroma += mx - mn;
+                    sumLuma += (r * 77 + g * 150 + b * 29) >> 8;
+                    n++;
+                }
+            }
+            if (n == 0) { return -1; }
+            meanLuma = sumLuma / n;
+            return sumChroma / n;
+        }
+
+        // The mouth and upper-face windows when there are no landmarks (a fixed slice of the detector's box, as before).
+        private static readonly RectangleF DefaultMouth = RectangleF.FromLTRB(0.25f, 0.62f, 0.75f, 0.95f);
+        private static readonly RectangleF DefaultUpper = RectangleF.FromLTRB(0.25f, 0.12f, 0.75f, 0.45f);
+
+        /// <summary>
+        /// Where to measure a face's mouth motion and the motion it is compared against, relative to its box: around the
+        /// mouth corners and under the eyes that YuNet found (fresh within MarksFreshSec) — a turned head's mouth is not
+        /// in the middle of its box — or the fixed slice of before.
+        /// </summary>
+        private static void MouthAndUpper(Slot s, DateTime now, out RectangleF mouth, out RectangleF upper)
+        {
+            bool fresh = s.MouthRel.Width > 0 && s.MarksUtc > DateTime.MinValue && (now - s.MarksUtc).TotalSeconds < MarksFreshSec;
+            mouth = fresh ? s.MouthRel : DefaultMouth;
+            upper = fresh ? s.UpperRel : DefaultUpper;
+        }
+
+        /// <summary>The mouth and upper-face windows from YuNet's landmarks, relative to the slot's (smoothed) box.</summary>
+        private static void SetMarks(Slot s, FaceAi.Face f, DateTime now)
+        {
+            if (s.W < 1 || s.H < 1) { return; }
+            PointF re = f.Marks[0], le = f.Marks[1], rm = f.Marks[3], lm = f.Marks[4];
+            double mw = Math.Sqrt((rm.X - lm.X) * (rm.X - lm.X) + (rm.Y - lm.Y) * (rm.Y - lm.Y));
+            double ed = Math.Sqrt((re.X - le.X) * (re.X - le.X) + (re.Y - le.Y) * (re.Y - le.Y));
+            if (mw < 3 || ed < 3) { return; }
+            double mcy = (rm.Y + lm.Y) / 2, ecy = (re.Y + le.Y) / 2;
+            // Lips and jaw: from just above the upper lip to below the lower lip.
+            RectangleF mouth = RectangleF.FromLTRB((float)(Math.Min(rm.X, lm.X) - 0.3 * mw), (float)(mcy - 0.45 * mw),
+                                                   (float)(Math.Max(rm.X, lm.X) + 0.3 * mw), (float)(mcy + 0.7 * mw));
+            // Eyes and brows: the face moving as a whole, which the mouth's motion is measured against.
+            RectangleF upper = RectangleF.FromLTRB((float)(Math.Min(re.X, le.X) - 0.3 * ed), (float)(ecy - 0.45 * ed),
+                                                   (float)(Math.Max(re.X, le.X) + 0.3 * ed), (float)(ecy + 0.25 * ed));
+            if (mouth.Bottom <= upper.Top) { return; }   // landmarks upside down: not a face we can read
+            s.MouthRel = Relative(mouth, s);
+            s.UpperRel = Relative(upper, s);
+            s.MarksUtc = now;
+        }
+
+        private static RectangleF Relative(RectangleF r, Slot s)
+        {
+            float Clamp(double v) => (float)Math.Max(-0.25, Math.Min(1.25, v));
+            return RectangleF.FromLTRB(Clamp((r.Left - s.X) / s.W), Clamp((r.Top - s.Y) / s.H),
+                                       Clamp((r.Right - s.X) / s.W), Clamp((r.Bottom - s.Y) / s.H));
+        }
+
+        /// <summary>
+        /// The face-AI pass (outside the slot lock): loads the models the first time (fetching the fingerprint model in the
+        /// background when it is missing), and when a pass is due finds every face's landmarks and prints the faces that
+        /// need it — new faces first, then prints older than PrintRefreshMs, at most MaxPrintsPerPass a pass.
+        /// </summary>
+        private void RunFaceAi(DateTime now, int w, int hgt, out List<FaceAi.Face> aiFaces, out List<float[]> aiPrints)
+        {
+            aiFaces = null;
+            aiPrints = null;
+            if (!_aiTried)
+            {
+                _aiTried = true;
+                _ai = FaceAi.TryCreate(out string why);
+                if (_ai == null)
+                {
+                    _aiState = "off — " + why;
+                    Logger.Info("[Face] face AI off: " + why + " — faces are told apart by their colours, as before.");
+                    return;
+                }
+                _aiState = _ai.CanRecognize ? "landmarks + fingerprints" : "landmarks (fingerprints once their model is fetched)";
+                Logger.Info("[Face] face AI on: YuNet landmarks" + (_ai.CanRecognize ? " + SFace fingerprints." : "; SFace not downloaded yet — fetching it."));
+                if (!_ai.CanRecognize)
+                {
+                    FaceAi.EnsureRecognizerDownloaded((ok, msg) =>
+                    {
+                        Logger.Info("[Face] fingerprint model (SFace, 37 MB, huggingface.co/opencv): " + msg + ".");
+                        if (ok) { _recognizerArrived = true; }
+                    });
+                }
+            }
+            // One reference for the whole pass: Stop() (captions off) may drop _ai from the UI thread meanwhile.
+            FaceAi ai = _ai;
+            if (ai == null) { return; }
+            if (_recognizerArrived && !ai.CanRecognize)
+            {
+                _recognizerArrived = false;
+                if (ai.TryLoadRecognizer())
+                {
+                    _aiState = "landmarks + fingerprints";
+                    Logger.Info("[Face] face fingerprints on.");
+                }
+            }
+            double since = (now - _lastAiPassUtc).TotalMilliseconds;
+            if (since >= 0 && since < (_aiWantSoon ? AiSoonMs : AiPassMs)) { return; }
+            byte[] raw = _rawBuf;
+            if (raw == null) { return; }
+            _lastAiPassUtc = now;
+            _aiWantSoon = false;
+            _aiPasses++;
+            List<FaceAi.Face> found = ai.Detect(raw, _rawStride, w, hgt, AiMinScore);
+            var prints = new List<float[]>(found.Count);
+            for (int i = 0; i < found.Count; i++) { prints.Add(null); }
+            if (ai.CanRecognize && found.Count > 0)
+            {
+                var want = new List<(int Priority, int Index)>();
+                lock (_slotLock)
+                {
+                    for (int i = 0; i < found.Count; i++)
+                    {
+                        Slot match = MatchSlot(found[i].Box);
+                        if (match != null && (match.IsStatic || match.IsDrawn)) { continue; }   // a picture of a face
+                        int priority = match == null || match.Print == null ? 0
+                                     : (now - match.PrintUtc).TotalMilliseconds >= PrintRefreshMs ? 1 : -1;
+                        if (priority >= 0) { want.Add((priority, i)); }
+                    }
+                }
+                // New faces first; among equals, the biggest (the surest print).
+                want.Sort((a, b) => a.Priority != b.Priority ? a.Priority.CompareTo(b.Priority)
+                                                             : found[b.Index].Box.Width.CompareTo(found[a.Index].Box.Width));
+                if (want.Count > 0 && PrepareFullFrame())
+                {
+                    double kx = _fullW / (double)w, ky = _fullH / (double)hgt;
+                    int budget = MaxPrintsPerPass;
+                    foreach (var item in want)
+                    {
+                        if (budget <= 0) { break; }
+                        FaceAi.Face f = found[item.Index];
+                        if (f.Box.Width < MinPrintFace) { continue; }
+                        var marks = new PointF[5];
+                        for (int n = 0; n < 5; n++) { marks[n] = new PointF((float)(f.Marks[n].X * kx), (float)(f.Marks[n].Y * ky)); }
+                        prints[item.Index] = ai.Fingerprint(_fullRaw, _fullRawStride, _fullW, _fullH, marks);
+                        if (prints[item.Index] != null) { _printsTaken++; }
+                        budget--;
+                    }
+                }
+            }
+            aiFaces = found;
+            aiPrints = prints;
+        }
+
+        private const int MaxPrintsPerPass = 2;
+        private const float MinPrintFace = 12f;      // analysis px: smaller faces give no useful print
+
+        /// <summary>The living slot a face-AI box belongs to (overlap, or its centre inside the slot's box), or null.</summary>
+        private Slot MatchSlot(RectangleF box)
+        {
+            Slot match = null;
+            float best = 0.2f;
+            var centre = new PointF(box.X + box.Width / 2, box.Y + box.Height / 2);
+            foreach (var s in _slots)
+            {
+                if (!s.Alive) { continue; }
+                var sb = new RectangleF((float)s.X, (float)s.Y, (float)s.W, (float)s.H);
+                float iou = FaceAi.Iou(box, sb);
+                if (sb.Contains(centre)) { iou = Math.Max(iou, 0.21f); }
+                if (iou > best) { best = iou; match = s; }
+            }
+            return match;
+        }
+
+        /// <summary>The full-size capture's pixels in _fullRaw (the prints are cut from it: sharper than the 640-wide frame).</summary>
+        private bool PrepareFullFrame()
+        {
+            Bitmap full = _fullBmp;
+            if (full == null || _fullW <= 0 || _fullH <= 0) { return false; }
+            var bits = full.LockBits(new Rectangle(0, 0, _fullW, _fullH), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            try
+            {
+                int len = bits.Stride * _fullH;
+                if (_fullRaw == null || _fullRaw.Length != len) { _fullRaw = new byte[len]; }
+                Marshal.Copy(bits.Scan0, _fullRaw, 0, len);
+                _fullRawStride = bits.Stride;
+                return true;
+            }
+            finally { full.UnlockBits(bits); }
+        }
+
+        /// <summary>
+        /// This frame's face-AI result for a detected face (by overlap with its detection box): its landmarks, and its
+        /// print — folded into the occupant's, unless it says somebody else is in the box now (both faces big enough to
+        /// judge, cosine under PrintChanged), when the slot starts over as a new face.
+        /// </summary>
+        private void ApplyFaceAi(Slot s, List<FaceAi.Face> aiFaces, List<float[]> aiPrints, double fx, double fy, double fw, double fh, DateTime now)
+        {
+            var det = new RectangleF((float)fx, (float)fy, (float)fw, (float)fh);
+            int bi = -1;
+            float best = 0.2f;
+            for (int i = 0; i < aiFaces.Count; i++)
+            {
+                RectangleF b = aiFaces[i].Box;
+                float iou = FaceAi.Iou(det, b);
+                if (det.Contains(new PointF(b.X + b.Width / 2, b.Y + b.Height / 2))) { iou = Math.Max(iou, 0.21f); }
+                if (iou > best) { best = iou; bi = i; }
+            }
+            if (bi < 0) { return; }
+            FaceAi.Face face = aiFaces[bi];
+            SetMarks(s, face, now);
+            float[] print = aiPrints != null && bi < aiPrints.Count ? aiPrints[bi] : null;
+            if (print == null) { return; }
+            float size = face.Box.Width;
+            if (s.Print != null)
+            {
+                float sim = FaceAi.Similarity(s.Print, print);
+                bool bothBig = s.PrintSize >= PrintBigFace && size >= PrintBigFace;
+                if (sim < PrintChanged && bothBig && s.OccupantId > 0)
+                {
+                    // Somebody else is in this box: a cut that put another person where this one was, and the colours
+                    // (one red shirt, one backdrop) said "same". One person's close-ups never print this far apart
+                    // (lowest 0.52 on the NASA footage).
+                    RestartAsNewFace(s, now);
+                    SetMarks(s, face, now);
+                    _printChanges++;
+                    _changedAtCut++;
+                }
+                else if (sim < PrintChanged && bothBig && s.OccupantId == 0)
+                {
+                    // Not named yet, and somebody else now: its looks so far were someone else's — start them over.
+                    s.PendingLook = null;
+                    s.PendingLooks = 0;
+                    s.PendingSeen = 0;
+                    s.Print = null;
+                    s.PrintCount = 0;
+                }
+                else if (sim < PrintSame)
+                {
+                    // Not clearly the same face: never folded in. Averaged, two people's prints make one that sits
+                    // between them and matches everybody — on the NASA footage four people ended up under one id that way.
+                    s.PrintUtc = now;
+                    return;
+                }
+            }
+            if (s.Print == null)
+            {
+                s.Print = print;
+                s.PrintCount = 1;
+                s.PrintSize = size;
+            }
+            else
+            {
+                s.Print = FaceAi.Accumulate(s.Print, s.PrintCount, print);
+                s.PrintCount = Math.Min(40, s.PrintCount + 1);
+                s.PrintSize = s.PrintSize * 0.7f + size * 0.3f;
+            }
+            s.PrintUtc = now;
+            if (s.OccupantId > 0) { RememberPrint(s.OccupantId, s.Print, s.PrintSize); }
         }
 
         /// <summary>
@@ -718,6 +1327,11 @@ namespace AutoClicker.Utils
             }
             try
             {
+                // Windows' face detector runs on Windows' own ONNX Runtime (System32's onnxruntime.dll, measured: loaded by
+                // its first detection). In the process first, it is what the Nemotron engine would bind to and crash on — so
+                // the Nemotron engine's runtime goes in before it (NemotronStreaming.Prepare; MainForm already did this off
+                // the UI thread, and then this is a no-op).
+                NemotronStreaming.Prepare();
                 if (!FaceDetector.IsSupported)
                 {
                     Logger.Info("[Face] the OS face detector isn't supported here - visual speaker analysis off.");
@@ -778,11 +1392,19 @@ namespace AutoClicker.Utils
             _prevGray = null;
             _spareGray = null;
             _rawBuf = null;
+            _fullRaw = null;
             _blankStreak = 0;
+            _detectedOccupants = new long[0];
+            // The face AI's sessions (the fingerprint model holds ~40 MB): built again at the next start.
+            FaceAi ai = _ai;
+            _ai = null;
+            _aiTried = false;
+            _aiPasses = 0; _printsTaken = 0; _ghostMerges = 0; _printReids = 0; _printChanges = 0;
             if (idle)
             {
                 try { _fullBmp?.Dispose(); } catch { }
                 try { _frameBmp?.Dispose(); } catch { }
+                try { ai?.Dispose(); } catch { }
             }
             else
             {
@@ -799,6 +1421,7 @@ namespace AutoClicker.Utils
             {
                 _slots.Clear();
                 _knownFaces.Clear();
+                _prints.Clear();
                 // The pictures go with the session: nothing of anyone's face outlives the captions.
                 foreach (Bitmap b in _thumbs.Values) { try { b?.Dispose(); } catch { } }
                 _thumbs.Clear();
@@ -941,8 +1564,50 @@ namespace AutoClicker.Utils
         // The analysis frame's colour rows (in _rawBuf), for measuring what faces look like.
         private int _rawStride;
 
+        /// <summary>
+        /// Asked before every frame (round 32): a reason NOT to look at any window now — the host's "the video isn't on
+        /// screen" when a browser plays it in a tab nobody can see (a background tab is not drawn at all, so whatever window
+        /// is in front shows another page — the user's 32.png had a page of haircut photos). Null = look as usual.
+        /// </summary>
+        public Func<string> SkipReason { get; set; }
+
+        private volatile string _skipReason;
+        private bool _skipLogged;
+        /// <summary>Why the analyzer is not looking right now (<see cref="SkipReason"/>), or null.</summary>
+        public string SkippedBecause => _skipReason;
+
         private void AnalyzeOneFrame()
         {
+            // 0. Nothing worth looking at (SkipReason): no capture, and no faces left standing from before.
+            if (_frameSourceForTest == null)
+            {
+                string skip = null;
+                try { skip = SkipReason?.Invoke(); } catch { skip = null; }
+                if (skip != null)
+                {
+                    if (_skipReason == null)
+                    {
+                        _visualSpeaker = 0;
+                        System.Threading.Interlocked.Exchange(ref _speakerOccupant, 0);
+                        _visibleOccupants = new long[0];
+                        _detectedOccupants = new long[0];
+                        _faceCount = 0;
+                        _talkingFaces = 0;
+                        _prevGray = null;
+                        _spareGray = null;
+                        // Once a run: tab switches come and go far more often than the log should say so.
+                        if (!_skipLogged)
+                        {
+                            _skipLogged = true;
+                            Logger.Info("[Face] not looking: " + skip + " — speakers by voice alone until it is (said once).");
+                        }
+                    }
+                    _skipReason = skip;
+                    return;
+                }
+                _skipReason = null;
+            }
+
             // 1. Pick the window to read: prefer the one PLAYING AUDIO (any app, even
             //    behind other windows), else the foreground window.
             Bitmap testFrame = _frameSourceForTest?.Invoke();
@@ -1132,6 +1797,17 @@ namespace AutoClicker.Utils
 
             DateTime now = _clock();
 
+            // 3b. The face AI (Utils/FaceAi.cs): about once a second — sooner while a new face waits for its print — the
+            // landmarks of every face, and fingerprints for the faces that need one. Run here, before the tracker takes
+            // its lock: a pass costs ~20 ms plus ~25–60 ms a print, and the UI reads thumbnails under that lock.
+            List<FaceAi.Face> aiFaces = null;
+            List<float[]> aiPrints = null;
+            if (!frozen && !blank && faces.Count > 0)
+            {
+                try { RunFaceAi(now, w, hgt, out aiFaces, out aiPrints); }
+                catch (Exception aex) { Logger.Swallow("FaceAi pass", aex); aiFaces = null; aiPrints = null; }
+            }
+
             // GLOBAL-MOTION GUARD: a scene cut or a hard camera pan changes nearly
             // every pixel at once. The mouth-minus-upper cancellation is built for
             // per-face movement — on a cut, both regions read enormous and the
@@ -1217,6 +1893,13 @@ namespace AutoClicker.Utils
                     _changedAtCut++;
                     best = null;
                 }
+                else if (best != null && best.OccupantId == 0 && globalJolt && _reidentify)
+                {
+                    // A face still being looked at (not named yet) does not carry its looks across a CUT: the face in its
+                    // place now may be anyone. Pooled, two people's looks became one new identity (round 26, NASA
+                    // footage: a close-up's looks and the next close-up's, at the same spot, named as one person).
+                    best = null;
+                }
                 if (best == null)
                 {
                     // Recycle an expired slot first — videos cut between scenes
@@ -1241,6 +1924,8 @@ namespace AutoClicker.Utils
                     best.OccupantId = _reidentify ? 0 : System.Threading.Interlocked.Increment(ref _nextOccupant);
                     best.BigLook = null; best.SmallLook = null;
                     best.PendingLook = null; best.PendingLooks = 0; best.PendingSeen = 0;
+                    best.Print = null; best.PrintCount = 0; best.PrintSize = 0;
+                    best.MarksUtc = DateTime.MinValue;
                     best.ThumbUtc = DateTime.MinValue;
                     best.ThumbTriedUtc = DateTime.MinValue;
                     best.ThumbScore = 0;
@@ -1255,6 +1940,7 @@ namespace AutoClicker.Utils
                     best.TotalMotionEma = 0; best.FreshTotal = true;
                     best.QuietSinceUtc = DateTime.MinValue; best.QuietSamples = 0;
                     best.IsStatic = false;
+                    best.IsDrawn = false; best.ChromaEma = -1; best.ChromaSamples = 0;
                 }
 
                 // Centre BEFORE this frame's smoothing — the frame-to-frame delta
@@ -1269,6 +1955,11 @@ namespace AutoClicker.Utils
                 best.LastSeenUtc = now;
                 best.Alive = true;
                 best.MatchedThisFrame = true;
+                // Colour in the face, or none (a drawing on a black-and-white page): see IsDrawn.
+                NoteFaceColour(best);
+                // The face AI's view of this face when a pass ran this frame: its landmarks, and maybe a fingerprint —
+                // which can also say the occupant has changed (ApplyFaceAi).
+                if (aiFaces != null) { ApplyFaceAi(best, aiFaces, aiPrints, fx, fy, fw, fh, now); }
                 if (best.OccupantId > 0)
                 {
                     if (look != null) { AddLook(ref best.BigLook, ref best.SmallLook, look); }
@@ -1309,12 +2000,13 @@ namespace AutoClicker.Utils
                     // face is measured mouth-on-mouth, not mouth-on-cheek.
                     double mvx = best.MatchedPrevFrame ? best.VX : 0;
                     double mvy = best.MatchedPrevFrame ? best.VY : 0;
+                    MouthAndUpper(best, now, out RectangleF mr, out RectangleF ur);
                     double mouth = RegionMotion(gray, w, hgt,
-                        best.X + best.W * 0.25, best.Y + best.H * 0.62,
-                        best.X + best.W * 0.75, best.Y + best.H * 0.95, mvx, mvy);
+                        best.X + best.W * mr.Left, best.Y + best.H * mr.Top,
+                        best.X + best.W * mr.Right, best.Y + best.H * mr.Bottom, mvx, mvy);
                     double upper = RegionMotion(gray, w, hgt,
-                        best.X + best.W * 0.25, best.Y + best.H * 0.12,
-                        best.X + best.W * 0.75, best.Y + best.H * 0.45, mvx, mvy);
+                        best.X + best.W * ur.Left, best.Y + best.H * ur.Top,
+                        best.X + best.W * ur.Right, best.Y + best.H * ur.Bottom, mvx, mvy);
                     double net = Math.Max(0, mouth - upper * 0.9);
                     if (best.FreshMotion)
                     {
@@ -1337,8 +2029,26 @@ namespace AutoClicker.Utils
                 }
             }
 
+            // A CUT: the faces the detector did not find again are not on screen any more. They used to coast on their
+            // old boxes for up to 3 s (that is for a head turned away, not for a different shot) — long enough for the
+            // same person, in the new shot, to stand beside his own ghost as "two faces sharing a voice" (22.png).
+            if (globalJolt && RetireAtCut)
+            {
+                foreach (var s in _slots)
+                {
+                    if (s.Alive && !s.MatchedThisFrame) { RetireOccupant(s, now); }
+                }
+            }
+
             // New faces with enough looks: someone seen before, or someone new.
             if (_reidentify) { ResolvePendingFaces(now); }
+
+            // A new face still waiting for its print asks for the next face-AI pass soon.
+            FaceAi aiNow = _ai;
+            foreach (var s in _slots)
+            {
+                if (s.Alive && s.OccupantId == 0 && s.Print == null && aiNow != null && aiNow.CanRecognize) { _aiWantSoon = true; break; }
+            }
 
             // COASTING: slots the detector missed this frame — a head turned to the
             // side, tipped down or up (the OS detector is near-frontal only) — keep
@@ -1379,12 +2089,13 @@ namespace AutoClicker.Utils
                     if (s.W < MinFaceWidth || globalJolt) { continue; }
                     // Same motion compensation as the detected path, using the drift
                     // the box just made — mouth measured against last frame's mouth.
+                    MouthAndUpper(s, now, out RectangleF mr, out RectangleF ur);
                     double mouth = RegionMotion(gray, w, hgt,
-                        s.X + s.W * 0.25, s.Y + s.H * 0.62,
-                        s.X + s.W * 0.75, s.Y + s.H * 0.95, drvx, drvy);
+                        s.X + s.W * mr.Left, s.Y + s.H * mr.Top,
+                        s.X + s.W * mr.Right, s.Y + s.H * mr.Bottom, drvx, drvy);
                     double upper = RegionMotion(gray, w, hgt,
-                        s.X + s.W * 0.25, s.Y + s.H * 0.12,
-                        s.X + s.W * 0.75, s.Y + s.H * 0.45, drvx, drvy);
+                        s.X + s.W * ur.Left, s.Y + s.H * ur.Top,
+                        s.X + s.W * ur.Right, s.Y + s.H * ur.Bottom, drvx, drvy);
                     double net = Math.Max(0, mouth - upper * 1.1);
                     s.MotionEma = s.MotionEma * 0.7 + net * 0.3;
                     PushMotionSample(s, net);
@@ -1409,7 +2120,7 @@ namespace AutoClicker.Utils
                 {
                     RetireOccupant(s, now);         // remembered, in case they come back
                 }
-                if (s.Alive) alive++;
+                if (s.Alive && !s.IsDrawn) alive++;   // a drawing is not a face on screen (round 27)
             }
             _faceCount = alive;
 
@@ -1434,8 +2145,13 @@ namespace AutoClicker.Utils
                 var s = _slots[i];
                 if (!s.Alive) continue;
                 // A Static slot is a picture of a face, not a face — whatever its
-                // mouth region's compression noise reads, it is not talking.
-                if (s.IsStatic) continue;
+                // mouth region's compression noise reads, it is not talking. Nor is a drawn one (IsDrawn), however the
+                // page it is on scrolls or zooms.
+                if (s.IsStatic || s.IsDrawn) continue;
+                // A new face that has looked colourless so far waits for its colour to be confirmed (DrawnMinSamples, about
+                // a second) before it may talk: in that second a drawing used to win the verdict often enough to be linked
+                // to the narrator's voice. A face with colour from its first look, or too dark to judge, is not held back.
+                if (s.ChromaEma >= 0 && s.ChromaEma < DrawnChromaClear && s.ChromaSamples < DrawnMinSamples) continue;
                 // A FAST-MOVING face earns extra skepticism: translation is
                 // velocity-compensated, but rotation and scale change are not, so
                 // residual motion leaks into the mouth reading roughly with speed.
@@ -1484,11 +2200,17 @@ namespace AutoClicker.Utils
             System.Threading.Interlocked.Exchange(ref _speakerOccupant,
                 confident && speaker >= 1 && speaker <= _slots.Count ? _slots[speaker - 1].OccupantId : 0);
             var visible = new List<long>(_slots.Count);
+            var detected = new List<long>(_slots.Count);
             foreach (var s in _slots)
             {
-                if (s.Alive && !s.IsStatic && s.OccupantId > 0) { visible.Add(s.OccupantId); }
+                if (s.Alive && !s.IsStatic && !s.IsDrawn && s.OccupantId > 0)
+                {
+                    visible.Add(s.OccupantId);
+                    if (s.MatchedThisFrame) { detected.Add(s.OccupantId); }
+                }
             }
             _visibleOccupants = visible.ToArray();
+            _detectedOccupants = detected.ToArray();
 
             // Publish the winner's correlation for Live debug.
             double winnerCorr = double.NaN;
@@ -1610,6 +2332,15 @@ namespace AutoClicker.Utils
             {
                 if (!_running) { return ""; }
                 var sb = new System.Text.StringBuilder();
+                // The face AI (round 26): what it can do here, and what it has done this session.
+                string ai = FaceAiState;
+                if (!string.IsNullOrEmpty(ai))
+                {
+                    FaceAi live = _ai;
+                    sb.Append("    face AI: ").Append(ai)
+                      .Append(live != null && live.LastDetectMs > 0 ? " · look " + live.LastDetectMs + " ms" : "")
+                      .Append(live != null && live.LastFingerprintMs > 0 ? " · print " + live.LastFingerprintMs + " ms" : "").AppendLine();
+                }
                 lock (_slotLock)
                 {
                     for (int i = 0; i < _slots.Count; i++)
@@ -1640,9 +2371,15 @@ namespace AutoClicker.Utils
                           .Append(Math.Sqrt(s.VX * s.VX + s.VY * s.VY).ToString("0.0"))
                           .Append("px/f")
                           .Append(s.IsStatic ? " · STATIC (image?)" : "")
+                          .Append(s.IsDrawn ? " · DRAWN (no colour " + s.ChromaEma.ToString("0.0") + ")" : "")
                           .Append(s.MatchedThisFrame ? "" : " · COASTING (head turned)")
                           .Append(Math.Sqrt(s.VX * s.VX + s.VY * s.VY) >= 1.5
                               ? " · MOVING (gate raised)" : "")
+                          // The face AI: a fingerprint (from how many pictures) and whether the mouth window follows
+                          // its landmarks right now.
+                          .Append(s.Print != null ? " · print ×" + s.PrintCount : "")
+                          .Append(s.MarksUtc > DateTime.MinValue && (DateTime.UtcNow - s.MarksUtc).TotalSeconds < MarksFreshSec
+                              ? " · mouth on landmarks" : "")
                           .AppendLine();
                     }
                     if (_sceneCuts > 0 || _globalX100 > 0)

@@ -39,23 +39,21 @@
 > **Use responsibly.** Auto-clicking may break the terms of service of some games and apps,
 > and some anti-cheat systems detect it. You are responsible for how you use Tempo.
 
-## What's new in 1.0.327
+## What's new in 1.0.328
 
-- **Any tab in its own window.** Right-click a tab in the sidebar and choose **Open in its own
-  window** to keep it beside your game, still open while Tempo's main window is minimised.
-- **Anti-AFK for Roblox.** Every few minutes, each Roblox window in a game gets one real key press
-  (F13), so Roblox doesn't disconnect it for idling. It doesn't modify Roblox, and it waits until
-  you're idle.
-- **See which game each account is in,** with notices when a client joins a game, is
-  disconnected or crashes.
-- **A crash and freeze guard** starts a crashed or frozen Roblox client again, as the same account
-  in the same game.
-- **A tidier Settings tab:** nine cards by topic, with the rarely used ones under **Advanced**.
-- **Multi-Point works on several points at once,** and the macro Live Monitor follows the playing
-  step.
-- **Fewer missed words in Live Captions,** and laughter reads "ha ha ha".
-- **Tempo now runs on .NET 10,** Microsoft's long-term release. There is still nothing to install.
-
+- **Rejoin after a lost connection.** When Roblox drops its connection and sits on its Disconnected
+  screen, Tempo puts the same account back into the same game once the internet is back. It never
+  rejoins a kick or a ban.
+- **Roblox brought back when it freezes,** even one that End task can't close: Tempo waits until
+  Windows lets it go, then starts it again.
+- **A redesigned Macros tab** with a bigger list, icons, quick speeds, and mouse movement recorded as
+  camera turns for games.
+- **Quick Capture for Multi-Point:** click several points in one go, with a magnifier.
+- **Nemotron streaming models** for Live Captions: word by word as people speak, in 40 languages.
+- **Two-tone themes:** every theme has a second colour of its own, with clearer hovers and borders.
+- **One Tempo on the taskbar,** and your logo (animated too) on the taskbar, the Start menu and
+  notifications.
+- **Opens at once after a download** — the first start could take a minute or two.
 The full notes are on the [release page](https://github.com/justcamop555-pixel/Tempo/releases/latest),
 and every change is in [CHANGELOG.md](CHANGELOG.md).
 

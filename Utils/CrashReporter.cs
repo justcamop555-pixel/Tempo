@@ -445,21 +445,78 @@ namespace AutoClicker.Utils
         /// <summary>The pre-filled report template, diagnostics included.</summary>
         public static string BlankReportBody()
         {
+            return Sanitize(BlankReportQuestions() + DiagnosticsDivider + "\n"
+                            + Localization.T("Diagnostics (please keep so we can help faster):") + "\n"
+                            + BuildDiagnostics());
+        }
+
+        /// <summary>The line that ends the part the reporter writes and starts the diagnostics.</summary>
+        public const string DiagnosticsDivider = "---";
+
+        /// <summary>
+        /// The questions at the top of the template, in the reporter's language — they were English in every
+        /// language, in the one box a reporter has to fill in. The diagnostics under them stay English: they are
+        /// for whoever reads the report.
+        /// </summary>
+        public static string BlankReportQuestions()
+        {
             var body = new StringBuilder();
-            body.AppendLine("Describe the bug:");
-            body.AppendLine();
-            body.AppendLine("Steps to reproduce:");
-            body.AppendLine("1. ");
-            body.AppendLine("2. ");
-            body.AppendLine();
-            body.AppendLine("What you expected to happen:");
-            body.AppendLine();
-            body.AppendLine("What actually happened:");
-            body.AppendLine();
-            body.AppendLine("---");
-            body.AppendLine("Diagnostics (please keep so we can help faster):");
-            body.Append(BuildDiagnostics());
-            return Sanitize(body.ToString());
+            body.Append(Localization.T("Describe the bug:")).Append('\n');
+            body.Append('\n');
+            body.Append(Localization.T("Steps to reproduce:")).Append('\n');
+            body.Append("1. \n");
+            body.Append("2. \n");
+            body.Append('\n');
+            body.Append(Localization.T("What you expected to happen:")).Append('\n');
+            body.Append('\n');
+            body.Append(Localization.T("What actually happened:")).Append('\n');
+            body.Append('\n');
+            return body.ToString();
+        }
+
+        /// <summary>
+        /// True when the part above the diagnostics still says only what the template says — nothing about what went
+        /// wrong. A report like that tells the reader the PC's details and nothing else.
+        /// </summary>
+        public static bool IsUndescribed(string body)
+        {
+            string text = (body ?? string.Empty).Replace("\r\n", "\n");
+            int cut = text.IndexOf("\n" + DiagnosticsDivider + "\n", StringComparison.Ordinal);
+            string written = cut >= 0 ? text.Substring(0, cut) : text;
+            return Squeeze(written) == Squeeze(BlankReportQuestions());
+        }
+
+        // Letters and digits only: blank lines, spaces and the "1." / "2." prompts do not count as writing something.
+        private static string Squeeze(string s)
+        {
+            var sb = new StringBuilder(s.Length);
+            foreach (char c in s)
+            {
+                if (char.IsLetterOrDigit(c)) { sb.Append(char.ToLowerInvariant(c)); }
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// The longest web link a compose page (a GitHub issue, Gmail, Outlook, Yahoo) can be handed with the report in
+        /// it. Past about 8 KB the sites refuse the request outright ("URI too long") or drop the body, and a report
+        /// with the activity log in it gets there easily once it is encoded for a link.
+        /// </summary>
+        public const int WebComposeUrlLimit = 7000;
+
+        /// <summary>True when this link is too long for the site it opens to accept whole.</summary>
+        public static bool WebUrlTooLong(string url)
+        {
+            return (url ?? string.Empty).Length > WebComposeUrlLimit;
+        }
+
+        /// <summary>
+        /// What goes in the body of a compose page that could not take the whole report: a line saying where it is.
+        /// The report itself goes on the clipboard (see MainForm.ComposeAndSendReport).
+        /// </summary>
+        public static string PasteHereBody()
+        {
+            return Localization.T("(The full report is on your clipboard — paste it here with Ctrl+V.)");
         }
 
         private static string Shorten(string s, int max)

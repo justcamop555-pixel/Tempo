@@ -6,11 +6,60 @@ using System.Windows.Forms;
 namespace AutoClicker.UI
 {
     /// <summary>
+    /// A list as ONE element for assistive tools (screen readers, and the AI "computer use" / "work with apps" tools that
+    /// read other programs the same way): no element per row and cell, and the selected row as its value ("When: …,
+    /// Clicks: …"). For lists that can be long — asked where each of 1,200 cells sat, about 2 ms a cell on the UI thread,
+    /// one such tool froze the window for up to 1.9 s (ThemedListView.CellsForAccessibility, 2026-11-12).
+    /// </summary>
+    internal sealed class ListAsOneAccessibleObject : Control.ControlAccessibleObject
+    {
+        private readonly ListView _list;
+
+        public ListAsOneAccessibleObject(ListView list) : base(list) { _list = list; }
+
+        public override AccessibleRole Role => AccessibleRole.List;
+
+        public override int GetChildCount() => 0;
+
+        public override AccessibleObject GetChild(int index) => null;
+
+        /// <summary>The selected row, cell by cell under its column's title.</summary>
+        public override string Value
+        {
+            get
+            {
+                try
+                {
+                    if (!_list.IsHandleCreated || _list.SelectedIndices.Count == 0) { return string.Empty; }
+                    ListViewItem row = _list.Items[_list.SelectedIndices[0]];
+                    var parts = new System.Collections.Generic.List<string>(row.SubItems.Count);
+                    for (int c = 0; c < row.SubItems.Count && c < _list.Columns.Count; c++)
+                    {
+                        string text = row.SubItems[c].Text;
+                        if (string.IsNullOrEmpty(text)) { continue; }
+                        string title = _list.Columns[c].Text;
+                        parts.Add(string.IsNullOrEmpty(title) ? text : title + ": " + text);
+                    }
+                    return string.Join(", ", parts);
+                }
+                catch { return string.Empty; }
+            }
+            set { }
+        }
+    }
+
+    /// <summary>
     /// A plain ListView whose columns scale with the window at 125%/150%, as ThemedListView's do
     /// (WinForms scales the list's size but not its columns).
     /// </summary>
     internal sealed class ColumnScalingListView : ListView
     {
+        /// <summary>As <see cref="ThemedListView.CellsForAccessibility"/>: false = one element for assistive tools.</summary>
+        public bool CellsForAccessibility { get; set; } = true;
+
+        protected override AccessibleObject CreateAccessibilityInstance() =>
+            CellsForAccessibility ? base.CreateAccessibilityInstance() : new ListAsOneAccessibleObject(this);
+
         protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
         {
             base.ScaleControl(factor, specified);
@@ -158,6 +207,21 @@ namespace AutoClicker.UI
         /// <summary>Alternating row tint. Off for very short lists where it just fidgets.</summary>
         public bool Striped { get; set; } = true;
 
+        /// <summary>
+        /// How assistive tools see the list. They include screen readers and the AI "computer use" / "work with apps"
+        /// tools that read other programs through Windows' accessibility.
+        /// - True (Windows' default): every row and every cell is an element of its own.
+        /// - False: the list is ONE element. Its value is the selected row, read out as text ("When: …, Clicks: …").
+        /// Use false for lists that can be long. With such a tool running, opening Statistics had it ask Windows where
+        /// each of the history's 1,200 cells sat on screen, about 2 ms a cell, all on Tempo's UI thread: the window
+        /// stopped answering for 0.2–1.9 s ("freezing for statistics", 2026-11-12, scratchpad/paintcost "stats").
+        /// Set it before the list is first asked for (the constructor).
+        /// </summary>
+        public bool CellsForAccessibility { get; set; } = true;
+
+        protected override AccessibleObject CreateAccessibilityInstance() =>
+            CellsForAccessibility ? base.CreateAccessibilityInstance() : new ListAsOneAccessibleObject(this);
+
         /// <summary>Column that shows the colour chip, or -1 for none.</summary>
         protected virtual int ChipColumn => -1;
 
@@ -270,6 +334,52 @@ namespace AutoClicker.UI
             base.OnItemSelectionChanged(e);
             if (HighlightSelection) { Invalidate(); }
         }
+
+        /// <summary>A virtual list reports a selection cleared or moved as a range, not row by row.</summary>
+        protected override void OnVirtualItemsSelectionRangeChanged(ListViewVirtualItemsSelectionRangeChangedEventArgs e)
+        {
+            base.OnVirtualItemsSelectionRangeChanged(e);
+            if (HighlightSelection) { Invalidate(); }
+        }
+
+        // ── Hover ────────────────────────────────────────────────────────────
+        // A list whose rows are there to be picked said nothing of it until one was: every row looked like text, the
+        // pointer over one changed nothing, and a user with ten accounts asked how they were supposed to select one.
+        // The row under the pointer is tinted now, as in Explorer and every browser's list.
+
+        /// <summary>
+        /// When true, the row under the pointer is tinted: the cue that a row is there to be clicked. Off by default, so
+        /// lists that drive a highlight of their own (the Live Monitor, the step lists) look as they did.
+        /// </summary>
+        public bool HoverHighlight { get; set; }
+
+        private int _hoverIndex = -1;
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (!HoverHighlight) { return; }
+            int index = -1;
+            try { index = GetItemAt(e.X, e.Y)?.Index ?? -1; }   // FullRowSelect: anywhere along the row
+            catch { }
+            SetHover(index);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            SetHover(-1);
+        }
+
+        private void SetHover(int index)
+        {
+            if (index == _hoverIndex) { return; }
+            _hoverIndex = index;
+            // The whole control, never the two rows' rectangles: the rule in this class's summary.
+            Invalidate();
+        }
+
+        private bool IsHover(int index) => HoverHighlight && index == _hoverIndex && index >= 0 && index < Items.Count;
 
         public virtual void ApplyTheme(Theme theme)
         {
@@ -517,12 +627,16 @@ namespace AutoClicker.UI
             {
                 return _theme.Accent;
             }
-            if (!Striped || index % 2 == 0)
+            Color back = !Striped || index % 2 == 0
+                ? _theme.Surface2
+                : Blend(_theme.Surface2, Luminance(_theme.Surface2) > 0.35 ? Color.Black : Color.White, 0.045);
+            if (IsHover(index))
             {
-                return _theme.Surface2;
+                // Twice the stripe's step, so a hovered row stands off both of its neighbours; far short of the
+                // accent, which still says "selected". The text on it is made readable against this colour.
+                back = Blend(back, Luminance(back) > 0.35 ? Color.Black : Color.White, 0.09);
             }
-            return Blend(_theme.Surface2,
-                         Luminance(_theme.Surface2) > 0.35 ? Color.Black : Color.White, 0.045);
+            return back;
         }
 
         // ── drawing ────────────────────────────────────────────────────────────
@@ -555,12 +669,29 @@ namespace AutoClicker.UI
 
         private Font HeaderFont => _headerFont ??= new Font(Font.FontFamily, HeaderFontSize, FontStyle.Bold);
 
+        // The rows' two fonts, made once. Every cell made (and dropped) a Font on every paint: six columns × the rows in
+        // view, each a GDI font object, on every hover, scroll and refresh.
+        private Font _cellFont, _cellFontBold;
+
+        private Font CellFont(FontStyle style) => style == FontStyle.Bold
+            ? _cellFontBold ??= new Font(Font.FontFamily, Font.Size, FontStyle.Bold)
+            : _cellFont ??= new Font(Font.FontFamily, Font.Size, FontStyle.Regular);
+
+        private void DropCellFonts()
+        {
+            _cellFont?.Dispose();
+            _cellFont = null;
+            _cellFontBold?.Dispose();
+            _cellFontBold = null;
+        }
+
         protected override void OnFontChanged(EventArgs e)
         {
             base.OnFontChanged(e);
             _headerFont?.Dispose();
             _headerFont = null;
             _headerNeed.Clear();
+            DropCellFonts();
         }
 
         protected override void Dispose(bool disposing)
@@ -569,6 +700,7 @@ namespace AutoClicker.UI
             {
                 _headerFont?.Dispose();
                 _headerFont = null;
+                DropCellFonts();
             }
             base.Dispose(disposing);
         }
@@ -752,15 +884,12 @@ namespace AutoClicker.UI
             }
 
             var textRect = new Rectangle(textLeft, r.Top, r.Right - textLeft - 4, r.Height);
-            using (var font = new Font(Font.FontFamily, Font.Size, style))
-            {
-                // Through ColorEmoji so an account's (or macro's) emoji keeps its colours — TextRenderer
-                // drew it as a flat silhouette in the row's text colour. Plain text draws as before.
-                // NoPrefix: these are the user's names, and a lone "&" in one ("Jump & Run") was taken for
-                // a shortcut marker — dropped, with the space after it underlined.
-                ColorEmoji.DrawText(g, text, font, textRect, textColour,
-                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            }
+            // Through ColorEmoji so an account's (or macro's) emoji keeps its colours — TextRenderer
+            // drew it as a flat silhouette in the row's text colour. Plain text draws as before.
+            // NoPrefix: these are the user's names, and a lone "&" in one ("Jump & Run") was taken for
+            // a shortcut marker — dropped, with the space after it underlined.
+            ColorEmoji.DrawText(g, text, CellFont(style), textRect, textColour,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
     }
 }

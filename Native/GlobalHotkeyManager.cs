@@ -409,7 +409,7 @@ namespace AutoClicker.Native
         {
             if (_keyHook == null)
             {
-                _keyHook = new LowLevelKeyboardHook();
+                _keyHook = new LowLevelKeyboardHook { Name = "hotkey keyboard" };
                 _keyHook.KeyEvent += OnKeyHookEvent;
             }
             if (!_keyHook.IsRunning)

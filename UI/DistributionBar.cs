@@ -58,9 +58,14 @@ namespace AutoClicker.UI
 
         public void SetValues(long left, long right, long middle)
         {
-            _left = left < 0 ? 0 : left;
-            _right = right < 0 ? 0 : right;
-            _middle = middle < 0 ? 0 : middle;
+            left = left < 0 ? 0 : left;
+            right = right < 0 ? 0 : right;
+            middle = middle < 0 ? 0 : middle;
+            // Set on every UI tick of the Statistics tab: only new numbers repaint it (see StatCard.Value).
+            if (left == _left && right == _right && middle == _middle) { return; }
+            _left = left;
+            _right = right;
+            _middle = middle;
             Invalidate();
         }
 

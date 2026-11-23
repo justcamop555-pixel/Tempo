@@ -337,7 +337,7 @@ namespace AutoClicker.UI
                 Name = key + "-window"
             };
 
-            NavIconKind glyph = index >= 0 && index < NavGlyphs.Length ? NavGlyphs[index] : NavIconKind.None;
+            NavIconKind glyph = GlyphOf(tab);
             var win = new DetachedPageWindow(tab.Text, _theme, Icon, glyph);
             // The taskbar and Alt+Tab say whose window it is; the header shows the tab's name alone.
             win.Text = tab.Text + " — Tempo";
@@ -398,6 +398,94 @@ namespace AutoClicker.UI
                 SaveSettingsQuietly();
             };
             win.FormClosed += (s, e) => OnTabWindowClosed(tw);
+            // Back from the taskbar in one piece, as the main window comes back (MainForm.OnResize): its page has been laid
+            // out for the new size by the time Resize is raised, so it is cloaked now — before the restore reaches the
+            // screen — painted once the restore has finished, and uncloaked whole. It used to come back with its old
+            // picture and paint itself in front of the user.
+            bool wasMinimised = false, transitionsOff = false, cloakedForRestore = false;
+            System.Windows.Forms.Timer transitionsOffTimer = null;
+            // Cloaked as Windows asks to restore it, before the restore puts anything on the screen (MainForm.CloakBeforeRestore);
+            // the Resize below reveals it. Never left cloaked: a second later the cloak comes off whatever happened.
+            win.RestoreAsked += (s, e) =>
+            {
+                if (cloakedForRestore || !win.IsHandleCreated || win.WindowState != FormWindowState.Minimized) { return; }
+                IntPtr ch = win.Handle;
+                if (!SetWindowCloak(ch, true)) { return; }
+                cloakedForRestore = true;
+                var fallback = new System.Windows.Forms.Timer { Interval = 1000 };
+                fallback.Tick += (s2, e2) =>
+                {
+                    fallback.Stop();
+                    fallback.Dispose();
+                    if (!cloakedForRestore) { return; }
+                    cloakedForRestore = false;
+                    if (!win.IsDisposed && win.IsHandleCreated && win.WindowState != FormWindowState.Minimized)
+                    {
+                        try { RedrawWindow(ch, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW); } catch { }
+                    }
+                    SetWindowCloak(ch, false);
+                };
+                fallback.Start();
+            };
+            win.Resize += (s, e) =>
+            {
+                if (win.WindowState == FormWindowState.Minimized)
+                {
+                    wasMinimised = true;
+                    // Windows' restore zoom would play its unpainted picture (MainForm.ArmRestoreWithoutTransition): off once
+                    // its minimise animation has had its time, back on after the restore.
+                    if (transitionsOffTimer == null)
+                    {
+                        transitionsOffTimer = new System.Windows.Forms.Timer { Interval = 450 };
+                        transitionsOffTimer.Tick += (s2, e2) =>
+                        {
+                            transitionsOffTimer.Stop();
+                            if (!win.IsDisposed && win.IsHandleCreated && win.WindowState == FormWindowState.Minimized && !transitionsOff)
+                            {
+                                WindowMotion.SetWindowTransitions(win.Handle, false);
+                                transitionsOff = true;
+                            }
+                        };
+                        win.FormClosed += (s3, e3) => { try { transitionsOffTimer.Stop(); transitionsOffTimer.Dispose(); } catch { } };
+                    }
+                    transitionsOffTimer.Stop();
+                    transitionsOffTimer.Start();
+                    return;
+                }
+                transitionsOffTimer?.Stop();
+                if (transitionsOff && win.IsHandleCreated)
+                {
+                    IntPtr th = win.Handle;
+                    Action back = () =>
+                    {
+                        if (!transitionsOff || win.IsDisposed || win.WindowState == FormWindowState.Minimized) { return; }
+                        WindowMotion.SetWindowTransitions(th, true);
+                        transitionsOff = false;
+                    };
+                    try { BeginInvoke(back); } catch { back(); }
+                }
+                if (!(wasMinimised || cloakedForRestore) || !win.Visible || !win.IsHandleCreated) { return; }
+                wasMinimised = false;
+                IntPtr h = win.Handle;
+                // Already cloaked by RestoreAsked, as a rule; cloaking only now is the fallback for a restore that never asked.
+                bool early = cloakedForRestore;
+                cloakedForRestore = false;
+                if (!early && !SetWindowCloak(h, true)) { return; }
+                Action reveal = () =>
+                {
+                    try
+                    {
+                        if (!win.IsDisposed && win.IsHandleCreated && win.WindowState != FormWindowState.Minimized)
+                        {
+                            RedrawWindow(h, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+                        }
+                    }
+                    catch (Exception ex) { Logger.Swallow("TabWindow restore " + key, ex); }
+                    finally { SetWindowCloak(h, false); }
+                };
+                try { BeginInvoke(reveal); }
+                catch { SetWindowCloak(h, false); }
+            };
             // The main window's net under a keybind field (OnDeactivate), for the Keybinds tab out here: a field
             // listening when the window lost focus would leave every hotkey silenced while you play.
             win.Deactivate += (s, e) =>
@@ -525,7 +613,8 @@ namespace AutoClicker.UI
             {
                 foreach (Control c in kids)
                 {
-                    if (c == null || c.IsDisposed || c is ScrollCover || IsTabWindowNote(c)) { continue; }
+                    // A turned-off feature's cover stays: RefreshFeatureCovers puts it on the page the content went to.
+                    if (c == null || c.IsDisposed || c is ScrollCover || c is FeatureOffCover || IsTabWindowNote(c)) { continue; }
                     from.Controls.Remove(c);
                     to.Controls.Add(c);
                 }
@@ -583,6 +672,8 @@ namespace AutoClicker.UI
         private void OnTabContentMoved(TabPage tab)
         {
             if (tab == null) { return; }
+            // A turned-off feature's cover follows its tab's controls (and the page left behind scrolls again).
+            try { RefreshFeatureCovers(); } catch (Exception ex) { Logger.Swallow("OnTabContentMoved/covers", ex); }
             try
             {
                 switch (tab.Name)
@@ -681,9 +772,8 @@ namespace AutoClicker.UI
         private Color NavHueOf(TabPage tab)
         {
             if (_theme == null || _tabs == null) { return Color.Empty; }
-            Color[] hues = SectionColors.IsLight(_theme) ? NavHuesLight : NavHuesDark;
-            int i = _tabs.TabPages.IndexOf(tab);
-            return i >= 0 && i < hues.Length ? _theme.Painted(hues[i]) : _theme.Accent;
+            Color hue = HueOf(tab, SectionColors.IsLight(_theme) ? NavHuesLight : NavHuesDark);
+            return hue.IsEmpty ? _theme.Accent : _theme.Painted(hue);
         }
 
         // ── The card on the tab while it is away ──────────────────────────────
@@ -1026,20 +1116,38 @@ namespace AutoClicker.UI
                 };
                 open.Click += (s, e) => SetTabWindowed(tab, true);
                 _navMenu.Items.Add(open);
-                return;
             }
-            var show = new ToolStripMenuItem(Localization.T("Show the window"))
+            else
             {
-                Tag = new TrayItemStyle(TrayGlyph.Window)
-            };
-            show.Click += (s, e) => TabWindowNavHandled(tab);
-            _navMenu.Items.Add(show);
-            var back = new ToolStripMenuItem(Localization.T("Put it back in the main window"))
+                var show = new ToolStripMenuItem(Localization.T("Show the window"))
+                {
+                    Tag = new TrayItemStyle(TrayGlyph.Window)
+                };
+                show.Click += (s, e) => TabWindowNavHandled(tab);
+                _navMenu.Items.Add(show);
+                var back = new ToolStripMenuItem(Localization.T("Put it back in the main window"))
+                {
+                    Tag = new TrayItemStyle(TrayGlyph.Move)
+                };
+                back.Click += (s, e) => SetTabWindowed(tab, false);
+                _navMenu.Items.Add(back);
+            }
+
+            // Settings → Disable features from the row itself (the user, 2026-11-08: "add it for saving time simple"):
+            // the feature this tab is for, off — or back on.
+            MainForm.TempoFeature? feature = FeatureForTab(tab);
+            if (feature.HasValue)
             {
-                Tag = new TrayItemStyle(TrayGlyph.Move)
-            };
-            back.Click += (s, e) => SetTabWindowed(tab, false);
-            _navMenu.Items.Add(back);
+                MainForm.TempoFeature f = feature.Value;
+                bool off = FeatureOff(f);
+                _navMenu.Items.Add(new ToolStripSeparator());
+                var toggle = new ToolStripMenuItem(Localization.F(off ? "Turn on {0}" : "Turn off {0}", FeatureName(f)))
+                {
+                    Tag = new TrayItemStyle(TrayGlyph.Power)
+                };
+                toggle.Click += (s, e) => SetFeatureOff(f, !off, "its sidebar row");
+                _navMenu.Items.Add(toggle);
+            }
         }
 
         /// <summary>The menu's renderer holds an animation timer, so the old one is disposed, not dropped.</summary>
@@ -1076,6 +1184,13 @@ namespace AutoClicker.UI
                 tip += ". " + (windowed
                     ? Localization.T("Right-click to put it back in the main window.")
                     : Localization.T("Right-click to open it in a window of its own."));
+                // The row that holds others (Clicker holds Profiles): what its chevron does.
+                if (_navButtons[i].HasExpander)
+                {
+                    var held = new List<string>();
+                    for (int c = i + 1; c < _tabs.TabPages.Count && IsNavGroupChild(c); c++) { held.Add(_tabs.TabPages[c].Text); }
+                    if (held.Count > 0) { tip += " " + Localization.F("Click › to show or hide {0} under it.", string.Join(", ", held)); }
+                }
                 tip += " " + Localization.T("Ctrl+Tab cycles through the tabs. Hold Ctrl to see each tab's number.");
                 TipStyle.Set(_tips, _navButtons[i], tip);
                 // Screen readers read AccessibleDescription, so the same help is there without a mouse.

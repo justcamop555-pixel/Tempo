@@ -400,6 +400,7 @@ namespace AutoClicker.Engine
                 _secondMouseHandle = IntPtr.Zero;
                 _secondMouseName = "";
                 _secondMouseDeviceName = "";
+                EndOneMouseMode();
                 StopListener();
                 if (_overlay.Visible) { _overlay.Hide(); }
             }
@@ -454,10 +455,16 @@ namespace AutoClicker.Engine
                     // cursor until something is actually bound.)
                     _usePhysicalMouse = true;
                     EnsureListener();
-                    Logger.Warn("[2nd mouse] only " + mice + " mouse detected — waiting for a 2nd one to be plugged in.");
+                    // Once per count: every settings re-apply funnels through here (three lines at each start-up).
+                    if (_waitingWarnedFor != mice)
+                    {
+                        _waitingWarnedFor = mice;
+                        Logger.Warn("[2nd mouse] only " + mice + " mouse detected — waiting for a 2nd one to be plugged in.");
+                    }
                     RaiseMiceChanged();
                     return;
                 }
+                _waitingWarnedFor = -1;   // a later drop to one mouse says so again
                 _usePhysicalMouse = true;
                 EnsureListener();
                 // Already bound to the chosen mouse? Leave it alone — every settings
@@ -485,11 +492,16 @@ namespace AutoClicker.Engine
                 _secondMouseHandle = IntPtr.Zero;
                 _secondMouseName = "";
                 _secondMouseDeviceName = "";
+                _waitingWarnedFor = -1;
+                EndOneMouseMode();
                 StopListener();
                 RefreshActiveLook();
                 RaiseMiceChanged();
             }
         }
+
+        /// <summary>The mouse count the "waiting for a 2nd one" warning was last logged for (-1: none since it changed).</summary>
+        private int _waitingWarnedFor = -1;
 
         /// <summary>Movement gain for the second mouse (percent; 100 = 1 raw count : 1 px).</summary>
         public void SetSecondMouseSensitivity(int percent)
@@ -521,9 +533,10 @@ namespace AutoClicker.Engine
             {
                 return;
             }
-            if (!TryBindByName(_desiredDeviceName))
+            if (!TryBindByName(_desiredDeviceName) && FindMouse(_desiredDeviceName) == null)
             {
-                // Chosen mouse isn't here yet — wait for the device-change watch to bind it.
+                // Chosen mouse isn't here yet — wait for the device-change watch to bind it. (Here but refused — the only
+                // mouse — BindSecondMouse has said why; "isn't connected" was wrong about a mouse in the user's hand.)
                 Logger.Info("[2nd mouse] chosen mouse isn't connected yet — it will bind when plugged in.");
             }
         }
@@ -538,8 +551,98 @@ namespace AutoClicker.Engine
             _secondMouseHandle = IntPtr.Zero;
             _secondMouseName = "";
             _secondMouseDeviceName = "";
+            EndOneMouseMode();
             StopListener();
             Logger.Info("[2nd mouse] released by Emergency-Stop — the second mouse no longer moves the cursor.");
+        }
+
+        // ── one mouse, two cursors ────────────────────────────────────────────
+        //
+        // The user, 2026-11-11, with one mouse connected: "wont let first mouse choose second fake cursor". Binding the only
+        // mouse is a real way to work — the mouse moves the second cursor and clicks there, the real pointer waits where it
+        // was — but only as a switch the user throws, with a sure way back. Before, a saved choice re-bound it at every start
+        // and the only ways back were the Emergency stop key or unplugging: the PC looked frozen (and the clicks it re-sent
+        // from inside the hook hung Tempo — see SendInOrder). Now:
+        //   • only an explicit pick (ChooseSecondMouse: the menu, the Clicker tab) binds the only mouse — never the saved
+        //     choice at start-up, the device watch, or the wiggle;
+        //   • Esc gives the mouse back to the pointer (watched on a hook thread of its own, and NOT swallowed — the app in
+        //     front still gets its Esc), and so does the Emergency stop key;
+        //   • a second mouse plugged in meanwhile simply takes over the pointer (the ordinary two-mouse mode).
+
+        /// <summary>True while the only mouse connected drives the second cursor (picked by the user; Esc gives it back).</summary>
+        public bool OneMouseMode => _oneMouse && _secondMouseHandle != IntPtr.Zero;
+
+        /// <summary>Raised when the user's pick has handed their only mouse to the second cursor (the window says how to get it back).</summary>
+        public event EventHandler OneMouseTaken;
+
+        private bool _oneMouse;
+        private Native.KeyboardHookThread _giveBackKeys;
+        private const int VK_ESCAPE = 0x1B;
+
+        /// <summary>
+        /// The user picked this mouse (the second cursor's menu, the Clicker tab): bind it now, the only mouse connected
+        /// included. False when it is not connected (it binds once it is, as long as another mouse is there too).
+        /// </summary>
+        public bool ChooseSecondMouse(string rawDeviceName)
+        {
+            _desiredDeviceName = rawDeviceName ?? "";
+            if (!_enabled || _desiredDeviceName.Length == 0) { return false; }
+            _usePhysicalMouse = true;
+            EnsureListener();
+            if (_secondMouseHandle != IntPtr.Zero &&
+                string.Equals(_secondMouseDeviceName, _desiredDeviceName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            MouseDeviceInfo info = FindMouse(_desiredDeviceName);
+            if (info == null)
+            {
+                Logger.Info("[2nd mouse] chosen mouse isn't connected yet — it will bind when plugged in.");
+                return false;
+            }
+            return BindSecondMouse(info, allowOnlyMouse: true);
+        }
+
+        /// <summary>Esc (or the window): the only mouse moves the real pointer again; the second cursor stays where it is.</summary>
+        public void GiveTheMouseBack(string how)
+        {
+            if (!OneMouseMode) { return; }
+            ReleaseAllHeldButtons();
+            string name = _secondMouseName.Length > 0 ? _secondMouseName : "your mouse";
+            _secondMouseHandle = IntPtr.Zero;
+            _secondMouseName = "";
+            EndOneMouseMode();
+            RefreshActiveLook();
+            Logger.Info("[2nd mouse] " + how + " — " + name + " moves your pointer again; the second cursor stays at ("
+                        + _x + ", " + _y + ").");
+            RaiseMiceChanged();
+        }
+
+        private void BeginOneMouseMode()
+        {
+            _oneMouse = true;
+            if (_giveBackKeys != null) { return; }
+            try
+            {
+                var keys = new Native.KeyboardHookThread("2nd cursor give-back key", quiet: true);
+                keys.KeyEvent += (s, e) =>
+                {
+                    // On the hook's own thread: only a look at the key, and the rest handed to the window's thread.
+                    if (e.Injected || !e.IsKeyDown || e.VirtualKey != VK_ESCAPE) { return; }
+                    MarshalToUi(() => GiveTheMouseBack("Esc"));
+                };
+                if (keys.Start()) { _giveBackKeys = keys; }
+                else { keys.Dispose(); Logger.Warn("[2nd mouse] the Esc key couldn't be watched — the Emergency stop key gives the mouse back."); }
+            }
+            catch (Exception ex) { Logger.Swallow("SecondCursor.GiveBackKeys", ex); }
+        }
+
+        private void EndOneMouseMode()
+        {
+            _oneMouse = false;
+            Native.KeyboardHookThread keys = _giveBackKeys;
+            _giveBackKeys = null;
+            try { keys?.Dispose(); } catch { }
         }
 
         /// <summary>Re-run the wiggle-to-assign step (e.g. the wrong mouse got picked).</summary>
@@ -587,6 +690,21 @@ namespace AutoClicker.Engine
 
         private void BeginAssign()
         {
+            // Nothing to wiggle with one mouse: whatever moved would be the pointer itself (see AnotherMouseThan). The
+            // device watch asks by itself once a second mouse is plugged in.
+            List<MouseDeviceInfo> connected;
+            try { connected = SecondMouseListener.EnumerateRealMice(); }
+            catch { connected = new List<MouseDeviceInfo>(); }
+            if (connected.Count < 2)
+            {
+                _assigning = false;
+                _assignTrack.Clear();
+                RefreshActiveLook();
+                RaiseMiceChanged();
+                Logger.Info("[2nd mouse] only " + connected.Count + " mouse connected — nothing to wiggle yet; plug in a second "
+                    + "mouse and Tempo asks for it then.");
+                return;
+            }
             // Re-picking while a second-mouse button is held: that button's release
             // event can no longer route back to us (the binding is being cleared), so
             // release anything held NOW or the real button would stay stuck down.
@@ -667,8 +785,7 @@ namespace AutoClicker.Engine
             {
                 return false;
             }
-            BindSecondMouse(info);
-            return true;
+            return BindSecondMouse(info);
         }
 
         private static MouseDeviceInfo FindMouse(string rawDeviceName)
@@ -700,13 +817,54 @@ namespace AutoClicker.Engine
             return null;
         }
 
-        private void BindSecondMouse(IntPtr hDevice)
+        private bool BindSecondMouse(IntPtr hDevice)
         {
-            BindSecondMouse(FindMouse(hDevice) ?? new MouseDeviceInfo(hDevice, "", ""));
+            return BindSecondMouse(FindMouse(hDevice) ?? new MouseDeviceInfo(hDevice, "", ""));
         }
 
-        private void BindSecondMouse(MouseDeviceInfo info)
+        /// <summary>
+        /// True when a mouse other than <paramref name="hDevice"/> is connected: one left to move the real pointer. Bound,
+        /// the ONLY mouse would hand all of its movement and clicks to the second cursor: the real pointer held still and
+        /// every click re-sent at the second cursor, so the PC looks frozen. That happened on 2026-11-11 (the user's Razer
+        /// DeathAdder, chosen in the menu with no other mouse connected), and the clicks it re-sent from inside the hook
+        /// hung Tempo (see SendInOrder). Not knowing counts as no.
+        /// </summary>
+        private static bool AnotherMouseThan(IntPtr hDevice, List<MouseDeviceInfo> mice = null)
         {
+            try
+            {
+                foreach (var m in mice ?? SecondMouseListener.EnumerateRealMice())
+                {
+                    if (m.Handle != hDevice) { return true; }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>The device a refusal was last logged for, so the 1.5 s watch says it once, not every tick.</summary>
+        private long _onlyMouseRefusedFor;
+
+        private bool BindSecondMouse(MouseDeviceInfo info, bool allowOnlyMouse = false)
+        {
+            bool another = AnotherMouseThan(info.Handle);
+            if (!another && !allowOnlyMouse)
+            {
+                _assigning = false;
+                _assignTrack.Clear();
+                RefreshActiveLook();
+                if (_onlyMouseRefusedFor != info.Handle.ToInt64())
+                {
+                    _onlyMouseRefusedFor = info.Handle.ToInt64();
+                    string name = string.IsNullOrEmpty(info.FriendlyName) ? "That mouse" : info.FriendlyName;
+                    Logger.Warn("[2nd mouse] not bound by itself: " + name + " is the only mouse connected, and it moves your "
+                        + "pointer. Pick it in the second cursor's menu to drive the second cursor with it (Esc gives it back), "
+                        + "or plug in a second mouse.");
+                    RaiseMiceChanged();
+                }
+                return false;
+            }
+            _onlyMouseRefusedFor = 0;
             // Switching to a DIFFERENT mouse mid-hold: the old mouse's release would
             // now be routed as "main mouse" and never lift the real button — release
             // everything held before the handle changes.
@@ -726,8 +884,22 @@ namespace AutoClicker.Engine
             RefreshActiveLook();
             Logger.Info("[2nd mouse] bound " + (_secondMouseName.Length > 0 ? _secondMouseName : "a mouse")
                 + " — it now drives the second cursor.");
+            if (!another)
+            {
+                // Only reachable from the user's own pick (allowOnlyMouse): one mouse, two cursors.
+                BeginOneMouseMode();
+                Logger.Info("[2nd mouse] one mouse, two cursors: it is the only mouse, so your pointer waits at ("
+                            + _lastMainX + ", " + _lastMainY + ") while it moves the second cursor — Esc or the Emergency "
+                            + "stop key gives it back.");
+                try { OneMouseTaken?.Invoke(this, EventArgs.Empty); } catch { }
+            }
+            else if (_oneMouse)
+            {
+                EndOneMouseMode();
+            }
             try { SecondMouseBoundChanged?.Invoke(this, EventArgs.Empty); } catch { }
             RaiseMiceChanged();
+            return true;
         }
 
         private void RaiseMiceChanged()
@@ -825,6 +997,28 @@ namespace AutoClicker.Engine
                     foreach (var m in mice) { if (m.Handle == _secondMouseHandle) { present = true; break; } }
                     if (present)
                     {
+                        bool another = AnotherMouseThan(_secondMouseHandle, mice);
+                        if (another && _oneMouse)
+                        {
+                            // A second mouse plugged in while one mouse drove both: it takes the pointer now (two mice).
+                            EndOneMouseMode();
+                            Logger.Info("[2nd mouse] another mouse is connected — it moves your pointer now, and "
+                                        + (_secondMouseName.Length > 0 ? _secondMouseName : "the chosen mouse")
+                                        + " stays on the second cursor.");
+                            RaiseMiceChanged();
+                        }
+                        // Two mice; or one mouse, two cursors, which the user picked (Esc gives it back).
+                        if (another || _oneMouse) { return; }
+                        // The OTHER mouse went: the bound one is all the PC has left to point with. Give it back — it
+                        // drives the second cursor again when another mouse is connected (the choice is kept).
+                        ReleaseAllHeldButtons();
+                        string was = _secondMouseName.Length > 0 ? _secondMouseName : "the second mouse";
+                        _secondMouseHandle = IntPtr.Zero;
+                        _secondMouseName = "";
+                        RefreshActiveLook();
+                        Logger.Info("[2nd mouse] the other mouse was unplugged — " + was + " is the only one left, so it moves "
+                            + "your pointer again until another mouse is connected.");
+                        RaiseMiceChanged();
                         return;
                     }
                     // Unplugged mid-hold? Release any held button so it can't stick down
@@ -832,6 +1026,7 @@ namespace AutoClicker.Engine
                     ReleaseAllHeldButtons();
                     _secondMouseHandle = IntPtr.Zero;
                     _secondMouseName = "";
+                    EndOneMouseMode();
                     Logger.Info("[2nd mouse] the bound mouse was unplugged.");
                     RaiseMiceChanged();
                 }
@@ -1008,8 +1203,9 @@ namespace AutoClicker.Engine
                         // FOLLOWS the second cursor while held, then is handed back to the
                         // parked spot on release. Without this, a click that moved even a pixel
                         // put its down at the second cursor and its up back at the parked spot
-                        // (a broken click / accidental drag).
-                        NativeMethods.SetCursorPos(_x, _y);
+                        // (a broken click / accidental drag). In order behind a press still queued.
+                        int fx = _x, fy = _y;
+                        SendInOrder(() => NativeMethods.SetCursorPos(fx, fy), injects: false);
                         _suppressMainUntilTick = now + 200;
                     }
                 }
@@ -1019,7 +1215,8 @@ namespace AutoClicker.Engine
                     // has one cursor, so this is the whole trick — you move the second
                     // cursor to line up your shot while your main pointer never budges
                     // (also blocked in the hook so there's not even a flicker).
-                    NativeMethods.SetCursorPos(_lastMainX, _lastMainY);
+                    int hx = _lastMainX, hy = _lastMainY;
+                    SendInOrder(() => PinPointer(hx, hy), injects: false);
                 }
                 Interlocked.Increment(ref _secondMouseMoves);
                 activity = true;
@@ -1046,20 +1243,113 @@ namespace AutoClicker.Engine
                 // MAIN pointer was.
                 int backX = _secondHeldButtons != 0 ? _x : _lastMainX;
                 int backY = _secondHeldButtons != 0 ? _y : _lastMainY;
+                int atX = _x, atY = _y, notches = wheel;
+                bool sideways = tilt;
                 _suppressMainUntilTick = now + 120;
-                try
+                SendInOrder(() =>
                 {
                     using (InputSimulator.RelayingUserInput())
                     {
-                        InputSimulator.RealWheelAtAndRestore(_x, _y, wheel, backX, backY, tilt);
+                        InputSimulator.RealWheelAtAndRestore(atX, atY, notches, backX, backY, sideways);
                     }
-                }
-                catch { }
+                });
                 activity = true;
             }
 
             if (activity) { _lastSecondActivityTick = now; }
         }
+
+        // ── input sent from inside a hook ─────────────────────────────────────
+        //
+        // 2026-11-11, on the user's PC: Tempo hung for good ("not responding"), its UI thread inside SendInput, inside
+        // this class's low-level mouse hook, inside SendInput, inside the hook again (dotnet-stack, twice, identical, no
+        // CPU). The hook drains queued raw input first (OnHookMouse → RawMouseHub.DrainPending), and a second-mouse press
+        // or release found there sent its click AT ONCE — SendInput from inside a low-level hook, on the hook's own
+        // thread. Windows then calls this same hook, on this same thread, for input arriving while that SendInput waits;
+        // a release found in THAT nested call sent again, and the thread never came back. Meanwhile every mouse movement
+        // on the PC waited on the hung hook. Nothing is sent from inside a hook now: what a report asks for is queued, in
+        // order, and sent the moment the message loop has the thread again (a posted flush). What the report CHANGES —
+        // the buttons held, the swallow windows — still changes at once, so the hook's own decisions are the same.
+
+        /// <summary>Input waiting to be sent, oldest first (UI thread only).</summary>
+        private readonly Queue<Action> _deferredInput = new Queue<Action>();
+        private bool _deferredFlushPosted;
+        /// <summary>How deep inside <see cref="OnHookMouse"/> the thread is.</summary>
+        private int _hookDepth;
+
+        /// <summary>Inside a low-level hook's callback: this class's own, or raw input drained by any hook (the macro recorder's too).</summary>
+        private bool InsideHook => _hookDepth > 0 || RawMouseHub.Draining;
+
+        /// <summary>
+        /// Sends input for the second mouse — now, unless that would be from inside a hook. There it is queued, and so is
+        /// everything after it until the queue has gone, so a press is never overtaken by its own release or by the pointer
+        /// moving on. <paramref name="injects"/> false: a pointer placement (SetCursorPos, which no hook sees), safe to make
+        /// inside a hook when nothing is queued ahead of it.
+        /// </summary>
+        private void SendInOrder(Action send, bool injects = true)
+        {
+            if (InsideHook)
+            {
+                if (injects || _deferredInput.Count > 0)
+                {
+                    _deferredInput.Enqueue(send);
+                    PostDeferredFlush();
+                    return;
+                }
+            }
+            else
+            {
+                FlushDeferredInput();   // anything queued from a hook goes first
+            }
+            try { send(); } catch { }
+        }
+
+        private void PostDeferredFlush()
+        {
+            if (_deferredFlushPosted || _disposing) { return; }
+            try
+            {
+                if (_overlay.IsHandleCreated)
+                {
+                    _deferredFlushPosted = true;
+                    _overlay.BeginInvoke((Action)FlushDeferredInput);
+                }
+            }
+            catch { _deferredFlushPosted = false; }
+        }
+
+        /// <summary>Sends what was queued from inside a hook, in order. Never from inside one.</summary>
+        private void FlushDeferredInput()
+        {
+            _deferredFlushPosted = false;
+            if (_deferredInput.Count == 0) { return; }
+            if (InsideHook) { PostDeferredFlush(); return; }
+            for (int n = 0; _deferredInput.Count > 0 && n < 512; n++)
+            {
+                Action send = _deferredInput.Dequeue();
+                try { send(); } catch { }
+            }
+        }
+
+        /// <summary>For tests and Live debug: input queued from inside a hook and not sent yet.</summary>
+        internal int DeferredInputCount => _deferredInput.Count;
+
+        /// <summary>
+        /// Keeps the real pointer at its parked spot while the second mouse aims — moving it only if it has left. This ran
+        /// SetCursorPos for every raw report: a 1,000 Hz gaming mouse (the user's Razer DeathAdder) made a thousand calls a
+        /// second, on the window's thread, for a pointer the hook already holds still.
+        /// </summary>
+        private void PinPointer(int x, int y)
+        {
+            if (NativeMethods.GetCursorPos(out NativeMethods.POINT p) && p.X == x && p.Y == y) { _pinsSkipped++; return; }
+            NativeMethods.SetCursorPos(x, y);
+            _pinsMade++;
+        }
+
+        /// <summary>For tests and Live debug: pins needed, and pins skipped because the pointer was already there.</summary>
+        internal int PinsMade => _pinsMade;
+        internal int PinsSkipped => _pinsSkipped;
+        private int _pinsMade, _pinsSkipped;
 
         /// <summary>
         /// Press a real mouse button AT the second cursor and keep it held. On the first
@@ -1073,7 +1363,8 @@ namespace AutoClicker.Engine
             _secondHeldButtons |= bit;
             Interlocked.Increment(ref _secondMouseClicks);
             _suppressMainUntilTick = Environment.TickCount + 250;
-            try
+            int px = _x, py = _y;   // where it was pressed, even if it is sent a moment later
+            SendInOrder(() =>
             {
                 // Relayed, not automated: the user physically pressed this button. The
                 // tag keeps SelfClickGuard from swallowing it when it lands on Tempo's own
@@ -1081,11 +1372,10 @@ namespace AutoClicker.Engine
                 // work, and that is exactly when someone would do it.
                 using (InputSimulator.RelayingUserInput())
                 {
-                    if (wasIdle) { InputSimulator.MoveTo(_x, _y); }   // borrow the pointer
+                    if (wasIdle) { InputSimulator.MoveTo(px, py); }   // borrow the pointer
                     pressIt();
                 }
-            }
-            catch { }
+            });
         }
 
         /// <summary>Releases any second-cursor buttons still held — so a button never sticks
@@ -1094,8 +1384,12 @@ namespace AutoClicker.Engine
         {
             int held = _secondHeldButtons;
             _secondHeldButtons = 0;
-            if (held == 0) { return; }
-            try
+            if (held == 0)
+            {
+                if (!InsideHook) { FlushDeferredInput(); }   // a press still queued goes out before anything is let go
+                return;
+            }
+            SendInOrder(() =>
             {
                 using (InputSimulator.RelayingUserInput())
                 {
@@ -1104,8 +1398,7 @@ namespace AutoClicker.Engine
                     if ((held & HeldX1) != 0) { InputSimulator.XButtonUp(1); }
                     if ((held & HeldX2) != 0) { InputSimulator.XButtonUp(2); }
                 }
-            }
-            catch { }
+            });
         }
 
         /// <summary>Release a held second-cursor button; hand the real pointer back when none remain.</summary>
@@ -1116,19 +1409,17 @@ namespace AutoClicker.Engine
                 return;   // we never pressed it (e.g. mode armed mid-hold)
             }
             _secondHeldButtons &= ~bit;
-            try
+            bool last = _secondHeldButtons == 0;
+            int bx = _lastMainX, by = _lastMainY;
+            if (last) { _suppressMainUntilTick = Environment.TickCount + 120; }
+            SendInOrder(() =>
             {
                 using (InputSimulator.RelayingUserInput())
                 {
                     releaseIt();
-                    if (_secondHeldButtons == 0)
-                    {
-                        InputSimulator.MoveTo(_lastMainX, _lastMainY);   // give the pointer back
-                        _suppressMainUntilTick = Environment.TickCount + 120;
-                    }
+                    if (last) { InputSimulator.MoveTo(bx, by); }   // give the pointer back
                 }
-            }
-            catch { }
+            });
         }
 
         /// <summary>
@@ -1860,7 +2151,7 @@ namespace AutoClicker.Engine
             {
                 return;
             }
-            _hook = new LowLevelMouseHook();
+            _hook = new LowLevelMouseHook { Name = "second-cursor mouse" };
             _hook.MouseEvent += OnHookMouse;
             _hook.Start();
         }
@@ -1877,6 +2168,14 @@ namespace AutoClicker.Engine
 
         private void OnHookMouse(object sender, MouseHookEventArgs e)
         {
+            // Everything under here runs inside the low-level hook: input it asks for is queued (SendInOrder).
+            _hookDepth++;
+            try { OnHookMouseInside(e); }
+            finally { _hookDepth--; }
+        }
+
+        private void OnHookMouseInside(MouseHookEventArgs e)
+        {
             // Which mouse did THIS come from? The hook can't tell; raw input can, but this
             // callback is SENT to the UI thread and so runs ahead of raw reports POSTED
             // before it — the decisions below were being made on the previous report. Moving
@@ -1887,6 +2186,16 @@ namespace AutoClicker.Engine
             if (_usePhysicalMouse && _secondMouseHandle != IntPtr.Zero && !e.Injected)
             {
                 RawMouseHub.DrainPending(e.TimeStamp);
+            }
+
+            // Grab & place: the marker goes where the pointer goes, at the pointer's own pace. It followed a 15 ms window
+            // timer (16 ms at best, longer while the window's thread is busy), so it trailed the pointer it was meant to
+            // be held by. The timer stays as the backstop for a move no hook sees (SetCursorPos, a hook Windows dropped).
+            if (_placing && e.Type == MouseHookEventType.Move)
+            {
+                _x = e.X;
+                _y = e.Y;
+                MoveOverlay(e.X, e.Y);
             }
 
             // ── keep the REAL cursor perfectly still while the 2nd mouse is moving ──
@@ -2068,6 +2377,7 @@ namespace AutoClicker.Engine
             // Tempo closing mid-drag with the second mouse: the button's release can never
             // arrive now, and Windows would go on believing it is held.
             ReleaseAllHeldButtons();
+            EndOneMouseMode();
             StopSpam();
             StopHook();
             StopListener();

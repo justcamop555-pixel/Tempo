@@ -160,7 +160,10 @@ namespace AutoClicker.UI
             // the diagnostics list.
             var dead = new List<string>(_hotkeyDead);
 
-            if (fallbacks.Count == 0 && dead.Count == 0)
+            // Keys a feature turned off in Settings → Disable features let go of: still set in the table, doing nothing.
+            string letGo = FeatureLetGoKeysText();
+
+            if (fallbacks.Count == 0 && dead.Count == 0 && letGo == null)
             {
                 SetKeybindNotice(_keybindsRouteLabel, null);
                 return;
@@ -202,6 +205,13 @@ namespace AutoClicker.UI
                         "⛔ {0} could not be bound at all — Windows refused them and the fallback hook "
                         + "would not install, so those keys do nothing. Pick other combinations.",
                         names));
+            }
+
+            if (letGo != null)
+            {
+                parts.Add(Utils.Localization.F(
+                    "ⓘ Turned off in Settings (Disable features), so these keys do nothing in Tempo and reach your game instead: {0}.",
+                    letGo));
             }
 
             SetKeybindNotice(_keybindsRouteLabel, string.Join("\r\n", parts.ToArray()));
@@ -544,75 +554,32 @@ namespace AutoClicker.UI
             page.Controls.Add(UiFactory.Label(Utils.Localization.T("Hotkey"), 300, headerY, FontStyle.Bold));
 
             int y = headerY + 26;
-            const int rowHeight = 44;
 
+            // In sections (HotkeyActions.InSections), each under a heading: Clicker, Profiles, Macros… Twenty-six rows
+            // in one run, in the order the actions happened to be added, was a list you searched rather than read —
+            // "Next profile" sat between "Emergency stop" and "Increase interval".
             _bindingControls.Clear();
-            foreach (var info in HotkeyActions.All)
+            bool firstSection = true;
+            foreach (var section in HotkeyActions.InSections())
             {
-                var label = UiFactory.Label(info.Label, 16, y + 3);
-                label.Width = 270;
-                label.AutoSize = false;
-                label.Height = 24;
-
-                var capture = new HotkeyCaptureControl
+                var heading = new KeybindSectionHeading
                 {
-                    Left = 300,
-                    Top = y,
-                    Width = 220,
-                    Font = UiFactory.BodyFont
+                    Text = Utils.Localization.T(section.Key),
+                    // Level with the action names and the "Action" header (x = 16), to the page's 772 px edge.
+                    Location = new Point(16, y + (firstSection ? 0 : 10)),
+                    Size = new Size(756, 22),
+                    Font = UiFactory.FontFor(9f, FontStyle.Bold),
+                    // A theme role (ThemeManager keeps it through every theme change), and the rule beside the
+                    // title is drawn in it too.
+                    ForeColor = _theme.AccentText
                 };
-
-                // Silence the live hotkeys while this field is listening.
-                capture.PauseHotkeys = paused =>
+                page.Controls.Add(heading);
+                y = heading.Bottom + 6;
+                firstSection = false;
+                foreach (var info in section.Value)
                 {
-                    if (_hotkeys != null) { _hotkeys.DeliveryPaused = paused; }
-                };
-
-                _bindingControls[info.Action] = capture;
-                capture.HotkeyChanged += OnKeybindEdited;
-                // Both translated: a screen reader announces these, and neither was
-                // going through the translator — the name was raw concatenation and the
-                // description came straight off the metadata table.
-                capture.AccessibleName = Utils.Localization.F("Hotkey for {0}",
-                    Utils.Localization.T(info.Label));
-                capture.AccessibleDescription = Utils.Localization.T(info.Description);
-
-                page.Controls.Add(label);
-                page.Controls.Add(capture);
-
-                // The three quick-play rows get a macro picker where the description
-                // would go. That is the one place a user actually asks "play macro 1 —
-                // which macro is that?", and until now nothing on this page answered
-                // it. The description moves to the tooltip so nothing is lost.
-                int slot = SlotForAction(info.Action);
-                if (slot > 0)
-                {
-                    // 4 px up: centred on the 23 px hotkey field beside it (a combo box is 30 tall once it has its window).
-                    var pick = UiFactory.Combo(530, y - 4, 186);
-                    pick.DropDownStyle = ComboBoxStyle.DropDownList;
-                    pick.AccessibleName = Utils.Localization.F("Macro for {0}",
-                        Utils.Localization.T(info.Label));
-                    pick.SelectedIndexChanged += OnMacroSlotPicked;
-                    pick.Tag = slot;
-                    _macroSlotCombos[slot] = pick;
-                    page.Controls.Add(pick);
-                    // The description tooltip is attached in SetupTooltips — _tips does
-                    // not exist yet at tab-build time, so setting it here would be a
-                    // silent no-op.
+                    y += AddKeybindRow(page, info, y);
                 }
-                else
-                {
-                    var desc = UiFactory.Caption(info.Description, 530, y + 1);
-                    desc.ForeColor = _theme.TextMuted;
-                    desc.AutoSize = false;
-                    // Ends at y + 39, clear of the next row's macro picker (from y + 40). At 40 tall the two touched,
-                    // and the start-up fitter — which grows a box only into room it does not already share — grew a
-                    // long German description 11 px over the picker at 150%. Now one that long ends in "…", whole on hover.
-                    desc.Size = new Size(186, 38);
-                    page.Controls.Add(desc);
-                }
-
-                y += rowHeight;
             }
 
             // Twenty-six actions, and on a typical setup five or six are bound. Finding
@@ -661,6 +628,122 @@ namespace AutoClicker.UI
             }
 
             _tabs.TabPages.Add(page);
+        }
+
+        /// <summary>
+        /// One action's row at <paramref name="y"/>: its name, its key field, and what it does — or, for a quick-play
+        /// slot, which macro it plays. Returns the row's height: 40, or more for a description that needs a third line.
+        /// </summary>
+        private int AddKeybindRow(TabPage page, HotkeyActions.Info info, int y)
+        {
+            var label = UiFactory.Label(info.Label, 16, y + 3);
+            label.Width = 270;
+            label.AutoSize = false;
+            label.Height = 24;
+
+            var capture = new HotkeyCaptureControl
+            {
+                Left = 300,
+                Top = y,
+                Width = 220,
+                Font = UiFactory.BodyFont
+            };
+
+            // Silence the live hotkeys while this field is listening.
+            capture.PauseHotkeys = paused =>
+            {
+                if (_hotkeys != null) { _hotkeys.DeliveryPaused = paused; }
+            };
+
+            _bindingControls[info.Action] = capture;
+            capture.HotkeyChanged += OnKeybindEdited;
+            // Both translated: a screen reader announces these, and neither was
+            // going through the translator — the name was raw concatenation and the
+            // description came straight off the metadata table.
+            capture.AccessibleName = Utils.Localization.F("Hotkey for {0}",
+                Utils.Localization.T(info.Label));
+            capture.AccessibleDescription = Utils.Localization.T(info.Description);
+
+            page.Controls.Add(label);
+            page.Controls.Add(capture);
+
+            const int rowHeight = 40;
+            const int descWidth = 236;   // to the page's 772 px content edge, less a margin (it was 186: most wrapped)
+
+            // The three quick-play rows get a macro picker where the description
+            // would go. That is the one place a user actually asks "play macro 1 —
+            // which macro is that?", and until now nothing on this page answered
+            // it. The description moves to the tooltip so nothing is lost.
+            int slot = SlotForAction(info.Action);
+            if (slot > 0)
+            {
+                // 4 px up: centred on the 23 px hotkey field beside it (a combo box is 30 tall once it has its window).
+                var pick = UiFactory.Combo(530, y - 4, descWidth);
+                pick.DropDownStyle = ComboBoxStyle.DropDownList;
+                pick.AccessibleName = Utils.Localization.F("Macro for {0}",
+                    Utils.Localization.T(info.Label));
+                pick.SelectedIndexChanged += OnMacroSlotPicked;
+                pick.Tag = slot;
+                _macroSlotCombos[slot] = pick;
+                page.Controls.Add(pick);
+                // The description tooltip is attached in SetupTooltips — _tips does
+                // not exist yet at tab-build time, so setting it here would be a
+                // silent no-op.
+                return rowHeight;
+            }
+
+            // Level with the action's name, and as tall as its text — up to three lines; past that it ends in "…" and
+            // the whole of it is on hover. A fixed two-line box cut the camera and second-cursor descriptions mid-way in
+            // every language, and the start-up fitter, which grows a box only into room nobody else shares, could not help.
+            var desc = UiFactory.Caption(info.Description, 530, y + 3);
+            desc.ForeColor = _theme.TextMuted;
+            desc.AutoSize = false;
+            desc.UseMnemonic = false;
+            desc.AutoEllipsis = true;
+            // In the window's units (MeasureLayout): built before the window is scaled, like the help text above.
+            int line = MeasureLayout("Ag", desc.Font, 0, TextFormatFlags.NoPrefix).Height;
+            int textH = MeasureLayout(desc.Text, desc.Font, descWidth, TextFormatFlags.NoPrefix).Height;
+            int descH = Math.Max(line, Math.Min(textH, 3 * line)) + 2;
+            desc.Size = new Size(descWidth, descH);
+            page.Controls.Add(desc);
+            TipStyle.FollowText(desc);
+            // The next row's macro picker starts 4 px above that row, so a description ends at least 2 px short of it.
+            return Math.Max(rowHeight, 3 + descH + 6);
+        }
+
+        /// <summary>
+        /// A section's title on the Keybinds tab — bold, in the theme's accent ink — with a faint rule from the end of the
+        /// title to the right edge, so each section reads as a block. The rule is drawn in the label's own colour, so it
+        /// follows every theme change with the title (ThemeManager keeps a label's role).
+        /// </summary>
+        private sealed class KeybindSectionHeading : Label
+        {
+            public KeybindSectionHeading()
+            {
+                AutoSize = false;
+                UseMnemonic = false;
+                TextAlign = ContentAlignment.MiddleLeft;
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+                try
+                {
+                    // Where the label drew the text: TextRenderer, with its usual padding.
+                    Size text = TextRenderer.MeasureText(e.Graphics, Text, Font, new Size(int.MaxValue, Height),
+                                                         TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                    int x0 = text.Width + Font.Height / 3;
+                    int x1 = ClientSize.Width - 1;
+                    if (x1 - x0 < Font.Height) { return; }
+                    int y = ClientSize.Height / 2 + 1;
+                    using (var pen = new Pen(Color.FromArgb(80, ForeColor), 1f))
+                    {
+                        e.Graphics.DrawLine(pen, x0, y, x1, y);
+                    }
+                }
+                catch (Exception ex) { Utils.Logger.Swallow("KeybindSectionHeading.OnPaint", ex); }
+            }
         }
 
         // ── The notice stack ────────────────────────────────────────────────────────────────
@@ -829,37 +912,45 @@ namespace AutoClicker.UI
                 // freeze-and-thaw of a page that is not the selected tab would put it up over the
                 // one that is.
                 if (onScreen) { SetRedraw(page, false); }
-                page.SuspendLayout();
                 try
                 {
-                    foreach (var move in moves) { move.Key.Bounds = move.Value; }
-                    if (delta != 0)
+                    page.SuspendLayout();
+                    try
                     {
-                        foreach (Control c in _keybindTable) { c.Top += delta; }
+                        foreach (var move in moves) { move.Key.Bounds = move.Value; }
+                        if (delta != 0)
+                        {
+                            foreach (Control c in _keybindTable) { c.Top += delta; }
+                        }
+                    }
+                    finally
+                    {
+                        page.ResumeLayout(true);
+                    }
+                    if (anchor)
+                    {
+                        Point at = page.AutoScrollPosition;   // negative offsets; set as positive ones
+                        int scroll = -at.Y + delta;
+                        // ...but not by scrolling the Save row out of view while it is in view: "Unsaved
+                        // changes — click Save Keybinds" lives there. The help text above it gives way
+                        // first; past that the rows move down instead.
+                        if (delta > 0 && _keybindsSaveBtn.Top >= 0)
+                        {
+                            int saveRow = _keybindsSaveBtn.Top - at.Y;   // its place on the unscrolled page
+                            scroll = Math.Min(scroll, Math.Max(-at.Y, saveRow - L(6)));
+                        }
+                        page.AutoScrollPosition = new Point(-at.X, Math.Max(0, scroll));
                     }
                 }
                 finally
                 {
-                    page.ResumeLayout(true);
-                }
-                if (anchor)
-                {
-                    Point at = page.AutoScrollPosition;   // negative offsets; set as positive ones
-                    int scroll = -at.Y + delta;
-                    // ...but not by scrolling the Save row out of view while it is in view: "Unsaved
-                    // changes — click Save Keybinds" lives there. The help text above it gives way
-                    // first; past that the rows move down instead.
-                    if (delta > 0 && _keybindsSaveBtn.Top >= 0)
+                    // In a finally: freezes are counted (SetRedraw), and one never thawed — an exception above — kept
+                    // the page from painting again for the rest of the run.
+                    if (onScreen)
                     {
-                        int saveRow = _keybindsSaveBtn.Top - at.Y;   // its place on the unscrolled page
-                        scroll = Math.Min(scroll, Math.Max(-at.Y, saveRow - L(6)));
+                        SetRedraw(page, true);
+                        page.Invalidate(true);
                     }
-                    page.AutoScrollPosition = new Point(-at.X, Math.Max(0, scroll));
-                }
-                if (onScreen)
-                {
-                    SetRedraw(page, true);
-                    page.Invalidate(true);
                 }
             }
             catch (Exception ex) { Utils.Logger.Swallow("RelayoutKeybindNotices", ex); }
@@ -1060,6 +1151,9 @@ namespace AutoClicker.UI
                     isClash ? BlendColors(normal, _theme.Danger, 0.35)
                   : amber ? BlendColors(normal, _theme.Warning, 0.30)
                   : normal;
+                // "(none)" in the muted ink, so the keys that ARE bound stand out down the column.
+                Color ink = valid ? _theme.Text : _theme.TextMuted;
+                if (pair.Value.ForeColor != ink) { pair.Value.ForeColor = ink; }
             }
 
             // Hold mode + a trigger that is the button being clicked = a hold that can
@@ -1388,7 +1482,10 @@ namespace AutoClicker.UI
             var rows = new List<KeyValuePair<string, string>>();   // label, what is bound (and played)
             int total = 0;
 
-            foreach (HotkeyActions.Info info in HotkeyActions.All)
+            // In the page's order (its sections), so the copy reads like the tab it came from.
+            var shown = new List<HotkeyActions.Info>();
+            foreach (var section in HotkeyActions.InSections()) { shown.AddRange(section.Value); }
+            foreach (HotkeyActions.Info info in shown)
             {
                 total++;
                 string label = Utils.Localization.T(info.Label);

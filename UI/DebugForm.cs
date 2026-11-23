@@ -68,6 +68,7 @@ namespace AutoClicker.UI
         private readonly TextBox _filter;
         private readonly CheckBox _pause;
         private readonly CheckBox _problemsOnly;
+        private readonly CheckBox _earlier;   // round 41: the log file's lines from before the ring, and the runs before
         private readonly CheckBox _trace;
         private readonly CheckBox _moveTrace;
         private readonly CheckBox _onTop;
@@ -537,6 +538,23 @@ namespace AutoClicker.UI
             };
             _problemsOnly.CheckedChanged += Safe("problemsOnly", () => ReloadFromRing());
             bottom.Controls.Add(_problemsOnly);
+
+            // Round 41 (the user: "log tempo and live debug needs improve to see previous after restart tempo or
+            // inactive"): the lines held in memory begin when this Tempo started — or later, once a long run has pushed
+            // the oldest out (the ring keeps 1,500) — so after a restart, or a long spell away, what happened before was
+            // not here at all. On (the default), the view starts with the log file's lines from before them: earlier in
+            // this run, and the runs before, each run opened by a divider. Copy and Save take what is shown.
+            _earlier = new CheckBox
+            {
+                AutoSize = true, Margin = StripCheckMargin, Text = Utils.Localization.T("Earlier runs"), Checked = true,
+                ForeColor = theme.Text, BackColor = Color.Transparent
+            };
+            _earlier.CheckedChanged += Safe("earlier", () => ReloadFromRing());
+            bottom.Controls.Add(_earlier);
+            TipStyle.Set(_tips, _earlier, Utils.Localization.T(
+                "Also show what happened before the lines kept in memory — earlier in this run, and before Tempo last "
+                + "restarted — read from Tempo's log file, each run opened by a divider. The file holds the info, warning "
+                + "and error lines; Live debug's detail lines are never written to it."));
 
             // Per-chunk pipeline trace: one [Trace] line per transcription pass
             // (chunk → inference time, real-time factor, backlog, gain, the text
@@ -1345,6 +1363,9 @@ namespace AutoClicker.UI
                 // the macro recorder and the raw mouse readout listen through: registered, released, refused.
                 ["RawInput"] = LineKind.Input,
                 ["2nd mouse"] = LineKind.Input,
+                // [Features] is Settings › Disable features: a feature turned off or on, and the hotkeys it lets go of —
+                // which keys Tempo still answers is an input question.
+                ["Features"] = LineKind.Input,
 
                 // Input Tempo WRITES: the click engine, macro record/playback, and the
                 // second cursor, which is a clicking automaton of its own.
@@ -1393,6 +1414,8 @@ namespace AutoClicker.UI
                 // the Official ID): the answer, the requests left this hour, a rate-limit pause.
                 ["GitHub"] = LineKind.System,
                 ["Uninstall"] = LineKind.System,
+                // [About] is the About box: its licences file, its update line (debugfit found it uncoloured, 2026-11-16).
+                ["About"] = LineKind.System,
 
                 // Trust and storage. Both were falling through to the uncategorised
                 // safety net: [Integrity] is the tamper check's verdict — the one
@@ -1419,7 +1442,11 @@ namespace AutoClicker.UI
                 // day someone adds an Info line under the same tag.
                 ["sidebar"] = LineKind.System,
                 ["window"] = LineKind.System,
+                // [TabWindow] is a tab opened in a window of its own and put back (MainForm.TabWindows.cs).
+                ["TabWindow"] = LineKind.System,
                 ["perf"] = LineKind.System,
+                // [motion] is the animations (UI/Motion.cs, WindowMotion.cs): a way in or out slow to start.
+                ["motion"] = LineKind.System,
                 // [stall] is the window-freeze watch (UI/UiStallWatch): "the window did not respond for 2.4 s",
                 // with what was running. It sits with [perf]: the same question, how long things take.
                 ["stall"] = LineKind.System,
@@ -1445,6 +1472,8 @@ namespace AutoClicker.UI
                 ["Roblox"] = LineKind.Accounts,
                 ["RobloxLogin"] = LineKind.Accounts,
                 ["AccountApi"] = LineKind.Accounts,
+                // [AntiAfk] is the Roblox anti-AFK presses (Utils/RobloxAntiAfk.cs): pressed, held back and why, warned.
+                ["AntiAfk"] = LineKind.Accounts,
 
                 // High-frequency chatter, dimmed so the events above stand out.
                 ["Trace"] = LineKind.Trace,
@@ -1534,6 +1563,11 @@ namespace AutoClicker.UI
 
         private Color ColorFor(string line)
         {
+            // A run's divider (round 41) in the accent, so a restart stands out in the stream.
+            if (IsDivider(line))
+            {
+                return _titleTheme != null ? Theme.Readable(_titleTheme.Accent, _titleTheme.InputBackground, 3.0) : _infoColor;
+            }
             LineKind kind = KindOf(line);
             // Errors/warnings always keep their severity colour. The per-subsystem hues
             // are optional — the checkbox lets the user fall back to the plain
@@ -1773,8 +1807,9 @@ namespace AutoClicker.UI
             if (passing.Count == 0) { return; }
 
             // Past the cap, start again from the ring (which trims itself) rather than growing —
-            // keeping the reader on the line they were reading.
-            if (_shownLines + passing.Count > 2200)
+            // keeping the reader on the line they were reading. (3,200 since round 41: a rebuild fills the view to
+            // ViewTarget with the earlier lines, so there is room for 200 more before the next.)
+            if (_shownLines + passing.Count > ViewCap)
             {
                 ReloadFromRing(keepPlace: true);
                 return;
@@ -1964,8 +1999,12 @@ namespace AutoClicker.UI
 
                 var shown = new System.Collections.Generic.List<string>();
                 int total = 0;
-                foreach (string line in SnapshotSinceClear())
+                int dividers = 0;
+                // The ring — and, with "Earlier runs" on, the log file's lines from before it (round 41), each run opened
+                // by a divider that is shown whatever the filter (it says where one run ends and the next begins).
+                foreach (string line in ViewSource())
                 {
+                    if (IsRunStart(line)) { shown.Add(RunDivider(line)); dividers++; }
                     total++;
                     if (PassesFilter(line)) { shown.Add(line); }
                 }
@@ -2002,7 +2041,7 @@ namespace AutoClicker.UI
                     _log.ScrollToCaret();
                 }
                 _log.Invalidate();
-                UpdateMatchCount(shown.Count, total);
+                UpdateMatchCount(shown.Count - dividers, total);
             }
             catch { }
         }
@@ -2057,6 +2096,117 @@ namespace AutoClicker.UI
         // the filter, Copy and Save all start from there.
         private long _clearedBefore;
         private DateTime _clearedAt;
+
+        // ── Earlier runs (round 41) ───────────────────────────────────────────────────────────────────
+        // The view holds up to ViewCap lines; a rebuild fills it to ViewTarget, the ring's lines first (all of them, up to
+        // its 1,500) and the log file's earlier lines before them for the rest.
+        private const int ViewCap = 3200;
+        private const int ViewTarget = 3000;
+
+        /// <summary>
+        /// What the view is built from, oldest first, before the filter: with "Earlier runs" on, the log file's lines from
+        /// before the ring's first line (as many as fill the view to <see cref="ViewTarget"/>), then the ring. Not after Clear
+        /// view: what was cleared stays out, and anything older with it.
+        /// </summary>
+        private System.Collections.Generic.List<string> ViewSource()
+        {
+            string[] ring = SnapshotSinceClear();
+            var all = new System.Collections.Generic.List<string>(ring.Length + 512);
+            if (_earlier != null && _earlier.Checked && _clearedBefore <= 0)
+            {
+                DateTime first = DateTime.MaxValue;
+                foreach (string r in ring)
+                {
+                    if (TryLineTime(r, out DateTime t)) { first = t; break; }
+                }
+                all.AddRange(EarlierLines(first, Math.Max(0, ViewTarget - ring.Length)));
+            }
+            all.AddRange(ring);
+            return all;
+        }
+
+        /// <summary>A line that starts a run of Tempo ("… [INFO] [startup] Tempo starting (version …").</summary>
+        private static bool IsRunStart(string line) =>
+            StartsWithTime(line) && line.IndexOf("[startup] Tempo starting", StringComparison.Ordinal) > 0;
+
+        private const string DividerMark = "──────  ";
+
+        /// <summary>The divider shown above a run's first line: "────── Tempo started · 2026-11-22 13:13:46 ──────".</summary>
+        private static string RunDivider(string runStart) =>
+            DividerMark + Utils.Localization.T("Tempo started") + " · " + runStart.Substring(0, 19) + "  ──────";
+
+        private static bool IsDivider(string line) => line != null && line.StartsWith(DividerMark, StringComparison.Ordinal);
+
+        /// <summary>The time a logger line starts with ("2026-11-22 13:13:46.638 [INFO] …"), local as written.</summary>
+        private static bool TryLineTime(string line, out DateTime time)
+        {
+            time = default;
+            return StartsWithTime(line) && DateTime.TryParseExact(line.Substring(0, 23), "yyyy-MM-dd HH:mm:ss.fff",
+                System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out time);
+        }
+
+        // The log files read so far: every line with the time of the entry it belongs to (a stack trace's lines carry their
+        // entry's), kept until a file changes in a way that matters — it was rotated (shrank), or the view now wants lines
+        // from after the end of what was read.
+        private readonly System.Collections.Generic.List<(DateTime Time, string Line)> _fileLines =
+            new System.Collections.Generic.List<(DateTime, string)>();
+        private string _fileLinesPath;
+        private long _fileLinesLength;
+        private DateTime _fileLinesEnd = DateTime.MinValue;
+
+        /// <summary>
+        /// The last <paramref name="budget"/> lines of the log files from before <paramref name="before"/>: whole entries
+        /// (a stack trace stays with its first line), from Tempo's log and the file before it (autoclicker.log.1) when the
+        /// current one does not go back far enough.
+        /// </summary>
+        private System.Collections.Generic.List<string> EarlierLines(DateTime before, int budget)
+        {
+            var result = new System.Collections.Generic.List<string>();
+            if (budget <= 0) { return result; }
+            try
+            {
+                string path = Utils.Logger.GetLogPath();
+                if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { return result; }
+                long length = new System.IO.FileInfo(path).Length;
+                if (!string.Equals(path, _fileLinesPath, StringComparison.OrdinalIgnoreCase) || length < _fileLinesLength
+                    || (before > _fileLinesEnd && length != _fileLinesLength))
+                {
+                    _fileLines.Clear();
+                    ReadLogLines(path + ".1", _fileLines);   // older first
+                    ReadLogLines(path, _fileLines);
+                    _fileLinesPath = path;
+                    _fileLinesLength = length;
+                    _fileLinesEnd = _fileLines.Count > 0 ? _fileLines[_fileLines.Count - 1].Time : DateTime.MinValue;
+                }
+                // The lines before the ring's first, the last `budget` of them, starting at an entry's first line.
+                int end = _fileLines.Count;
+                while (end > 0 && _fileLines[end - 1].Time >= before) { end--; }
+                int start = Math.Max(0, end - budget);
+                while (start < end && !StartsWithTime(_fileLines[start].Line)) { start++; }
+                for (int i = start; i < end; i++) { result.Add(_fileLines[i].Line); }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("DebugForm.EarlierLines", ex); }
+            return result;
+        }
+
+        /// <summary>Appends a log file's lines to <paramref name="into"/>, each with its entry's time; shared with the writer.</summary>
+        private static void ReadLogLines(string path, System.Collections.Generic.List<(DateTime, string)> into)
+        {
+            if (!System.IO.File.Exists(path)) { return; }
+            using (var fs = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+                                                     System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete))
+            using (var sr = new System.IO.StreamReader(fs, Encoding.UTF8))
+            {
+                DateTime current = DateTime.MinValue;
+                string line;
+                while ((line = sr.ReadLine()) != null)
+                {
+                    if (TryLineTime(line, out DateTime t)) { current = t; }
+                    else if (current == DateTime.MinValue || line.Length == 0) { continue; }   // nothing to belong to, or a blank
+                    into.Add((current, line));
+                }
+            }
+        }
 
         /// <summary>The ring, without what Clear view put away.</summary>
         private string[] SnapshotSinceClear()
@@ -2179,7 +2329,13 @@ namespace AutoClicker.UI
             // matter and then pressed Copy was handed all 1500 again — the filtering, which
             // is the work, was thrown away at exactly the moment they went to share it.
             // Clear view the same way: what was cleared to watch what happens next stays out.
-            string[] ring = SnapshotSinceClear();
+            // What the view shows: with "Earlier runs" on, the log file's lines from before the ring first (round 41).
+            var ring = new System.Collections.Generic.List<string>();
+            foreach (string line in ViewSource())
+            {
+                if (IsRunStart(line)) { ring.Add(RunDivider(line)); }
+                ring.Add(line);
+            }
             string cleared = _clearedBefore > 0
                 ? "lines before " + _clearedAt.ToString("HH:mm:ss") + " were cleared from the view and are not included."
                 : null;
@@ -2190,6 +2346,8 @@ namespace AutoClicker.UI
                 var kept = new StringBuilder();
                 foreach (string line in ring)
                 {
+                    // A run's divider stays, as in the view, and is no line of the log.
+                    if (IsDivider(line)) { kept.AppendLine(line); continue; }
                     total++;
                     if (!PassesFilter(line)) { continue; }
                     shown++;

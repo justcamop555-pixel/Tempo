@@ -182,11 +182,46 @@ namespace AutoClicker.UI
             _toggleAllPointsBtn = UiFactory.Button(Utils.Localization.T("Enable / Disable all"), bx, 402, 130, 30);
             _toggleAllPointsBtn.Click += OnToggleAllPoints;
 
+            // An icon on every button of the column, at its left edge, the words after it — as on the Macros tab's Manage
+            // card (round 40: "better visual"). A caption too long for its icon in a longer language keeps the button to
+            // itself (RoundedButton.GlyphFits).
+            var columnGlyphs = new (Button Button, ActionGlyph Glyph)[]
+            {
+                (_addPointBtn, ActionGlyph.Plus), (_capturePointBtn, ActionGlyph.Crosshair), (_editPointBtn, ActionGlyph.Pencil),
+                (_duplicatePointBtn, ActionGlyph.Copy), (_togglePointBtn, ActionGlyph.Toggle), (_removePointBtn, ActionGlyph.Trash),
+                (_selectAllPointsBtn, ActionGlyph.SelectAll), (_showPointsBtn, ActionGlyph.Eye), (_clearPointsBtn, ActionGlyph.Clear),
+                (_toggleAllPointsBtn, ActionGlyph.Toggle)
+            };
+            foreach (var (button, glyph) in columnGlyphs)
+            {
+                if (button is RoundedButton rb)
+                {
+                    rb.Glyph = glyph;
+                    rb.GlyphAlignLeft = true;
+                }
+            }
+
+            // One width for the whole column ("consistent button sizes"): as wide as its widest caption with its icon —
+            // or, in a longer language, as its widest caption alone — up to 184. Left at 130, the layout fitter widened
+            // only the buttons that needed it, into the free space beside them: "Show on screen" and "Enable / Disable
+            // all" stood out wider than the rest, and Spanish "Activar / Desactivar todo" (180 px) after the first fix.
+            int columnWidth = 130;
+            foreach (var (button, _) in columnGlyphs)
+            {
+                if (!(button is RoundedButton rb)) { continue; }
+                foreach (string caption in LayoutFitter.CaptionsOf(rb))
+                {
+                    columnWidth = Math.Max(columnWidth, (int)Math.Ceiling(rb.CaptionWidthWanted(caption) * LayoutUnitsPerPixel));
+                }
+            }
+            columnWidth = Math.Min(184, columnWidth);
+            foreach (var (button, _) in columnGlyphs) { button.Width = columnWidth; }
+
             // Save right here. This column used to end in a tip — "press Save on the Clicker tab to
             // store these points" — while switching profile throws unsaved point edits away, and the only
             // unsaved-changes warning was on that other tab. Always enabled, like the Clicker tab's own
             // Save; the note below carries the state.
-            _pointsSaveBtn = UiFactory.Button(Utils.Localization.T("Save"), bx, 448, 130, 30);
+            _pointsSaveBtn = UiFactory.Button(Utils.Localization.T("Save"), bx, 448, columnWidth, 30);
             _pointsSaveBtn.Click += OnSaveProfile;
             StyleAccentButton(_pointsSaveBtn);
             SetGlyph(_pointsSaveBtn, ActionGlyph.Save);
@@ -198,7 +233,7 @@ namespace AutoClicker.UI
                 AutoEllipsis = true,
                 Location = new Point(bx, 484),
                 // Three lines at this width: the longer translations need them.
-                Size = new Size(130, 48),
+                Size = new Size(columnWidth, 48),
                 Font = new Font("Segoe UI", 8.25f, FontStyle.Bold),
                 ForeColor = _theme.AccentText,
                 Visible = false
@@ -225,7 +260,7 @@ namespace AutoClicker.UI
                 Visible = false
             };
             page.Controls.Add(_pointsEmptyHint);
-            _pointsEmptyHint.BringToFront();
+            PutEmptyHintOverList();
             LayoutFitter.DeclareOverlay(_pointsEmptyHint, "drawn on top of the points list while it is empty");
 
             // The two things that stop this page's sequence working, given room to say
@@ -262,6 +297,25 @@ namespace AutoClicker.UI
             ShiftBelowIntro(page, help, 720, firstRowY: 52);
 
             _tabs.TabPages.Add(page);
+        }
+
+        /// <summary>
+        /// The "No points yet" line just in front of the points list — not in front of everything on the page. It was
+        /// brought to the very front each time the empty list was refreshed, over the cover of a turned-off Multi-Point
+        /// tab (Settings ▸ Disable features) too, where it showed on its own on the cover's backdrop.
+        /// </summary>
+        private void PutEmptyHintOverList()
+        {
+            try
+            {
+                Control page = _pointsEmptyHint?.Parent;
+                if (page == null || _pointsList == null || !ReferenceEquals(_pointsList.Parent, page)) { _pointsEmptyHint?.BringToFront(); return; }
+                int list = page.Controls.GetChildIndex(_pointsList, false);
+                int hint = page.Controls.GetChildIndex(_pointsEmptyHint, false);
+                // A lower index is nearer the front: the hint at the list's place puts the list just behind it.
+                if (list >= 0 && hint > list) { page.Controls.SetChildIndex(_pointsEmptyHint, list); }
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("PutEmptyHintOverList", ex); }
         }
 
         private void RefreshPointsList()
@@ -341,7 +395,7 @@ namespace AutoClicker.UI
                 _pointsEmptyHint.BackColor = _pointsList.BackColor;
                 _pointsEmptyHint.ForeColor = _theme.TextMuted;
                 _pointsEmptyHint.Visible = _workingPoints.Count == 0;
-                if (_pointsEmptyHint.Visible) _pointsEmptyHint.BringToFront();
+                if (_pointsEmptyHint.Visible) { PutEmptyHintOverList(); }
             }
 
             UpdateCycleInfo();
@@ -585,27 +639,33 @@ namespace AutoClicker.UI
             int added = 0;
             try
             {
-                // Keep capturing points until the user cancels (Esc), so a whole
-                // sequence can be defined in one go instead of one click per dialog.
-                while (true)
+                // One overlay for the whole sequence (round 40): each click adds a point, numbered on screen and joined to
+                // the one before; Backspace takes the last back; Enter, Esc or a right-click finish. It used to close after
+                // every click and open a fresh full-screen overlay, with nothing showing the points already taken. The
+                // points the list has are shown too, dimmed, so the new ones are placed in relation to them.
+                using (var picker = new CoordinatePickerForm(_theme) { MultiCapture = true })
                 {
-                    using (var picker = new CoordinatePickerForm(_theme))
+                    var existing = new List<Point>();
+                    foreach (ClickPoint cp in _workingPoints)
                     {
-                        if (picker.ShowDialog() != DialogResult.OK)
+                        if (cp != null) { existing.Add(new Point(cp.X, cp.Y)); }
+                    }
+                    picker.ExistingPoints = existing;
+                    if (picker.ShowDialog() == DialogResult.OK)
+                    {
+                        foreach (Point p in picker.CapturedPoints)
                         {
-                            break;
+                            _workingPoints.Add(new ClickPoint(p.X, p.Y)
+                            {
+                                // In the reader's language ("Point 3" was English in every one).
+                                Label = Utils.Localization.F("Point {0}", _workingPoints.Count + 1),
+                                // Enabled by default so a freshly captured sequence is ready to
+                                // run immediately (matching points added via the editor), instead
+                                // of silently not clicking until each row is ticked. Untick to skip.
+                                Enabled = true
+                            });
+                            added++;
                         }
-
-                        _workingPoints.Add(new ClickPoint(picker.PickedX, picker.PickedY)
-                        {
-                            // In the reader's language ("Point 3" was English in every one).
-                            Label = Utils.Localization.F("Point {0}", _workingPoints.Count + 1),
-                            // Enabled by default so a freshly captured sequence is ready to
-                            // run immediately (matching points added via the editor), instead
-                            // of silently not clicking until each row is ticked. Untick to skip.
-                            Enabled = true
-                        });
-                        added++;
                     }
                 }
             }

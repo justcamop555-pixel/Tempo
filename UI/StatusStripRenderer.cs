@@ -77,7 +77,11 @@ namespace AutoClicker.UI
             }
             // Top hairline: border blended a touch toward the accent, so the bar
             // feels intentionally seated under the content rather than tacked on.
-            using (var p = new Pen(Blend(_theme.Border, _theme.Accent, 0.35)))
+            // Round 42: from the accent at the left into the theme's second accent at the right.
+            Color lineEnd = Blend(_theme.Border, _theme.Accent2.IsEmpty ? _theme.Accent : _theme.Accent2, 0.35);
+            using (var lb = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, Math.Max(2, r.Width), 1),
+                       Blend(_theme.Border, _theme.Accent, 0.35), lineEnd, System.Drawing.Drawing2D.LinearGradientMode.Horizontal))
+            using (var p = new Pen(lb, 1))
             {
                 g.DrawLine(p, 0, 0, r.Width, 0);
             }

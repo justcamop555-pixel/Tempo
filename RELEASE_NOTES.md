@@ -2,45 +2,45 @@
 
 This file always holds the notes for the most recent version. Per-version notes live in the `release-notes/` folder, and every change is in `CHANGELOG.md`.
 
-## Tempo 1.0.327
+## Tempo 1.0.328
 
-**Any tab in its own window · anti-AFK for Roblox · see which game each account is in · a crash and freeze guard · a tidier Settings tab · Tempo now runs on .NET 10**
-
-### Your window, your way
-- **Any tab in its own window.** Right-click a tab in the sidebar and choose **Open in its own window**. The tab then sits in a window of its own, beside your game, and stays open while Tempo's main window is minimised. Its place in Tempo offers **Show the window** and **Bring it back here**, and each window remembers where it was. This replaces the Accounts-only "In its own window" setting.
-- **A tidier Settings tab.** Nine cards by topic, with the ones most people never change folded under **Advanced** (Display & logo, More caption options, Camera-relative movement). On the Clicker tab, Second Cursor, Background Clicking and Sound fold under Advanced too.
-- **The Window card** saves opacity, always on top and "remember the window" the moment they change, and a double-click on the opacity slider puts it back to 100%.
+**Rejoin after a lost connection · Roblox brought back when it freezes · a redesigned Macros tab · Nemotron live captions · one Tempo on the taskbar · two-tone themes**
 
 ### Roblox and accounts
-- **Anti-AFK.** Roblox disconnects a player who is idle for 20 minutes. Turn on **Anti-AFK** on the Roblox client card and pick how often (every 1 to 18 minutes). Tempo then brings each Roblox window that is in a game to the front, presses F13 once (a key games don't use) and puts your window back.
-  - It doesn't modify or inject into Roblox. It presses a real key, as you would.
-  - It waits until you have stopped typing and moving for a few seconds. It stays out of the way while you hold a mouse button, play with a controller, run something else full screen or have the PC locked. It warns you if a window gets close to 20 minutes.
-  - Turn it off for one account from the account list's right-click menu. Like any key press, it keeps Windows from switching the screen off.
-- **See which game each account is in.** The Roblox client card shows a live line, such as "Connected: in Blox Fruits as Main, since 10:21", and the Session column says **In game**. Tempo can tell you when a client joins a game, is disconnected (and why) or crashes. It reads Roblox's own log on your PC. The only thing it sends is a game's number, once, to learn its name, and **Name the Roblox game you're playing** in Updates & privacy turns that off.
-- **A crash and freeze guard.** When a Roblox client crashes or stops responding for a minute, Tempo starts it again as the same account in the same game, at most 3 times in 15 minutes. It covers clients Tempo launched and clients you started yourself that play as a saved account. It's on by default. It can't stop Roblox from crashing in the first place.
-- **Smoother play.** The Roblox window you're in comes first: other Roblox clients run at a lower priority, and Tempo's own animations pause while Roblox is in front. Tempo also warns you when the PC is low on memory.
-- **Faster joins and Recent games.** Launching an account into a game takes less time, and **Recent games** fills in a Place ID you played lately.
-- **Fix Roblox links** repairs Roblox's links when an update left them pointing at a version that no longer exists.
-- **The Accounts tab** is laid out in four cards with a Session column, and a failed launch ticket no longer marks a good session as expired.
-- **Fixed:** opening an account's browser a second time gave an empty tab.
+- **Rejoin after a lost connection.** When Roblox loses its connection and stays on its Disconnected screen (a Wi-Fi or Ethernet drop, errors 277, 1025 or 256), Tempo waits until your PC and Roblox can be reached again, then puts the same account back into the same game. It never rejoins a kick, a ban or "playing on another device", and stops after 5 rejoins in 30 minutes. It has its own switch on the Roblox client card.
+- **Lost-connection notices** say what dropped and why: your PC's internet, the game's server, or Roblox.
+- **The crash & freeze guard waits for the vault.** A crash, freeze or drop while the vault is locked goes back into the game once you unlock it (within 30 minutes).
+- **A frozen Roblox that won't close** — not even with End task — is watched until Windows lets it go, then brought back. After 90 seconds Tempo tells you; with multi-instance on it starts the account again beside the stuck window. A Roblox you end yourself after it froze comes back too.
+- **Roblox's anti-cheat messages:** when Roblox closes itself with one, Tempo shows Roblox's own words and doesn't restart it — except the time-out, which asks for a restart and gets one.
+- **Anti-AFK never shows anything:** its presses no longer bring Roblox in front of what you're doing, and its status says when the last press was and when the next comes.
+- **Sessions are checked for all accounts at once,** not one by one.
+- **Accounts:** account groups (a strip of chips, rename, move, drag onto a chip); a re-login with a passkey is detected; copy usernames, passwords or both for any number of selected accounts; add an account from a cookie (checked with Roblox before it's saved).
+- **Roblox links repair themselves** when an update leaves them pointing at a version that's gone, and the version picker follows what's installed.
+- **Smoother play** for the Roblox window you're in, also with one client.
 
-### Clicker, macros and profiles
-- **Multi-Point: work on several points at once.** Select them with Ctrl+A, **Select all** or Ctrl-click, then edit, move or delete them together, or drag them as a block. Point names, buttons and types appear in your language.
-- **The Live Monitor follows the playing step** until you scroll away, and **Jump to the playing step** catches up. Right-click a step to edit or copy it, double-click it to open it in the editor, or press Ctrl+C.
-- **Profiles:** picking a profile counts as using it, and its card updates at once.
+### Macros, clicker and Multi-Point
+- **A redesigned Macros tab:** a larger Saved macros list with search and sort, a Manage column with icons, Record and Playback cards, and quick speeds (0.5×, 1×, 2×, 4×).
+- **Mouse movement as camera turns** while recording, for games that steer the camera with the mouse.
+- **Quick Capture** for Multi-Point: click several points in one go, each numbered where you click, with a magnifier. Multi-Point now sits under the Clicker row, with Profiles.
+- **Disable features** you don't use (Clicker, Macros, Multi-Point, Captions): their keys are let go and nothing can start them.
+- **Second Cursor:** a hang is fixed, and one mouse can drive two cursors.
 
 ### Live Captions
-- **Fewer missed words.** Short words, words after a pause and words said twice reach the caption line far more often.
-- **Laughter shows as "ha ha ha",** not "5, 5, 5".
-- **Captions follow the sound** to whichever speakers or headset it plays on.
-- **Older caption text dims** after 10 seconds, so the newest line stands out.
-- The model line suggests a bigger model you have downloaded when your graphics card can run it.
+- **Nemotron streaming models:** live captions word by word as people speak, in English or 40 languages, on the processor.
+- **Hear only the playing app** picks the right app more often, the caption bar names the source, and the bar has a background panel in three sizes.
+- **The ♪ note** no longer covers speech in a video.
+- Better recall with the large models, a Diagnose window for Windows' own captions bar, and a transcript you can copy.
 
-### Under the hood
-- **Tempo now runs on .NET 10,** Microsoft's current long-term release, supported until November 2028. Support for .NET 8 ends on 10 November 2026. There is nothing to install: Tempo carries .NET inside it, and it starts as quickly as before.
-- **Fixed:**
-  - Changing the language, which restarts Tempo, could end in a crash report.
-  - Holding an arrow key in a list or drop-down list made it stall.
-  - The divider between Live debug's panes couldn't be dragged. Shift+wheel now scrolls Live debug sideways.
-  - Game mode took browsers, video players, Tempo itself and maximised windows on a second screen for a game.
-  - The update line in Settings now says when the next check is due.
+### Look and feel
+- **Two-tone themes:** every theme has a second colour of its own for the header, the selected tab, card headers, main buttons and progress bars, plus clearer hover colours and card borders.
+- **One Tempo on the taskbar:** About, Live debug and other windows no longer show up as a second app.
+- **Your logo everywhere:** a custom logo, animated GIFs included, shows on the taskbar button, in the Start menu and on Windows notifications.
+- **The status bar** fits CPU %, RAM and uptime at any window size.
+- **Live debug** shows earlier runs too — what happened before Tempo last restarted.
+- The safety note opens in the middle of the window, smoother animations and scrolling, a reorganised tray menu, and clearer tooltips.
+
+### Fixed
+- The first start of a downloaded Tempo could take one to two minutes. It opens at once now.
+- The Statistics tab froze while screen readers or AI tools read it.
+- Tempo now says how its last run ended (closed, Windows shut down, or ended from outside).
+- Many visual fixes: smeared scrolling, stale scroll bars after maximising, and empty spaces on some tabs.

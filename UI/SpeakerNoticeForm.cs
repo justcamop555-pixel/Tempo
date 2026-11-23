@@ -44,7 +44,7 @@ namespace AutoClicker.UI
             {
                 Text = Utils.Localization.T("Speaker labels are AI guesses"),
                 Font = new Font("Segoe UI", 14f, FontStyle.Bold),
-                ForeColor = theme.Accent,
+                ForeColor = theme.AccentText,
                 AutoSize = false,
                 Location = new Point(24, 20),
                 Size = new Size(422, 30)
@@ -98,7 +98,7 @@ namespace AutoClicker.UI
             // The caption is rebuilt through T() each tick. Assigning a raw English
             // literal here — which is what this did — silently undid the translation
             // UiFactory had just applied to the button, one second after it opened.
-            // Same defect as OfficialSourceForm; see the note there.
+            // Same defect as the old safety-note dialog had (SafetyNoteCard.CountdownText).
             var autoClose = new Timer { Interval = 1000 };
             int secondsLeft = 12;
             ok.Text = Utils.Localization.T("Got it") + "  (" + secondsLeft + ")";

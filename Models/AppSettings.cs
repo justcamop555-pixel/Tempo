@@ -369,6 +369,14 @@ namespace AutoClicker.Models
         public string CaptionLanguage { get; set; } = "auto";
 
         /// <summary>
+        /// The spoken language the last detecting session settled on ("en", "es", …; null before any), so the next start
+        /// of Tempo begins in it instead of detecting from nothing — 7 to 60 s on the user's PC, every chunk of it slower
+        /// (round 30). The first speech is still checked against it where that check is quick (the GPU, the small models),
+        /// and a different language moves the lock. Not a choice in Settings; Reset to defaults clears it.
+        /// </summary>
+        public string CaptionLastLanguage { get; set; }
+
+        /// <summary>
         /// Prefix caption lines with "Speaker 1:", "Speaker 2:" ... based on
         /// pause-detected speaker turns (see Utils.SpeakerTurnLabeler), sharpened by
         /// on-device voice matching (Utils.VoiceProfiler) when audio is available.
@@ -468,13 +476,38 @@ namespace AutoClicker.Models
         public bool CaptionShowSourceTag { get; set; } = true;
 
         /// <summary>
-        /// Try the GPU (Vulkan) speech engine instead of the CPU one. Opt-in and
-        /// experimental: GPU behaviour varies wildly by card/driver, so the proven
-        /// CPU engine stays the default. Applies when the engine next loads
-        /// (restart Tempo). Auto-switches itself back off if the GPU engine can't
-        /// keep real-time pace.
+        /// The user asked for the GPU (Vulkan) speech engine: used even on an integrated GPU. Applies when the engine
+        /// next loads (restart Tempo). Without it the engine still runs on the GPU by itself when this PC has a discrete
+        /// graphics card (since 2026-11-15, see <see cref="CaptionCpuOnly"/>): the CPU engine ran the large models 6×
+        /// slower than real time on the user's PC, beside an idle RTX 5060, and dropped most of what was said.
         /// </summary>
         public bool CaptionTryGpu { get; set; } = false;
+
+        /// <summary>
+        /// The user turned the GPU speech engine OFF: captions stay on the processor even with a graphics card.
+        /// Also set by Tempo after the GPU engine stopped Tempo twice while starting (<see cref="CaptionGpuCrashes"/>).
+        /// </summary>
+        public bool CaptionCpuOnly { get; set; } = false;
+
+        /// <summary>Times the GPU speech engine has stopped Tempo while starting (CaptionCrashGuard); two turn it off.</summary>
+        public int CaptionGpuCrashes { get; set; } = 0;
+
+        /// <summary>
+        /// The chosen model this PC has proven too slow for live audio on one engine ("gpu"/"cpu"), and the faster model the
+        /// ladder moved to then: the next start goes straight to that one instead of losing the first half-minute of speech
+        /// finding out again (2026-11-15: Large v3 on the RTX 5060). The saved choice is untouched; stepping back up to it
+        /// when there is room again (OnTempoEngineHeadroom) clears this.
+        /// </summary>
+        public string CaptionSlowModelKey { get; set; } = "";
+        public string CaptionSlowModelEngine { get; set; } = "";
+        public string CaptionSlowModelFallback { get; set; } = "";
+
+        /// <summary>
+        /// How many times slower than the speech <see cref="CaptionSlowModelKey"/> decoded then (0 = not recorded): the next
+        /// start chooses its fallback again from it, by the ladder of the day — a record from before round 25 named Medium
+        /// (English-only) for Large v3 on the GPU, where the ladder now takes Large Turbo.
+        /// </summary>
+        public double CaptionSlowModelPace { get; set; } = 0;
 
         /// <summary>
         /// Skip captioning the user's OWN voice when it comes back through the
@@ -492,6 +525,14 @@ namespace AutoClicker.Models
         /// instrumental music can bring stray invented words back. Applies at once.
         /// </summary>
         public bool CaptionLyrics { get; set; } = false;
+
+        /// <summary>
+        /// Hear only the app that's playing (round 27, 2026-11-15): captions of system audio listen to the app making the
+        /// sound — the one the caption bar names — and leave other apps' sounds out (notification pings, music, a game in
+        /// the background), so they can't break into the words. On by default. Needs Windows 10 build 20348 or Windows 11;
+        /// older Windows always hears every app. Applies at once.
+        /// </summary>
+        public bool CaptionOnlyPlayingApp { get; set; } = true;
 
         /// <summary>
         /// Endpoint id of the SPEAKER captions listen through (loopback). Empty =
@@ -526,6 +567,13 @@ namespace AutoClicker.Models
 
         /// <summary>Draw the rounded background panel behind captions (false = text only).</summary>
         public bool CaptionShowBackground { get; set; } = true;
+
+        /// <summary>
+        /// How big the background panel is (round 40, "need small or medium than big"): 0 = Small — it hugs the words;
+        /// 1 = Medium (default) — a calm, steady width, only as tall as the lines shown; 2 = Large — the whole bar, as
+        /// it always was (80 % of the screen wide and every kept line tall, even for one line of words).
+        /// </summary>
+        public int CaptionPanelSize { get; set; } = 1;
 
         /// <summary>Caption colour as an ARGB int. Default = bright amber/yellow.</summary>
         public int CaptionColorArgb { get; set; } = unchecked((int)0xFFF4BF4F);
@@ -655,6 +703,25 @@ namespace AutoClicker.Models
         public bool HotkeysIgnoreExtraShiftCtrl { get; set; } = true;
 
         /// <summary>
+        /// Features turned off in Settings → Disable features (2026-11-08, the user: "disable feature for every tab …
+        /// it would not accidentally press exactly shortcut game and tempo conflict"). A feature that is off stops, can't
+        /// be started by any button, hotkey or tray item, and its hotkeys are let go of — Windows gives those keys back
+        /// to the game. Turning the Clicker off stops Multi-Point runs too: they are the clicker's. All on by default.
+        /// Kept by "Reset settings" with the keybinds they decide over (KeepSeparatelyManagedFrom): a reset must not
+        /// quietly make a game's keys fire Tempo again.
+        /// </summary>
+        public bool ClickerDisabled { get; set; }
+
+        /// <summary>See <see cref="ClickerDisabled"/>: no recording, no playback, the macro hotkeys let go.</summary>
+        public bool MacrosDisabled { get; set; }
+
+        /// <summary>See <see cref="ClickerDisabled"/>: no run in Multi-Point mode, its hotkeys let go.</summary>
+        public bool MultiPointDisabled { get; set; }
+
+        /// <summary>See <see cref="ClickerDisabled"/>: no captions (nor their automatic start), the caption key let go.</summary>
+        public bool CaptionsDisabled { get; set; }
+
+        /// <summary>
         /// Seconds of countdown shown before clicking begins from the Start button
         /// or the Start/Toggle hotkey (not Hold mode). Zero starts immediately.
         /// </summary>
@@ -761,6 +828,15 @@ namespace AutoClicker.Models
         public bool RobloxCrashGuard { get; set; } = true;
 
         /// <summary>
+        /// Rejoin the game when Roblox says a client lost its connection — a Wi-Fi or Ethernet drop, or the server going
+        /// quiet — and leaves it open on its Disconnected screen: once the PC is online again and the saved session still
+        /// works, that client is closed and the same account joins the same game again. The clients it covers are the
+        /// crash guard's (launched by Tempo, or playing as an account saved in the open vault). On by default (asked for,
+        /// 2026-11-07); Reconnect or Leave pressed in Roblox within a few seconds of the drop is left to stand.
+        /// </summary>
+        public bool RobloxRejoinOnDrop { get; set; } = true;
+
+        /// <summary>
         /// A notice — Tempo's card, or the Windows one when the cards are off — when a Roblox client joins a game, is
         /// disconnected from it, crashes in it, or turns out too old to run, whoever started it: Tempo, a browser's
         /// Play button, the Roblox app or a launcher. Watching for it reads Roblox's own logs on this PC and nothing
@@ -775,6 +851,15 @@ namespace AutoClicker.Models
         /// exit. On by default (asked for, 2026-11-01).
         /// </summary>
         public bool RobloxSmootherPlay { get; set; } = true;
+
+        /// <summary>
+        /// Keep Roblox's links working: when Windows' roblox-player: and roblox: links name a Roblox version that Roblox's
+        /// own update deleted (it moves on to a new version folder and does not always rewrite them), Play buttons in every
+        /// browser start nothing. On, Tempo points them at the Roblox installed on this PC as soon as it sees that — at
+        /// start, after a Roblox update, and every 30 minutes — and only ever a link that opens nothing. On by default
+        /// (asked for, 2026-11-11: "repair the roblox links now and add auto"); only while the account manager is on.
+        /// </summary>
+        public bool RobloxRepairLinks { get; set; } = true;
 
         /// <summary>
         /// Anti-AFK on the Accounts page: every <see cref="RobloxAntiAfkMinutes"/> minutes, each Roblox client in a game
@@ -1001,6 +1086,13 @@ namespace AutoClicker.Models
         /// sounds). Closed by default, remembered once opened, kept by Reset to defaults.
         /// </summary>
         public bool ClickerAdvancedOpen { get; set; } = false;
+
+        /// <summary>
+        /// Whether the sidebar's Clicker row is opened out to show the rows it holds (Profiles) — the user, 2026-11-13: "tab
+        /// Clicker needs add expand > Profiles". Folded by default; remembered once opened or closed with its chevron, and
+        /// kept by Reset to defaults like the other folds. The rail opens it by itself whenever Profiles is the open tab.
+        /// </summary>
+        public bool SidebarClickerOpen { get; set; } = false;
 
         /// <summary>UI language.</summary>
         public Language Language { get; set; } = Language.English;
@@ -1234,8 +1326,12 @@ namespace AutoClicker.Models
             LastTabKey = s.LastTabKey;
             SettingsAdvancedOpen = s.SettingsAdvancedOpen;
             ClickerAdvancedOpen = s.ClickerAdvancedOpen;
+            SidebarClickerOpen = s.SidebarClickerOpen;
             Language = s.Language;
             LanguageAutoDetected = s.LanguageAutoDetected;
+            // A fact about this PC, not a choice: the GPU speech engine stopped Tempo while starting. Reset must not
+            // hand the automatic GPU choice back to a driver that has already taken Tempo down twice.
+            CaptionGpuCrashes = s.CaptionGpuCrashes;
         }
 
         /// <summary>
@@ -1266,14 +1362,21 @@ namespace AutoClicker.Models
             MacroSlot3 = s.MacroSlot3;
             IntervalStepMilliseconds = s.IntervalStepMilliseconds;
             HotkeysIgnoreExtraShiftCtrl = s.HotkeysIgnoreExtraShiftCtrl;
+            // Which features are off decides which of those keys are live: a reset must not re-arm them.
+            ClickerDisabled = s.ClickerDisabled;
+            MacrosDisabled = s.MacrosDisabled;
+            MultiPointDisabled = s.MultiPointDisabled;
+            CaptionsDisabled = s.CaptionsDisabled;
 
             AccountsEnabled = s.AccountsEnabled;
             AccountsPlacement = s.AccountsPlacement;
             AccountsWindowTopMost = s.AccountsWindowTopMost;
             RobloxMultiInstance = s.RobloxMultiInstance;
             RobloxCrashGuard = s.RobloxCrashGuard;
+            RobloxRejoinOnDrop = s.RobloxRejoinOnDrop;
             RobloxGameNotices = s.RobloxGameNotices;
             RobloxSmootherPlay = s.RobloxSmootherPlay;
+            RobloxRepairLinks = s.RobloxRepairLinks;
             RobloxAntiAfk = s.RobloxAntiAfk;
             RobloxAntiAfkMinutes = s.RobloxAntiAfkMinutes;
             RobloxAntiAfkSkip = s.RobloxAntiAfkSkip != null

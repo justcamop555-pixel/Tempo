@@ -16,12 +16,68 @@ namespace AutoClicker.UI
         private string _caption = "";
         private string _value = "0";
         private string _sub = "";
+        private Color _cardColor = Color.FromArgb(24, 27, 39);
+        private Color _captionColor = Color.FromArgb(132, 142, 168);
+        private Color _valueColor = Color.FromArgb(232, 236, 246);
+        private Color _accentBar = Color.FromArgb(124, 92, 255);
+        private bool _showAccent = true;
 
-        public Color CardColor { get; set; } = Color.FromArgb(24, 27, 39);
-        public Color CaptionColor { get; set; } = Color.FromArgb(132, 142, 168);
-        public Color ValueColor { get; set; } = Color.FromArgb(232, 236, 246);
-        public Color AccentBar { get; set; } = Color.FromArgb(124, 92, 255);
-        public bool ShowAccent { get; set; } = true;
+        public Color CardColor { get => _cardColor; set { if (value != _cardColor) { _cardColor = value; DropPicture(); } } }
+        public Color CaptionColor { get => _captionColor; set { if (value != _captionColor) { _captionColor = value; DropPicture(); } } }
+        public Color ValueColor { get => _valueColor; set { if (value != _valueColor) { _valueColor = value; DropPicture(); } } }
+        public Color AccentBar { get => _accentBar; set { if (value != _accentBar) { _accentBar = value; DropPicture(); } } }
+        public bool ShowAccent { get => _showAccent; set { if (value != _showAccent) { _showAccent = value; DropPicture(); } } }
+
+        // ── The card's picture ───────────────────────────────────────────────────────────────────────
+        //
+        // A card is drawn once — shadow, gradient, accent, three texts in GDI+ with antialiasing — into a picture of its
+        // own, and every paint after that copies the picture. Drawing it took about a millisecond a time, and a fast scroll
+        // of the Statistics page repaints every card its uncovered strip crosses on every step: that drawing was most of a
+        // step, and the longer a step, the likelier the screen shows the strip before it is painted (scratchpad/scrollstress).
+        // The picture is drawn on the page's own colour, so it is opaque and copied straight; a page with a wallpaper
+        // behind it (which differs from place to place) is drawn as before, every time. New texts, colours, size or
+        // screen scale draw it again.
+        private Bitmap _picture;
+        private Color _pictureBack;
+
+        private void DropPicture()
+        {
+            _picture?.Dispose();
+            _picture = null;
+        }
+
+        /// <summary>The solid colour behind the card, or Color.Empty when what is behind it is not one colour (a wallpaper).</summary>
+        private Color SolidBack()
+        {
+            if (Parent is BackdropTabPage page && page.HasBackdropImage) { return Color.Empty; }
+            Color c = Parent?.BackColor ?? Color.Empty;
+            return c.A == 255 ? c : Color.Empty;
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            DropPicture();
+            base.OnResize(e);
+        }
+
+        protected override void OnParentChanged(EventArgs e)
+        {
+            DropPicture();
+            base.OnParentChanged(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { DropPicture(); }
+            base.Dispose(disposing);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            // The picture covers every pixel when there is one to copy; only a card drawn live needs what is behind it.
+            if (!SolidBack().IsEmpty && Width >= 8 && Height >= 10) { return; }
+            base.OnPaintBackground(e);
+        }
 
         public StatCard()
         {
@@ -43,35 +99,74 @@ namespace AutoClicker.UI
         private float DpiScale => DeviceDpi / 96f;
         private int Px(float size96) => (int)Math.Round(size96 * DpiScale, MidpointRounding.AwayFromZero);
 
+        // The dashboard sets every card's texts on each UI tick (five times a second), changed or not. Each set used
+        // to repaint the card — every card on screen, five times a second, while nothing changed — and that steady
+        // paint was what a fast scroll had to queue behind (the smeared Statistics page, 2026-11-08). Only a
+        // change repaints now.
         public string Caption
         {
             get => _caption;
-            set { _caption = value ?? ""; Invalidate(); }
+            set { string v = value ?? ""; if (v == _caption) { return; } _caption = v; DropPicture(); Invalidate(); }
         }
 
         public string Value
         {
             get => _value;
-            set { _value = value ?? ""; Invalidate(); }
+            set { string v = value ?? ""; if (v == _value) { return; } _value = v; DropPicture(); Invalidate(); }
         }
 
         /// <summary>Optional small text under the value (e.g. units or context).</summary>
         public string Sub
         {
             get => _sub;
-            set { _sub = value ?? ""; Invalidate(); }
+            set { string v = value ?? ""; if (v == _sub) { return; } _sub = v; DropPicture(); Invalidate(); }
         }
+
+        // Made once: three fonts and a string format were created and thrown away on every paint of every card.
+        private static readonly Font CaptionFont = new Font("Segoe UI", CaptionFontSize, FontStyle.Regular);
+        private static readonly Font SubFont = new Font("Segoe UI", 8f, FontStyle.Regular);
+        private static readonly Font ValueFont = new Font("Segoe UI", 18f, FontStyle.Bold);
+        private static readonly StringFormat SubFormat = new StringFormat
+        {
+            Alignment = StringAlignment.Far,
+            FormatFlags = StringFormatFlags.NoWrap,
+            Trimming = StringTrimming.EllipsisCharacter
+        };
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-
             if (Width < 8 || Height < 10)
             {
                 return;
             }
+            Color back = SolidBack();
+            if (back.IsEmpty)
+            {
+                DropPicture();
+                DrawCard(e.Graphics);   // over a wallpaper: drawn live, on what is behind it
+                return;
+            }
+            if (_picture == null || _picture.Width != Width || _picture.Height != Height || _pictureBack != back)
+            {
+                DropPicture();
+                // Opaque (no alpha), as the screen buffer it used to be drawn on: ClearType text needs that to come out the same.
+                _picture = new Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                _pictureBack = back;
+                using (Graphics pg = Graphics.FromImage(_picture))
+                {
+                    pg.Clear(back);
+                    DrawCard(pg);
+                }
+            }
+            e.Graphics.CompositingMode = CompositingMode.SourceCopy;
+            e.Graphics.DrawImageUnscaled(_picture, 0, 0);
+        }
+
+        /// <summary>The card itself: shadow, surface, accent and texts.</summary>
+        private void DrawCard(Graphics g)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
             // Reserve a few pixels at the bottom/right for a soft drop shadow.
             var card = new Rectangle(Px(1), Px(1), Width - Px(4), Height - Px(6));
@@ -113,8 +208,8 @@ namespace AutoClicker.UI
             }
 
             using (var capBrush = new SolidBrush(CaptionColor))
-            using (var capFont = new Font("Segoe UI", CaptionFontSize, FontStyle.Regular))
             {
+                Font capFont = CaptionFont;
                 string cap = _caption.ToUpperInvariant();
                 g.DrawString(cap, capFont, capBrush, Px(CaptionX), Px(CaptionY));
 
@@ -131,28 +226,20 @@ namespace AutoClicker.UI
                     float subWidth = Width - subLeft - Px(12);
                     if (subWidth > Px(24))
                     {
-                        using (var subFont = new Font("Segoe UI", 8f, FontStyle.Regular))
                         using (var subBrush = new SolidBrush(CaptionColor))
                         {
-                            var fmt = new StringFormat
-                            {
-                                Alignment = StringAlignment.Far,
-                                FormatFlags = StringFormatFlags.NoWrap,
-                                Trimming = StringTrimming.EllipsisCharacter
-                            };
                             // As tall as its line at this DPI (14 px at 100%), so it is never cut across.
-                            float subH = Math.Max(Px(14), (float)Math.Ceiling(subFont.GetHeight(g)));
-                            g.DrawString(_sub, subFont, subBrush,
-                                new RectangleF(subLeft, Px(23), subWidth, subH), fmt);
+                            float subH = Math.Max(Px(14), (float)Math.Ceiling(SubFont.GetHeight(g)));
+                            g.DrawString(_sub, SubFont, subBrush,
+                                new RectangleF(subLeft, Px(23), subWidth, subH), SubFormat);
                         }
                     }
                 }
             }
 
             using (var valBrush = new SolidBrush(ValueColor))
-            using (var valFont = new Font("Segoe UI", 18f, FontStyle.Bold))
             {
-                g.DrawString(_value, valFont, valBrush, Px(12), Px(40));
+                g.DrawString(_value, ValueFont, valBrush, Px(12), Px(40));
             }
         }
 

@@ -35,7 +35,7 @@ namespace AutoClicker.Native
         /// <summary>Unassigned: no keyboard sends it and no program acts on it.</summary>
         internal const int VK_MASK = 0xE8;
 
-        private readonly LowLevelKeyboardHook _hook = new LowLevelKeyboardHook();
+        private readonly LowLevelKeyboardHook _hook = new LowLevelKeyboardHook { Name = "shortcut-guard keyboard" };
         // Hook-thread state. SetActive touches it only while that thread is not running.
         private readonly HashSet<int> _heldBack = new HashSet<int>();
         private bool _winDown;
@@ -57,6 +57,43 @@ namespace AutoClicker.Native
         /// <summary>How many shortcuts were held back since Tempo started (Live debug, the tests).</summary>
         public int HeldBackCount => Volatile.Read(ref _heldBackCount);
         private int _heldBackCount;
+
+        /// <summary>How many of Windows' screenshot / recording shortcuts were let through during runs (Live debug, the tests).</summary>
+        public int CaptureLetThroughCount => Volatile.Read(ref _captureCount);
+        private int _captureCount;
+
+        /// <summary>A shortcut that was held back: its key, and the modifiers held with it.</summary>
+        public readonly struct HeldBackKey
+        {
+            public readonly int VirtualKey;
+            public readonly bool Win, Control, Alt, Shift;
+
+            public HeldBackKey(int vk, bool win, bool control, bool alt, bool shift)
+            {
+                VirtualKey = vk;
+                Win = win;
+                Control = control;
+                Alt = alt;
+                Shift = shift;
+            }
+
+            /// <summary>The Windows key pressed and released on its own (which opens Start).</summary>
+            public bool IsLoneWindowsKey => VirtualKey == VK_LWIN || VirtualKey == VK_RWIN;
+        }
+
+        private readonly object _lastGate = new object();
+        private HeldBackKey _last;
+        private long _lastTick;
+
+        /// <summary>The shortcut held back most recently, and when (Environment.TickCount64; 0 = none yet).</summary>
+        public HeldBackKey LastHeldBack(out long tick)
+        {
+            lock (_lastGate)
+            {
+                tick = _lastTick;
+                return _last;
+            }
+        }
 
         /// <summary>For the tests: sends the mask key / a key release instead of SendInput.</summary>
         internal Action<int, bool> SendKeyForTest;
@@ -169,7 +206,7 @@ namespace AutoClicker.Native
                     Send(VK_MASK, true);
                     Send(VK_MASK, false);
                     Send(vk, false);
-                    Note();
+                    Note(new HeldBackKey(vk, false, false, false, false));
                 }
                 return;
             }
@@ -193,12 +230,19 @@ namespace AutoClicker.Native
                 if (IsModifier(vk)) { return; }
                 _winCombined = true;   // Start will not open on release now
                 if (IsTempoHotkeySafe(vk)) { return; }   // Tempo's own Win+… hotkey
+                if (IsCaptureShortcut(vk))
+                {
+                    // A screenshot or a recording of the run is asked for on purpose — three keys at once — and takes
+                    // nothing from the game: let through.
+                    Interlocked.Increment(ref _captureCount);
+                    return;
+                }
                 e.Suppress = true;
                 _heldBack.Add(vk);
                 // The shell saw the Windows key go down, then nothing: release it now and Start opens.
                 Send(VK_MASK, true);
                 Send(VK_MASK, false);
-                Note();
+                Note(new HeldBackKey(vk, true, IsDown(VK_CONTROL), IsDown(VK_MENU), IsDown(VK_SHIFT)));
                 return;
             }
 
@@ -207,7 +251,35 @@ namespace AutoClicker.Native
                 if (IsTempoHotkeySafe(vk)) { return; }
                 e.Suppress = true;   // Ctrl+Esc opens Start; Ctrl+Shift+Esc (Task Manager) is not touched
                 _heldBack.Add(vk);
-                Note();
+                Note(new HeldBackKey(vk, false, true, false, false));
+            }
+        }
+
+        private const int VK_SNAPSHOT = 0x2C;
+
+        /// <summary>
+        /// Windows' own screenshot and recording shortcuts, which are let through during a run: Win+Shift+S (Snipping
+        /// Tool), Win+Shift+R (its screen recording), Win+PrtScn and Win+Alt+PrtScn (a screenshot saved — of the game,
+        /// by Game Bar), Win+Alt+R and Win+Alt+G (Game Bar's recording). Held back like every Win+… combination, they
+        /// made it impossible to take a picture of a run while it ran — the user turned the whole guard off to do it.
+        /// None opens Start or switches away from the game for good, and none is pressed by accident: each is three
+        /// keys, or the Print Screen key.
+        /// </summary>
+        private bool IsCaptureShortcut(int vk)
+        {
+            if (vk == VK_SNAPSHOT) { return true; }
+            if (IsDown(VK_CONTROL)) { return false; }
+            bool shift = IsDown(VK_SHIFT), alt = IsDown(VK_MENU);
+            switch (vk)
+            {
+                case 0x53:                       // S
+                    return shift && !alt;
+                case 0x52:                       // R
+                    return shift != alt;         // Win+Shift+R or Win+Alt+R
+                case 0x47:                       // G
+                    return alt && !shift;
+                default:
+                    return false;
             }
         }
 
@@ -217,9 +289,14 @@ namespace AutoClicker.Native
             catch { return false; }
         }
 
-        private void Note()
+        private void Note(HeldBackKey key)
         {
             Interlocked.Increment(ref _heldBackCount);
+            lock (_lastGate)
+            {
+                _last = key;
+                _lastTick = Environment.TickCount64;
+            }
             try { HeldBackShortcut?.Invoke(); } catch { }
         }
 

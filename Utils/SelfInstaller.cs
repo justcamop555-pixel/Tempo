@@ -124,6 +124,85 @@ namespace AutoClicker.Utils
             catch { return path ?? ""; }
         }
 
+        /// <summary>One shortcut that opens Tempo, as <see cref="SetShortcutIcons"/> found it.</summary>
+        internal sealed class ShortcutIcon
+        {
+            public string Link;           // the .lnk file
+            public string IconPath;       // its icon location before (empty = the target's own icon)
+            public int IconIndex;
+            public bool Changed;          // given the new icon
+            public string Error;          // why it could not be, or null
+        }
+
+        /// <summary>
+        /// Gives every shortcut in <paramref name="folders"/> (top level) that opens <paramref name="exe"/> the icon
+        /// <paramref name="iconPath"/>,<paramref name="iconIndex"/> — where <paramref name="mayReplace"/> agrees to the
+        /// icon it has now (ShellLogo: only the exe's own icon or a logo Tempo put there before, never one the user
+        /// picked). Returns every shortcut that opens the exe, changed or not; <paramref name="probeOnly"/> changes
+        /// none. COM's shell link object: callable from any thread.
+        /// </summary>
+        internal static List<ShortcutIcon> SetShortcutIcons(string exe, string iconPath, int iconIndex, IEnumerable<string> folders,
+                                                            Func<string, int, bool> mayReplace, bool probeOnly = false)
+        {
+            var found = new List<ShortcutIcon>();
+            if (string.IsNullOrEmpty(exe) || folders == null) { return found; }
+            string me = FullPathOrEmpty(exe);
+
+            foreach (string folder in folders)
+            {
+                if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) { continue; }
+                string[] links;
+                try { links = Directory.GetFiles(folder, "*.lnk", SearchOption.TopDirectoryOnly); }
+                catch { continue; }
+
+                foreach (string lnk in links)
+                {
+                    object link = null;
+                    ShortcutIcon entry = null;
+                    try
+                    {
+                        link = new CShellLink();
+                        ((IPersistFile)link).Load(lnk, 0);
+                        var shellLink = (IShellLinkW)link;
+                        var target = new StringBuilder(1024);
+                        shellLink.GetPath(target, target.Capacity, IntPtr.Zero, 0);
+                        if (target.Length == 0 ||
+                            !string.Equals(FullPathOrEmpty(target.ToString()), me, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        var icon = new StringBuilder(1024);
+                        shellLink.GetIconLocation(icon, icon.Capacity, out int index);
+                        entry = new ShortcutIcon { Link = lnk, IconPath = icon.ToString(), IconIndex = index };
+                        found.Add(entry);
+
+                        bool same = string.Equals(FullPathOrEmpty(entry.IconPath), FullPathOrEmpty(iconPath), StringComparison.OrdinalIgnoreCase)
+                                    && entry.IconIndex == iconIndex;
+                        if (probeOnly || same || (mayReplace != null && !mayReplace(entry.IconPath, entry.IconIndex))) { continue; }
+
+                        shellLink.SetIconLocation(iconPath, iconIndex);
+                        ((IPersistFile)link).Save(lnk, true);
+                        entry.Changed = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        // A shortcut that opens Tempo but could not be changed (read-only, held open) — reported; one that
+                        // could not even be read is not known to be Tempo's, and is passed over.
+                        if (entry != null) { entry.Error = ex.Message; }
+                    }
+                    finally
+                    {
+                        if (link != null && Marshal.IsComObject(link))
+                        {
+                            try { Marshal.ReleaseComObject(link); } catch { }
+                        }
+                    }
+                }
+            }
+            return found;
+        }
+
         /// <summary>The Start Menu shortcut install.cmd creates, and RemoveShellIntegration deletes.</summary>
         public static string StartMenuShortcutPath =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

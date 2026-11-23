@@ -40,6 +40,7 @@ namespace AutoClicker.UI
 
         private readonly TextBox _body;
         private readonly CheckBox _includeLog;
+        private readonly ToolTip _tips;
 
         public EmailReportChannel Choice { get; private set; } = EmailReportChannel.None;
 
@@ -78,7 +79,7 @@ namespace AutoClicker.UI
             {
                 Text = Localization.T("Send a bug report"),
                 Font = new Font("Segoe UI", 14f, FontStyle.Bold),
-                ForeColor = theme.Accent,
+                ForeColor = theme.AccentText,
                 AutoSize = false,
                 Location = new Point(24, 22),
                 Size = new Size(512, 30)
@@ -110,6 +111,9 @@ namespace AutoClicker.UI
             _body = new TextBox
             {
                 Multiline = true,
+                // Enter is a new line in the report. Without this, Enter in the box pressed the form's default
+                // button — the channel used last time — and sent a report half-written, mid-sentence.
+                AcceptsReturn = true,
                 ScrollBars = ScrollBars.Vertical,
                 BackColor = theme.InputBackground,
                 ForeColor = theme.Text,
@@ -117,9 +121,23 @@ namespace AutoClicker.UI
                 Font = new Font("Consolas", 8.5f),
                 Location = new Point(24, 118),
                 Size = new Size(512, 210),
-                Text = (CrashReporter.BlankReportBody() ?? string.Empty).Replace("\n", "\r\n")
+                // One kind of line break: the diagnostics come with "\r\n" and the "\n" → "\r\n" turned those into
+                // "\r\r\n", which went out in every report.
+                Text = (CrashReporter.BlankReportBody() ?? string.Empty).Replace("\r\n", "\n").Replace("\n", "\r\n")
             };
             Controls.Add(_body);
+            // Ready to type: the caret on the empty line under "Describe the bug:", the first thing to fill in.
+            Shown += (s, e) =>
+            {
+                try
+                {
+                    int line = _body.Text.IndexOf("\r\n", StringComparison.Ordinal);
+                    _body.Focus();
+                    _body.Select(line >= 0 ? line + 2 : 0, 0);
+                    _body.ScrollToCaret();
+                }
+                catch (Exception ex) { Logger.Swallow("EmailReportChooserForm.Shown", ex); }
+            };
 
             _includeLog = new CheckBox
             {
@@ -159,6 +177,22 @@ namespace AutoClicker.UI
             };
             Controls.Add(how);
 
+            // What each way means, before choosing one: which is public, which needs an account, which is private.
+            var howHint = new Label
+            {
+                Text = Localization.T("A GitHub issue is public and needs a free GitHub account. Email goes privately to "
+                                      + "the developer. Copy puts the report on the clipboard to paste anywhere."),
+                ForeColor = theme.TextMuted,
+                AutoSize = false,
+                Location = new Point(24, 414),
+                Size = new Size(512, 16)
+            };
+            // As tall as its words (in 100% units: the window is scaled after it is built), and the buttons below
+            // move down by all of it.
+            howHint.Height = Math.Max(16, UiFactory.Measure96(howHint.Text, Font, howHint.Width, TextFormatFlags.Default).Height + 2);
+            int channelShift = howHint.Height + 4;
+            Controls.Add(howHint);
+
             // Two columns: six channels stacked in one column made the dialog taller
             // than the report it is meant to show.
             Button github = MakeChoice(theme, "GitHub issue", 24, 418);
@@ -193,21 +227,30 @@ namespace AutoClicker.UI
             Controls.Add(cancel);
             CancelButton = cancel;
 
-            if (shift > 0 || hintShift > 0)
+            // Each way to send, said on hover too.
+            _tips = new ToolTip { AutoPopDelay = 20000, InitialDelay = 400, ReshowDelay = 120 };
+            TipStyle.Set(_tips, github, Localization.T("Opens a new issue on Tempo's GitHub page in your browser with this report filled in. Issues are public, and you need a free GitHub account to post one."));
+            TipStyle.Set(_tips, email, Localization.T("Opens a new email to the developer in your email app (Outlook, Mail, Thunderbird…) with this report in it."));
+            TipStyle.Set(_tips, gmail, Localization.T("Opens a new Gmail message to the developer in your browser with this report in it."));
+            TipStyle.Set(_tips, outlook, Localization.T("Opens a new Outlook.com message to the developer in your browser with this report in it."));
+            TipStyle.Set(_tips, yahoo, Localization.T("Opens a new Yahoo Mail message to the developer in your browser with this report in it."));
+            TipStyle.Set(_tips, copy, Localization.F("Puts the report on the clipboard, to paste into any email to {0} — or anywhere else.", CrashReporter.SupportEmail));
+            Disposed += (s, e) => _tips.Dispose();
+
+            // All from the positions as built: everything under the privacy note moves by its growth, everything
+            // under the log hint by that one's as well, and the channel buttons and Cancel by the "which way" hint.
             {
-                // Both from the positions as built: everything under the privacy note moves by its growth,
-                // and everything under the log hint by that one's as well.
-                int below = _body.Top, belowHint = how.Top;
+                int below = _body.Top, belowHint = how.Top, belowChannels = howHint.Top + 1;
                 foreach (Control c in Controls)
                 {
-                    int move = (c.Top >= below ? shift : 0) + (c.Top >= belowHint ? hintShift : 0);
+                    int move = (c.Top >= below ? shift : 0) + (c.Top >= belowHint ? hintShift : 0) +
+                               (c.Top >= belowChannels ? channelShift : 0);
                     if (move > 0) { c.Top += move; }
                 }
-                ClientSize = new Size(ClientSize.Width, ClientSize.Height + shift + hintShift);
+                ClientSize = new Size(ClientSize.Width, ClientSize.Height + shift + hintShift + channelShift);
             }
 
-            // Highlight and focus whichever channel was used last time, so a repeat
-            // report is just Enter.
+            // Highlight whichever channel was used last time and make it the default button.
             Button lastBtn = lastUsed == EmailReportChannel.GitHub ? github
                            : lastUsed == EmailReportChannel.EmailApp ? email
                            : lastUsed == EmailReportChannel.Gmail ? gmail
@@ -237,8 +280,9 @@ namespace AutoClicker.UI
                 }
                 lastBtn.BackColor = theme.Surface;
                 lastBtn.FlatAppearance.BorderColor = theme.Accent;
+                // The default button, but not the focus: the report box has it, because describing the problem comes
+                // first. Enter there is a new line (AcceptsReturn); anywhere else it sends this way.
                 AcceptButton = lastBtn;
-                Shown += (s, e) => lastBtn.Focus();
             }
 
             UiFactory.ScaleToScreen(this);
@@ -294,6 +338,27 @@ namespace AutoClicker.UI
 
         private void Pick(EmailReportChannel channel)
         {
+            // A report that says nothing about what went wrong is the PC's details and nothing else. Ask once; "No"
+            // goes back to the box with the caret where the description goes.
+            if (CrashReporter.IsUndescribed(_body.Text))
+            {
+                var answer = MessageBox.Show(this,
+                    Localization.T("You haven't described the problem yet. A few words about what you were doing and "
+                                   + "what went wrong make the report far more useful.\n\nSend it anyway?"),
+                    "Tempo", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (answer != DialogResult.Yes)
+                {
+                    try
+                    {
+                        int line = _body.Text.IndexOf("\r\n", StringComparison.Ordinal);
+                        _body.Focus();
+                        _body.Select(line >= 0 ? line + 2 : 0, 0);
+                        _body.ScrollToCaret();
+                    }
+                    catch (Exception ex) { Logger.Swallow("EmailReportChooserForm.Pick", ex); }
+                    return;
+                }
+            }
             Choice = channel;
             DialogResult = DialogResult.OK;
             Close();

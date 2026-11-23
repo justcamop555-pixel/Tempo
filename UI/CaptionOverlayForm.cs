@@ -72,6 +72,19 @@ namespace AutoClicker.UI
         private bool _useCustomColor = true;
         private bool _showBackground = true;
 
+        // ── The panel's size, and the source chip (round 40) ──────────────────────────────────────────────────────────
+        // "show background panel … need small or medium than big": the panel filled the whole bar — 80 % of the screen
+        // wide and every kept line tall — around one line of words. 0 Small hugs the shown lines; 1 Medium keeps a calm
+        // steady width (Medium share of the bar) and is only as tall as the shown lines; 2 Large is the whole bar, as before.
+        // Small and Medium sit at the bar's bottom and grow upwards, and ease to a new size rather than jump.
+        private int _panelSize = 1;
+        private const float MediumPanelShare = 0.62f;
+        private RectangleF _panelCur = RectangleF.Empty;     // where the panel is drawn (eased)
+        private RectangleF _panelTarget = RectangleF.Empty;  // where the words want it
+        // "♪ YouTube": where the sound comes from, on a chip of its own at the panel's top edge. It was the first words of
+        // the caption text, so once the text ran past the lines kept it scrolled away with them.
+        private string _source = "";
+
         // Panel background opacity as a fraction of the text opacity, so turning the
         // text down also softens the panel. Tuned to read well over bright scenes.
         private const double PanelAlphaFactor = 0.62;
@@ -280,7 +293,8 @@ namespace AutoClicker.UI
             int shift = int.MinValue;
             {
                 int lim = Math.Min(ow.Length, nw.Length);
-                while (sameUpTo < lim && ow[sameUpTo] == nw[sameUpTo]) { sameUpTo++; }
+                // A draft word kept by the final caption is the same word (SameWord ignores DraftMark).
+                while (sameUpTo < lim && SameWord(ow[sameUpTo], nw[sameUpTo])) { sameUpTo++; }
             }
             if (ow.Length == 0 || _revealed <= 0)
             {
@@ -309,7 +323,7 @@ namespace AutoClicker.UI
                         bool match = true;
                         for (int k = 0; k < take; k++)
                         {
-                            if (nw[p + k] != ow[Math.Min(_revealed, ow.Length) - take + k]) { match = false; break; }
+                            if (!SameWord(nw[p + k], ow[Math.Min(_revealed, ow.Length) - take + k])) { match = false; break; }
                         }
                         if (match)
                         {
@@ -325,7 +339,7 @@ namespace AutoClicker.UI
             for (int k = 0; k < nw.Length; k++)
             {
                 int old = k < sameUpTo ? k : (shift != int.MinValue ? k - shift : -1);
-                arrival[k] = old >= 0 && old < ow.Length && old < _wordArrival.Length && ow[old] == nw[k]
+                arrival[k] = old >= 0 && old < ow.Length && old < _wordArrival.Length && SameWord(ow[old], nw[k])
                     ? _wordArrival[old]
                     : now;
             }
@@ -461,9 +475,70 @@ namespace AutoClicker.UI
         }
 
         // ── Public surface (unchanged signatures) ───────────────────────────
+        // Draft words (TempoTranscriber.DraftRecognized, round 30): words still being heard, shown after the caption's own,
+        // fainter, until the engine's final words for them arrive (SetCaption). Inside _text each carries DraftMark (an
+        // invisible separator) in front, so the reveal treats a draft word the final caption keeps as the SAME word — it is
+        // not animated in a second time, only its colour goes from draft to full — and TokenizeRuns paints it fainter.
+        internal const char DraftMark = '⁣';
+        private string _committed = "";
+        private string _draft = "";
+
+        // A notice is on the bar (SetNote) rather than words: the "♪ Music or sounds playing — no speech" line, "Game
+        // mode — …", a model too slow. Draft words are not put after it (round 39: "♪ YouTube · Music or sounds playing
+        // — no speech bro" — a word still being heard, glued onto a sentence saying nobody is speaking). The next
+        // caption replaces the notice, as before.
+        private bool _noteUp;
+
         public void SetCaption(string text)
         {
-            text = text ?? "";
+            // The engine's final words supersede any draft of them.
+            _draft = "";
+            _noteUp = false;
+            ApplyCaption(text ?? "");
+        }
+
+        /// <summary>
+        /// A notice in the caption's place — not words anyone said. Shown like a caption, but draft words are not
+        /// added to it; the next <see cref="SetCaption"/> replaces it.
+        /// </summary>
+        public void SetNote(string text)
+        {
+            _draft = "";
+            _noteUp = true;
+            ApplyCaption(text ?? "");
+        }
+
+        /// <summary>True while a notice (<see cref="SetNote"/>) is what the bar shows.</summary>
+        public bool ShowingNote => _noteUp;
+
+        /// <summary>
+        /// Draft words to show after the caption, fainter, until the final words arrive (<see cref="SetCaption"/>, which
+        /// clears them); "" takes a draft back. Not shown after a notice (<see cref="SetNote"/>).
+        /// </summary>
+        public void SetDraft(string draft)
+        {
+            draft = (draft ?? "").Trim();
+            if (_noteUp) { _draft = ""; return; }
+            if (draft == _draft) { return; }
+            _draft = draft;
+            if (_captionsOff) { return; }
+            ApplyCaption(_committed);
+        }
+
+        private void ApplyCaption(string text)
+        {
+            _committed = text;
+            if (_draft.Length > 0)
+            {
+                var sb = new System.Text.StringBuilder(text.Length + _draft.Length + 16);
+                sb.Append(text);
+                foreach (string w in _draft.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (sb.Length > 0) { sb.Append(' '); }
+                    sb.Append(DraftMark).Append(w);
+                }
+                text = sb.ToString();
+            }
             // Real text means we're no longer "pending" - drop the listening cue and
             // show the live text from here on.
             if (_pending && text.Length > 0)
@@ -506,6 +581,11 @@ namespace AutoClicker.UI
                 _captionsOff = false;       // "listening" means captions are on
                 _revealLagMs = -1;          // a fresh session measures its own reveal delay
                 _text = "";
+                _committed = "";
+                _draft = "";
+                _noteUp = false;
+                _source = "";               // a fresh session names its own source
+                _panelCur = RectangleF.Empty;   // and its panel starts where the cue is, not eased from the last one
                 _fadeTarget = 1.0;
                 _age = _ageTarget = 1.0;    // the listening cue is never "old"
                 _oldTextTimer.Stop();
@@ -530,6 +610,7 @@ namespace AutoClicker.UI
             if (off)
             {
                 _pending = false;
+                _source = "";
                 SetCaption("");
                 _captionsOff = true;        // SetCaption("") leaves it, but be explicit
             }
@@ -634,6 +715,36 @@ namespace AutoClicker.UI
                 Repaint();
             }
         }
+
+        /// <summary>The background panel's size: 0 Small (hugs the words), 1 Medium, 2 Large (the whole bar).</summary>
+        public void SetPanelSize(int size)
+        {
+            size = Math.Max(0, Math.Min(2, size));
+            if (size == _panelSize) { return; }
+            _panelSize = size;
+            Repaint();
+        }
+
+        /// <summary>The panel size in use (0 Small, 1 Medium, 2 Large).</summary>
+        public int PanelSize => _panelSize;
+
+        /// <summary>
+        /// Where the sound comes from ("YouTube", "Roblox: Blox Fruits"), drawn as "♪ YouTube" on a chip at the panel's top
+        /// edge — not inside the caption text, where it scrolled away once the words ran past the lines kept. "" for none.
+        /// </summary>
+        public void SetSource(string source)
+        {
+            source = (source ?? "").Trim();
+            if (source == _source) { return; }
+            _source = source;
+            Repaint();
+        }
+
+        /// <summary>What the source chip shows ("" for none).</summary>
+        public string Source => _source;
+
+        /// <summary>For the harnesses: the panel as last drawn (empty when none), in the bar's own pixels.</summary>
+        internal RectangleF PanelRectForTest => _panelCur;
 
         public void ApplyTheme(Theme theme)
         {
@@ -911,6 +1022,17 @@ namespace AutoClicker.UI
                 busy = true;
             }
 
+            // The panel eases to the size the words want (Small / Medium, round 40): a quarter of a second to settle, at
+            // either frame rate.
+            if (!_panelTarget.IsEmpty && !_panelCur.IsEmpty && _panelCur != _panelTarget)
+            {
+                float k = LowImpactMode ? 0.6f : 0.35f;
+                float Step(float a, float b) => Math.Abs(b - a) < 0.75f ? b : a + (b - a) * k;
+                _panelCur = new RectangleF(Step(_panelCur.X, _panelTarget.X), Step(_panelCur.Y, _panelTarget.Y),
+                                           Step(_panelCur.Width, _panelTarget.Width), Step(_panelCur.Height, _panelTarget.Height));
+                busy = true;
+            }
+
             Repaint();
             if (!busy) _anim.Stop();
         }
@@ -1066,42 +1188,40 @@ namespace AutoClicker.UI
             // Soft rounded panel with a subtle top-to-bottom gradient. Skipped when
             // the user has turned the background off (text-only look) - but always
             // drawn in move mode so there's something solid to grab.
-            if (_showBackground || _movable)
+            //
+            // Large (and move mode): the whole bar, drawn now, as it always was. Small and Medium (round 40) fit the shown
+            // lines, so they are drawn once the words are laid out, below.
+            bool panelOn = _showBackground || _movable;
+            bool fitPanel = panelOn && !_movable && _panelSize < 2;
+            if (panelOn && !fitPanel)
             {
-                using (var path = RoundedRect(rect, 18))
-                {
-                    using (var lg = new LinearGradientBrush(rect,
-                        Color.FromArgb(panelA, panelTop.R, panelTop.G, panelTop.B),
-                        Color.FromArgb((int)(panelA * 0.92), panelBot.R, panelBot.G, panelBot.B), 90f))
-                    {
-                        g.FillPath(lg, path);
-                    }
-                    // Hairline border for definition, tinted from the theme border.
-                    using (var bp = new Pen(Color.FromArgb((int)(panelA * 0.55), borderCol.R, borderCol.G, borderCol.B), 1f))
-                    {
-                        g.DrawPath(bp, path);
-                    }
-                }
-            }
-
-            // "Live" accent line along the bottom that glows while speech arrives.
-            // Part of the panel chrome, so it follows the same background toggle.
-            if (_showBackground || _movable)
-            {
+                DrawPanel(g, rect, 18, panelA, panelTop, panelBot, borderCol);
+                // "Live" accent line along the bottom that glows while speech arrives.
+                // Part of the panel chrome, so it follows the same background toggle.
                 DrawAccent(g, rect, baseColor, globalFade);
+                _panelCur = rect;
+                _panelTarget = RectangleF.Empty;
             }
 
-            if (string.IsNullOrEmpty(drawText)) return;
+            if (string.IsNullOrEmpty(drawText))
+            {
+                // No words: no fitted panel (an empty box around nothing is what Small and Medium are for not drawing).
+                if (fitPanel || !panelOn) { _panelCur = RectangleF.Empty; _panelTarget = RectangleF.Empty; }
+                return;
+            }
             textA = (int)Math.Round(textA * wordsStrength);
-
-            // Small "where this audio comes from" tag in the top-right corner. Full
-            // text alpha — the bar's background is colour-keyed, so faded pixels turn
-            // near-invisible on dark wallpapers; the tag stays subordinate through its
-            // small size instead. A soft dark halo keeps it readable over anything.
 
             // Text area leaves room for the accent line.
             var layout = new RectangleF(rect.Left + 26, rect.Top + 10,
                 rect.Width - 52, rect.Height - 28);
+            // The source chip inside the whole-bar panel takes a strip at its top (Small and Medium carry it on the
+            // fitted panel's edge instead).
+            float chipH = string.IsNullOrEmpty(_source) || _movable ? 0f : SourceChipHeight(g);
+            if (!fitPanel && panelOn && chipH > 0)
+            {
+                float down = chipH * 0.6f;
+                layout = new RectangleF(layout.Left, layout.Top + down, layout.Width, Math.Max(1f, layout.Height - down));
+            }
             if (_movable)
             {
                 // Below the move chip, so it never sits on the first line.
@@ -1255,7 +1375,47 @@ namespace AutoClicker.UI
                 if (lines.Count == 0) { return; }
 
                 float blockH = _lineH * lines.Count;
+                float blockW = 0f;
+                foreach (float lw in lineWidths) { if (lw > blockW) { blockW = lw; } }
                 float y = layout.Top + Math.Max(0, (layout.Height - blockH) / 2f);
+                RectangleF chipAnchor;
+                bool chipOnEdge;
+                if (fitPanel)
+                {
+                    // Small: the panel hugs the shown lines. Medium: a steady share of the bar wide (wider only for a longer
+                    // line), as tall as the shown lines. Both sit at the bar's bottom and grow upwards; the words keep the
+                    // same wrap width as the whole bar, so a line never re-wraps when the size changes.
+                    float padX = 22f * Dpi, padTop = 10f * Dpi, padBottom = 18f * Dpi;
+                    float w = _panelSize == 0 ? blockW + 2 * padX : Math.Max(blockW + 2 * padX, rect.Width * MediumPanelShare);
+                    w = Math.Max(120f * Dpi, Math.Min(w, rect.Width));
+                    float h = Math.Min(blockH + padTop + padBottom, rect.Height);
+                    var target = new RectangleF(rect.Left + (rect.Width - w) / 2f, rect.Bottom - h, w, h);
+                    _panelTarget = target;
+                    if (_panelCur.IsEmpty || _panelCur.Width <= 0) { _panelCur = target; }   // first words: no ease from nothing
+                    else if (_panelCur != target) { EnsureAnimating(); }
+                    Rectangle pr = Rectangle.Round(_panelCur);
+                    DrawPanel(g, pr, Math.Min(18, Math.Max(6, pr.Height / 2)), panelA, panelTop, panelBot, borderCol);
+                    DrawAccent(g, pr, baseColor, globalFade);
+                    // The words at the panel's bottom, following it as it eases.
+                    y = _panelCur.Bottom - padBottom - blockH;
+                    chipAnchor = _panelCur;
+                    chipOnEdge = true;
+                }
+                else if (panelOn)
+                {
+                    chipAnchor = rect;
+                    chipOnEdge = false;
+                }
+                else
+                {
+                    // No panel: the chip sits just over the first line.
+                    chipAnchor = new RectangleF(layout.Left + Math.Max(0, (layout.Width - blockW) / 2f), y, blockW, blockH);
+                    chipOnEdge = true;
+                }
+                if (chipH > 0)
+                {
+                    DrawSourceChip(g, chipAnchor, chipOnEdge, (int)Math.Round(255 * op * globalFade), panelBot);
+                }
 
                 // Build one path per run for the coloured fills plus a combined path
                 // the glow/outline strokes once — so the halo stays seamless across
@@ -1400,9 +1560,17 @@ namespace AutoClicker.UI
             if (idx > text.Length) { idx = text.Length; }
             string[] words = text.Substring(idx)
                 .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            Color draftColor = DraftColor(body);
             for (int i = 0; i < words.Length; i++)
             {
                 string w = words[i];
+                // A draft word (DraftMark in front): painted fainter, never a label.
+                if (w.Length > 1 && w[0] == DraftMark)
+                {
+                    consumed++;
+                    toks.Add(new TextRun { Text = w.Substring(1), Color = draftColor, RevealAt = consumed });
+                    continue;
+                }
                 // "Speaker" + "N:" is kept as ONE token so the label never wraps
                 // mid-label and colours as a unit.
                 if (w == Utils.SpeakerTurnLabeler.SpeakerWord && i + 1 < words.Length && words[i + 1].Length == 2 &&
@@ -1429,6 +1597,28 @@ namespace AutoClicker.UI
             return toks;
         }
 
+        /// <summary>
+        /// The colour draft words are painted in: the caption's own colour 45 % of the way to mid-grey — plainly fainter on
+        /// a dark bar and a light one alike, and the same hue.
+        /// </summary>
+        private static Color DraftColor(Color body)
+        {
+            const double mix = 0.45;
+            return Color.FromArgb(body.A,
+                (int)Math.Round(body.R * (1 - mix) + 128 * mix),
+                (int)Math.Round(body.G * (1 - mix) + 128 * mix),
+                (int)Math.Round(body.B * (1 - mix) + 128 * mix));
+        }
+
+        /// <summary>The same word, draft or final (DraftMark ignored) — for the reveal's comparisons.</summary>
+        private static bool SameWord(string a, string b)
+        {
+            if (a == null || b == null) { return a == b; }
+            int ia = a.Length > 0 && a[0] == DraftMark ? 1 : 0;
+            int ib = b.Length > 0 && b[0] == DraftMark ? 1 : 0;
+            return a.Length - ia == b.Length - ib && string.CompareOrdinal(a, ia, b, ib, a.Length - ia) == 0;
+        }
+
         /// <summary>Re-primes the cached space/line metrics when the font changes.</summary>
         private void RefreshTextMetrics(Graphics g, Font font, StringFormat typo, float emSize)
         {
@@ -1452,6 +1642,93 @@ namespace AutoClicker.UI
             if (_wordW.Count > 600) { _wordW.Clear(); }   // captions churn words; stay bounded
             _wordW[word] = w;
             return w;
+        }
+
+        /// <summary>The rounded panel behind the words: a soft top-to-bottom gradient and a hairline border.</summary>
+        private static void DrawPanel(Graphics g, Rectangle r, int radius, int panelA, Color panelTop, Color panelBot, Color borderCol)
+        {
+            if (r.Width <= 2 || r.Height <= 2 || panelA <= 0) { return; }
+            using (var path = RoundedRect(r, radius))
+            {
+                using (var lg = new LinearGradientBrush(r,
+                    Color.FromArgb(panelA, panelTop.R, panelTop.G, panelTop.B),
+                    Color.FromArgb((int)(panelA * 0.92), panelBot.R, panelBot.G, panelBot.B), 90f))
+                {
+                    g.FillPath(lg, path);
+                }
+                // Hairline border for definition, tinted from the theme border.
+                using (var bp = new Pen(Color.FromArgb((int)(panelA * 0.55), borderCol.R, borderCol.G, borderCol.B), 1f))
+                {
+                    g.DrawPath(bp, path);
+                }
+            }
+        }
+
+        // The source chip's font: half the caption's size, never under 9 pt — rebuilt only when that size changes.
+        private Font _chipFont;
+        private float _chipFontPts;
+
+        private Font ChipFont()
+        {
+            float pts = Math.Max(9f, _fontPoints * 0.5f) * Dpi;
+            if (_chipFont == null || Math.Abs(_chipFontPts - pts) > 0.01f)
+            {
+                try { _chipFont?.Dispose(); } catch { }
+                try { _chipFont = new Font("Segoe UI Semibold", pts, FontStyle.Regular, GraphicsUnit.Point); }
+                catch { _chipFont = new Font(FontFamily.GenericSansSerif.Name, pts, FontStyle.Bold, GraphicsUnit.Point); }
+                _chipFontPts = pts;
+            }
+            return _chipFont;
+        }
+
+        private float SourceChipHeight(Graphics g)
+        {
+            try { return ChipFont().GetHeight(g) + 4f * Dpi; }
+            catch { return 0f; }
+        }
+
+        /// <summary>
+        /// "♪ YouTube" on a small pill: across the top edge of a fitted panel (or just over the words with no panel), inside
+        /// the top-left corner of the whole-bar panel. Readable over anything: a darker pill than the panel under it.
+        /// </summary>
+        private void DrawSourceChip(Graphics g, RectangleF anchor, bool onEdge, int alpha, Color panelBot)
+        {
+            if (string.IsNullOrEmpty(_source) || alpha <= 0) { return; }
+            string text = "♪ " + _source;
+            Font f = ChipFont();
+            SizeF ts = g.MeasureString(text, f, PointF.Empty, StringFormat.GenericTypographic);
+            float padX = 9f * Dpi, padY = 2f * Dpi;
+            float w = Math.Min(ts.Width + 2 * padX, Math.Max(40f, Width - 8f));
+            float h = SourceChipHeight(g);
+            float x = anchor.Left + 14f * Dpi;
+            float y = onEdge ? anchor.Top - h * 0.55f : anchor.Top + 6f * Dpi;
+            if (x + w > Width - 3) { x = Math.Max(2f, Width - 3 - w); }
+            if (y < 1) { y = 1; }
+            var r = Rectangle.Round(new RectangleF(x, y, w, h));
+            Color bg = Darken(panelBot, 0.25);
+            int pillA = Math.Min(255, Math.Max(150, (int)(alpha * 0.85)));
+            using (var path = RoundedRect(r, Math.Max(2, r.Height / 2)))
+            using (var b = new SolidBrush(Color.FromArgb(pillA, bg.R, bg.G, bg.B)))
+            using (var p = new Pen(Color.FromArgb(Math.Min(255, pillA / 2), SourceTagColor.R, SourceTagColor.G, SourceTagColor.B), 1f))
+            {
+                g.FillPath(b, path);
+                g.DrawPath(p, path);
+            }
+            Region old = g.Clip;
+            try
+            {
+                g.SetClip(r);
+                using (var tb = new SolidBrush(Color.FromArgb(Math.Min(255, alpha), SourceTagColor.R, SourceTagColor.G, SourceTagColor.B)))
+                {
+                    g.DrawString(text, f, tb, new PointF(r.Left + padX, r.Top + padY + Math.Max(0f, (r.Height - 2 * padY - f.GetHeight(g)) / 2f)),
+                                 StringFormat.GenericTypographic);
+                }
+            }
+            finally
+            {
+                g.Clip = old;
+                old.Dispose();
+            }
         }
 
         private void DrawAccent(Graphics g, Rectangle rect, Color accent, double fade)
@@ -1560,6 +1837,7 @@ namespace AutoClicker.UI
                 try { _anim?.Stop(); _anim?.Dispose(); } catch { }
                 try { _oldTextTimer?.Stop(); _oldTextTimer?.Dispose(); } catch { }
                 try { _surface?.Dispose(); _surface = null; } catch { }
+                try { _chipFont?.Dispose(); _chipFont = null; } catch { }
             }
             base.Dispose(disposing);
         }

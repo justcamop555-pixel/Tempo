@@ -131,6 +131,60 @@ namespace AutoClicker.Models
 
         public static IReadOnlyList<Info> All => _all;
 
+        /// <summary>The heading for actions no section lists (see <see cref="InSections"/>).</summary>
+        public const string OtherSection = "Other";
+
+        // The Keybinds tab's sections, in the order shown. The list above stays in its stored order (settings and the
+        // defaults follow it); this is only how the page groups it — 26 rows in one run was a list to search, not read.
+        private static readonly (string Title, HotkeyAction[] Actions)[] _sections =
+        {
+            ("Clicker", new[]
+            {
+                HotkeyAction.ToggleStartStop, HotkeyAction.StartClicking, HotkeyAction.StopClicking, HotkeyAction.TogglePause,
+                HotkeyAction.EmergencyStop, HotkeyAction.PickPosition, HotkeyAction.IncreaseInterval,
+                HotkeyAction.DecreaseInterval, HotkeyAction.ToggleAntiFreeze
+            }),
+            ("Profiles", new[] { HotkeyAction.NextProfile, HotkeyAction.PreviousProfile }),
+            ("Macros", new[]
+            {
+                HotkeyAction.ToggleRecordMacro, HotkeyAction.PlayMacro, HotkeyAction.StopMacro,
+                HotkeyAction.PlayMacro1, HotkeyAction.PlayMacro2, HotkeyAction.PlayMacro3
+            }),
+            ("Multi-Point", new[] { HotkeyAction.AddPointAtCursor, HotkeyAction.ShowPointsOverlay }),
+            ("Window", new[] { HotkeyAction.ShowHideWindow, HotkeyAction.ToggleAlwaysOnTop }),
+            ("Live Captions", new[] { HotkeyAction.ToggleLiveCaptions }),
+            ("Camera-relative movement", new[] { HotkeyAction.ToggleCameraMovement, HotkeyAction.RecenterCameraMovement }),
+            ("Second cursor", new[] { HotkeyAction.GrabSecondCursor, HotkeyAction.ToggleSecondCursorSpam }),
+        };
+
+        /// <summary>
+        /// Every action once, grouped as the Keybinds tab shows them: each section's title (English — translate it to
+        /// show it) and its actions. An action no section lists comes last under <see cref="OtherSection"/>, so one
+        /// added to the enum without a section still gets a row; one listed twice shows once, in its first section.
+        /// </summary>
+        public static List<KeyValuePair<string, List<Info>>> InSections()
+        {
+            var result = new List<KeyValuePair<string, List<Info>>>();
+            var placed = new HashSet<HotkeyAction>();
+            foreach (var section in _sections)
+            {
+                var rows = new List<Info>();
+                foreach (HotkeyAction action in section.Actions)
+                {
+                    Info info = Get(action);
+                    if (info != null && placed.Add(action)) { rows.Add(info); }
+                }
+                if (rows.Count > 0) { result.Add(new KeyValuePair<string, List<Info>>(section.Title, rows)); }
+            }
+            var rest = new List<Info>();
+            foreach (Info info in _all)
+            {
+                if (!placed.Contains(info.Action)) { rest.Add(info); }
+            }
+            if (rest.Count > 0) { result.Add(new KeyValuePair<string, List<Info>>(OtherSection, rest)); }
+            return result;
+        }
+
         public static Info Get(HotkeyAction action)
         {
             foreach (var info in _all)

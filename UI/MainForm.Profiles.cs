@@ -694,6 +694,9 @@ namespace AutoClicker.UI
             var sb = new System.Text.StringBuilder(p.Name ?? "");
             string desc = Localization.T(p.Description ?? "");
             if (!string.IsNullOrWhiteSpace(desc)) { sb.Append('\n').Append(desc.Trim()); }
+            // What it clicks. A card showed a name, an icon and how often it was used — never what switching to it
+            // would DO, which is the question people asked about profiles.
+            sb.Append("\n\n").Append(ProfileSettingsSummary(p));
             if (p.Keybinds != null || p.AppSettings != null)
             {
                 sb.Append("\n\n").Append(Localization.T(
@@ -704,6 +707,49 @@ namespace AutoClicker.UI
                             : "Switching to it also puts back its saved theme, overlay and caption look."));
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// A profile's clicking in two short lines: the button (or key), the click type, the mode and the interval; then
+        /// where it clicks and when it stops. Translated pieces joined by "·", so no sentence is assembled from parts.
+        /// </summary>
+        internal static string ProfileSettingsSummary(ClickProfile p)
+        {
+            if (p == null) { return ""; }
+            var what = new List<string>();
+            if (p.Target == ClickTarget.Key)
+            {
+                what.Add(p.KeyVirtualKey != 0
+                    ? Localization.F("Key: {0}", KeyNames.Friendly(p.KeyVirtualKey))
+                    : Localization.T("Keyboard"));
+            }
+            else
+            {
+                what.Add(Localization.T(p.Button == MouseButtonType.Right ? "Right"
+                                      : p.Button == MouseButtonType.Middle ? "Middle" : "Left"));
+            }
+            what.Add(Localization.T(p.Style == ClickStyle.Double ? "Double"
+                                  : p.Style == ClickStyle.Triple ? "Triple"
+                                  : p.Style == ClickStyle.Quadruple ? "Quadruple" : "Single"));
+            what.Add(Localization.T(p.Mode == ClickMode.HoldToClick ? "Hold"
+                                  : p.Mode == ClickMode.Burst ? "Burst" : "Interval"));
+            double ms = p.ManualPreciseIntervalMs > 0 ? p.ManualPreciseIntervalMs : p.GetBaseIntervalMilliseconds();
+            var culture = System.Globalization.CultureInfo.CurrentCulture;
+            what.Add(ms < 1000 ? Localization.F("{0} ms", ms.ToString("0.##", culture))
+                   : ms < 60000 ? Localization.F("{0} s", (ms / 1000.0).ToString("0.##", culture))
+                   : FormatProfileRuntime((long)Math.Round(ms / 1000.0)));
+
+            string where = p.PositionMode == PositionMode.FixedPosition
+                    ? Localization.F("Fixed position ({0}, {1})", p.FixedX, p.FixedY)
+                : p.PositionMode == PositionMode.MultiPoint
+                    ? Localization.F("Multi-Point: {0} point(s)", p.Points?.Count ?? 0)
+                : Localization.T("Current cursor position");
+            string until = p.RepeatMode == RepeatMode.FixedCount
+                    ? Localization.F("Stops after {0} click(s)", p.RepeatCount)
+                : p.RepeatMode == RepeatMode.ForDuration
+                    ? Localization.F("Stops after {0} s", p.RepeatDurationSeconds)
+                : Localization.T("Until stopped");
+            return string.Join("  ·  ", what) + "\n" + where + "  ·  " + until;
         }
 
         /// <summary>
@@ -1038,7 +1084,7 @@ namespace AutoClicker.UI
             {
                 profile.AppSettings.ApplyTo(_settings);
                 LoadSettingsIntoUi();
-                ApplyThemeToEverything();
+                ApplyThemeFaded();   // a profile's own look arrives as a cross-fade of the whole window
                 // The appearance carries the caption bar's look (text size, font, colour, opacity, panel)
                 // and whether there is a bar at all. Only the Settings page followed: the caption bar and
                 // the history window on screen kept the old look until settings were next saved, and a

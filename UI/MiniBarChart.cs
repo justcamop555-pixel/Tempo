@@ -61,6 +61,12 @@ namespace AutoClicker.UI
         /// <summary>Sets the bar values (expected oldest-first), with optional labels.</summary>
         public void SetValues(IList<long> values, IList<string> labels = null)
         {
+            // The dashboard hands every chart its numbers on each UI tick, five times a second; the same numbers
+            // are not a reason to repaint the chart (see StatCard.Value).
+            if (SameAs(values, labels))
+            {
+                return;
+            }
             if (values == null)
             {
                 _values = new long[0];
@@ -86,7 +92,24 @@ namespace AutoClicker.UI
                     _labels[i] = labels[i] ?? "";
                 }
             }
+            _valuesVersion++;
             Invalidate();
+        }
+
+        /// <summary>Whether these are exactly the values (as stored: negatives as 0) and labels already shown.</summary>
+        private bool SameAs(IList<long> values, IList<string> labels)
+        {
+            int n = values?.Count ?? 0;
+            if (n != _values.Length || (labels?.Count ?? 0) != _labels.Length) { return false; }
+            for (int i = 0; i < n; i++)
+            {
+                if (Math.Max(0, values[i]) != _values[i]) { return false; }
+            }
+            for (int i = 0; i < _labels.Length; i++)
+            {
+                if (!string.Equals(labels[i] ?? "", _labels[i], StringComparison.Ordinal)) { return false; }
+            }
+            return true;
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -130,9 +153,55 @@ namespace AutoClicker.UI
             Invalidate();
         }
 
+        // ── The chart's picture (see StatCard's): drawn once, copied on every paint after, drawn again when anything it
+        // shows changes. A scroll step across a chart repainted the whole chart — bars, gradients, labels — to fill the
+        // strip it uncovered. Only over a solid background (a wallpaper differs from place to place: drawn live there).
+        private Bitmap _picture;
+        private string _pictureKey;
+        private int _valuesVersion;
+
+        private string PictureKey() => string.Join("|", Width, Height, DeviceDpi, BackColor.ToArgb(), CardColor.ToArgb(), BarColor.ToArgb(),
+                                                   TextColor.ToArgb(), MutedColor.ToArgb(), Title, ValueFormat, ReferenceLabel,
+                                                   ReferenceValue.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                                                   _hoverIndex, _valuesVersion, Utils.Localization.Current);
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            if (BackColor.A == 255 && Width > 2 && Height > 2) { return; }   // the picture covers every pixel
+            base.OnPaintBackground(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { _picture?.Dispose(); _picture = null; }
+            base.Dispose(disposing);
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics;
+            if (BackColor.A != 255 || Width <= 2 || Height <= 2)
+            {
+                DrawChart(e.Graphics);
+                return;
+            }
+            string key = PictureKey();
+            if (_picture == null || _pictureKey != key)
+            {
+                _picture?.Dispose();
+                _picture = new Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                _pictureKey = key;
+                using (Graphics pg = Graphics.FromImage(_picture))
+                {
+                    pg.Clear(BackColor);
+                    DrawChart(pg);
+                }
+            }
+            e.Graphics.CompositingMode = CompositingMode.SourceCopy;
+            e.Graphics.DrawImageUnscaled(_picture, 0, 0);
+        }
+
+        private void DrawChart(Graphics g)
+        {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 

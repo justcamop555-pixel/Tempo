@@ -232,8 +232,12 @@ namespace AutoClicker.UI
         /// The order is what keeps the page whole: closing hides the cards BEFORE the tail moves up over
         /// them, opening moves them into place while still hidden and only then shows them — no visible
         /// card ever sits on another, not even for one frame.
+        ///
+        /// <paramref name="animate"/> (the button, not the search's jump or an import): the cards unroll from
+        /// under the section's header and push the buttons below them down, or roll back up with the buttons
+        /// following (FoldChange) — they used to appear or vanish in one frame.
         /// </summary>
-        private void SetSettingsAdvancedOpen(bool open)
+        private void SetSettingsAdvancedOpen(bool open, bool animate = false)
         {
             if (_settings == null || _settingsPage == null || _settingsPage.IsDisposed) { return; }
             if (_settings.SettingsAdvancedOpen != open)
@@ -243,12 +247,34 @@ namespace AutoClicker.UI
             }
             if (_settingsAdvancedShown != open)
             {
-                if (!open) { ShowAdvancedCards(false); }
-                RestackSettingsCards();
-                if (open) { ShowAdvancedCards(true); }
+                Control header = _settingsAdvancedBtn?.Parent;
+                void Change()
+                {
+                    if (!open) { ShowAdvancedCards(false); }
+                    RestackSettingsCards();
+                    if (open) { ShowAdvancedCards(true); }
+                    RefreshSettingsAdvancedButton();
+                    // Opened with the button: the cards brought into view when they opened below it.
+                    if (open && animate && header != null) { RevealOpenedSection(header, _settingsAdvancedCards); }
+                }
+                if (animate && header != null) { FoldChange(header, _settingsAdvancedCards, SettingsTailLead(), open, Change); }
+                else { Change(); }
                 Logger.Info("[Settings] advanced section " + (open ? "opened" : "closed") + ".");
             }
             RefreshSettingsAdvancedButton();
+        }
+
+        /// <summary>The top-most shown control of the tail (the buttons under the last card), which follows the section as it folds; null when none is shown.</summary>
+        private Control SettingsTailLead()
+        {
+            Control lead = null;
+            foreach (KeyValuePair<Control, int> kv in _settingsTail)
+            {
+                Control c = kv.Key;
+                if (c == null || c.IsDisposed || !c.Visible) { continue; }
+                if (lead == null || c.Top < lead.Top) { lead = c; }
+            }
+            return lead;
         }
 
         /// <summary>
@@ -270,6 +296,8 @@ namespace AutoClicker.UI
             _settingsAdvancedBtn.Text = SettingsAdvancedOpen
                 ? Localization.T("Hide advanced settings")
                 : Localization.T("Show advanced settings");
+            SetGlyph(_settingsAdvancedBtn, SettingsAdvancedOpen ? ActionGlyph.ChevronUp : ActionGlyph.ChevronDown);
+            _settingsAdvancedBtn.Invalidate();
         }
 
         /// <summary>After settings were loaded from somewhere else (Import): the page follows the setting.</summary>

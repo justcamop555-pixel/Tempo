@@ -217,6 +217,27 @@ namespace AutoClicker.Utils
         {
             object hit = _cached;
             if (hit != null) { return (AdvancedColor)hit; }
+            AdvancedColor result = Query(out bool answered);
+            if (answered) { _cached = result; }
+            return result;
+        }
+
+        /// <summary>
+        /// Asks Windows again and swaps the new answer in — for a display change, called OFF the UI thread (2026-11-10).
+        /// The old answer stays readable while Windows is asked, so nothing on the UI thread waits on the display: the
+        /// query used to run there the moment a change was reported, which is the moment Windows is still switching modes
+        /// — a monitor waking with HDR on held Tempo's window for 3.3 s (its own stall note, 2026-11-08 12:39).
+        /// </summary>
+        public static void Refresh()
+        {
+            AdvancedColor result = Query(out bool answered);
+            _cached = answered ? (object)result : null;   // unanswered: the next reader asks again
+        }
+
+        /// <summary>The query itself. <paramref name="answered"/> is false when Windows gave nothing to go on (not to be cached).</summary>
+        private static AdvancedColor Query(out bool answered)
+        {
+            answered = false;
             var result = new AdvancedColor();
             try
             {
@@ -308,7 +329,7 @@ namespace AutoClicker.Utils
             }
             catch (Exception ex) { Logger.Swallow("DisplayColorInfo.Advanced", ex); }
 
-            _cached = result;
+            answered = true;
             return result;
         }
 

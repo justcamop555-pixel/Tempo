@@ -145,8 +145,69 @@ namespace AutoClicker.UI
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern IntPtr GetMessageExtraInfo();
 
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern int GetMessageTime();
+
+        // ── A run's own clicks still waiting when it ends ─────────────────────────────────────────
+        // Input waits in the window's queue until the window reads it, and a hotkey's message is read BEFORE input that
+        // came first. So when a run was stopped, its clicks still queued behind the stop were read with the guard
+        // already off — and pressed whatever was under the pointer, Start included, which began the run again (the
+        // user: "turn off auto click … then accidentally click tempo's own windows"). A click is the run's when it was
+        // MADE while the run went on: its message time is before the moment the guard first saw the run over (plus a
+        // little for a click the click thread was sending as the stop came).
+        private bool _wasRunning;
+        private bool _endKnown;
+        private int _endedTick;
+        private long _afterRun;
+
+        /// <summary>A click made up to this long after the run was seen over still counts as the run's.</summary>
+        private const int LateMs = 250;
+
+        /// <summary>How long after a run ends its queued clicks are looked for at all.</summary>
+        private const int BacklogMs = 15000;
+
+        /// <summary>How many of a run's own input messages were dropped after the run had ended (Live debug).</summary>
+        public long AfterRunCount => System.Threading.Interlocked.Read(ref _afterRun);
+
+        /// <summary>For the tests: the message time of the message being read, instead of GetMessageTime.</summary>
+        internal Func<int> MessageTimeForTest;
+
+        /// <summary>For the tests: the stamp of the message being read, instead of GetMessageExtraInfo.</summary>
+        internal Func<IntPtr> ExtraInfoForTest;
+
+        /// <summary>
+        /// True when this input message was made while the run that just ended was still going — still waiting in the
+        /// queue as it ended.
+        /// </summary>
+        private bool MadeDuringEndedRun()
+        {
+            if (!_endKnown) { return false; }
+            int now = Environment.TickCount;
+            if (unchecked(now - _endedTick) > BacklogMs) { _endKnown = false; return false; }
+            int made;
+            try { made = MessageTimeForTest != null ? MessageTimeForTest() : GetMessageTime(); }
+            catch { return false; }
+            return unchecked(made - _endedTick) <= LateMs;
+        }
+
         public bool PreFilterMessage(ref Message m)
         {
+            // Every message, not only input: the run's end is seen at the first message read after it, so whatever of
+            // the run is still queued behind that message is known by its time (MadeDuringEndedRun).
+            bool running;
+            try { running = _isRunning(); }
+            catch { running = false; }
+            if (running)
+            {
+                _wasRunning = true;
+            }
+            else if (_wasRunning)
+            {
+                _wasRunning = false;
+                _endedTick = Environment.TickCount;
+                _endKnown = true;
+            }
+
             switch (m.Msg)
             {
                 case WM_LBUTTONDOWN:
@@ -177,16 +238,19 @@ namespace AutoClicker.UI
                     return false;       // not input that can act — nothing to do
             }
 
-            bool running;
-            try { running = _isRunning(); }
-            catch { return false; }
-            if (!running) { return false; }
+            bool afterRun = false;
+            if (!running)
+            {
+                if (!MadeDuringEndedRun()) { return false; }
+                afterRun = true;
+            }
 
             try
             {
                 // GetMessageExtraInfo returns the value attached to the message being
                 // processed right now, which is exactly what SendInput stamped on it.
-                if (GetMessageExtraInfo() != Engine.InputSimulator.ExtraInfo)
+                IntPtr stamp = ExtraInfoForTest != null ? ExtraInfoForTest() : GetMessageExtraInfo();
+                if (stamp != Engine.InputSimulator.ExtraInfo)
                 {
                     return false;       // a real click from the user — always let it through
                 }
@@ -200,7 +264,8 @@ namespace AutoClicker.UI
             }
 
             System.Threading.Interlocked.Increment(ref _blocked);
-            LastBlockedUtc = DateTime.UtcNow;
+            if (afterRun) { System.Threading.Interlocked.Increment(ref _afterRun); }
+            else { LastBlockedUtc = DateTime.UtcNow; }
             return true;                // swallow: Tempo must not click itself
         }
 

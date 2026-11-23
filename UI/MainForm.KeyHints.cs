@@ -30,6 +30,8 @@ namespace AutoClicker.UI
         {
             HotkeyDefinition hk = _settings?.HotkeyFor(action);
             if (hk == null || !hk.IsValid) { return null; }
+            // A feature turned off in Settings has let go of the key: nothing it says would happen does.
+            if (HotkeyLetGo(action)) { return null; }
 
             // Hold-to-click polls the Start / Stop key itself: it is live whether or not it is registered.
             bool polled = action == HotkeyAction.ToggleStartStop && HoldModeSelected;

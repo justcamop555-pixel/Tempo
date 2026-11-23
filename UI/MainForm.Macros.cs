@@ -60,6 +60,122 @@ namespace AutoClicker.UI
         /// <summary>Names the macros in the library that have Problem-level faults.</summary>
         private Label _macroHealthLabel;
 
+        // Round 40's layout: the Saved macros and Record cards (the Record card's title dot shows the recorder's state), and
+        // the Quick speed pills with the Speed values they set.
+        private CardGroupBox _macroListGroup;
+        private CardGroupBox _recordGroup;
+        private readonly List<Button> _macroSpeedPills = new List<Button>();
+        private static readonly int[] MacroSpeedPresets = { 5, 10, 20, 40 };
+
+        /// <summary>
+        /// The Macros tab's buttons whose colour means something. The theme pass gives every button the neutral fill and the
+        /// plain text colour, so these are coloured again after building the tab and after every theme pass — before round 40
+        /// nothing did, and a theme change left playback's Stop grey and Record and Delete in plain text until a restart.
+        ///  • Record and Stop (recording) are both in the accent: the one that cannot be pressed greys, so the lit one is
+        ///    always the next thing to do. Record's dot is the danger red, moved where it shows on the accent.
+        ///  • Pin is the list's own main action, in the accent.
+        ///  • Playback's Stop is the danger red; Delete's words are; the Recycle bin's icon and edge are the success green.
+        /// </summary>
+        private void StyleMacroButtons()
+        {
+            if (_theme == null) { return; }
+            StyleAccentButton(_recordBtn);
+            StyleAccentButton(_stopRecordBtn);
+            if (_recordBtn is RoundedButton rec)
+            {
+                rec.GlyphColor = Theme.Readable(_theme.Danger, _theme.Accent, 3.0);
+            }
+            StyleAccentButton(_pinMacroBtn);
+            StyleDangerButton(_stopPlayBtn);
+            if (_deleteMacroBtn != null) { _deleteMacroBtn.ForeColor = _theme.DangerText; }
+            if (_macroRecycleBtn is RoundedButton bin)
+            {
+                bin.GlyphColor = _theme.SuccessText;
+                bin.FlatAppearance.BorderColor = Theme.Blend(_theme.Border, _theme.Success, 0.55);
+            }
+            HighlightMacroSpeedPreset();
+            _recordGroup?.Invalidate();
+        }
+
+        /// <summary>
+        /// Lays a row of buttons out across [<paramref name="left"/>, <paramref name="right"/>], in the window's units: each as
+        /// wide as its words need, then — left to right, while the row still fits — wide enough for its icon too, then the room
+        /// left over shared out evenly. So the row always fills its card and no caption is cut, and an icon gives way only
+        /// where the words of a longer language need its room (RoundedButton.GlyphFits). Every caption a button can show is
+        /// measured (LayoutFitter.DeclareCaptions: Pin / Unpin).
+        /// </summary>
+        private void FillGlyphRow(int left, int right, int gap, params Button[] row)
+        {
+            if (row == null || row.Length == 0) { return; }
+            int n = row.Length;
+            int room = right - left - gap * (n - 1);
+            var widths = new int[n];
+            var wants = new int[n];
+            for (int i = 0; i < n; i++)
+            {
+                int need = 40, want = 40;
+                if (row[i] is RoundedButton rb)
+                {
+                    foreach (string caption in LayoutFitter.CaptionsOf(rb))
+                    {
+                        need = Math.Max(need, (int)Math.Ceiling(rb.CaptionWidthNeeded(16, caption) * LayoutUnitsPerPixel));
+                        want = Math.Max(want, (int)Math.Ceiling(rb.CaptionWidthWanted(caption) * LayoutUnitsPerPixel));
+                    }
+                }
+                widths[i] = need;
+                wants[i] = Math.Max(need, want);
+            }
+            int total = 0;
+            foreach (int w in widths) { total += w; }
+            for (int i = 0; i < n; i++)
+            {
+                int extra = wants[i] - widths[i];
+                if (extra > 0 && total + extra <= room)
+                {
+                    widths[i] += extra;
+                    total += extra;
+                }
+            }
+            if (total < room)
+            {
+                int spare = room - total;
+                for (int i = 0; i < n; i++)
+                {
+                    int share = spare / (n - i);
+                    widths[i] += share;
+                    spare -= share;
+                }
+            }
+            int x = left;
+            for (int i = 0; i < n; i++)
+            {
+                row[i].Left = x;
+                row[i].Width = widths[i];
+                x += widths[i] + gap;
+            }
+        }
+
+        /// <summary>
+        /// Lights the Quick speed pill whose speed the Speed box holds (accent fill), the others plain — as the Clicker tab's
+        /// CPS presets do — so the presets say which one is in effect, and none does at a speed of the user's own.
+        /// </summary>
+        private void HighlightMacroSpeedPreset()
+        {
+            if (_theme == null || _macroSpeedNum == null) { return; }
+            int speed = (int)_macroSpeedNum.Value;
+            for (int i = 0; i < _macroSpeedPills.Count && i < MacroSpeedPresets.Length; i++)
+            {
+                Button b = _macroSpeedPills[i];
+                if (b == null || b.IsDisposed) { continue; }
+                bool active = MacroSpeedPresets[i] == speed;
+                b.BackColor = active ? _theme.Accent : _theme.Surface2;
+                b.ForeColor = active ? _theme.OnAccent : _theme.Text;
+                b.FlatAppearance.BorderSize = active ? 0 : 1;
+                b.FlatAppearance.BorderColor = _theme.Border;
+                b.Invalidate();
+            }
+        }
+
         /// <summary>
         /// Sweeps the WHOLE library with the macro doctor and names anything that is
         /// actually broken — an input pressed and never released, or coordinates outside
@@ -205,22 +321,48 @@ namespace AutoClicker.UI
             help.AutoSize = true;
             help.ForeColor = _theme.TextMuted;
 
-            // The row is centred on the Sort combo (61-91 once it has its window): the 23 px search box sat on
-            // its Top, a step up the row. The list starts 6 px under the search box.
-            var listLabel = UiFactory.Label(Utils.Localization.T("Saved macros"), 12, 68, FontStyle.Bold);
-            _macroSearchBox = UiFactory.Text(140, 64, 172);
+            // \u2500\u2500 Round 40: three sections, after the user's mockup \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+            // "Better layout: three clearly separated sections." Saved macros (search and sort, the list, Pin / Reset stats,
+            // the library line) on the left, the Manage column in the middle, Record above Playback on the right, the Live
+            // Monitor under all three. The three columns start on one line and end on one line, each a card with the
+            // accent's soft band across its title row. Every control and handler is the one the tab had; only where they
+            // sit and how they look changed.
+            const int rowTop = 62;
+            const int columnBottom = 700;   // Playback's foot: Record 62 + 252, 8 between, Playback 378
+
+            // \u2500\u2500 Saved macros \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+            var listGroup = (CardGroupBox)UiFactory.Group(Utils.Localization.T("Saved macros"), 12, rowTop, 296, columnBottom - rowTop, CardIcon.Folder);
+            listGroup.HeaderTint = true;
+            _macroListGroup = listGroup;
+
+            // Search and Sort share the row under the title: the box takes what the combo leaves. The combo is as wide
+            // as its longest choice ("Sort.: meist gespielt"), ending at the card's inner edge; the row is centred on it
+            // (30 px once it has its window), so the 23 px box sits 3 px lower.
+            _macroSortCombo = UiFactory.Combo(160, 32, 124, Utils.Localization.T("Sort: A \u2192 Z"), Utils.Localization.T("Sort: Most played"), Utils.Localization.T("Sort: Newest"));
+            _macroSortCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            if (_macroSortCombo is FlatComboBox sortBox)
+            {
+                sortBox.Width = Math.Min(170, sortBox.WidthForChoices96(118));
+            }
+            _macroSortCombo.Left = 284 - _macroSortCombo.Width;
+            _macroSortCombo.SelectedIndexChanged += OnMacroSortChanged;
+
+            _macroSearchBox = UiFactory.Text(12, 35, Math.Max(96, _macroSortCombo.Left - 8 - 12));
             _macroSearchBox.PlaceholderText = Utils.Localization.T("Search macros\u2026");
             _macroSearchBox.TextChanged += (s, e) => { _macroFilter = _macroSearchBox.Text; RefreshMacroList(); };
-            // 296 wide, ending at 308: the three columns (list, Manage, Record/Playback) sat edge to edge with no
-            // gap at all; now 6 px between each, and the list still ends at 460.
+
+            // The list fills the card between that row and the block at its foot (Pin / Reset stats, the library line, the
+            // health notice's room), with no frame of its own: the card is its frame.
+            const int listTop = 68;
+            const int footBlock = 146;   // 8 + Pin/Reset 32 + 10 + the library line's two lines 32 + 2 + the notice's 50 + 12
             _macroListBox = new MacroListBox
             {
-                Left = 12,
-                Top = 93,
-                Width = 296,
-                Height = 367,
+                Left = 8,
+                Top = listTop,
+                Width = 280,
+                Height = (columnBottom - rowTop) - listTop - footBlock,
                 Font = UiFactory.BodyFont,
-                BorderStyle = BorderStyle.FixedSingle
+                BorderStyle = BorderStyle.None
             };
             _macroListBox.DoubleClick += (s, e) => EditSelectedMacro();
             _macroListBox.SelectedIndexChanged += (s, e) => LoadMacroDefaultsIntoUi();
@@ -263,111 +405,74 @@ namespace AutoClicker.UI
                 }
             };
 
-            // ── Management panel ───────────────────────────────────────────────
-            // Grouped into a titled panel so the actions read as one organized block
-            // rather than a loose column of buttons (which looked dated).
-            // 496 tall, not 458: one more row for "Fix…". The Live Monitor below starts
-            // at y=634, so there is room for it without moving anything else.
-            // 536 rather than 496: the Recycle bin button below Delete needs the room,
-            // and the Live Monitor card does not start until y=634.
-            // Top 92, not 84: the Sort combo above it ends at y=91, so the card's top
-            // border ran 7px through the bottom of the combo. Height is unchanged, so the
-            // bottom moves to 628 and still clears the Live Monitor card at 634.
-            // 460 rather than 536: Move up / Move down are gone (drag the rows instead), so the card is
-            // two rows shorter and still ends well clear of the Live Monitor at y=634.
-            // 314-438 and from 97 down: 6 px from the list on its left, the Record and Playback cards on its right
-            // (it touched both) and the Sort combo above (it was a pixel under it).
-            var manageGroup = UiFactory.Group(Utils.Localization.T("Manage"), 314, 97, 124, 460, CardIcon.Gear);
-            int mx = 6;
-            int mw = 112;
-
-            _editMacroBtn = UiFactory.Button(Utils.Localization.T("Edit…"), mx, 24, mw, 30);
-            _editMacroBtn.Click += (s, e) => EditSelectedMacro();
-
-            _renameMacroBtn = UiFactory.Button(Utils.Localization.T("Rename…"), mx, 58, mw, 30);
-            _renameMacroBtn.Click += OnRenameMacro;
-
-            _duplicateMacroBtn = UiFactory.Button(Utils.Localization.T("Duplicate"), mx, 92, mw, 30);
-            _duplicateMacroBtn.Click += OnDuplicateMacro;
-
-            _notesMacroBtn = UiFactory.Button(Utils.Localization.T("Notes…"), mx, 126, mw, 30);
-            _notesMacroBtn.Click += OnEditMacroNotes;
-
-            // Move up / Move down are gone: dragging a row does it directly, and two buttons to shuffle
-            // one position at a time were the slowest possible way to say "put this one at the top".
-            // Everything below them moves up by the 76px the pair occupied.
-            _exportMacroBtn = UiFactory.Button(Utils.Localization.T("Export…"), mx, 168, mw, 30);
-            _exportMacroBtn.Click += OnExportMacro;
-
-            _importMacroBtn = UiFactory.Button(Utils.Localization.T("Import…"), mx, 202, mw, 30);
-            _importMacroBtn.Click += OnImportMacro;
-
-            _exportAllBtn = UiFactory.Button(Utils.Localization.T("Export all…"), mx, 236, mw, 30);
-            _exportAllBtn.Click += OnExportAllMacros;
-
-            _importAllBtn = UiFactory.Button(Utils.Localization.T("Import all…"), mx, 270, mw, 30);
-            _importAllBtn.Click += OnImportAllMacros;
-
-            _mergeMacroBtn = UiFactory.Button(Utils.Localization.T("Merge…"), mx, 312, mw, 30);
-            _mergeMacroBtn.Click += OnMergeMacroClicked;
-
-            // Sits directly above Delete: the repair pass a recording usually wants
-            // before it is trusted (stuck keys, off-screen clicks, robotic timing).
-            // Delete stays last so the destructive button keeps its own corner.
-            _fixMacroBtn = UiFactory.Button(Utils.Localization.T("Fix…"), mx, 346, mw, 30);
-            _fixMacroBtn.Click += OnFixMacroClicked;
-
-            _deleteMacroBtn = UiFactory.Button("Delete", mx, 380, mw, 30);
-            _deleteMacroBtn.ForeColor = _theme.DangerText;
-            _deleteMacroBtn.Click += OnDeleteMacroClicked;
-
-            // Directly under Delete, because that is the button people press by
-            // accident and this is the way back from it.
-            _macroRecycleBtn = UiFactory.Button(Utils.Localization.T("Recycle bin"), mx, 418, mw, 30);
-            _macroRecycleBtn.Click += OnMacroRecycleBinClicked;
-
-            manageGroup.Controls.Add(_macroRecycleBtn);
-            manageGroup.Controls.Add(_fixMacroBtn);
-            manageGroup.Controls.Add(_editMacroBtn);
-            manageGroup.Controls.Add(_renameMacroBtn);
-            manageGroup.Controls.Add(_duplicateMacroBtn);
-            manageGroup.Controls.Add(_notesMacroBtn);
-            manageGroup.Controls.Add(_exportMacroBtn);
-            manageGroup.Controls.Add(_importMacroBtn);
-            manageGroup.Controls.Add(_exportAllBtn);
-            manageGroup.Controls.Add(_importAllBtn);
-            manageGroup.Controls.Add(_mergeMacroBtn);
-            manageGroup.Controls.Add(_deleteMacroBtn);
-
-            // Sort lives above the list, next to the search box.
-            _macroSortCombo = UiFactory.Combo(314, 61, 124, Utils.Localization.T("Sort: A \u2192 Z"), Utils.Localization.T("Sort: Most played"), Utils.Localization.T("Sort: Newest"));
-            _macroSortCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-            // As wide as its longest choice, still ending at the column's right edge; the search box
-            // beside it gives up the difference. "Ordem: mais usadas" needed 114 px of the 100 it had
-            // (Spanish and German too), and ended in "\u2026" whenever it was the order chosen.
-            if (_macroSortCombo is FlatComboBox sortBox)
+            // ── Manage ─────────────────────────────────────────────────────────
+            // "Consistent button sizes with recognizable icons": one column of buttons of one size, each with its icon
+            // at the left and its words after it (GlyphAlignLeft), so the icons line up one under another. Four groups —
+            // the macro itself; files; repairs; the bin. (Move up / Move down are long gone: drag a row.)
+            var manageGroup = (CardGroupBox)UiFactory.Group(Utils.Localization.T("Manage"), 314, rowTop, 124, columnBottom - rowTop, CardIcon.Gear);
+            manageGroup.HeaderTint = true;
+            const int mx = 6, mw = 112, mh = 35, mgap = 8, groupGap = 30;
+            int my = 36;
+            Button ManageButton(string caption, ActionGlyph glyph, EventHandler click, bool groupStart = false)
             {
-                sortBox.Width = sortBox.WidthForChoices96(124);
-                sortBox.Left = 438 - sortBox.Width;   // ends where the Manage card does
-                if (_macroSearchBox != null)
+                if (groupStart) { my += groupGap - mgap; }
+                Button b = UiFactory.Button(caption, mx, my, mw, mh);
+                if (b is RoundedButton rb)
                 {
-                    _macroSearchBox.Width = Math.Max(96, sortBox.Left - 8 - _macroSearchBox.Left);
+                    rb.Glyph = glyph;
+                    rb.GlyphAlignLeft = true;
                 }
+                b.Click += click;
+                manageGroup.Controls.Add(b);   // top to bottom, so Tab walks the column in order
+                my += mh + mgap;
+                return b;
             }
-            _macroSortCombo.SelectedIndexChanged += OnMacroSortChanged;
 
-            // Pin / Reset stats sit under the list as a compact action row.
-            _pinMacroBtn = UiFactory.Button("\u2605 Pin", 12, 468, 144, 30);
-            LayoutFitter.DeclareCaptions(_pinMacroBtn, Utils.Localization.T("\u2605 Pin"), Utils.Localization.T("\u2605 Unpin"));
+            _editMacroBtn = ManageButton(Utils.Localization.T("Edit…"), ActionGlyph.Pencil, (s, e) => EditSelectedMacro());
+            _renameMacroBtn = ManageButton(Utils.Localization.T("Rename…"), ActionGlyph.Rename, OnRenameMacro);
+            _duplicateMacroBtn = ManageButton(Utils.Localization.T("Duplicate"), ActionGlyph.Copy, OnDuplicateMacro);
+            _notesMacroBtn = ManageButton(Utils.Localization.T("Notes…"), ActionGlyph.Notes, OnEditMacroNotes);
+            _exportMacroBtn = ManageButton(Utils.Localization.T("Export…"), ActionGlyph.Upload, OnExportMacro, groupStart: true);
+            _importMacroBtn = ManageButton(Utils.Localization.T("Import…"), ActionGlyph.Download, OnImportMacro);
+            _exportAllBtn = ManageButton(Utils.Localization.T("Export all…"), ActionGlyph.Upload, OnExportAllMacros);
+            _importAllBtn = ManageButton(Utils.Localization.T("Import all…"), ActionGlyph.Download, OnImportAllMacros);
+            // Fix sits directly above Delete: the repair pass a recording usually wants before it is trusted (stuck
+            // keys, off-screen clicks, robotic timing). Delete keeps its own corner, in its warning colour
+            // (StyleMacroButtons), and the Recycle bin sits under it: the way back from the button people press by accident.
+            _mergeMacroBtn = ManageButton(Utils.Localization.T("Merge…"), ActionGlyph.Link, OnMergeMacroClicked, groupStart: true);
+            _fixMacroBtn = ManageButton(Utils.Localization.T("Fix…"), ActionGlyph.Wrench, OnFixMacroClicked);
+            _deleteMacroBtn = ManageButton("Delete", ActionGlyph.Trash, OnDeleteMacroClicked);
+            _macroRecycleBtn = ManageButton(Utils.Localization.T("Recycle bin"), ActionGlyph.Recycle, OnMacroRecycleBinClicked, groupStart: true);
+
+            // \u2500\u2500 The foot of Saved macros: Pin / Reset stats, the library line, the health notice \u2500\u2500
+            int footTop = (columnBottom - rowTop) - footBlock + 8;
+            // Pin is the list's own main action (a starred macro sits at the top): the accent, with a star glyph; the
+            // caption carries no star of its own any more ("Pin" / "Unpin").
+            _pinMacroBtn = UiFactory.Button("Pin", 12, footTop, 132, 32);
+            LayoutFitter.DeclareCaptions(_pinMacroBtn, Utils.Localization.T("Pin"), Utils.Localization.T("Unpin"));
+            SetGlyph(_pinMacroBtn, ActionGlyph.Star);
             _pinMacroBtn.Click += OnPinMacroClicked;
 
-            _resetMacroStatsBtn = UiFactory.Button("Reset stats", 164, 468, 144, 30);
+            _resetMacroStatsBtn = UiFactory.Button("Reset stats", 152, footTop, 132, 32);
+            SetGlyph(_resetMacroStatsBtn, ActionGlyph.Refresh);
             _resetMacroStatsBtn.Click += OnResetMacroStats;
+            FillGlyphRow(12, 284, 8, _pinMacroBtn, _resetMacroStatsBtn);
 
-            _macroSummaryLabel = UiFactory.Caption("", 12, 504);
+            // "18 macros \u2022 4,121 steps total", after a small library mark; two lines of room, for a search's longer
+            // "4 of 18 macros match \u2022 \u2026" in the longer languages.
+            var libraryMark = new IconChip
+            {
+                Icon = CardIcon.Database,
+                ThemeSource = () => _theme,
+                Left = 12,
+                Top = footTop + 41,
+                Width = 18,
+                Height = 18
+            };
+            _macroSummaryLabel = UiFactory.Caption("", 38, footTop + 42);
             _macroSummaryLabel.AutoSize = false;
-            _macroSummaryLabel.Width = 296;
-            _macroSummaryLabel.Height = 16;
+            _macroSummaryLabel.Width = 284 - 38;
+            _macroSummaryLabel.Height = 32;
             _macroSummaryLabel.ForeColor = _theme.TextMuted;
 
             // Library-wide health. "Fix…" has always been able to find a stuck key or a
@@ -380,161 +485,182 @@ namespace AutoClicker.UI
             _macroHealthLabel = new Label
             {
                 AutoSize = false,
-                Location = new Point(12, 526),
-                Size = new Size(296, 96),
+                Location = new Point(12, footTop + 76),
+                Size = new Size(272, 50),
                 Font = new Font("Segoe UI", 8.5f),
                 ForeColor = _theme.WarningText,
                 Visible = false
             };
 
-            // ── Record group ───────────────────────────────────────────────────
-            // 224 tall, not 202: one more row, the camera option under mouse movement. The
-            // Playback card and the Live Monitor below move down by the same 22 px.
-            var recGroup = UiFactory.Group(Utils.Localization.T("Record"), 444, 80, 268, 224, CardIcon.Target);
+            listGroup.Controls.Add(_macroSearchBox);
+            listGroup.Controls.Add(_macroSortCombo);
+            listGroup.Controls.Add(_macroListBox);
+            listGroup.Controls.Add(_pinMacroBtn);
+            listGroup.Controls.Add(_resetMacroStatsBtn);
+            listGroup.Controls.Add(libraryMark);
+            listGroup.Controls.Add(_macroSummaryLabel);
+            listGroup.Controls.Add(_macroHealthLabel);
 
-            // Every row 4 px lower than it was: at y = 22 the first tick box ran 4 px into the card's
-            // title badge (which reaches y = 26), found by the layout check once it measured painted
-            // titles. The card had 23 px to spare at the bottom.
-            _recordMovesCheck = UiFactory.Check("Capture mouse movement", 16, 26, true);
+            // ── Record ─────────────────────────────────────────────────────────
+            // "More prominent Record and Stop buttons": a pair of 40 px buttons sharing the card's width, Record with its
+            // red dot and Stop with its square, the one you can press in the accent (StyleMacroButtons). The dot at the
+            // right of the title says at a glance whether a take is running (red) or the recorder is ready (green).
+            var recGroup = (CardGroupBox)UiFactory.Group(Utils.Localization.T("Record"), 444, rowTop, 268, 252, CardIcon.Target);
+            recGroup.HeaderTint = true;
+            recGroup.HeaderDot = th => _liveRecording ? th.Danger : th.Success;
+            _recordGroup = recGroup;
+
+            _recordMovesCheck = UiFactory.Check("Capture mouse movement", 16, 32, true);
             _recordMovesCheck.Checked = _settings == null || _settings.RecordMacroMovements;
             _recordMovesCheck.CheckedChanged += OnRecordMovesChanged;
             recGroup.Controls.Add(_recordMovesCheck);
 
             // Indented under "Capture mouse movement": HOW the movement is recorded, so it
             // only means something while that is ticked.
-            _recordCameraCheck = UiFactory.Check("…as camera turns (games)", 36, 48, false);
+            _recordCameraCheck = UiFactory.Check("…as camera turns (games)", 36, 54, false);
             _recordCameraCheck.Checked = _settings != null && _settings.RecordMacroCameraMovement;
             _recordCameraCheck.Enabled = _recordMovesCheck.Checked;
             _recordCameraCheck.CheckedChanged += OnRecordCameraChanged;
             recGroup.Controls.Add(_recordCameraCheck);
 
-            _recordKeysCheck = UiFactory.Check("Capture keyboard", 16, 70, true);
+            _recordKeysCheck = UiFactory.Check("Capture keyboard", 16, 76, true);
             _recordKeysCheck.Checked = _settings == null || _settings.RecordMacroKeyboard;
             _recordKeysCheck.CheckedChanged += OnRecordKeysChanged;
             recGroup.Controls.Add(_recordKeysCheck);
 
-            _appendRecordCheck = UiFactory.Check("Append to selected macro", 16, 92, false);
+            _appendRecordCheck = UiFactory.Check("Append to selected macro", 16, 98, false);
             recGroup.Controls.Add(_appendRecordCheck);
 
             // Optional "3, 2, 1" countdown before capture starts, so you can switch to the
-            // target window first (its own alt-tab isn't recorded). Symmetric with playback.
-            recGroup.Controls.Add(UiFactory.Caption("Countdown (s, 0 = off)", 16, 120));
-            _recordCountdownNum = UiFactory.Numeric(178, 116, 60, 0, 10, 0);
+            // target window first (its own alt-tab isn't recorded). Symmetric with playback:
+            // the same caption, its box in the same column as Playback's.
+            recGroup.Controls.Add(UiFactory.Caption("Countdown (s, 0 = off)", 16, 130));
+            _recordCountdownNum = UiFactory.Numeric(170, 126, 82, 0, 10, 0);
             if (_settings != null) _recordCountdownNum.Value = Clamp(_settings.RecordCountdownSeconds, 0, 10);
             _recordCountdownNum.ValueChanged += OnRecordCountdownChanged;
             recGroup.Controls.Add(_recordCountdownNum);
 
-            _recordBtn = UiFactory.Button("● Record", 16, 146, 118, 34);
-            _recordBtn.ForeColor = _theme.DangerText;
+            _recordBtn = UiFactory.Button("Record", 16, 164, 114, 40);
+            SetGlyph(_recordBtn, ActionGlyph.Record);
+            _recordBtn.Font = UiFactory.ButtonFont;
             _recordBtn.Click += (s, e) => StartRecording();
             recGroup.Controls.Add(_recordBtn);
 
-            _stopRecordBtn = UiFactory.Button("■ Stop", 140, 146, 112, 34);
+            _stopRecordBtn = UiFactory.Button("Stop", 138, 164, 114, 40);
+            SetGlyph(_stopRecordBtn, ActionGlyph.Stop);
+            _stopRecordBtn.Font = UiFactory.ButtonFont;
             _stopRecordBtn.Enabled = false;
             _stopRecordBtn.Click += (s, e) => StopRecording();
             recGroup.Controls.Add(_stopRecordBtn);
+            FillGlyphRow(16, 252, 8, _recordBtn, _stopRecordBtn);
 
-            _recordStatusLabel = UiFactory.Label("Not recording.", 16, 190, FontStyle.Italic, 9f);
+            _recordStatusLabel = UiFactory.Label("Not recording.", 16, 214, FontStyle.Italic, 9f);
             _recordStatusLabel.MaximumSize = new Size(236, 0);
             _recordStatusLabel.ForeColor = _theme.TextMuted;
             recGroup.Controls.Add(_recordStatusLabel);
 
-            // ── Playback group ─────────────────────────────────────────────────
-            // 362, not 334: a row for holding back Windows' shortcuts while a macro plays or records.
-            var playGroup = UiFactory.Group(Utils.Localization.T("Playback"), 444, 314, 268, 362, CardIcon.Play);
+            // ── Playback ───────────────────────────────────────────────────────
+            // "Better grouping of playback settings and quick-speed controls": the four numbers in one column, the speed
+            // presets as pills under them — the one the Speed box holds is lit (HighlightMacroSpeedPreset) — then Play /
+            // Once / Stop, the progress, and the three options.
+            var playGroup = (CardGroupBox)UiFactory.Group(Utils.Localization.T("Playback"), 444, rowTop + 252 + 8, 268, columnBottom - (rowTop + 252 + 8), CardIcon.Play);
+            playGroup.HeaderTint = true;
 
-            playGroup.Controls.Add(UiFactory.Caption("Loops (0 = infinite)", 16, 26));
-            _macroLoopNum = UiFactory.Numeric(170, 22, 86, 0, 1000000, 1);
+            playGroup.Controls.Add(UiFactory.Caption("Loops (0 = infinite)", 16, 38));
+            _macroLoopNum = UiFactory.Numeric(170, 34, 82, 0, 1000000, 1);
             _macroLoopNum.ValueChanged += OnMacroDefaultChanged;
             playGroup.Controls.Add(_macroLoopNum);
 
-            playGroup.Controls.Add(UiFactory.Caption("Speed (10 = 1.0x)", 16, 54));
+            playGroup.Controls.Add(UiFactory.Caption("Speed (10 = 1.0x)", 16, 66));
             // Speed is an integer 1..100 meaning 0.1x .. 10.0x.
-            _macroSpeedNum = UiFactory.Numeric(170, 50, 86, 1, 100, 10);
+            _macroSpeedNum = UiFactory.Numeric(170, 62, 82, 1, 100, 10);
             _macroSpeedNum.ValueChanged += OnMacroDefaultChanged;
+            _macroSpeedNum.ValueChanged += (s, e) => HighlightMacroSpeedPreset();
             playGroup.Controls.Add(_macroSpeedNum);
 
-            playGroup.Controls.Add(UiFactory.Caption("Countdown (s, 0 = off)", 16, 82));
-            _macroCountdownNum = UiFactory.Numeric(170, 78, 86, 0, 10, 0);
+            playGroup.Controls.Add(UiFactory.Caption("Countdown (s, 0 = off)", 16, 94));
+            _macroCountdownNum = UiFactory.Numeric(170, 90, 82, 0, 10, 0);
             _macroCountdownNum.ValueChanged += OnMacroDefaultChanged;
             playGroup.Controls.Add(_macroCountdownNum);
 
-            playGroup.Controls.Add(UiFactory.Caption("Loop delay (ms)", 16, 110));
-            _macroLoopDelayNum = UiFactory.Numeric(170, 106, 86, 0, 3600000, 0);
+            playGroup.Controls.Add(UiFactory.Caption("Loop delay (ms)", 16, 122));
+            _macroLoopDelayNum = UiFactory.Numeric(170, 118, 82, 0, 3600000, 0);
             _macroLoopDelayNum.ValueChanged += OnMacroDefaultChanged;
             playGroup.Controls.Add(_macroLoopDelayNum);
 
             // Quick playback-speed presets so you don't have to know the "10 = 1.0x"
-            // scale — each just sets the Speed value above (0.5x = 5, 1x = 10, …).
-            playGroup.Controls.Add(UiFactory.Caption(Utils.Localization.T("Quick speed:"), 16, 144));
-            var speedPresets = new[] { new[] { 5 }, new[] { 10 }, new[] { 20 }, new[] { 40 } };
+            // scale — each just sets the Speed value above (0.5x = 5, 1x = 10, …). Round pills,
+            // the one in effect in the accent.
+            playGroup.Controls.Add(UiFactory.Caption(Utils.Localization.T("Quick speed:"), 16, 156));
             string[] speedLabels = { "0.5×", "1×", "2×", "4×" };
+            _macroSpeedPills.Clear();
             int spX = 96;
-            for (int si = 0; si < speedPresets.Length; si++)
+            for (int si = 0; si < MacroSpeedPresets.Length; si++)
             {
-                int val = speedPresets[si][0];
-                var sb = UiFactory.Button(speedLabels[si], spX, 140, 38, 26);
+                int val = MacroSpeedPresets[si];
+                var sb = UiFactory.Button(speedLabels[si], spX, 152, 36, 26);
+                if (sb is RoundedButton pill) { pill.CornerRadius = 13; }
                 sb.Click += (s, e) => { if (_macroSpeedNum != null) _macroSpeedNum.Value = val; };
                 playGroup.Controls.Add(sb);
-                spX += 42;
+                _macroSpeedPills.Add(sb);
+                spX += 40;
             }
 
-            _playMacroBtn = UiFactory.PrimaryButton("▶ Play", 16, 176, 80, 38, _theme);
+            _playMacroBtn = UiFactory.PrimaryButton("Play", 16, 188, 96, 40, _theme);
+            SetGlyph(_playMacroBtn, ActionGlyph.Play);
             _playMacroBtn.Click += OnPlayMacroClicked;
             playGroup.Controls.Add(_playMacroBtn);
 
-            _playOnceBtn = UiFactory.Button("Once", 102, 176, 70, 38);
+            _playOnceBtn = UiFactory.Button("Once", 118, 188, 60, 40);
             _playOnceBtn.Click += OnPlayMacroOnceClicked;
             playGroup.Controls.Add(_playOnceBtn);
 
-            _macroSmoothCheck = UiFactory.Check("Smooth mouse movement", 12, 274);
-            _macroSmoothCheck.CheckedChanged += OnMacroSmoothChanged;
-            playGroup.Controls.Add(_macroSmoothCheck);
-
-            // When on, the speed presets only speed up the gaps between actions — held keys
-            // and buttons keep their real recorded duration (so 2x/4x won't shrink a WASD
-            // movement hold into a tap).
-            _macroPreserveHoldsCheck = UiFactory.Check("Keep key/button holds at speed", 12, 300);
-            _macroPreserveHoldsCheck.CheckedChanged += OnMacroPreserveHoldsChanged;
-            playGroup.Controls.Add(_macroPreserveHoldsCheck);
-
-            // Settings ▸ Behaviour's "Hold back Windows shortcuts…", here where a macro is played and
-            // recorded (the same setting: SetGuardWindowsShortcuts).
-            _macroGuardCheck = MakeGuardShortcutsCheck(12, 326, "Macros tab");
-            playGroup.Controls.Add(_macroGuardCheck);
-
-            _stopPlayBtn = UiFactory.Button("■ Stop", 178, 176, 74, 38);
-            _stopPlayBtn.BackColor = _theme.Danger;
-            _stopPlayBtn.ForeColor = Theme.ReadableOn(_theme.Danger);
-            _stopPlayBtn.FlatAppearance.BorderSize = 0;
+            _stopPlayBtn = UiFactory.Button("Stop", 184, 188, 68, 40);
+            SetGlyph(_stopPlayBtn, ActionGlyph.Stop);
             _stopPlayBtn.Enabled = false;
             _stopPlayBtn.Click += (s, e) => _player.Stop();
             playGroup.Controls.Add(_stopPlayBtn);
+            FillGlyphRow(16, 252, 6, _playMacroBtn, _playOnceBtn, _stopPlayBtn);
 
             _macroProgressBar = new ThemedProgressBar
             {
                 Left = 16,
-                Top = 222,
+                Top = 240,
                 Width = 236,
-                Height = 16,
+                Height = 10,
                 Maximum = 100,
                 Value = 0
             };
             _macroProgressBar.ApplyTheme(_theme);
             playGroup.Controls.Add(_macroProgressBar);
 
-            _macroProgressLabel = UiFactory.Label("Ready.", 16, 242, FontStyle.Italic, 8.5f);
+            _macroProgressLabel = UiFactory.Label("Ready.", 16, 256, FontStyle.Italic, 8.5f);
             _macroProgressLabel.MaximumSize = new Size(236, 0);
             _macroProgressLabel.ForeColor = _theme.TextMuted;
             playGroup.Controls.Add(_macroProgressLabel);
+
+            _macroSmoothCheck = UiFactory.Check("Smooth mouse movement", 12, 292);
+            _macroSmoothCheck.CheckedChanged += OnMacroSmoothChanged;
+            playGroup.Controls.Add(_macroSmoothCheck);
+
+            // When on, the speed presets only speed up the gaps between actions — held keys
+            // and buttons keep their real recorded duration (so 2x/4x won't shrink a WASD
+            // movement hold into a tap).
+            _macroPreserveHoldsCheck = UiFactory.Check("Keep key/button holds at speed", 12, 318);
+            _macroPreserveHoldsCheck.CheckedChanged += OnMacroPreserveHoldsChanged;
+            playGroup.Controls.Add(_macroPreserveHoldsCheck);
+
+            // Settings ▸ Behaviour's "Hold back Windows shortcuts…", here where a macro is played and
+            // recorded (the same setting: SetGuardWindowsShortcuts).
+            _macroGuardCheck = MakeGuardShortcutsCheck(12, 344, "Macros tab");
+            playGroup.Controls.Add(_macroGuardCheck);
 
             // ── Live Monitor ───────────────────────────────────────────────────
             // A real-time view of macro steps: it fills as you record, shows the
             // selected macro at rest, and highlights the current step during
             // playback (auto-scrolling to follow along).
-            // 656, not 634: the Record card grew a row (the camera option) and pushed the
-            // Playback card down by 22 px. 684: the Playback card grew a row of its own (28 px).
-            var liveGroup = UiFactory.Group(Utils.Localization.T("Live Monitor"), 12, 684, 700, 240, CardIcon.Wave);
+            // 8 px under the three columns (round 40), across the page's whole width.
+            var liveGroup = UiFactory.Group(Utils.Localization.T("Live Monitor"), 12, columnBottom + 8, 700, 240, CardIcon.Wave);
 
             // Compact rows by default; this shows one row per step instead. Right-aligned, so the
             // header keeps whatever width the switch leaves in the language shown.
@@ -630,15 +756,8 @@ namespace AutoClicker.UI
             };
 
             page.Controls.Add(help);
-            page.Controls.Add(listLabel);
-            page.Controls.Add(_macroSearchBox);
-            page.Controls.Add(_macroSortCombo);
-            page.Controls.Add(_macroListBox);
+            page.Controls.Add(listGroup);
             page.Controls.Add(manageGroup);
-            page.Controls.Add(_pinMacroBtn);
-            page.Controls.Add(_resetMacroStatsBtn);
-            page.Controls.Add(_macroSummaryLabel);
-            page.Controls.Add(_macroHealthLabel);
             page.Controls.Add(recGroup);
             page.Controls.Add(playGroup);
             page.Controls.Add(liveGroup);
@@ -650,7 +769,11 @@ namespace AutoClicker.UI
             // If the intro paragraph wraps to more lines than designed (e.g. at a
             // higher display scale), push everything below it down so nothing
             // overlaps. The intro itself stays put.
-            ShiftBelowIntro(page, help, 720, firstRowY: 60);
+            ShiftBelowIntro(page, help, 720, firstRowY: rowTop);
+
+            // The colours that mean something (Record's dot, Delete's red, the lit speed pill); the theme pass does the
+            // same after every theme change.
+            StyleMacroButtons();
 
             _tabs.TabPages.Add(page);
         }
@@ -1423,7 +1546,7 @@ namespace AutoClicker.UI
                 if (_macroPreserveHoldsCheck != null) _macroPreserveHoldsCheck.Checked = macro.PreserveKeyHolds;
                 if (_pinMacroBtn != null)
                 {
-                    _pinMacroBtn.Text = Utils.Localization.T(macro.IsFavorite ? "★ Unpin" : "★ Pin");
+                    _pinMacroBtn.Text = Utils.Localization.T(macro.IsFavorite ? "Unpin" : "Pin");
                 }
             }
             finally
@@ -1702,6 +1825,12 @@ namespace AutoClicker.UI
                 return;
             }
 
+            // Turned off in Settings → Disable features (the Record button, its hotkey, everything comes through here).
+            if (RefuseIfOff(TempoFeature.Macros))
+            {
+                return;
+            }
+
             // Not while a macro plays: the Record button is disabled then, but the Record hotkey came
             // straight here and recorded over the playback — whose own input never reaches a take, so
             // the recording held your input and the playback's results, and the Live Monitor showed
@@ -1784,6 +1913,7 @@ namespace AutoClicker.UI
             _recordBtn.Enabled = false;
             RefreshBusyLock();
             _stopRecordBtn.Enabled = true;
+            _recordGroup?.Invalidate();   // its title dot turns red
             // Set here, not where the clicker is actually stopped: this line runs a moment
             // later and would overwrite anything said earlier.
             _recordStatusLabel.Text = _clickerYieldedToMacro
@@ -1926,6 +2056,7 @@ namespace AutoClicker.UI
             _stopRecordBtn.Enabled = false;
             _statusState.Text = Utils.Localization.T("Idle");
             _liveRecording = false;
+            _recordGroup?.Invalidate();   // its title dot back to green
             HideRecordingIndicator();
             RefreshBusyLock();
 
@@ -2021,6 +2152,18 @@ namespace AutoClicker.UI
             {
                 _emptyTakeToExplain = false;
                 ShowInfo(ExplainEmptyTake(_recorder.LastTake));
+            }
+            else if (_lastRecorded != null && _lastRecorded.StepCount > 0 && _recorder.LastTake != null
+                     && _recorder.LastTake.LooksLikeCamera)
+            {
+                // Round 40 ("improve capture … as camera turns (games)"): a take recorded as positions while a game held or
+                // hid the pointer — its camera turning — replays as nothing (the pointer sat still where the game held it).
+                // Said once, after this take, with what to do about it.
+                ShowInfo(Utils.Localization.T(
+                    "Part of this recording moved the mouse while the game was holding or hiding the pointer — the game "
+                    + "turning its camera, which recorded pointer positions cannot replay. Tick “…as camera turns "
+                    + "(games)” under Record and record it again: turns are then recorded as turns, and clicks on menus "
+                    + "as positions."));
             }
         }
 
@@ -2225,6 +2368,12 @@ namespace AutoClicker.UI
             // IsBusy, not IsPlaying: a stopped run whose last step has not returned yet still
             // owns the player (see MacroPlayer.IsBusy). And not while a macro countdown is up.
             if (macro == null || _player.IsBusy || _macroCountdown != null)
+            {
+                return;
+            }
+
+            // Turned off in Settings → Disable features: no button, hotkey or quick-play key plays a macro.
+            if (RefuseIfOff(TempoFeature.Macros))
             {
                 return;
             }
@@ -2934,7 +3083,7 @@ namespace AutoClicker.UI
 
             macro.IsFavorite = !macro.IsFavorite;
             _macros.Save();
-            _pinMacroBtn.Text = Utils.Localization.T(macro.IsFavorite ? "★ Unpin" : "★ Pin");
+            _pinMacroBtn.Text = Utils.Localization.T(macro.IsFavorite ? "Unpin" : "Pin");
             RefreshMacroList();
             SelectMacro(macro);
         }
@@ -3396,7 +3545,15 @@ namespace AutoClicker.UI
         {
             if (_macroRecycleBtn == null) { return; }
             int binned = _macros?.RecycleBin?.Count ?? 0;
-            _macroRecycleBtn.Text = binned > 0
+            // The count rides in a badge at the button's right end (round 40): as "Recycle bin (3)" in the caption it left
+            // the Manage column's button no room for its icon. Screen readers still hear the count.
+            _macroRecycleBtn.Text = Localization.T("Recycle bin");
+            if (_macroRecycleBtn is RoundedButton bin)
+            {
+                bin.BadgeText = binned > 0 ? binned.ToString() : null;
+                bin.Invalidate();
+            }
+            _macroRecycleBtn.AccessibleName = binned > 0
                 ? Localization.F("Recycle bin ({0})", binned.ToString())
                 : Localization.T("Recycle bin");
             _macroRecycleBtn.Enabled = binned > 0;

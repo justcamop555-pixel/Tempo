@@ -23,6 +23,9 @@ namespace AutoClicker.UI
         {
             HeaderStyle = ColumnHeaderStyle.Nonclickable;
             HideSelection = false;
+            // A macro can run to thousands of steps of four cells each: assistive tools get the list as one element
+            // (ThemedListView.CellsForAccessibility), or one reading the Macros tab held the window for seconds.
+            CellsForAccessibility = false;
         }
 
         /// <summary>

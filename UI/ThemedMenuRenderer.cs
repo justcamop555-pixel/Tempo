@@ -29,7 +29,17 @@ namespace AutoClicker.UI
         /// <summary>The running badges (Overlays): a pill with its status dot, like the badge itself.</summary>
         Badge,
         /// <summary>Windows' shortcuts held back during a run: a keyboard (Keybinds' colour).</summary>
-        Keys
+        Keys,
+        /// <summary>Open a tab: the window with its sidebar rail down the left.</summary>
+        Tabs,
+        /// <summary>Anti-AFK: a crescent moon with a key under it — away, and kept in the game.</summary>
+        Afk,
+        /// <summary>Rejoin after a lost connection: a broken link with an arrow closing it.</summary>
+        Rejoin,
+        /// <summary>Bring back crashed clients: a shield with a tick.</summary>
+        Shield,
+        /// <summary>The window's options (the Window submenu): three sliders.</summary>
+        Options
     }
 
     /// <summary>
@@ -66,6 +76,11 @@ namespace AutoClicker.UI
         public bool Toggle;
         /// <summary>The hint is something to act on ("3 missed"): drawn in the warning colour.</summary>
         public bool HintAlert;
+        /// <summary>
+        /// A section's name over the rows that belong together (Roblox, Captions): small muted capitals and a hairline,
+        /// in place of a bare separator — the long menu reads as groups. Not a choice: disabled, no hover, no icon.
+        /// </summary>
+        public bool Section;
 
         /// <summary>A toggle's shortcut text: figure spaces, which every font gives a digit's width.</summary>
         public const string SwitchRoom = "     ";
@@ -382,7 +397,8 @@ namespace AutoClicker.UI
 
             // Status row: no hover chrome — just its dot + text (drawn in the text
             // pass); a faint inset band separates it from the actionable items.
-            if (style != null && style.Status)
+            // A section's name the same: nothing to choose, so nothing lights.
+            if (style != null && (style.Status || style.Section))
             {
                 return;
             }
@@ -442,6 +458,11 @@ namespace AutoClicker.UI
 
         protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
         {
+            // WinForms draws a plain row's text twice, its words and then its shortcut, and makes the second call even
+            // when there is no shortcut, with "". The rows drawn by hand below put down more than words (the version,
+            // a status dot, a heading's hairline), so that empty call drew them a second time: the hairline from the
+            // left edge, straight through the heading's name. Nothing to write: nothing drawn.
+            if (string.IsNullOrEmpty(e.Text)) { return; }
             var style = StyleOf(e.Item);
             if (style != null && style.Header)
             {
@@ -474,7 +495,11 @@ namespace AutoClicker.UI
             // "what is Tempo doing right now", refreshed every time the menu opens.
             if (style != null && style.Status)
             {
-                _statusItem = e.Item;
+                // There can be two status rows (Tempo's, and the Roblox clients'): the beat follows the one that pulses.
+                if (style.Pulse || _statusItem == null || _statusItem.IsDisposed || StyleOf(_statusItem)?.Pulse != true)
+                {
+                    _statusItem = e.Item;
+                }
                 e.Graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 var box = GlyphBox(e.Item);
@@ -506,6 +531,30 @@ namespace AutoClicker.UI
                 return;
             }
 
+            // A section's name: small muted capitals where the labels start, then a hairline to the menu's edge.
+            if (style != null && style.Section)
+            {
+                if (IsShortcutText(e)) { return; }
+                var g = e.Graphics;
+                g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+                string caps = (e.Text ?? "").ToUpper(System.Globalization.CultureInfo.CurrentUICulture);
+                // The row has a small font of its own (which also keeps the row short); bold, in capitals.
+                using (var small = new Font(e.TextFont.FontFamily, Math.Max(7f, e.TextFont.Size), FontStyle.Bold))
+                {
+                    int left = GlyphBox(e.Item).Left + 2;
+                    Size sz = TextRenderer.MeasureText(g, caps, small, Size.Empty, TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                    var r = new Rectangle(left, 0, Math.Min(sz.Width + 2, e.Item.Width - left), e.Item.Height);
+                    TextRenderer.DrawText(g, caps, small, r, SectionText(), TextFormatFlags.Left | TextFormatFlags.VerticalCenter
+                                          | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+                    int lineFrom = r.Right + 8, y = e.Item.Height / 2 + 1;
+                    if (lineFrom < e.Item.Width - 12)
+                    {
+                        using (var p = new Pen(_theme.Border)) { g.DrawLine(p, lineFrom, y, e.Item.Width - 12, y); }
+                    }
+                }
+                return;
+            }
+
             bool hot = e.Item.Selected && e.Item.Enabled && HoverAlpha(e.Item) > 0.5f;
 
             // The shortcut column: a toggle's switch, or the hint ("F6", "2× tray", "3 missed").
@@ -516,16 +565,7 @@ namespace AutoClicker.UI
                     DrawSwitch(e.Graphics, e.TextRectangle, e.Item, hot);
                     return;
                 }
-                Color hint = style != null && style.HintAlert
-                    ? _theme.WarningText
-                    : !e.Item.Enabled ? _theme.TextMuted
-                    : hot ? Blend(_theme.TextMuted, _theme.Text, 0.45) : _theme.TextMuted;
-                using (var small = new Font(e.TextFont.FontFamily, Math.Max(6f, e.TextFont.Size - 1f)))
-                {
-                    TextRenderer.DrawText(e.Graphics, e.Text, small, e.TextRectangle, hint,
-                        TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
-                        TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
-                }
+                DrawHint(e, e.Text, e.TextRectangle, style, hot);
                 return;
             }
 
@@ -534,6 +574,34 @@ namespace AutoClicker.UI
             // so on a lit row it is checked against the wash's lighter top and moved if short.
             e.TextColor = !e.Item.Enabled ? _theme.TextMuted : hot ? HotText() : _theme.Text;
             base.OnRenderItemText(e);
+
+            // A row that opens a submenu gets no shortcut call from WinForms at all, so a hint put on one (the
+            // Notifications row's "3 missed") is drawn here: at the right of the text column, before the arrow, when
+            // it clears the row's own words.
+            if (e.Item is ToolStripMenuItem parent && parent.HasDropDownItems && !string.IsNullOrEmpty(parent.ShortcutKeyDisplayString))
+            {
+                Size words = TextRenderer.MeasureText(e.Graphics, e.Text, e.TextFont, Size.Empty, TextFormatFlags.NoPadding);
+                var room = Rectangle.FromLTRB(e.TextRectangle.Left + words.Width + 10, e.TextRectangle.Top,
+                                              e.TextRectangle.Right, e.TextRectangle.Bottom);
+                DrawHint(e, parent.ShortcutKeyDisplayString, room, style, hot);
+            }
+        }
+
+        /// <summary>The muted small hint at the right of a row ("F6", "2× tray", "3 missed"), in the warning ink when it
+        /// asks to be looked at. Not drawn where it would not fit whole.</summary>
+        private void DrawHint(ToolStripItemTextRenderEventArgs e, string text, Rectangle room, TrayItemStyle style, bool hot)
+        {
+            Color hint = style != null && style.HintAlert
+                ? _theme.WarningText
+                : !e.Item.Enabled ? _theme.TextMuted
+                : hot ? Blend(_theme.TextMuted, _theme.Text, 0.45) : _theme.TextMuted;
+            const TextFormatFlags flags = TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
+                                          TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+            using (var small = new Font(e.TextFont.FontFamily, Math.Max(6f, e.TextFont.Size - 1f)))
+            {
+                if (TextRenderer.MeasureText(e.Graphics, text, small, Size.Empty, flags).Width > room.Width) { return; }
+                TextRenderer.DrawText(e.Graphics, text, small, room, hint, flags);
+            }
         }
 
         /// <summary>The text colour on a lit row: the theme's own, unless the wash needs it moved to read 4.5:1.</summary>
@@ -548,6 +616,9 @@ namespace AutoClicker.UI
         }
 
         private Color _hotText = Color.Empty;
+
+        /// <summary>A section name's ink: the muted text colour, held to 4.5:1 on the menu (it is text, if small).</summary>
+        internal Color SectionText() => Theme.Readable(_theme.TextMuted, _theme.Surface, 4.5);
 
         /// <summary>True when this call draws the item's shortcut text, not its label.</summary>
         private static bool IsShortcutText(ToolStripItemTextRenderEventArgs e)
@@ -680,15 +751,19 @@ namespace AutoClicker.UI
                 case TrayGlyph.Badge: c = SectionColors.For(Section.Clicker, _theme); break;
                 case TrayGlyph.Keys: c = SectionColors.For(Section.Keybinds, _theme); break;
                 case TrayGlyph.Accounts:
-                case TrayGlyph.Lock: c = SectionColors.For(Section.Accounts, _theme); break;
+                case TrayGlyph.Lock:
+                case TrayGlyph.Afk:
+                case TrayGlyph.Rejoin:
+                case TrayGlyph.Shield: c = SectionColors.For(Section.Accounts, _theme); break;
                 case TrayGlyph.Captions:
                 case TrayGlyph.History:
-                case TrayGlyph.Move:
-                case TrayGlyph.Speech: c = SectionColors.For(Section.Captions, _theme); break;
+                case TrayGlyph.Move: c = SectionColors.For(Section.Captions, _theme); break;
                 case TrayGlyph.Pin:
                 case TrayGlyph.Bell:
                 case TrayGlyph.Camera:
                 case TrayGlyph.Inbox:
+                case TrayGlyph.Speech:
+                case TrayGlyph.Options:
                 case TrayGlyph.Gear: c = SectionColors.For(Section.Settings, _theme); break;
                 case TrayGlyph.Code: c = _theme.Text; break;
                 default: c = _theme.Accent; break;      // Brand, Window, Refresh, Dot
@@ -1001,6 +1076,74 @@ namespace AutoClicker.UI
                                         r.Right - r.Width * 0.30f, r.Bottom - r.Height * 0.20f);
                         break;
                     }
+                    case TrayGlyph.Tabs:
+                    {
+                        // Tempo's window: its frame, the sidebar rail down the left with two rows, the page beside it.
+                        var r = new RectangleF(x + 1.5f, y + 2.5f, w - 3, h - 5);
+                        using (var rp = RoundedF(r, 2.2f)) { g.DrawPath(pen, rp); }
+                        float rail = r.Left + r.Width * 0.36f;
+                        g.DrawLine(pen, rail, r.Top + 0.5f, rail, r.Bottom - 0.5f);
+                        g.FillRectangle(fill, r.Left + 2f, r.Top + r.Height * 0.24f, rail - r.Left - 3.5f, 1.6f);
+                        g.FillRectangle(fill, r.Left + 2f, r.Top + r.Height * 0.52f, rail - r.Left - 3.5f, 1.6f);
+                        break;
+                    }
+                    case TrayGlyph.Afk:
+                    {
+                        // Idle, and kept in the game anyway: the crescent moon chat apps show for "idle", and the key
+                        // Tempo presses meanwhile at its foot. (The first one, two arcs that never met, read as a hook.)
+                        using (var moon = Crescent(x + w * 0.34f, y + h * 0.36f, w * 0.28f, x + w * 0.52f, y + h * 0.20f, w * 0.23f))
+                        {
+                            if (moon != null) { g.FillPath(fill, moon); }
+                        }
+                        var key = new RectangleF(x + w * 0.56f, y + h * 0.64f, w * 0.36f, h * 0.26f);
+                        using (var kp = RoundedF(key, 1.4f)) { g.DrawPath(pen, kp); }
+                        break;
+                    }
+                    case TrayGlyph.Rejoin:
+                    {
+                        // Back in: an arrow going in through a doorway. (The first one, a broken link under an arc,
+                        // read as a pair of glasses.)
+                        g.DrawLines(pen, new[]
+                        {
+                            new PointF(x + w * 0.52f, y + h * 0.14f), new PointF(x + w * 0.84f, y + h * 0.14f),
+                            new PointF(x + w * 0.84f, y + h * 0.86f), new PointF(x + w * 0.52f, y + h * 0.86f),
+                        });
+                        g.DrawLine(pen, x + w * 0.12f, y + h * 0.50f, x + w * 0.62f, y + h * 0.50f);
+                        g.DrawLines(pen, new[]
+                        {
+                            new PointF(x + w * 0.44f, y + h * 0.32f), new PointF(x + w * 0.62f, y + h * 0.50f),
+                            new PointF(x + w * 0.44f, y + h * 0.68f),
+                        });
+                        break;
+                    }
+                    case TrayGlyph.Shield:
+                    {
+                        // Watched over: a shield with a tick in it.
+                        using (var s = new GraphicsPath())
+                        {
+                            s.AddLine(x + w * 0.50f, y + h * 0.08f, x + w * 0.84f, y + h * 0.22f);
+                            s.AddBezier(x + w * 0.84f, y + h * 0.22f, x + w * 0.84f, y + h * 0.62f, x + w * 0.70f, y + h * 0.80f, x + w * 0.50f, y + h * 0.94f);
+                            s.AddBezier(x + w * 0.50f, y + h * 0.94f, x + w * 0.30f, y + h * 0.80f, x + w * 0.16f, y + h * 0.62f, x + w * 0.16f, y + h * 0.22f);
+                            s.CloseFigure();
+                            g.DrawPath(pen, s);
+                        }
+                        g.DrawLines(pen, new[] { new PointF(x + w * 0.34f, y + h * 0.50f), new PointF(x + w * 0.46f, y + h * 0.62f), new PointF(x + w * 0.68f, y + h * 0.38f) });
+                        break;
+                    }
+                    case TrayGlyph.Options:
+                    {
+                        // Three sliders, each knob at a different place.
+                        float[] rows = { 0.24f, 0.50f, 0.76f };
+                        float[] knobs = { 0.66f, 0.34f, 0.56f };
+                        for (int i = 0; i < 3; i++)
+                        {
+                            float ry = y + h * rows[i];
+                            g.DrawLine(pen, x + w * 0.12f, ry, x + w * 0.88f, ry);
+                            float kx = x + w * knobs[i], kr = w * 0.10f;
+                            g.FillEllipse(fill, kx - kr, ry - kr, kr * 2, kr * 2);
+                        }
+                        break;
+                    }
                 }
             }
             g.SmoothingMode = prev;
@@ -1028,6 +1171,37 @@ namespace AutoClicker.UI
             p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
             p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
             p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+
+        /// <summary>
+        /// The part of disc A that disc B does not cover, as one closed outline: A's arc on the far side from B, then B's
+        /// arc inside A back to where they cross. Null when the circles don't cross (B misses A, or holds it whole).
+        /// Angles go clockwise from the x axis, as GDI+ draws them.
+        /// </summary>
+        private static GraphicsPath Crescent(float ax, float ay, float ar, float bx, float by, float br)
+        {
+            double dx = bx - ax, dy = by - ay, d = Math.Sqrt(dx * dx + dy * dy);
+            if (d <= Math.Abs(ar - br) || d >= ar + br) { return null; }
+            double along = (ar * ar - br * br + d * d) / (2 * d);
+            double half = Math.Sqrt(Math.Max(0, ar * ar - along * along));
+            double mx = ax + dx * along / d, my = ay + dy * along / d;
+            double p1x = mx - half * dy / d, p1y = my + half * dx / d;
+            double p2x = mx + half * dy / d, p2y = my - half * dx / d;
+            double Angle(double cx, double cy, double px, double py) => Math.Atan2(py - cy, px - cx) * 180 / Math.PI;
+            double Clockwise(double from, double to) => ((to - from) % 360 + 360) % 360;
+            // A: from p1 to p2 the way that does not pass the side facing B.
+            double a1 = Angle(ax, ay, p1x, p1y), a2 = Angle(ax, ay, p2x, p2y), towardB = Angle(ax, ay, bx, by);
+            double sweepA = Clockwise(a1, a2);
+            if (Clockwise(a1, towardB) < sweepA) { sweepA -= 360; }
+            // B: from p2 back to p1 the way that passes inside A (the side facing A's centre).
+            double b2 = Angle(bx, by, p2x, p2y), b1 = Angle(bx, by, p1x, p1y), towardA = Angle(bx, by, ax, ay);
+            double sweepB = Clockwise(b2, b1);
+            if (Clockwise(b2, towardA) >= sweepB) { sweepB -= 360; }
+            var p = new GraphicsPath();
+            p.AddArc(ax - ar, ay - ar, ar * 2, ar * 2, (float)a1, (float)sweepA);
+            p.AddArc(bx - br, by - br, br * 2, br * 2, (float)b2, (float)sweepB);
             p.CloseFigure();
             return p;
         }

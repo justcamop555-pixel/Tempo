@@ -90,7 +90,7 @@ namespace AutoClicker.UI
             _started = DateTime.UtcNow;
             _worker = new Thread(() =>
             {
-                bool ok = WhisperModelManager.Download(_model, OnProgress, () => _cancelled, out string error);
+                bool ok = WhisperModelManager.Download(_model, OnProgress, () => _cancelled, out string error, OnPhase);
                 BeginInvoke((Action)(() =>
                 {
                     if (ok)
@@ -110,6 +110,27 @@ namespace AutoClicker.UI
                 Name = "TempoModelDownload"
             };
             _worker.Start();
+        }
+
+        /// <summary>
+        /// A streaming model's archive moved on from downloading (round 35): "Checking the download…", then "Unpacking the
+        /// model…" — a minute with nothing to count, so the bar runs instead of sitting at 100 %.
+        /// </summary>
+        private void OnPhase(string english)
+        {
+            if (IsDisposed || string.IsNullOrEmpty(english)) { return; }
+            try
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    _bar.Style = ProgressBarStyle.Marquee;
+                    _status.Text = Localization.T(english);
+                }));
+            }
+            catch (InvalidOperationException)
+            {
+                // Window closing; ignore.
+            }
         }
 
         private long _lastProgressTick;

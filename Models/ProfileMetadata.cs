@@ -137,6 +137,7 @@ namespace AutoClicker.Models
         public bool CaptionUseCustomColor { get; set; } = true;
         public int CaptionColorArgb { get; set; } = unchecked((int)0xFFF4BF4F);
         public bool CaptionShowBackground { get; set; } = true;
+        public int CaptionPanelSize { get; set; } = 1;
 
         public ProfileAppSettings Clone()
         {
@@ -164,7 +165,8 @@ namespace AutoClicker.Models
                 CaptionFontFamily = s.CaptionFontFamily,
                 CaptionUseCustomColor = s.CaptionUseCustomColor,
                 CaptionColorArgb = s.CaptionColorArgb,
-                CaptionShowBackground = s.CaptionShowBackground
+                CaptionShowBackground = s.CaptionShowBackground,
+                CaptionPanelSize = s.CaptionPanelSize
             };
         }
 
@@ -188,6 +190,7 @@ namespace AutoClicker.Models
             s.CaptionUseCustomColor = CaptionUseCustomColor;
             s.CaptionColorArgb = CaptionColorArgb;
             s.CaptionShowBackground = CaptionShowBackground;
+            s.CaptionPanelSize = System.Math.Max(0, System.Math.Min(2, CaptionPanelSize));
         }
     }
 }

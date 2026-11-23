@@ -82,12 +82,25 @@ namespace AutoClicker.UI
             T(_captionFontCombo, "Font for the captions. Each name in the list is drawn in its own font, and every installed text font follows the recommended ones. Changes show at once.");
             T(_captionColorBtn, "Pick the caption text colour. Bright yellow reads well over most games. (The bar background always stays transparent.)");
             T(_captionBackgroundCheck, "Show the rounded panel behind captions. Turn this off for a clean text-only look with no background \u2014 the text keeps a soft glow so it stays readable.");
-            T(_profileCombo, "Switch between your saved click profiles.");
-            T(_profileNameText, "The name used when you save this profile.");
+            T(_captionPanelSizeCombo, "How big the panel behind the captions is. Small hugs the words, Medium keeps a calm, steady width and is only as tall as the lines shown, Large fills the whole caption bar. Changes show at once.");
+            // What a profile IS, said where people meet it first. "Switch between your saved click profiles" assumed
+            // they already knew, and people asked what profiles were for.
+            T(_profileCombo, "A profile is one saved clicker setup: the interval, the button or key, the click type and mode, where it clicks (with its Multi-Point points), when it stops and the randomisation. Keep one for each game or task and switch between them here, on the Profiles tab, from the tray menu or with the Next / Previous profile hotkeys.");
+            T(_profileNameText, "This profile's name. Type a new one and press Save to rename the profile.");
             // New starts from the defaults and Duplicate copies the profile as saved, as the code has
             // always done; New's tip promised "from the current settings", which neither does.
-            T(_newProfileBtn, "Create a new profile with the default settings.");
-            T(_saveProfileBtn, "Save the current settings (including multi-point list) to this profile.");
+            T(_newProfileBtn, "Add a new profile with the default settings and switch to it. Set it up, then press Save.");
+            T(_saveProfileBtn, "Save this tab's settings and the Multi-Point list into this profile. Until you do, changes are not part of the profile.");
+
+            // ── Profiles tab ────────────────────────────────────────────────────
+            // None of its controls had a tip.
+            T(_profileSearch, "Find a profile by its name or description.");
+            T(_profileCategoryFilter, "Show only one category. A profile's category is set with Edit details… (right-click its card).");
+            T(_profileSortCombo, "The order of the cards. Favourites always come first.");
+            T(_profileFavOnly, "Show only your favourites. Click the star on a card to make it one.");
+            T(_profileNewButton, "Make a new profile: give it a name, an icon and a category, and Tempo switches to it. Then set up its clicking on the Clicker tab and press Save there.");
+            T(_profileImportButton, "Add a profile from a file exported with Export… (right-click a card) — from this PC or someone else's.");
+            T(_profileRecycleButton, "Deleted profiles wait here, so you can bring one back.");
             T(_duplicateProfileBtn, "Make a copy of the selected profile as it was last saved. Save first to include your changes.");
             T(_deleteProfileBtn, "Delete the selected profile. You can restore it from the recycle bin on the Profiles tab.");
 
@@ -168,7 +181,7 @@ namespace AutoClicker.UI
                 "  Random - a different random point each time\n" +
                 "  Ping-Pong - down the list then back up, repeating");
             T(_addPointBtn, "Add a point by typing its coordinates.");
-            T(_capturePointBtn, "Capture a point by clicking somewhere on screen.");
+            T(_capturePointBtn, "Click on screen to add points, one after another — each is numbered where you click, and the magnifier shows the exact pixel. Backspace takes the last one back; Enter, Esc or a right-click finishes.");
             T(_editPointBtn, "Edit the selected point.");
             T(_duplicatePointBtn, "Duplicate the selected points (Ctrl+D).");
             T(_togglePointBtn, "Enable or disable the selected points.");
@@ -182,8 +195,8 @@ namespace AutoClicker.UI
             T(_recordBtn, "Start recording mouse and keyboard input.");
             T(_stopRecordBtn, "Stop recording.");
             T(_recordCountdownNum, "Seconds to wait (3, 2, 1…) before recording starts, so you can switch to the app you want to record. 0 starts immediately.");
-            T(_recordMovesCheck, "Also record mouse movement between actions.");
-            T(_recordCameraCheck, "For games that turn the camera with the mouse — first person, shift lock, holding right-click. Records how far the mouse moved instead of where the pointer was, and plays it back as mouse movement, which is what turns a game's camera. Clicks then happen wherever the pointer is. Leave it off for clicking on screens and menus.");
+            T(_recordMovesCheck, "Also record the mouse's path between actions — including where it rests and where it turns sharply, so hover menus and tooltips play back too.");
+            T(_recordCameraCheck, "For games that turn the camera with the mouse — first person, shift lock, holding right-click. While the game holds or hides the pointer, how far the mouse moved is recorded and played back as camera turns; while the pointer is free (the game's menus), where it was is recorded, so clicks land on the same spots.");
             T(_playMacroBtn, "Play the selected macro (Enter).");
             T(_playOnceBtn, "Play the selected macro a single time.");
             T(_stopPlayBtn, "Stop the macro that's playing.");
@@ -242,9 +255,10 @@ namespace AutoClicker.UI
             T(_themeCombo, "Choose a colour theme. Applied instantly.");
             T(_followSystemThemeCheck, "Match Windows: with the Light or Dark theme selected, Tempo follows Windows' light/dark mode AND adopts your Windows accent colour, switching live the moment you change either in Windows Settings. Pick a colourful theme (Synthwave, Ocean, …) and it keeps that look untouched. While this is on the theme picker is turned off; a custom accent colour still overrides everything.");
             T(_audioDeviceStatus, "Live view of the audio devices Tempo can hear through, updated every few seconds. Captions capture 'what the PC is playing' via the speaker shown here; with no speaker, switch \"Listen to\" to Microphone. When a speaker appears or comes back (headphones plugged in, Bluetooth reconnects), running captions recover automatically.");
-            T(_captionSourceTagCheck, "Show which app the audio comes from at the start of the caption bar — '♪ YouTube ·', '♪ Roblox ·', and the app name on the '♪ Music or sounds' note. Untick to hide the tag and keep only the words and speaker labels. Takes effect from the next caption line.");
-            T(_captionGpuCheck, "Run the speech engine on your graphics card (Vulkan — works on AMD, Intel and NVIDIA) instead of the processor. Experimental: on some PCs it's much faster, on others slower than CPU. Takes effect the next time Tempo starts. If the GPU can't keep up with live audio (a game using the card, say), Tempo uses Windows Live Captions for the rest of that session and tries the GPU again the next time it starts — this option stays on. AMD processors always use the normal CPU engine — nothing special needed.");
+            T(_captionSourceTagCheck, "Show which app the sound comes from — '♪ YouTube', '♪ Roblox' — on a small label at the top edge of the caption panel. It stays there however long the words run. Untick to hide it and keep only the words and speaker labels. Changes show at once.");
+            T(_captionGpuCheck, "Runs the speech engine on your graphics card (Vulkan: AMD, Intel and NVIDIA) instead of the processor — many times faster with the big models, so captions keep up with the speech. Ticked by itself when this PC has a graphics card of its own; untick it to keep captions on the processor, or tick it to use a graphics chip built into the processor. Takes effect the next time Tempo starts. If the card falls behind (a game using it), captions move to a faster model until it has room again.");
             T(_captionLyricsCheck, "Off (the default): Tempo's voice detection skips stretches of sound with no voice in them — music, a fan, gunfire, a game's menus — before the speech engine hears them, because that is where it invents words. Singing can count as 'no voice', so song lyrics may be skipped too. On: everything with sound is transcribed, lyrics included, and instrumental music can bring stray invented words back. Applies at once.");
+            T(_captionOnlyAppCheck, "On (the default): captions listen only to the app making the sound — the one the caption bar names, such as YouTube in your browser — so other apps' pings, music and games can't break into the words or the speaker labels. When another app's sound takes over for a few seconds, captions move to it. Off: captions hear everything your speaker plays. Needs Windows 11 (or Windows 10 build 20348 and later). Applies at once.");
             T(_speakerDeviceCombo, "Which SPEAKER captions listen through. Tempo hears 'what the PC plays' via this device — with several outputs (headset + monitor speakers), pick the one your videos/games actually play on. 'Default' follows whatever Windows has as its output. Devices are listed by model; a device whose model can't be read shows as 'Unknown speaker'. Applies immediately, and if the chosen device is unplugged, captions fall back to the default and say so below.");
             T(_micDeviceCombo, "Which MICROPHONE is used when 'Listen to' is set to Microphone (or Auto falls back to it). With several mics (webcam mic + USB mic), pick the good one. 'Default' follows Windows. Applies immediately; an unplugged choice falls back to the default with a note below.");
             // ── Camera-relative movement ─────────────────────────────────────────
@@ -289,7 +303,7 @@ namespace AutoClicker.UI
             T(_showIndicatorCheck, "Shows a small click-through badge while the clicker runs or a macro plays, so you can tell Tempo is working even when its window is hidden. Customise… sets where it sits and what it shows. The recording badge always shows.");
             T(_minimizeRecordingCheck, "When you start recording or playing a macro, minimise Tempo — and the Accounts window when it's open on its own — so they aren't in the way. Only when a Record/Stop or Emergency-stop hotkey is bound, so you can always finish. They come back by themselves afterwards, unless the macro was started by a hotkey from inside another app: then Tempo stays out of the way.");
             T(_ignoreOwnWindowCheck, "Stops a run from clicking or typing into Tempo itself if the cursor is left over one of its windows — it would otherwise tick boxes, switch tabs and hit buttons at full speed. Clicks made without moving your cursor go through Tempo's windows to the app underneath. Your own clicks and keys always work, so Stop is never blocked. Turn off only if you deliberately automate Tempo's own interface.");
-            T(_guardShortcutsCheck, "While the clicker runs or a macro plays or records, the Windows key and its shortcuts (Start, Win+D, Win+G, Win+Tab…), Ctrl+Esc and the Sticky Keys and Filter Keys pop-ups are held back, so a stray press can't pull the game out of focus mid-run. Tempo's own keybinds always work, and recordings leave these shortcuts out. Never held back: Alt+Tab and Ctrl+Shift+Esc, so there is always a way out — nor Ctrl+Alt+Del and Win+L, which Windows keeps for itself. Not while the clicker uses \"Click without moving my cursor\": you are using the PC then.");
+            T(_guardShortcutsCheck, "While the clicker runs or a macro plays or records, the Windows key and its shortcuts (Start, Win+D, Win+G, Win+Tab…), Ctrl+Esc and the Sticky Keys and Filter Keys pop-ups are held back, so a stray press can't pull the game out of focus mid-run. Tempo's own keybinds always work, and recordings leave these shortcuts out. Never held back: Alt+Tab and Ctrl+Shift+Esc, so there is always a way out; Windows' screenshot and recording keys (Win+Shift+S, Win+Print Screen, Win+Alt+R); nor Ctrl+Alt+Del and Win+L, which Windows keeps for itself. Not while the clicker uses \"Click without moving my cursor\": you are using the PC then.");
             // Its copies on the Clicker and Macros tabs explain the same thing, in the same words.
             foreach (Control copy in new Control[] { _clickerGuardCheck, _macroGuardCheck })
             {
@@ -299,6 +313,109 @@ namespace AutoClicker.UI
             }
             // (header/footer backdrop pickers were replaced by the full-window one)
             T(_recordHistoryCheck, "When off, finished runs aren't saved to your session history and your lifetime totals stop changing — Tempo keeps no record of your activity.");
+
+            // ── Controls that had no tip at all (found by listing every control without one) ──────────────
+            // Only where the caption alone does not say what happens: "Save", "Clear" and "Test pop-up" mean
+            // what they say. The one-off buttons a page keeps in no field are found by their caption on it.
+            void TCaption(Control root, string caption, string text)
+            {
+                if (root == null) { return; }
+                string shown = Utils.Localization.T(caption);
+                var pending = new System.Collections.Generic.Stack<Control>();
+                pending.Push(root);
+                while (pending.Count > 0)
+                {
+                    foreach (Control c in pending.Pop().Controls)
+                    {
+                        if (c is ButtonBase b && string.Equals(b.Text, shown, System.StringComparison.Ordinal)) { T(b, text); }
+                        if (c.HasChildren) { pending.Push(c); }
+                    }
+                }
+            }
+
+            // Clicker
+            T(_clickerAdvancedBtn, "Show or hide the less-used cards: the second cursor, clicking without moving your cursor, and sounds.");
+            T(_secondCursorEnableCheck, "Puts a second pointer on screen that Tempo can click with while your real one stays free. Aim it with the Second cursor hotkeys (Keybinds tab) or with a second mouse.");
+
+            // Multi-Point
+            T(_pointsSaveBtn, "Save the points into the current profile, together with the Clicker tab's settings.");
+
+            // Macros
+            T(_editMacroBtn, "Open the selected macro's steps to change, add or remove them.");
+            T(_renameMacroBtn, "Rename the selected macro (F2).");
+            T(_duplicateMacroBtn, "Make a copy of the selected macro.");
+            T(_notesMacroBtn, "Write a note on the selected macro — what it is for, where to start it. The search box finds notes too.");
+            T(_mergeMacroBtn, "Add the steps of another macro to the end of the selected one.");
+            T(_fixMacroBtn, "Check the selected macro for problems — a key left held down, clicks on a screen that is no longer connected, robotic timing — and repair them.");
+            T(_macroRecycleBtn, "Deleted macros wait here, so you can bring one back.");
+            T(_macroSortCombo, "The order of the macro list. Pinned macros stay at the top.");
+            T(_recordKeysCheck, "Record key presses as well as the mouse. Untick to record the mouse only.");
+            T(_appendRecordCheck, "Add the new recording to the end of the selected macro instead of making a new one.");
+            T(_macroCountdownNum, "Seconds to wait (3, 2, 1…) before playback starts, so you can switch to the window it plays into. 0 starts at once.");
+            T(_macroLoopDelayNum, "A pause between one loop and the next, in milliseconds.");
+            foreach (string speed in new[] { "0.5×", "1×", "2×", "4×" })
+            {
+                TCaption(_playMacroBtn?.Parent, speed, "Quick playback speed: sets the Speed box above (0.5× is half speed, 2× twice as fast).");
+            }
+            T(_liveEveryStepCheck, "One row for every step. Off, a run of mouse travel (the moves and the short waits between them) is one row, and so is a run of camera turns.");
+
+            // Statistics
+            var culture = System.Globalization.CultureInfo.CurrentCulture;
+            TCaption(_statsPage, "1K", Utils.Localization.F("Set the session goal to {0} clicks.", 1000.ToString("N0", culture)));
+            TCaption(_statsPage, "10K", Utils.Localization.F("Set the session goal to {0} clicks.", 10000.ToString("N0", culture)));
+            TCaption(_statsPage, "100K", Utils.Localization.F("Set the session goal to {0} clicks.", 100000.ToString("N0", culture)));
+            TCaption(_statsPage, "Export CSV…", "Save your statistics as a CSV file, which spreadsheets such as Excel open.");
+            TCaption(_statsPage, "Export JSON…", "Save your statistics as a JSON file, for scripts and other programs.");
+            TCaption(_statsPage, "Clear history", "Empty the recent-sessions list. Your click totals stay as they are.");
+            TCaption(_statsPage, "Copy summary", "Copy a short text summary of your statistics, to paste anywhere.");
+
+            // Keybinds
+            TCaption(_keybindsPage, "Reset to defaults", "Put every action back to its default key (F6, F7, F8 and F9 for the main four; the rest unbound). Asks first, and saves at once.");
+            T(_copyKeybindsBtn, "Copy a list of your hotkeys as text — for a note, a guide or a bug report.");
+
+            // Settings
+            T(_settingsSearch, "Type part of a setting's name to highlight it. Enter jumps to the first match, opening Advanced if it is there; Esc clears.");
+            T(_accentHexBox, "Type an accent colour as a hex code, such as #D79921.");
+            T(_fullGifBtn, "Pick a picture or an animated GIF to show behind the whole window. The Dim slider keeps text readable over it.");
+            T(_fullGifClearBtn, "Remove the background image.");
+            T(_cursorTrailCheck, "Draws a colourful trail behind the mouse pointer. Just for fun: it never affects clicking.");
+            T(_hideWhenClickingCheck, "When clicking starts, Tempo tucks its window into the tray. Open it again from the tray icon or with the Show / Hide window hotkey.");
+            TCaption(_settingsPage, "Reset window position", "Put the window back to its first-start size, centred on the screen.");
+            TCaption(_settingsPage, "Customise…", "Choose where the badge sits and what it shows.");
+            T(_customNotifyCheck, "Show Tempo's notifications as its own animated cards, in the corner you choose, instead of Windows' plain ones.");
+            T(_notifyCornerCombo, "The corner of the screen where Tempo's notification cards appear.");
+            // Its comment always said "see tooltip" — there was none.
+            T(_mirrorNotifyCheck, "Shows other apps' Windows notifications as Tempo cards too. Windows asks once for permission to read them. It does not stop Windows' own pop-ups — Do not disturb does that (Stop Windows pop-ups…).");
+            T(_notifyDurationNum, "How many seconds a card stays on screen.");
+            T(_mirrorClearCheck, "Once Tempo has shown another app's notification, remove it from the Windows notification centre so it is not kept twice.");
+            TCaption(_settingsPage, "Stop Windows pop-ups…", "Opens Windows' notification settings. Turn on Do not disturb there: Windows stops its own pop-ups but still hands notifications to Tempo, so only Tempo's cards appear.");
+            T(_notifyPermissionBtn, "Opens Windows' privacy page for notifications, where Tempo can be allowed to read other apps' notifications.");
+            T(_notifyCloseCheck, "Put a ✕ on each card to close it. Without it, a card still closes when clicked and goes away by itself.");
+            TCaption(_settingsPage, "Notification history…", "The notifications shown lately, including the ones you missed while you were busy.");
+            T(_mutedAppsBtn, "Apps you muted (right-click one of their cards to mute it). Unmute them here.");
+            T(_captionLinesNum, "How many lines of speech the caption bar keeps on screen before the oldest scrolls away.");
+            T(_captionLangCombo, "The language being spoken. Auto-detect suits most videos; pick the language if captions come out in the wrong one.");
+            TCaption(_settingsPage, "Models folder…", "Speech models: open their folder, get more from the official site, or use a model file from anywhere.");
+            T(_captionDownloadModelBtn, "Download the speech model chosen above. It downloads once, then works offline.");
+            T(_captionOwnVoiceCheck, "Skip captioning your own voice when it comes back through the speakers (a headset's sidetone, \"Listen to this device\"). Uses your microphone only to tell when you are speaking — its loudness, nothing is recorded.");
+            TCaption(_settingsPage, "Diagnose Windows bar", "Checks whether Windows 11's own Live Captions bar works with Tempo on this PC, says what is wrong if it does not, and fixes what it can.");
+            T(_integrityCheck, "Each time Tempo starts, it checks that its program file is the copy that was installed here and, where it can, that it matches the official release on GitHub. It can spot a changed copy; it cannot stop one.");
+            TCaption(_settingsPage, "Check now", "Run the tamper check again now.");
+            T(_integrityTrustBtn, "Replaced Tempo on purpose (a build of your own, an update from somewhere else)? Make this file the one Tempo expects, so the warning stops.");
+            T(_integrityDetailsBtn, "Each step of the check, the file's fingerprint (SHA-256) and where this copy came from.");
+            TCaption(_settingsPage, "Open data folder", "Open the folder where Tempo keeps your settings, profiles, macros and statistics.");
+            TCaption(_settingsPage, "Export settings…", "Save your settings to a file — to keep, or to bring to another PC with Import settings….");
+            TCaption(_settingsPage, "Import settings…", "Load settings from a file saved with Export settings….");
+            TCaption(_settingsPage, "Back up all data…", "Copy everything — settings, profiles, macros, statistics — into a folder you choose.");
+            TCaption(_settingsPage, "Restore points…", "Tempo saves your data before each update. Pick one of those saves to go back to it; it is put back the next time Tempo starts.");
+            TCaption(_settingsPage, "Uninstall Tempo…", "Remove Tempo from this PC. Your data is kept unless you choose to delete it.");
+            TCaption(_settingsPage, "Report a bug…", "Write a bug report — you see all of it and can edit it — and post it as a GitHub issue or send it by email.");
+            TCaption(_settingsPage, "Email a bug…", "Write a bug report — you see all of it and can edit it — and email it to the developer: your email app, Gmail, Outlook or Yahoo, or copy it.");
+            TCaption(_settingsPage, "Open log file", "Open Tempo's log: what it did and any errors, newest at the end. A bug report can include its last lines.");
+            T(_settingsAdvancedBtn, "Show or hide the settings most people never need.");
+            T(_animateLogoCheck, "Play your logo's animation, when the image you chose for it is an animated GIF.");
+            T(_logoSpeedCombo, "How fast the logo's animation plays. 1× is the speed it was made at.");
+            TCaption(_settingsPage, "Reset to defaults", "Put every setting back to its default. Asks first, and says what is kept: your keybinds, statistics and language stay, and so do your profiles and macros.");
 
             // Accessible names for controls a screen reader would otherwise announce
             // only by their value (e.g. an unlabelled "0" spinner).
@@ -323,8 +440,8 @@ namespace AutoClicker.UI
             Name(_repeatDurationNum, "Repeat seconds");
             Name(_burstSizeNum, "Clicks per burst");
             Name(_burstPauseNum, "Burst pause");
-            Name(_intervalJitterNum, "Interval randomization");
-            Name(_posJitterNum, "Position randomization");
+            Name(_intervalJitterNum, "Interval randomisation");
+            Name(_posJitterNum, "Position randomisation");
             Name(_macroLoopNum, "Macro loops");
             Name(_macroSpeedNum, "Macro speed");
             Name(_pointOrderCombo, "Point order");
@@ -339,6 +456,9 @@ namespace AutoClicker.UI
 
             // The profile cards were built before this ran (the first grid is part of start-up).
             RefreshProfileCardTips();
+
+            // Settings → Disable features: what each switch turns off and which keys it lets go of.
+            SetupFeatureTips();
         }
     }
 }

@@ -26,6 +26,35 @@ namespace AutoClicker.UI
         public Color InputBackground { get; private set; }
 
         /// <summary>
+        /// The theme's SECOND accent (round 42: "every different theme and more details to better new color, not new
+        /// theme"): the colour its gradients run to — the header's underline, wordmark and logo glow, a card's title band
+        /// and title bar, the selected sidebar row, primary buttons, progress bars and sliders — so each theme carries a
+        /// two-tone signature of its own: Dracula's purple to its pink, Nord's frost to its aurora purple, Monokai's green
+        /// to its cyan, Sunset's orange to pink. Chosen per theme (<see cref="SecondAccent"/>). For fills, lines and
+        /// gradients; as text, <see cref="Accent2Text"/>.
+        /// </summary>
+        public Color Accent2 { get; private set; }
+
+        /// <summary>
+        /// The sidebar rail's ground: the page's colour with a breath of the accent — a step deeper on a dark theme — so
+        /// the rail reads as a place of its own instead of more page. Muted text still reads on it at 4.6:1 (RailFor).
+        /// </summary>
+        public Color Rail { get; private set; }
+
+        /// <summary>
+        /// Where a primary button's fill runs to: as far toward <see cref="Accent2"/> (at most half way) as its label —
+        /// <see cref="OnAccent"/>, the same ink the whole width — still reads, at 4.5:1 or as well as on the accent itself.
+        /// The accent when no step keeps it readable.
+        /// </summary>
+        public Color PrimaryEnd { get; private set; }
+
+        /// <summary><see cref="Accent2"/> as text that reads on the page, a card and a nested panel.</summary>
+        public Color Accent2Text => ReadableAnywhere(Accent2);
+
+        /// <summary><paramref name="t"/> of the way from the accent to the second accent (0 = accent, 1 = second accent).</summary>
+        public Color AccentMix(double t) => Blend(Accent, Accent2, t);
+
+        /// <summary>
         /// Returns a copy of this theme with the accent (and a derived hover shade)
         /// replaced by <paramref name="accent"/>. Used for the custom-accent option.
         /// </summary>
@@ -35,6 +64,10 @@ namespace AutoClicker.UI
             // An HDR-corrected palette converts the user's own accent the same way as its own
             // colours; otherwise the one colour they picked by eye would be the one still lifted.
             if (_hdrCompensated) { accent = ForHdr(accent); }
+            // The second accent follows the user's colour: turned round the colour wheel as far as the theme's own pair
+            // is, at the second accent's own strength (a custom accent beside the theme's pink would fight it).
+            Color second = FollowAccent(Accent, Accent2, accent);
+            bool dark = RelativeLuminance(Background) < 0.18;
             return new Theme
             {
                 _hdrCompensated = _hdrCompensated,
@@ -46,6 +79,9 @@ namespace AutoClicker.UI
                 Border = Border,
                 Accent = accent,
                 AccentHover = Lighten(accent, 0.14),
+                Accent2 = second,
+                Rail = RailFor(Background, accent, TextMuted, dark),
+                PrimaryEnd = PrimaryEndFor(accent, second),
                 Success = Success,
                 Danger = Danger,
                 Warning = Warning,
@@ -53,6 +89,160 @@ namespace AutoClicker.UI
                 TextMuted = TextMuted,
                 InputBackground = InputBackground
             };
+        }
+
+        // ── The details on top of a palette's twelve colours (round 42) ─────────────────────────────────────────────
+
+        /// <summary>
+        /// Finishes a built-in palette: its second accent, a hover the eye can tell from the accent (Nord's was 1.04:1 from
+        /// it, Peach's 1.08), card edges that show (some were 1.28:1 from the card), the rail's ground and the primary fill's
+        /// far end. Each fix moves a colour only as far as its bar, in the direction the theme itself leans.
+        /// </summary>
+        private static Theme WithDetails(Theme t)
+        {
+            bool dark = RelativeLuminance(t.Background) < 0.18;
+            t.Accent2 = SecondAccent(t.Kind, t.Accent);
+            if (ContrastRatio(t.AccentHover, t.Accent) < 1.2)
+            {
+                bool lighter = RelativeLuminance(t.AccentHover) >= RelativeLuminance(t.Accent);
+                t.AccentHover = Apart(t.AccentHover, t.Accent, 1.2, lighter);
+            }
+            if (ContrastRatio(t.Border, t.Surface) < 1.45)
+            {
+                bool lighter = RelativeLuminance(t.Border) >= RelativeLuminance(t.Surface);
+                t.Border = Apart(t.Border, t.Surface, 1.45, lighter);
+            }
+            t.Rail = RailFor(t.Background, t.Accent, t.TextMuted, dark);
+            t.PrimaryEnd = PrimaryEndFor(t.Accent, t.Accent2);
+            return t;
+        }
+
+        /// <summary><paramref name="c"/> moved lighter (or darker) in small steps until it stands <paramref name="need"/> from <paramref name="from"/>.</summary>
+        private static Color Apart(Color c, Color from, double need, bool lighter)
+        {
+            for (int i = 1; i <= 40; i++)
+            {
+                Color m = lighter ? Lighten(c, i * 0.025) : Darken(c, i * 0.025);
+                if (ContrastRatio(m, from) >= need) { return m; }
+            }
+            return lighter ? Lighten(c, 1.0) : Darken(c, 1.0);
+        }
+
+        /// <summary>The rail's ground (see <see cref="Rail"/>): the tint backs off until muted text reads on it at 4.6:1.</summary>
+        private static Color RailFor(Color background, Color accent, Color muted, bool dark)
+        {
+            Color baseColor = dark ? Blend(background, Color.Black, 0.22) : Blend(background, Color.Black, 0.012);
+            for (double tint = dark ? 0.05 : 0.045; tint > 0.004; tint -= 0.005)
+            {
+                Color rail = Blend(baseColor, accent, tint);
+                if (ContrastRatio(muted, rail) >= 4.6) { return rail; }
+            }
+            return ContrastRatio(muted, baseColor) >= 4.6 ? baseColor : background;
+        }
+
+        /// <summary>The primary fill's far end (see <see cref="PrimaryEnd"/>).</summary>
+        private static Color PrimaryEndFor(Color accent, Color second)
+        {
+            if (second.IsEmpty) { return accent; }
+            Color ink = ReadableOn(accent);
+            double need = Math.Min(4.5, ContrastRatio(ink, accent));
+            for (double t = 0.5; t > 0.04; t -= 0.05)
+            {
+                Color end = Blend(accent, second, t);
+                if (ReadableOn(end) == ink && ContrastRatio(ink, end) >= need) { return end; }
+            }
+            return accent;
+        }
+
+        /// <summary>
+        /// A second accent for a custom accent: <paramref name="custom"/> turned round the colour wheel as far as the
+        /// theme's own pair (<paramref name="accent"/> → <paramref name="second"/>), at the second accent's saturation and
+        /// lightness. A grey custom accent has no hue to turn: a lighter or darker step of it instead.
+        /// </summary>
+        private static Color FollowAccent(Color accent, Color second, Color custom)
+        {
+            if (second.IsEmpty) { return custom; }
+            if (custom.GetSaturation() < 0.12f || accent.GetSaturation() < 0.12f)
+            {
+                return RelativeLuminance(custom) > 0.4 ? Darken(custom, 0.22) : Lighten(custom, 0.28);
+            }
+            float turn = second.GetHue() - accent.GetHue();
+            return FromHsl(custom.GetHue() + turn, second.GetSaturation(), second.GetBrightness());
+        }
+
+        /// <summary>A colour from hue (degrees), saturation and lightness (0–1) — the HSL that Color.GetHue/GetSaturation/GetBrightness read.</summary>
+        private static Color FromHsl(double h, double s, double l)
+        {
+            h = ((h % 360) + 360) % 360 / 360.0;
+            s = Math.Max(0, Math.Min(1, s));
+            l = Math.Max(0, Math.Min(1, l));
+            if (s <= 0) { int v = (int)Math.Round(l * 255); return Color.FromArgb(v, v, v); }
+            double q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            double p = 2 * l - q;
+            double Channel3(double t)
+            {
+                if (t < 0) { t += 1; }
+                if (t > 1) { t -= 1; }
+                if (t < 1 / 6.0) { return p + (q - p) * 6 * t; }
+                if (t < 0.5) { return q; }
+                if (t < 2 / 3.0) { return p + (q - p) * (2 / 3.0 - t) * 6; }
+                return p;
+            }
+            return Color.FromArgb((int)Math.Round(Channel3(h + 1 / 3.0) * 255),
+                                  (int)Math.Round(Channel3(h) * 255),
+                                  (int)Math.Round(Channel3(h - 1 / 3.0) * 255));
+        }
+
+        /// <summary>
+        /// Each theme's second accent: a colour of its own family that sits beside its accent — the palette's own second
+        /// colour where it has one (Dracula, Nord, Monokai, Gruvbox, Solarized), otherwise a neighbour on the colour wheel
+        /// chosen for the mood (Ocean's blue to sea-teal, Crimson's red to ember, Coffee's caramel to latte, Sunset's
+        /// orange to pink). Never a status colour's job: Synthwave's is violet, not the cyan its Success already is.
+        /// </summary>
+        private static Color SecondAccent(ThemeKind kind, Color accent)
+        {
+            switch (kind)
+            {
+                case ThemeKind.Dark: return Color.FromArgb(207, 92, 245);       // orchid
+                case ThemeKind.Light: return Color.FromArgb(147, 51, 234);      // purple
+                case ThemeKind.Midnight: return Color.FromArgb(129, 140, 248);  // indigo
+                case ThemeKind.Ocean: return Color.FromArgb(45, 212, 191);      // sea teal
+                case ThemeKind.Forest: return Color.FromArgb(45, 212, 191);     // stream teal
+                case ThemeKind.Crimson: return Color.FromArgb(251, 146, 60);    // ember
+                case ThemeKind.Solarized: return Color.FromArgb(108, 113, 196); // solarized violet
+                case ThemeKind.Amoled: return Color.FromArgb(34, 211, 238);     // neon cyan
+                case ThemeKind.Nord: return Color.FromArgb(180, 142, 173);      // aurora purple
+                case ThemeKind.Dracula: return Color.FromArgb(255, 121, 198);   // Dracula pink
+                case ThemeKind.Monokai: return Color.FromArgb(102, 217, 239);   // Monokai cyan
+                case ThemeKind.Gruvbox: return Color.FromArgb(142, 192, 124);   // gruvbox aqua
+                case ThemeKind.Synthwave: return Color.FromArgb(157, 92, 255);  // electric violet
+                case ThemeKind.Coffee: return Color.FromArgb(230, 201, 160);    // latte
+                case ThemeKind.Cosmos: return Color.FromArgb(244, 114, 182);    // nebula pink
+                case ThemeKind.Rose: return Color.FromArgb(192, 132, 252);      // lilac
+                case ThemeKind.Slate: return Color.FromArgb(167, 139, 250);     // violet
+                case ThemeKind.Sunset: return Color.FromArgb(244, 95, 160);     // dusk pink
+                case ThemeKind.Mint: return Color.FromArgb(103, 232, 249);      // aqua
+                case ThemeKind.Sand: return Color.FromArgb(200, 80, 26);        // burnt orange
+                case ThemeKind.Lavender: return Color.FromArgb(240, 171, 252);  // orchid
+                case ThemeKind.Sakura: return Color.FromArgb(165, 75, 216);     // plum
+                case ThemeKind.Emerald: return Color.FromArgb(56, 189, 248);    // sky
+                case ThemeKind.Steel: return Color.FromArgb(143, 164, 240);     // periwinkle
+                case ThemeKind.Grape: return Color.FromArgb(139, 92, 246);      // violet
+                case ThemeKind.Arctic: return Color.FromArgb(61, 123, 230);     // glacier blue
+                case ThemeKind.Indigo: return Color.FromArgb(232, 121, 249);    // fuchsia
+                case ThemeKind.Teal: return Color.FromArgb(96, 165, 250);       // blue
+                case ThemeKind.Tangerine: return Color.FromArgb(244, 63, 94);   // rose
+                case ThemeKind.Bubblegum: return Color.FromArgb(139, 92, 246);  // violet
+                case ThemeKind.Carbon: return Color.FromArgb(165, 180, 203);    // cool steel
+                case ThemeKind.Honey: return Color.FromArgb(249, 115, 22);      // amber orange
+                case ThemeKind.Sapphire: return Color.FromArgb(59, 208, 242);   // ice
+                case ThemeKind.Olive: return Color.FromArgb(111, 174, 123);     // sage
+                case ThemeKind.Cyan: return Color.FromArgb(110, 139, 255);      // electric blue
+                case ThemeKind.Peach: return Color.FromArgb(214, 69, 126);      // raspberry
+                case ThemeKind.Wine: return Color.FromArgb(168, 85, 194);       // plum
+                case ThemeKind.Magenta: return Color.FromArgb(255, 122, 89);    // coral
+                default: return Lighten(accent, 0.3);
+            }
         }
 
         /// <summary>
@@ -253,7 +443,7 @@ namespace AutoClicker.UI
         /// </summary>
         public static Theme ForKind(ThemeKind kind, bool compensateForHdr)
         {
-            Theme t = BaseForKind(kind);
+            Theme t = WithDetails(BaseForKind(kind));
             return compensateForHdr ? t.HdrCompensated() : t;
         }
 
@@ -306,6 +496,9 @@ namespace AutoClicker.UI
             TextMuted = ForHdr(TextMuted);
             Accent = ForHdr(Accent);
             AccentHover = ForHdr(AccentHover);
+            Accent2 = ForHdr(Accent2);
+            Rail = ForHdr(Rail);
+            PrimaryEnd = ForHdr(PrimaryEnd);
             Success = ForHdr(Success);
             Danger = ForHdr(Danger);
             Warning = ForHdr(Warning);

@@ -187,7 +187,9 @@ namespace AutoClicker.Native
                             // Timed: this one runs the hotkey ACTIONS, so it is the likeliest of the
                             // three to grow slow as the app gains features — see HookHealth.
                             long started = System.Diagnostics.Stopwatch.GetTimestamp();
-                            ButtonDown.Invoke(this, args);
+                            string was = HookHealth.Enter("mouse-hotkey");
+                            try { ButtonDown.Invoke(this, args); }
+                            finally { HookHealth.Leave(was); }
                             HookHealth.NoteCallback("mouse-hotkey", started);
 
                             if (args.Suppress)

@@ -65,6 +65,9 @@ namespace AutoClicker.UI
             button.ForeColor = theme.OnAccent;   // readable on ANY accent — see Theme.OnAccent
             button.FlatAppearance.BorderSize = 0;
             button.FlatAppearance.MouseOverBackColor = theme.AccentHover;
+            // Round 42: the accent runs into the theme's second accent across the button — only as far as the label
+            // still reads (Theme.PrimaryEnd), and only while the fill is still this accent (RoundedButton.SetGradient).
+            if (button is RoundedButton rb) { rb.SetGradient(theme.Accent, theme.PrimaryEnd); }
         }
 
         /// <summary>

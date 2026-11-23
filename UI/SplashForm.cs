@@ -167,6 +167,40 @@ namespace AutoClicker.UI
             // immediately. Without this the splash could be told to close before it
             // ever drew, so the launch effect was never seen.
             try { TopMost = true; BringToFront(); Update(); } catch { }
+            NoteShown();
+        }
+
+        /// <summary>
+        /// For Live debug: how long the click took to show anything, in words — the first thing to know when someone says
+        /// "I click Tempo and nothing comes up" (2026-11-14). Empty until the splash has been on screen.
+        /// </summary>
+        public static string StartTiming { get; private set; } = "";
+
+        /// <summary>Logs, once, how long after the process started the splash was on screen, and where the time went.</summary>
+        private static void NoteShown()
+        {
+            try
+            {
+                DateTime started = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
+                double total = (DateTime.UtcNow - started).TotalMilliseconds;
+                double before = AutoClicker.Program.MsBeforeMain();
+                double ours = before >= 0 ? Math.Max(0, total - before) : -1;
+                StartTiming = "the splash was on screen " + (int)total + " ms after Tempo was started"
+                              + (before >= 0 ? " (" + (int)before + " ms before Tempo's own code ran, " + (int)ours + " ms in its start-up checks)" : "");
+                if (total > 3000)
+                {
+                    // Slow enough to be felt as "nothing happened" — say what the time was spent on.
+                    Utils.Logger.Warn("[startup] " + StartTiming + ". "
+                        + (before > total * 0.6
+                            ? "Most of it passed before Tempo's code ran: Windows and .NET starting the program — the first start of a new copy unpacks it, and an antivirus may scan every file it unpacks."
+                            : "Most of it was Tempo's own start-up checks — a busy or slow disk is the usual reason."));
+                }
+                else
+                {
+                    Utils.Logger.Info("[startup] " + StartTiming + ".");
+                }
+            }
+            catch { /* timing only */ }
         }
 
         /// <summary>Signals the splash (on its own thread) to fade out and close.</summary>

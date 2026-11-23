@@ -30,6 +30,9 @@ namespace AutoClicker.UI
         /// <summary>A pause a person notices. Windows calls a window "Not responding" after 5 s.</summary>
         private const int StallMs = 1500;
 
+        /// <summary>While a stall lasts: a line at 5 s (Windows' "Not responding"), at 30 s, then every minute, at most this many.</summary>
+        private const int StillStalledFirstMs = 5000, StillStalledStepMs = 250, StillStalledMaxLines = 10;
+
         private static Thread _thread;
         private static Control _owner;
         private static volatile string _lastInput = "";
@@ -48,6 +51,9 @@ namespace AutoClicker.UI
             try
             {
                 _owner = owner;
+                // Start runs on the window's thread (the message filter below is that thread's): the hook callbacks on it
+                // say where it is, so a stall inside one can be named.
+                HookHealth.WatchThread(Environment.CurrentManagedThreadId);
                 Application.AddMessageFilter(new InputNoter());
                 _thread = new Thread(Loop) { IsBackground = true, Name = "UiStallWatch", Priority = ThreadPriority.BelowNormal };
                 _thread.Start();
@@ -69,17 +75,36 @@ namespace AutoClicker.UI
                     owner.BeginInvoke(Ping);
                     if (Answered.WaitOne(StallMs)) { continue; }
 
-                    // Stalled. Note what came just before it, then wait for the window to come back.
-                    // Every ping is answered before the next is posted, so no late answer is left over.
+                    // Stalled. Note what came just before it, then wait for the window to come back — saying so WHILE
+                    // it waits. This used to write nothing until the answer came, so a window that never came back left
+                    // no line at all: on 2026-11-11 the second cursor's mouse hook held Tempo for thirteen minutes until
+                    // it was killed, and the log stopped as if nothing had happened. Every ping is answered before the
+                    // next is posted, so no late answer is left over.
                     string cause = _lastInput;
                     long causeAge = sent - Interlocked.Read(ref _lastInputAtMs);
-                    Answered.WaitOne();
+                    string after = cause.Length > 0 && causeAge >= 0 && causeAge < 10000
+                        ? " — just after " + cause : " (no click or key press just before it)";
+                    // Counted in waits, not read off the clock: a PC that sleeps stops this thread too, and must not
+                    // wake up to "still not responding after 8 hours".
+                    int waitedMs = StallMs, sayAtMs = StillStalledFirstMs, said = 0;
+                    while (!Answered.WaitOne(StillStalledStepMs))
+                    {
+                        waitedMs += StillStalledStepMs;
+                        if (waitedMs < sayAtMs || said >= StillStalledMaxLines) { continue; }
+                        said++;
+                        string inside = HookHealth.InsideOnWatchedThread;
+                        Logger.Warn("[stall] the window has not responded for " + (waitedMs / 1000) + " s and is still stuck" + after
+                                    + (inside != null
+                                        ? "; it is inside the " + inside + " hook, so every " + (inside.Contains("mouse") ? "mouse movement" : "key press")
+                                          + " on this PC waits on it."
+                                        : "."));
+                        sayAtMs = sayAtMs < 30000 ? 30000 : sayAtMs + 60000;
+                    }
                     long ms = Clock.ElapsedMilliseconds - sent;
-                    // Minutes on end is a PC that slept or a debugger, not something anyone sat through.
-                    if (ms > 10 * 60 * 1000) { continue; }
-                    Logger.Warn("[stall] the window did not respond for " + (ms / 1000.0).ToString("0.0") + " s"
-                                + (cause.Length > 0 && causeAge >= 0 && causeAge < 10000
-                                    ? " — just after " + cause + "." : " (no click or key press just before it)."));
+                    // Minutes on end with nothing said while it lasted is a PC that slept or a debugger, not something
+                    // anyone sat through.
+                    if (ms > 10 * 60 * 1000 && said == 0) { continue; }
+                    Logger.Warn("[stall] the window did not respond for " + (ms / 1000.0).ToString("0.0") + " s" + after + ".");
                 }
                 catch (ObjectDisposedException) { return; }
                 catch (InvalidOperationException) { /* the window is being made or closed */ }

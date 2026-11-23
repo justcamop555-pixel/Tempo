@@ -31,8 +31,13 @@ namespace AutoClicker.UI
         private int _hoverIndex = -1;
         private int _dropLine = -1;
 
-        // The two lines' fonts. Points, so they grow with the screen's scale by themselves.
-        private const float NamePt = 9.5f, MetaPt = 8.25f;
+        // The two lines' fonts. Points, so they grow with the screen's scale by themselves. Round 40 (the user's mockup:
+        // "larger list, better spacing, clearer statistics"): 10 / 8.5, up from 9.5 / 8.25, in a taller row.
+        private const float NamePt = 10f, MetaPt = 8.5f;
+
+        // The column at the left of every row where the selected one shows its ▶ (the one Play and Enter play), so the
+        // names start at one place whether a row is selected or not.
+        private const int MarkerColumn = 16;
 
         // Every other size here is a 100% number, multiplied out by Px for the screen's scale.
         //
@@ -41,7 +46,8 @@ namespace AutoClicker.UI
         // again while the row stayed 40 px — the name ran into the detail line and both lost
         // their bottoms ("Macro 10-39-20" over a cut-off "137 steps · 3.2 s"). Now the row is as
         // tall as its two lines at this DPI: 40 px at 100% as before, 60 px at 150%.
-        private const int PadX = 10;
+        // 8 (was 10) since round 40: the ▶ column took room the detail line needs.
+        private const int PadX = 8;
 
         public MacroListBox()
         {
@@ -62,15 +68,15 @@ namespace AutoClicker.UI
         private static int LineHeight(Font f, float dpi) => (int)Math.Ceiling(f.GetHeight(dpi));
 
         /// <summary>
-        /// Insets (2 + 2), the gap above the name (3) and below the detail (1), around the two lines as they
-        /// measure at this DPI.
+        /// Insets (2 + 2), the gap above the name (6), between the lines (1) and below the detail (4), around the two lines
+        /// as they measure at this DPI: 48 px at 100%, up from 40, so the rows breathe (round 40).
         /// </summary>
         private int RowHeightForDpi()
         {
             using (var nameFont = new Font(Font.FontFamily, NamePt, FontStyle.Bold))
             using (var metaFont = new Font(Font.FontFamily, MetaPt, FontStyle.Regular))
             {
-                return Px(2 + 3 + 1 + 2) + LineHeight(nameFont, DeviceDpi) + LineHeight(metaFont, DeviceDpi);
+                return Px(2 + 6 + 1 + 4 + 2) + LineHeight(nameFont, DeviceDpi) + LineHeight(metaFont, DeviceDpi);
             }
         }
 
@@ -178,6 +184,25 @@ namespace AutoClicker.UI
             _hoverIndex = index;
             InvalidateRow(previous);
             InvalidateRow(index);
+            // And the rows above them: each row draws the separator under it, which gives way to a lifted row below.
+            InvalidateRow(previous - 1);
+            InvalidateRow(index - 1);
+        }
+
+        private int _lastSelected = -1;
+
+        protected override void OnSelectedIndexChanged(EventArgs e)
+        {
+            base.OnSelectedIndexChanged(e);
+            // Windows redraws the row that lost the selection and the one that got it; the separators above them are
+            // drawn by the rows above (see SetHover).
+            int now = SelectedIndex;
+            if (now != _lastSelected)
+            {
+                InvalidateRow(_lastSelected - 1);
+                InvalidateRow(now - 1);
+                _lastSelected = now;
+            }
         }
 
         private void InvalidateRow(int index)
@@ -253,24 +278,35 @@ namespace AutoClicker.UI
 
             var row = new Rectangle(e.Bounds.X + Px(3), e.Bounds.Y + Px(2),
                                     e.Bounds.Width - Px(6), e.Bounds.Height - Px(4));
+
+            // The inks of this row: plain on the card; on the selection, the theme's text and muted text moved where
+            // they read on the accent fill (round 40: the selection is the accent itself now, as in the user's mockup,
+            // not a faint wash of it with a bar).
+            Color rowFill = th.Surface;
+            Color nameInk = th.Text, metaInk = th.TextMuted;
             if (selected || hover)
             {
-                Color fill = selected
-                    ? Blend(th.Accent, th.Surface, 0.72)
+                rowFill = selected
+                    ? Blend(th.Accent, th.Surface, 0.38)
                     : Blend(th.Surface2, th.Surface, 0.45);
-                using (var path = Rounded(row, Px(7)))
-                using (var b = new SolidBrush(fill))
+                using (var path = Rounded(row, Px(8)))
+                using (var b = new SolidBrush(rowFill))
                 {
                     g.FillPath(b, path);
                 }
                 if (selected)
                 {
-                    // A short accent bar rather than a full-height block: it marks the row
-                    // without drowning the text it is meant to highlight.
-                    using (var bar = new SolidBrush(th.Accent))
-                    {
-                        g.FillRectangle(bar, row.X + Px(1), row.Y + Px(6), Px(3), row.Height - Px(12));
-                    }
+                    nameInk = Theme.Readable(th.Text, rowFill, 4.5);
+                    metaInk = Theme.Readable(Blend(nameInk, rowFill, 0.22), rowFill, 4.5);
+                }
+            }
+            else if (e.Index < Items.Count - 1 && SelectedIndex != e.Index + 1 && _hoverIndex != e.Index + 1)
+            {
+                // A hairline between rows, from where the words start; it gives way next to a lifted row.
+                using (var line = new Pen(Blend(th.Border, th.Surface, 0.45), 1f))
+                {
+                    int y = e.Bounds.Bottom - 1;
+                    g.DrawLine(line, row.X + Px(PadX) + Px(MarkerColumn), y, row.Right - Px(4), y);
                 }
             }
 
@@ -294,19 +330,35 @@ namespace AutoClicker.UI
 
             if (macro == null) { return; }
 
-            int textLeft = row.X + Px(PadX);
+            int markerLeft = row.X + Px(PadX) - Px(2);
+            int textLeft = row.X + Px(PadX) + Px(MarkerColumn);
             int textRight = row.Right - Px(PadX);
-            int nameTop = row.Y + Px(3);
+            int nameTop = row.Y + Px(6);
             int metaTop;
 
             // ── Line 1: the name, plus a star for favourites ──────────────────
             string name = string.IsNullOrEmpty(macro.Name) ? "(unnamed)" : macro.Name;
             using (var nameFont = new Font(Font.FontFamily, NamePt, FontStyle.Bold))
-            using (var nameBrush = new SolidBrush(th.Text))
+            using (var nameBrush = new SolidBrush(nameInk))
             {
                 // Measured on the Graphics that draws it, so the band always holds the line it draws.
                 int nameH = (int)Math.Ceiling(nameFont.GetHeight(g));
-                metaTop = nameTop + nameH;
+                metaTop = nameTop + nameH + Px(1);
+
+                // ▶ on the selected row, in the marker column, centred on the two lines: the macro Play and Enter play.
+                if (selected)
+                {
+                    float s = Px(9);
+                    float mx = markerLeft + (Px(MarkerColumn) - s) / 2f;
+                    float my = row.Y + (row.Height - s) / 2f;
+                    using (var mark = new SolidBrush(nameInk))
+                    {
+                        g.FillPolygon(mark, new[]
+                        {
+                            new PointF(mx, my), new PointF(mx + s * 0.9f, my + s / 2f), new PointF(mx, my + s)
+                        });
+                    }
+                }
                 if (macro.IsFavorite)
                 {
                     using (var star = new SolidBrush(th.Warning))
@@ -329,35 +381,38 @@ namespace AutoClicker.UI
             // no helper that could have caught it — and it is the most-read text on the
             // tab. Every macro's detail line was English in all five other languages.
             bool everPlayed = macro.TimesPlayed > 0;
+            // " • " between the parts, as in the mockup and the library line under the list — and two spaces narrower
+            // than the old "  ·  ", which this line, short of room in the longer languages, can use.
             string meta = Utils.Localization.F("{0} steps", macro.StepCount.ToString("N0"))
-                + "  ·  " + ShortTime(macro.EstimatedDurationMs);
+                + " • " + ShortTime(macro.EstimatedDurationMs);
             // COUNT FIRST — "2× played", not "played 2×". This line is trimmed with an
             // ellipsis when it runs out of room, and it does run out in the longer
             // languages: Spanish "reproducido 2×" came back as "reproducid…", throwing
             // away the only part that carried information. With the number in front, a
             // trim costs the word and keeps the count.
-            meta += "  ·  " + (everPlayed
+            meta += " • " + (everPlayed
                 ? Utils.Localization.F("{0}× played", macro.TimesPlayed)
                 : Utils.Localization.T("never played"));
             using (var metaFont = new Font(Font.FontFamily, MetaPt, FontStyle.Regular))
-            using (var metaBrush = new SolidBrush(th.TextMuted))
+            using (var metaBrush = new SolidBrush(metaInk))
             {
                 int metaH = (int)Math.Ceiling(metaFont.GetHeight(g));
-                // 62px (at 100%), measured against the longest translations of this column —
-                // "il y a 2mo", "creado 2me", "2Mo alt" — which all sit inside it. Widening
-                // it was tried and was the wrong trade: every pixel here comes straight out
-                // of the meta line to its left, which is the one that was actually running
-                // out of room. The draw below trims with an ellipsis rather than clipping
-                // mid-glyph, so a language that still overruns degrades readably.
-                int agoWidth = Px(62);
                 // Last played when it has been, otherwise how old the recording is — so
                 // the column is never empty. "old" rather than "ago" makes clear which
                 // of the two dates is being shown without needing a second label.
                 string ago = everPlayed
                     ? Ago(macro.LastPlayedUtc)
                     : Age(macro.CreatedUtc);
+                // The recency column is as wide as its words, up to 64px (at 100%) — the longest translations,
+                // "il y a 2mo", "creado 2me", "2Mo alt", sit inside that — so every pixel it does not use goes to the
+                // detail line to its left, the one that runs out of room ("3× play…" in English once the rows gained
+                // their ▶ column, round 40). It was a fixed 62. The draw below trims with an ellipsis rather than
+                // clipping mid-glyph, so a language that still overruns degrades readably.
+                int agoWidth = ago.Length > 0
+                    ? Math.Min(Px(64), (int)Math.Ceiling(g.MeasureString(ago, metaFont, PointF.Empty, StringFormat.GenericDefault).Width) + Px(2))
+                    : 0;
                 int metaWidth = ago.Length > 0
-                    ? textRight - textLeft - agoWidth - Px(6)
+                    ? textRight - textLeft - agoWidth - Px(8)
                     : textRight - textLeft;
 
                 g.DrawString(meta, metaFont, metaBrush,

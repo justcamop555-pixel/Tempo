@@ -203,7 +203,27 @@ namespace AutoClicker.Native
             {
                 return 0;
             }
+            _drainDepth++;
+            try { return DrainNow(time); }
+            finally { _drainDepth--; }
+        }
 
+        private static int _drainDepth;
+        private static IntPtr _drainBuffer;
+        private static uint _drainCapacity;
+
+        /// <summary>
+        /// True while <see cref="DrainPending"/> is handing reports to the listeners — which is only ever done from inside
+        /// a low-level hook's callback (the second cursor's, the macro recorder's, the camera calibration's). A listener
+        /// must not SEND input then: SendInput from inside a low-level hook, on the hook's own thread, makes Windows call
+        /// that hook again for the input being sent while the thread is still inside it. The second cursor did that with a
+        /// press found in the drain, and Tempo hung for good inside SendInput (2026-11-11, see SecondCursorController).
+        /// UI thread only, like everything here.
+        /// </summary>
+        public static bool Draining => _drainDepth > 0;
+
+        private static int DrainNow(uint time)
+        {
             int count = 0;
             uint headerSize = (uint)Marshal.SizeOf<RAWINPUTHEADER>();
             uint one = 0;
@@ -213,7 +233,26 @@ namespace AutoClicker.Native
             }
 
             uint capacity = one * 32;
-            IntPtr buffer = Marshal.AllocHGlobal((int)capacity);
+            // One buffer, kept: this runs inside a hook callback for every mouse event while a second mouse is bound
+            // (a thousand times a second with a 1,000 Hz mouse), and allocated and freed native memory each time. A drain
+            // inside a drain (none is known) gets one of its own.
+            bool shared = _drainDepth == 1;
+            IntPtr buffer;
+            if (shared)
+            {
+                if (_drainBuffer == IntPtr.Zero || _drainCapacity < capacity)
+                {
+                    if (_drainBuffer != IntPtr.Zero) { Marshal.FreeHGlobal(_drainBuffer); }
+                    _drainBuffer = Marshal.AllocHGlobal((int)capacity);
+                    _drainCapacity = capacity;
+                }
+                buffer = _drainBuffer;
+                capacity = _drainCapacity;
+            }
+            else
+            {
+                buffer = Marshal.AllocHGlobal((int)capacity);
+            }
             try
             {
                 for (int rounds = 0; rounds < 64; rounds++)
@@ -247,7 +286,7 @@ namespace AutoClicker.Native
             }
             finally
             {
-                Marshal.FreeHGlobal(buffer);
+                if (!shared) { Marshal.FreeHGlobal(buffer); }
             }
             return count;
         }

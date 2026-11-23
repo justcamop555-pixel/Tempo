@@ -64,6 +64,12 @@ namespace AutoClicker.Engine
             // The run's own randomness and aim, touched only by its worker (see RandomizationHelper, CursorAnchor).
             public readonly RandomizationHelper Random = new RandomizationHelper();
             public readonly CursorAnchor Anchor = new CursorAnchor();
+            /// <summary>
+            /// The last actuation was held back because one of Tempo's own windows was at the point
+            /// (InputSimulator.HeldBackForOwnWindow): nothing was sent, so the run loops do not count it — a run of 100
+            /// clicks makes 100 clicks on what it is clicking. Its worker's alone, like the rest.
+            /// </summary>
+            public bool HeldBack;
             public RunContext(int generation, ManualResetEventSlim stop) { Generation = generation; Stop = stop; }
         }
 
@@ -264,6 +270,7 @@ namespace AutoClicker.Engine
                 _paused = false;
                 LastRunCompletedNaturally = true;   // Stop() flips this off.
                 System.Threading.Interlocked.Exchange(ref _runPerformed, 0);
+                System.Threading.Interlocked.Exchange(ref _runHeldBack, 0);
                 _runClock.Restart();
                 _resyncScheduler = false;
                 _throttleFactor = 1.0;
@@ -354,6 +361,16 @@ namespace AutoClicker.Engine
             }
 
             Logger.Info("[Clicker] engine stopped.");
+            LogHeldBack();
+        }
+
+        /// <summary>A run that held clicks back says so once, at its end: "it clicked nothing" then has its answer in the log.</summary>
+        private void LogHeldBack()
+        {
+            long held = RunHeldBack;
+            if (held <= 0) { return; }
+            Logger.Info("[Clicker] " + held.ToString("N0") + " click(s) of this run held back, not sent: Tempo's own window was "
+                        + "where they would have landed (\"Ignore Tempo's own window while clicking\").");
         }
 
         /// <summary>Toggles between running and idle.</summary>
@@ -509,6 +526,8 @@ namespace AutoClicker.Engine
                 _statistics.EndRun();
                 SetState(EngineState.Idle);
             }
+            // Ended on its own (a count or a duration reached): Stop, which logs it otherwise, never ran.
+            if (LastRunCompletedNaturally) { LogHeldBack(); }
 
             // Optionally return the cursor to where it was before the run, for
             // Fixed / Multi-Point modes that moved it away. Skipped in background
@@ -589,8 +608,11 @@ namespace AutoClicker.Engine
                 }
 
                 long interval = PerformOneActuation(p, run);
-                performed++;
-                System.Threading.Interlocked.Increment(ref _runPerformed);
+                if (!run.HeldBack)
+                {
+                    performed++;
+                    System.Threading.Interlocked.Increment(ref _runPerformed);
+                }
 
                 if (!IsCurrent(run) || performed >= max)
                 {
@@ -659,8 +681,11 @@ namespace AutoClicker.Engine
                     }
 
                     long interval = PerformOneActuation(p, run);
-                    performed++;
-                    System.Threading.Interlocked.Increment(ref _runPerformed);
+                    if (!run.HeldBack)
+                    {
+                        performed++;
+                        System.Threading.Interlocked.Increment(ref _runPerformed);
+                    }
 
                     if (i < burst - 1 && IsCurrent(run) && performed < max)
                     {
@@ -776,8 +801,26 @@ namespace AutoClicker.Engine
             }
         }
 
+        /// <summary>Clicks held back in the current (or last) run because Tempo's own window was at the point.</summary>
+        public long RunHeldBack => System.Threading.Interlocked.Read(ref _runHeldBack);
+        private long _runHeldBack;
+
+        /// <summary>
+        /// True — the click not sent — when a click Tempo would SEND at this point would land in its own window and
+        /// "Ignore Tempo's own window" is on. Background clicks never ask: they are aimed through Tempo's windows to the
+        /// one underneath instead (InputSimulator.ResolveWindowAt).
+        /// </summary>
+        private bool HoldBack(RunContext run, int x, int y)
+        {
+            if (!InputSimulator.HeldBackForOwnWindow(x, y)) { return false; }
+            run.HeldBack = true;
+            if (IsCurrent(run)) { System.Threading.Interlocked.Increment(ref _runHeldBack); }
+            return true;
+        }
+
         private long PerformOneActuation(ClickProfile p, RunContext run)
         {
+            run.HeldBack = false;
             MouseButtonType button = p.Button;
             ClickStyle style = p.Style;
             MouseButtonType actuatedButton = button;
@@ -805,6 +848,14 @@ namespace AutoClicker.Engine
             {
                 _lastPressClicks = 1;
                 int vk = p.KeyVirtualKey;
+                if (vk != 0 && InputSimulator.HeldBackForOwnFocus())
+                {
+                    // Tempo's own window has the keyboard: the press would land in it (and be thrown away there, or
+                    // typed into it after the run). Not sent, not counted — like a click aimed at its window.
+                    run.HeldBack = true;
+                    if (IsCurrent(run)) { System.Threading.Interlocked.Increment(ref _runHeldBack); }
+                    return interval;
+                }
                 if (vk != 0)
                 {
                     if (hold > 0)
@@ -843,7 +894,11 @@ namespace AutoClicker.Engine
                     }
 
                     NoteClickPoint(x, y);
-                    Actuate(true, x, y, point.Button, point.Style, hold, run.Stop, p.BackgroundClick);
+                    // The point's dwell is kept for a held-back point too: the sequence keeps its timing.
+                    if (p.BackgroundClick || !HoldBack(run, x, y))
+                    {
+                        Actuate(true, x, y, point.Button, point.Style, hold, run.Stop, p.BackgroundClick);
+                    }
                     style = point.Style;
                     actuatedButton = point.Button;
 
@@ -863,7 +918,10 @@ namespace AutoClicker.Engine
                 }
 
                 NoteClickPoint(x, y);
-                Actuate(true, x, y, button, style, hold, run.Stop, p.BackgroundClick);
+                if (p.BackgroundClick || !HoldBack(run, x, y))
+                {
+                    Actuate(true, x, y, button, style, hold, run.Stop, p.BackgroundClick);
+                }
             }
             else if (p.RandomizePosition)
             {
@@ -874,9 +932,13 @@ namespace AutoClicker.Engine
                 {
                     run.Anchor.Aim(cx, cy, out int ax, out int ay);
                     run.Random.JitterWithin(ref ax, ref ay, p.PositionJitterPixels, RootWindowAt);
-                    run.Anchor.Clicked(ax, ay);
                     NoteClickPoint(ax, ay);
-                    Actuate(true, ax, ay, button, style, hold, run.Stop);
+                    // Held back: the cursor stays where the user has it, so the anchor is not told of a click.
+                    if (!HoldBack(run, ax, ay))
+                    {
+                        run.Anchor.Clicked(ax, ay);
+                        Actuate(true, ax, ay, button, style, hold, run.Stop);
+                    }
                 }
                 else
                 {
@@ -888,7 +950,16 @@ namespace AutoClicker.Engine
             {
                 // Pure "click where the cursor is" — no move event needed (the health monitor reads the cursor).
                 _lastPointValid = false;
-                Actuate(false, 0, 0, button, style, hold, run.Stop);
+                if (!ScreenGeometry.TryGetCursorPosition(out int px, out int py) || !HoldBack(run, px, py))
+                {
+                    Actuate(false, 0, 0, button, style, hold, run.Stop);
+                }
+            }
+
+            if (run.HeldBack)
+            {
+                // Nothing was sent: no click to count, and the run loops do not count it as performed (RunContext.HeldBack).
+                return interval;
             }
 
             // Count every real mouse click, not just the actuation. A double-click

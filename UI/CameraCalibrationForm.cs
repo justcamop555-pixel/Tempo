@@ -50,7 +50,7 @@ namespace AutoClicker.UI
         internal const double CorrectionShare = 0.25;
 
         private readonly RawMouseInput _mouse = new RawMouseInput();
-        private readonly LowLevelKeyboardHook _keys = new LowLevelKeyboardHook();
+        private readonly LowLevelKeyboardHook _keys = new LowLevelKeyboardHook { Name = "calibration keyboard" };
         private readonly System.Windows.Forms.Timer _tick;
 
         private readonly Label _instructions;

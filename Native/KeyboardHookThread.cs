@@ -31,6 +31,7 @@ namespace AutoClicker.Native
         {
             _name = name ?? "Tempo keyboard hook";
             _hook.Quiet = quiet;
+            _hook.Name = _name;   // "the anti-AFK key guard hook callback took …" names which one
         }
 
         /// <summary>Raised on the hook's own thread for every key. Set <see cref="KeyboardHookEventArgs.Suppress"/> to swallow it.</summary>

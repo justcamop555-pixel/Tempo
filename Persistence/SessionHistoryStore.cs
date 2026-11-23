@@ -40,6 +40,12 @@ namespace AutoClicker.Persistence
 
         public IReadOnlyList<SessionRecord> Records => _records;
 
+        /// <summary>
+        /// Goes up whenever the records change (load, add, remove, clear). The Statistics page keeps its rows while this
+        /// stands still: it rebuilt all 200 on every visit, 60–110 ms and now and then 1.6–1.9 s (2026-11-12).
+        /// </summary>
+        public int Version { get; private set; }
+
         public static string GetPath()
         {
             return Path.Combine(SettingsManager.GetSettingsDirectory(), "sessions.json");
@@ -48,6 +54,7 @@ namespace AutoClicker.Persistence
         public void Load()
         {
             _records.Clear();
+            Version++;
             bool recovered = false;
             try
             {
@@ -71,6 +78,7 @@ namespace AutoClicker.Persistence
                 if (list != null)
                 {
                     _records.AddRange(list);
+                    Version++;
                 }
             }
             catch (Exception ex)
@@ -116,6 +124,7 @@ namespace AutoClicker.Persistence
             }
 
             _records.Insert(0, record);
+            Version++;
             while (_records.Count > MaxEntries)
             {
                 // Say so. The lifetime aggregates already carry this run's totals
@@ -135,6 +144,7 @@ namespace AutoClicker.Persistence
         public void Clear()
         {
             _records.Clear();
+            Version++;
             Save();
         }
 
@@ -147,6 +157,7 @@ namespace AutoClicker.Persistence
             }
 
             _records.RemoveAt(index);
+            Version++;
             Save();
         }
     }

@@ -571,6 +571,67 @@ namespace AutoClicker.Engine
         /// </summary>
         public static IntPtr TargetWindowAt(int x, int y) => ResolveWindowAt(x, y);
 
+        private static long _ownWindowHeldBack;
+        private static long _ownWindowHeldBackTick;
+
+        /// <summary>Clicks the clicker held back this session because one of Tempo's own windows was at the point.</summary>
+        public static long OwnWindowHeldBack => System.Threading.Interlocked.Read(ref _ownWindowHeldBack);
+
+        /// <summary>When the last of them was held back (Environment.TickCount64); 0 = never.</summary>
+        public static long OwnWindowHeldBackTick => System.Threading.Interlocked.Read(ref _ownWindowHeldBackTick);
+
+        /// <summary>
+        /// True — and counted — when a click Tempo is about to SEND at this screen point would land in one of Tempo's own
+        /// windows while "Ignore Tempo's own window" is on (<see cref="SkipOwnWindows"/>): the click engine then holds it
+        /// back instead of sending it. Asked on the click thread before each click's press, never between a press and
+        /// its release, so a button is never left down.
+        ///
+        /// The guard used to act only where the click arrived (SelfClickGuard, on the window's thread): every click was
+        /// sent and Tempo threw each one away. At a 1 ms interval with the pointer on Tempo's own Start button that was
+        /// two thousand messages a second for the window to read and discard — painting waits until nothing else is
+        /// queued, so the clicking badge that had just appeared stayed an empty grey box and the window froze — and the
+        /// clicks still waiting in the queue when the run was stopped arrived after the guard had switched off and
+        /// pressed whatever was under the pointer, Start included.
+        /// </summary>
+        public static bool HeldBackForOwnWindow(int x, int y)
+        {
+            bool skipOwn;
+            try { skipOwn = SkipOwnWindows?.Invoke() ?? false; } catch { skipOwn = false; }
+            if (!skipOwn) { return false; }
+            // Where Windows would deliver it: the window at the point that takes the mouse (click-through overlays —
+            // the badges, the caption bar, the second cursor's marker — are passed over, as Windows passes over them).
+            IntPtr hwnd = NativeMethods.WindowFromPoint(new NativeMethods.POINT(x, y));
+            if (hwnd == IntPtr.Zero) { return false; }
+            // Its top-level window decides: a control of another program's inside one of Tempo's windows is Tempo's too.
+            IntPtr root = GetAncestor(hwnd, GA_ROOT);
+            if (!IsOwnWindow(root != IntPtr.Zero ? root : hwnd) || IsWelcome(hwnd)) { return false; }
+            System.Threading.Interlocked.Increment(ref _ownWindowHeldBack);
+            System.Threading.Interlocked.Exchange(ref _ownWindowHeldBackTick, Environment.TickCount64);
+            return true;
+        }
+
+        /// <summary>
+        /// The keyboard's <see cref="HeldBackForOwnWindow"/>: true — and counted — when a key Tempo is about to press would
+        /// go to one of Tempo's own windows (it has the focus: Start was just clicked in it, say) while "Ignore Tempo's own
+        /// window" is on. The CPS test's window is the exception: it counts Tempo's own presses on purpose.
+        /// </summary>
+        public static bool HeldBackForOwnFocus()
+        {
+            bool skipOwn;
+            try { skipOwn = SkipOwnWindows?.Invoke() ?? false; } catch { skipOwn = false; }
+            if (!skipOwn) { return false; }
+            IntPtr fg = NativeMethods.GetForegroundWindow();
+            if (fg == IntPtr.Zero || !IsOwnWindow(fg)) { return false; }
+            IntPtr welcome = WelcomeWindow;
+            if (welcome != IntPtr.Zero && GetAncestor(welcome, GA_ROOT) == fg) { return false; }
+            System.Threading.Interlocked.Increment(ref _ownWindowHeldBack);
+            System.Threading.Interlocked.Exchange(ref _ownWindowHeldBackTick, Environment.TickCount64);
+            return true;
+        }
+
+        private const uint GA_ROOT = 2;
+        [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+
         /// <summary>
         /// Finds the window that should receive a click at a screen point: the
         /// top-level window under it, then the deepest visible, non-transparent child

@@ -156,6 +156,8 @@ namespace AutoClicker.UI
         // be by then, rather than restarting the easing from wherever it got to.
         private const int SlideInMs = 240;
         private const int SlideOutMs = 190;
+        /// <summary>The most a card's window is ever set to: 254/255, so it stays layered (see OnAnimTick).</summary>
+        private const double MaxAlpha = 254.5 / 255.0;
         private const int ReflowMs = 260;   // easing to a new stack slot
 
         private long _phaseStartTick;       // when In/Out began
@@ -164,6 +166,13 @@ namespace AutoClicker.UI
         private long _yTweenStartTick;      // reflow tween (retargets independently)
         private double _fromY;
         private int _yTweenTarget = int.MinValue;
+
+        /// <summary>
+        /// Milliseconds on the high-resolution clock — every time the card's motion is placed by. It was
+        /// Environment.TickCount64, which moves in 15.6 ms steps: however often a frame came, the card could only take a
+        /// new position every 15.6 ms (12–15 positions across a slide, measured with scratchpad/toastframes).
+        /// </summary>
+        private static long NowMs() => (long)(System.Diagnostics.Stopwatch.GetTimestamp() * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
 
         /// <summary>Ease-out cubic — fast departure, soft landing. The Windows 11 feel.</summary>
         private static double EaseOut(double t)
@@ -195,7 +204,7 @@ namespace AutoClicker.UI
         private void EnterPhase(Phase next)
         {
             _phase = next;
-            _phaseStartTick = Environment.TickCount64;
+            _phaseStartTick = NowMs();
             _fromX = _x;
             _fromAlpha = _alpha;
 
@@ -280,6 +289,7 @@ namespace AutoClicker.UI
 
             _anim = new Timer { Interval = 16 };   // ~60 fps
             _anim.Tick += OnAnimTick;
+            _frameTick = () => { if (!IsDisposed) { OnAnimTick(this, EventArgs.Empty); } };
         }
 
         // Never take focus from the game / app the user is looking at.
@@ -487,6 +497,11 @@ namespace AutoClicker.UI
                 _y = y;
                 try { Location = new Point((int)_x, (int)_y); } catch { }
             }
+            else if (IsHandleCreated && Visible && Math.Abs(_y - y) > 0.4)
+            {
+                // A new place in the stack: on the frame clock now, not at the next 60 ms countdown tick.
+                SetOnClock(true);
+            }
         }
 
         protected override void OnShown(EventArgs e)
@@ -509,6 +524,64 @@ namespace AutoClicker.UI
             _yTweenTarget = _targetY;
             EnterPhase(Phase.In);
             _anim.Start();
+            SetOnClock(true);
+            Announce();
+        }
+
+        /// <summary>
+        /// Says the card out loud to a screen reader (Narrator, NVDA), as Windows' own notifications are. The card
+        /// never takes focus — it must not, over a game — so nothing else would make a reader say it.
+        /// </summary>
+        private void Announce()
+        {
+            // Not a mirrored card: the app's own notification is Windows', and Windows reads that one out itself — saying it
+            // again here doubled every message for a screen-reader user.
+            if (_kind == ToastKind.Mirror) { return; }
+            try
+            {
+                string what = string.IsNullOrWhiteSpace(_title) ? _body : (string.IsNullOrWhiteSpace(_body) ? _title : _title + ". " + _body);
+                if (string.IsNullOrWhiteSpace(what)) { return; }
+                string from = string.IsNullOrWhiteSpace(_appName) ? "" : _appName + ": ";
+                AccessibilityObject.RaiseAutomationNotification(
+                    System.Windows.Forms.Automation.AutomationNotificationKind.Other,
+                    System.Windows.Forms.Automation.AutomationNotificationProcessing.All,
+                    from + what);
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("NotificationToastForm.Announce", ex); }
+        }
+
+        /// <summary>
+        /// Smooth frames while the card MOVES — sliding in or out, or easing to a new place in the stack — from
+        /// Motion's frame clock: one tick per composed frame, paced by DwmFlush. The WinForms timer alone could not
+        /// give them: WM_TIMER is the last message Windows hands over (about 64 a second at best, late whenever the
+        /// window is busy), and in Dwell it ticks every 60 ms, so the stack's reflow — the cards below sliding up
+        /// when one is dismissed — moved at about 16 frames a second. The timer stays on for the countdown, and as
+        /// the fallback where there is no clock. Ticks from both are harmless: every frame is placed by elapsed time.
+        /// </summary>
+        private void SetOnClock(bool want)
+        {
+            if (want == _onClock) { return; }
+            if (want)
+            {
+                Motion.Subscribe(_frameTick);
+                _onClock = Motion.IsSubscribed(_frameTick);
+            }
+            else
+            {
+                Motion.Unsubscribe(_frameTick);
+                _onClock = false;
+            }
+        }
+
+        private bool _onClock;
+        private readonly Action _frameTick;
+
+        protected override void Dispose(bool disposing)
+        {
+            // Off the frame clock however the card goes. Every road today closes it first (OnFormClosed does this), but a
+            // card disposed without closing would stay on the clock's list and keep it ticking every frame for nothing.
+            if (disposing) { try { SetOnClock(false); } catch { } }
+            base.Dispose(disposing);
         }
 
         /// <summary>
@@ -564,6 +637,7 @@ namespace AutoClicker.UI
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             OverlayTopmost.Unregister(Handle);
+            SetOnClock(false);
             _anim.Stop();
             _anim.Dispose();
             _appFont?.Dispose();
@@ -635,7 +709,7 @@ namespace AutoClicker.UI
         protected override void OnMouseEnter(EventArgs e)
         {
             base.OnMouseEnter(e);
-            if (!_hovered) { _hoverSinceTick = Environment.TickCount64; }
+            if (!_hovered) { _hoverSinceTick = NowMs(); }
             _hovered = true;
             Invalidate();
         }
@@ -644,7 +718,7 @@ namespace AutoClicker.UI
         {
             base.OnMouseLeave(e);
             _hovered = false;
-            _leftTick = Environment.TickCount64;
+            _leftTick = NowMs();
             _hotButton = -1;
             Invalidate();
         }
@@ -848,7 +922,7 @@ namespace AutoClicker.UI
 
         private void OnAnimTick(object sender, EventArgs e)
         {
-            long now = Environment.TickCount64;
+            long now = NowMs();
             long sinceLast = _lastTickTick == 0 ? _anim.Interval : now - _lastTickTick;
             _lastTickTick = now;
 
@@ -934,6 +1008,9 @@ namespace AutoClicker.UI
                 _y = _targetY;
             }
 
+            // On the frame clock while anything moves; back to the countdown timer alone once it all stands still.
+            SetOnClock(_phase != Phase.Dwell || Math.Abs(_y - _targetY) > 0.4);
+
             try
             {
                 // Only touch the window when something actually CHANGED.
@@ -946,7 +1023,10 @@ namespace AutoClicker.UI
                 // repeating identical work. With several toasts stacked that is a lot of
                 // redundant compositing competing with the main window for the UI thread,
                 // which is what made the animation feel like it stuttered.
-                double alpha = Math.Max(0, Math.Min(1, _alpha));
+                // Never quite 1. At exactly 1.0 WinForms takes the layered style off the window, which throws its
+                // picture away and repaints the whole card — at the end of every slide-in, and again as the slide-out
+                // puts the style back. 254 of 255 cannot be seen; the repaint could.
+                double alpha = Math.Max(0, Math.Min(MaxAlpha, _alpha));
                 if (Math.Abs(alpha - _lastAppliedAlpha) > 0.004)
                 {
                     _lastAppliedAlpha = alpha;
@@ -1150,7 +1230,11 @@ namespace AutoClicker.UI
                 {
                     g.DrawPath(bp, RoundedRect(iconRect, S(6)));
                 }
-                TextRenderer.DrawText(g, Glyph, _glyphFont, iconRect, accent,
+                // The glyph (✓ ⚠ ✕ …) carries the meaning, so it must stand out from its own tinted badge (3:1, as
+                // for an icon): the raw status colour on a tint of itself fell short on the paler palettes.
+                Color cardBack = _hovered && _onActivate != null ? Blend(_theme.Surface, _theme.Surface2, 0.55) : _theme.Surface;
+                Color badge = Blend(cardBack, accent, 42 / 255.0);
+                TextRenderer.DrawText(g, Glyph, _glyphFont, iconRect, Theme.Readable(accent, badge, 3.0),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             }
 
@@ -1334,7 +1418,7 @@ namespace AutoClicker.UI
             {
                 // A third of the bar sliding across, once every 1.6 s (repainted from the dwell tick).
                 int seg = Math.Max(BarH * 2, r.Width / 3);
-                double t = (Environment.TickCount64 % 1600) / 1600.0;
+                double t = (NowMs() % 1600) / 1600.0;
                 int x = r.X - seg + (int)Math.Round((r.Width + seg) * t);
                 fill = Rectangle.Intersect(r, new Rectangle(x, r.Y, seg, r.Height));
             }

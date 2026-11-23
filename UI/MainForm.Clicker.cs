@@ -299,15 +299,15 @@ namespace AutoClicker.UI
             _burstGroup.Controls.Add(_burstPauseNum);
 
             // ── Randomization group ────────────────────────────────────────────
-            var randGroup = UiFactory.Group(Localization.T("Randomization (anti-pattern)"), 12, 382, 696, 72, CardIcon.Wave);
-            _randIntervalCheck = UiFactory.Check("Randomize interval  ±", 16, 30);
+            var randGroup = UiFactory.Group(Localization.T("Randomisation (anti-pattern)"), 12, 382, 696, 72, CardIcon.Wave);
+            _randIntervalCheck = UiFactory.Check("Randomise interval  ±", 16, 30);
             _randIntervalCheck.CheckedChanged += (s, e) => { UpdateRandomizeControlsEnabled(); UpdateIntervalHint(); SyncHumanizeButtonFromState(); PushHumanizingToEngine(); };
             _intervalJitterNum = UiFactory.Numeric(180, 28, 80, 0, 100000, 0);
             _intervalJitterNum.Enabled = false;
             _intervalJitterNum.ValueChanged += (s, e) => { UpdateIntervalHint(); SyncHumanizeButtonFromState(); PushHumanizingToEngine(); };
             randGroup.Controls.Add(UiFactory.Caption("ms", 264, 32));
 
-            _randPosCheck = UiFactory.Check("Randomize position  ±", 320, 30);
+            _randPosCheck = UiFactory.Check("Randomise position  ±", 320, 30);
             _randPosCheck.CheckedChanged += (s, e) => { UpdateRandomizeControlsEnabled(); SyncHumanizeButtonFromState(); PushHumanizingToEngine(); };
             _posJitterNum = UiFactory.Numeric(490, 28, 80, 0, 1000, 0);
             _posJitterNum.Enabled = false;
@@ -469,7 +469,8 @@ namespace AutoClicker.UI
             _exactCpsNum = UiFactory.Numeric(110, 162, 74, 1, UnlockedMaxCps, 10);
             _exactCpsNum.Value = Clamp(_speedTrack.Value, 1, UnlockedMaxCps);
             speedGroup.Controls.Add(_exactCpsNum);
-            _exactCpsSetBtn = UiFactory.Button(Localization.T("Set"), 192, 161, 58, 28);
+            // y 160: its middle level with the 23 px number box's (162 + 11.5); at 161 it sat 1.5 px low, 2.5 px at 150%.
+            _exactCpsSetBtn = UiFactory.Button(Localization.T("Set"), 192, 160, 58, 28);
             _exactCpsSetBtn.Click += (s, e) => ApplyCpsPreset((int)_exactCpsNum.Value);
             StyleAccentButton(_exactCpsSetBtn);
             _exactCpsNum.KeyDown += (s, e) =>
@@ -577,11 +578,15 @@ namespace AutoClicker.UI
             _clickerAdvancedBtn = UiFactory.Button("Show advanced settings", 476, 26, 204, 30);
             LayoutFitter.DeclareCaptions(_clickerAdvancedBtn,
                 Localization.T("Show advanced settings"), Localization.T("Hide advanced settings"));
-            // In the window's units (MeasureLayout): built before the window is scaled.
-            FitButtonToText(_clickerAdvancedBtn, 204, 30);
+            // A chevron that points the way the section will move (round 40); 24 more for it, so it fits beside the
+            // longer caption in every language. In the window's units (MeasureLayout): built before the window is scaled.
+            SetGlyph(_clickerAdvancedBtn, ActionGlyph.ChevronDown);
+            FitButtonToText(_clickerAdvancedBtn, 204, 54);
             _clickerAdvancedBtn.Left = 680 - _clickerAdvancedBtn.Width;
-            _clickerAdvancedBtn.Click += (s, e) => SetClickerAdvancedOpen(!ClickerAdvancedOpen);
+            _clickerAdvancedBtn.Click += (s, e) => SetClickerAdvancedOpen(!ClickerAdvancedOpen, animate: true);
             advanced.Controls.Add(_clickerAdvancedBtn);
+            // The whole header card opens and closes the section too, not only its button (round 40).
+            MakeFoldHeader(advanced, () => SetClickerAdvancedOpen(!ClickerAdvancedOpen, animate: true));
 
             var advancedNote = UiFactory.Caption(
                 "The second mouse, clicking without moving your cursor, and start/stop sounds — most people never need them.",
@@ -648,18 +653,29 @@ namespace AutoClicker.UI
         /// <summary>
         /// Opens or closes the Clicker tab's Advanced section. Its cards are the last thing on the page, so
         /// they are only shown or hidden where they are — nothing else moves, and a hidden card adds nothing
-        /// to the page's scroll range.
+        /// to the page's scroll range. <paramref name="animate"/> (the button): the cards unroll from under the
+        /// section's header, or roll back up into it (FoldChange), instead of appearing or vanishing at once.
         /// </summary>
-        private void SetClickerAdvancedOpen(bool open)
+        private void SetClickerAdvancedOpen(bool open, bool animate = false)
         {
             if (_settings == null) { return; }
-            if (_settings.ClickerAdvancedOpen != open)
+            bool changed = _settings.ClickerAdvancedOpen != open;
+            if (changed)
             {
                 _settings.ClickerAdvancedOpen = open;
                 SaveSettingsQuietly();
             }
-            ShowClickerAdvanced(open);
-            Logger.Info("[Clicker] advanced section " + (open ? "opened" : "closed") + ".");
+            Control header = _clickerAdvancedBtn?.Parent;
+            if (animate && header != null)
+            {
+                FoldChange(header, _clickerAdvancedCards, null, open, () =>
+                {
+                    ShowClickerAdvanced(open);
+                    if (open) { RevealOpenedSection(header, _clickerAdvancedCards); }
+                });
+            }
+            else { ShowClickerAdvanced(open); }
+            if (changed) { Logger.Info("[Clicker] advanced section " + (open ? "opened" : "closed") + "."); }
         }
 
         private void ShowClickerAdvanced(bool show)
@@ -668,6 +684,33 @@ namespace AutoClicker.UI
             if (_clickerAdvancedBtn != null && !_clickerAdvancedBtn.IsDisposed)
             {
                 _clickerAdvancedBtn.Text = Localization.T(show ? "Hide advanced settings" : "Show advanced settings");
+                SetGlyph(_clickerAdvancedBtn, show ? ActionGlyph.ChevronUp : ActionGlyph.ChevronDown);
+                _clickerAdvancedBtn.Invalidate();
+            }
+        }
+
+        /// <summary>
+        /// Makes an Advanced section's header card — its surface and the words on it, not the controls that do something
+        /// of their own — open and close the section on a click, with the hand pointer over it, so the target is the whole
+        /// card rather than one button at its right end (round 40, "improve for hide/show advanced settings"). The button
+        /// stays the keyboard's way in.
+        /// </summary>
+        private void MakeFoldHeader(Control card, Action toggle)
+        {
+            if (card == null || toggle == null) { return; }
+            void Wire(Control c)
+            {
+                c.Cursor = Cursors.Hand;
+                c.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) { toggle(); } };
+            }
+            Wire(card);
+            card.ControlAdded += (s, e) =>
+            {
+                if (e.Control is Label) { Wire(e.Control); }
+            };
+            foreach (Control child in card.Controls)
+            {
+                if (child is Label) { Wire(child); }
             }
         }
 
@@ -779,10 +822,13 @@ namespace AutoClicker.UI
                 }
                 else
                 {
-                    // Quiet "available" look: the theme surface with a purple outline.
-                    _humanizeBtn.BackColor = _theme != null ? _theme.Surface2 : Color.FromArgb(40, 40, 48);
-                    _humanizeBtn.ForeColor = HumanizePurple;
-                    _humanizeBtn.FlatAppearance.BorderColor = HumanizePurple;
+                    // Quiet "available" look: the theme surface with a purple outline. The violet itself was the
+                    // caption, 2.0–3.9:1 on the surface in all 38 themes (scratchpad/inkscan): the same hue now, made
+                    // light or dark enough to read (4.5:1), and its outline enough to see (3:1).
+                    Color face = _theme != null ? _theme.Surface2 : Color.FromArgb(40, 40, 48);
+                    _humanizeBtn.BackColor = face;
+                    _humanizeBtn.ForeColor = Theme.Readable(HumanizePurple, face, 4.5);
+                    _humanizeBtn.FlatAppearance.BorderColor = Theme.Readable(HumanizePurple, face, 3.0);
                     _humanizeBtn.FlatAppearance.BorderSize = 1;
                 }
             }
@@ -2081,7 +2127,8 @@ namespace AutoClicker.UI
         {
             if (_statusProfile != null)
             {
-                _statusProfile.Text = Localization.T("Profile: ") + MenuText(name ?? "");
+                // Without its "Profile:" word when the bar needs the room (round 41, SetProfileStatusText).
+                SetProfileStatusText(Localization.T("Profile: ") + MenuText(name ?? ""));
             }
             if (_header != null)
             {
@@ -2131,8 +2178,8 @@ namespace AutoClicker.UI
                 !string.IsNullOrEmpty(_runProfileName) &&
                 !string.Equals(_runProfileName, name, StringComparison.OrdinalIgnoreCase))
             {
-                _statusProfile.Text = Localization.F("Profile: {0}  (run started on {1})",
-                    MenuText(name), MenuText(_runProfileName));
+                SetProfileStatusText(Localization.F("Profile: {0}  (run started on {1})",
+                    MenuText(name), MenuText(_runProfileName)));
                 Utils.Logger.Warn("[Profiles] switched to '" + name + "' while a run started on '" +
                     _runProfileName + "' is going — the running clicker now uses '" + name +
                     "' settings; the run stays credited to '" + _runProfileName + "'.");
@@ -2475,6 +2522,9 @@ namespace AutoClicker.UI
                 // "Ask by wiggling" asks now, like the same entry in the cursor's own menu. On
                 // its own it only forgot the chosen mouse, and one already bound stayed bound.
                 if (raw.Length == 0) { _secondCursor?.RepickSecondMouse(); }
+                // A mouse picked here by the user binds now — the only one connected included (one mouse, two cursors;
+                // Esc gives it back). The saved choice alone (SetPreferredDevice, at start-up too) never takes the only mouse.
+                else if (_settings.SecondCursorUsePhysicalMouse) { _secondCursor?.ChooseSecondMouse(raw); }
                 RefreshMiceDetectedLabel();
             };
             g.Controls.Add(_secondMouseCombo);
@@ -2643,6 +2693,8 @@ namespace AutoClicker.UI
                 _secondCursor.SecondMouseBoundChanged += (s, e) => RunOnUi(OnSecondMouseBound);
                 _secondCursor.PositionChanged += (s, e) => RunOnUi(OnSecondCursorMoved);
                 _secondCursor.SpamChanged += (s, e) => RunOnUi(OnSecondCursorSpamChanged);
+                // The user's own pick handed their only mouse to the second cursor: say at once how to get it back.
+                _secondCursor.OneMouseTaken += (s, e) => RunOnUi(OnOneMouseTaken);
                 // Back where it was parked last time (onto a screen, if that one is gone).
                 if (_settings.SecondCursorX != int.MinValue && _settings.SecondCursorY != int.MinValue)
                 {
@@ -2657,13 +2709,32 @@ namespace AutoClicker.UI
                 (MouseButtonType)Math.Max(0, Math.Min(2, _settings.SecondCursorSpamButton)),
                 ClickStyle.Single, Math.Max(1, 1000 / cps), _settings.SecondCursorSpamRealClicks);
             _secondCursor.SetSecondMouseSensitivity(_settings.SecondCursorMouseSensitivity);
-            _secondCursor.SetEnabled(_settings.SecondCursorEnabled);
+            // The second cursor clicks: with the Clicker turned off in Settings → Disable features it is put away too
+            // (its own switch is left as the user set it, for when the Clicker comes back on).
+            bool secondCursorOn = _settings.SecondCursorEnabled && !_settings.ClickerDisabled;
+            _secondCursor.SetEnabled(secondCursorOn);
             // Tell the controller which mouse the user chose BEFORE arming the mode, so it
             // binds that one directly instead of asking for a wiggle.
             _secondCursor.SetPreferredDevice(_settings.SecondCursorMouseDeviceName);
             // Arm the "2nd real mouse" mode if the user asked for it (needs the cursor
             // showing; it now waits for a 2nd mouse rather than hard-failing).
-            _secondCursor.SetUsePhysicalMouse(_settings.SecondCursorEnabled && _settings.SecondCursorUsePhysicalMouse);
+            _secondCursor.SetUsePhysicalMouse(secondCursorOn && _settings.SecondCursorUsePhysicalMouse);
+        }
+
+        /// <summary>
+        /// One mouse, two cursors: the only mouse now moves the second cursor (the user picked it). The way back is said
+        /// at once, in a card — the pointer itself is not where they will look for an answer.
+        /// </summary>
+        private void OnOneMouseTaken()
+        {
+            try
+            {
+                _notifications?.Notify("Tempo", Localization.T("One mouse, two cursors"),
+                    Localization.T("Your mouse now moves the second cursor and clicks there. Press Esc to get your pointer back."),
+                    ToastKind.Info);
+            }
+            catch (Exception ex) { Utils.Logger.Swallow("OnOneMouseTaken", ex); }
+            RefreshMiceUi();
         }
 
         // Saves the parked spot a moment after the last move rather than on every one: a
@@ -2953,8 +3024,9 @@ namespace AutoClicker.UI
             // be plugged in, rather than refusing. That is the right behaviour, but the menu
             // said nothing about it: you ticked the item, the cursor carried on ignoring
             // your mouse, and the only explanation was a line in the log. Say it here.
+            bool oneMouseDriving = _secondCursor != null && _secondCursor.OneMouseMode;
             string use2ndText = Localization.T(_settings.SecondCursorUsePhysicalMouse
-                ? (miceCount < 2 ? "Waiting for a 2nd mouse — click to stop" : "Stop using my 2nd mouse")
+                ? (miceCount < 2 && !oneMouseDriving ? "Waiting for a 2nd mouse — click to stop" : "Stop using my 2nd mouse")
                 : (miceCount < 2 ? "Use my 2nd mouse — plug one in first (experimental)"
                                  : "Use my 2nd mouse (experimental)"));
             var use2nd = new ToolStripMenuItem(use2ndText)
@@ -2999,8 +3071,14 @@ namespace AutoClicker.UI
             foreach (var m in Native.SecondMouseListener.EnumerateRealMice())
             {
                 string raw = m.DeviceName;
+                // The only mouse connected can be picked too: one mouse, two cursors — it moves the second cursor and
+                // clicks there until Esc gives it back (SecondCursorController.ChooseSecondMouse). Only this pick does that;
+                // the saved choice never takes the only mouse at start-up.
                 var it = new ToolStripMenuItem(MenuText(m.FriendlyName))
-                { Checked = string.Equals(raw, chosenRaw, StringComparison.OrdinalIgnoreCase), CheckOnClick = false };
+                {
+                    Checked = string.Equals(raw, chosenRaw, StringComparison.OrdinalIgnoreCase),
+                    CheckOnClick = false
+                };
                 it.Click += (s, ev) =>
                 {
                     _settings.SecondCursorMouseDeviceName = raw;
@@ -3016,6 +3094,7 @@ namespace AutoClicker.UI
                     }
                     finally { _suppressProfileEvents = prev; }
                     ApplySecondCursorSettings();
+                    _secondCursor?.ChooseSecondMouse(raw);   // the user's own pick: binds even the only mouse
                     RefreshMiceUi();
                 };
                 chooseItem.DropDownItems.Add(it);

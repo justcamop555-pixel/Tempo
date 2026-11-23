@@ -54,13 +54,28 @@ namespace AutoClicker.Utils
         private static bool _probed;
         private static bool _runtimePresent;
         private static bool _hasDevice;
+        private static bool _hasDiscrete;
         private static string _summary;
+
+        // VkPhysicalDeviceType.
+        private const int TypeOther = 0, TypeIntegrated = 1, TypeDiscrete = 2, TypeVirtual = 3, TypeCpu = 4;
 
         /// <summary>True when the Vulkan runtime (vulkan-1.dll) is installed at all.</summary>
         public static bool RuntimePresent { get { Probe(); return _runtimePresent; } }
 
-        /// <summary>True when Vulkan reports at least one physical device.</summary>
+        /// <summary>
+        /// True when Vulkan reports a graphics device that is a real GPU: integrated, discrete or virtual. Not a Vulkan
+        /// driver that draws on the processor (device type "CPU": SwiftShader, lavapipe — what VMs and remote sessions
+        /// often have): the GPU engine there is the CPU engine, slower. It used to count, as the first device whatever
+        /// it was.
+        /// </summary>
         public static bool HasUsableDevice { get { Probe(); return _hasDevice; } }
+
+        /// <summary>
+        /// True when one of the devices is a discrete graphics card — what captions use on their own, without being asked
+        /// (MainForm.WantGpuCaptionEngine). An integrated GPU is used only when the user asks for the GPU engine.
+        /// </summary>
+        public static bool HasDiscreteDevice { get { Probe(); return _hasDiscrete; } }
 
         /// <summary>Whether the probe has run: <see cref="HasUsableDevice"/> then answers at once instead of loading
         /// Vulkan — what a caller on the UI thread asks first.</summary>
@@ -72,13 +87,30 @@ namespace AutoClicker.Utils
         /// </summary>
         public static string Summary { get { Probe(); return _summary; } }
 
+        private static string TypeName(int type) =>
+            type == TypeDiscrete ? "discrete" : type == TypeIntegrated ? "integrated" : type == TypeVirtual ? "virtual"
+            : type == TypeCpu ? "software" : "other";
+
+        private static readonly object _probeLock = new object();
+
+        /// <summary>
+        /// Runs the probe once, whichever thread asks first; a second caller waits for its answer. "Probed" is set only
+        /// once the answer is in: it used to be set FIRST, so a caller racing the start-up probe (captions starting on the
+        /// UI thread while a background probe ran) read "no GPU" off a probe still under way.
+        /// </summary>
         private static void Probe()
         {
-            if (_probed)
+            if (System.Threading.Volatile.Read(ref _probed)) { return; }
+            lock (_probeLock)
             {
-                return;
+                if (_probed) { return; }
+                try { ProbeCore(); }
+                finally { System.Threading.Volatile.Write(ref _probed, true); }
             }
-            _probed = true;
+        }
+
+        private static void ProbeCore()
+        {
             _summary = "GPU engine unavailable — Vulkan could not be queried.";
 
             // 1. Is the loader even installed? Probing this first means a machine with
@@ -130,18 +162,41 @@ namespace AutoClicker.Utils
 
                 // VkPhysicalDeviceProperties: apiVersion(4) driverVersion(4) vendorID(4)
                 // deviceID(4) deviceType(4) deviceName[256]… — well under 2 KB in total,
-                // and only the leading fields are read.
+                // and only the leading fields are read. Every device, not only the first: the
+                // first was taken whatever it was, a software renderer included.
                 IntPtr props = Marshal.AllocHGlobal(2048);
                 try
                 {
-                    VkGetPhysicalDeviceProperties(handles[0], props);
-                    uint api = (uint)Marshal.ReadInt32(props, 0);
-                    string name = Marshal.PtrToStringAnsi(props + 20) ?? "GPU";
+                    string bestName = null, firstName = null;
+                    uint bestApi = 0;
+                    int bestRank = -1, usable = 0;
+                    var kinds = new System.Collections.Generic.List<string>();
+                    foreach (IntPtr h in handles)
+                    {
+                        VkGetPhysicalDeviceProperties(h, props);
+                        uint api = (uint)Marshal.ReadInt32(props, 0);
+                        int type = Marshal.ReadInt32(props, 16);
+                        string name = (Marshal.PtrToStringAnsi(props + 20) ?? "GPU").Trim();
+                        if (firstName == null) { firstName = name; }
+                        kinds.Add(name + " (" + TypeName(type) + ")");
+                        // Discrete, then integrated, then virtual; a CPU renderer or an unknown kind is never a GPU.
+                        int rank = type == TypeDiscrete ? 3 : type == TypeIntegrated ? 2 : type == TypeVirtual ? 1 : -1;
+                        if (rank < 0) { continue; }
+                        usable++;
+                        if (type == TypeDiscrete) { _hasDiscrete = true; }
+                        if (rank > bestRank) { bestRank = rank; bestName = name; bestApi = api; }
+                    }
+                    if (bestName == null)
+                    {
+                        _summary = "Vulkan reports only a software renderer (" + firstName + ") — the CPU engine will be used";
+                        Logger.Info("[Captions] Vulkan probe: no real GPU — " + string.Join(", ", kinds) + ".");
+                        return;
+                    }
                     _hasDevice = true;
-                    _summary = name.Trim() + " · Vulkan " +
-                               ((api >> 22) & 0x7F) + "." + ((api >> 12) & 0x3FF) + "." + (api & 0xFFF) +
-                               (count > 1 ? " (+" + (count - 1) + " more)" : "");
-                    Logger.Info("[Captions] Vulkan probe: " + _summary);
+                    _summary = bestName + " · Vulkan " +
+                               ((bestApi >> 22) & 0x7F) + "." + ((bestApi >> 12) & 0x3FF) + "." + (bestApi & 0xFFF) +
+                               (usable > 1 ? " (+" + (usable - 1) + " more)" : "");
+                    Logger.Info("[Captions] Vulkan probe: " + _summary + (count > 1 ? " — devices: " + string.Join(", ", kinds) : "") + ".");
                 }
                 finally
                 {

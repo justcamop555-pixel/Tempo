@@ -24,6 +24,7 @@ namespace AutoClicker.UI
         private readonly Utils.SpeakerLinker _speakerLinker = new Utils.SpeakerLinker();
         private System.Threading.Timer _speakerSampleTimer;
         private int _speakerSampleBusy;
+        private int _keepPicturesTick;
         private int _speakerSplitCaptions;     // captions cut in two at a hand-over, this session
 
         /// <summary>Starts feeding the linker ~10 samples a second. Idempotent.</summary>
@@ -59,6 +60,12 @@ namespace AutoClicker.UI
                            && tr.ActiveMode == Utils.CaptureMode.Microphone;
                 bool voice = !mic && vp != null && vp.Running;
                 bool face = !mic && fa != null && fa.Running && _settings != null && _settings.CaptionFaceAnalysis;
+                // Whether two faces are one person, from the face analyzer's fingerprints (round 26) — whichever analyzer is
+                // current when asked (0 = cannot say: no analyzer, no prints).
+                if (_speakerLinker.SamePerson == null)
+                {
+                    _speakerLinker.SamePerson = (a, b) => _faceAnalyzer != null ? _faceAnalyzer.SamePerson(a, b) : 0;
+                }
                 _speakerLinker.Sample(DateTime.UtcNow, new Utils.SpeakerLinker.Evidence
                 {
                     VoiceRunning = voice,
@@ -69,13 +76,261 @@ namespace AutoClicker.UI
                     FacesOnScreen = face ? fa.FaceCount : 0,
                     CrossTalk = face && fa.CrossTalk,
                     VisibleFaces = face ? fa.VisibleOccupants : null,
+                    DetectedFaces = face ? fa.DetectedOccupants : null,
                 });
+                // About once a second: the faces speakers are linked to keep their pictures while passers-by's go first
+                // (round 27 — FaceSpeakerAnalyzer.TrimPictures). Outside both locks: the linker's copy, then a set swap.
+                if (face && ++_keepPicturesTick % 10 == 0)
+                {
+                    var keep = new System.Collections.Generic.List<long>();
+                    foreach (Utils.SpeakerLinker.SpeakerInfo s in _speakerLinker.Snapshot()) { keep.AddRange(s.Faces); }
+                    fa.KeepPicturesOf(keep);
+                }
             }
             catch (Exception ex) { Utils.Logger.Swallow("SampleSpeakerEvidence", ex); }
             finally { System.Threading.Interlocked.Exchange(ref _speakerSampleBusy, 0); }
         }
 
         /// <summary>A new caption session or new audio: forget who everyone was.</summary>
+        // ── A new video in the same app (round 30) ───────────────────────────────────────────────────────────────────────
+        // Speakers were reset only when the sound moved to another APP: the user named a speaker "iShowSpeed's brother",
+        // watched a video by another creator in the same Edge window, and the new man was shown under that name. The title
+        // Windows' media controls show for the playing app (MediaTitleWatcher) changes with the video; kept in memory only.
+        private Utils.MediaTitleWatcher _mediaTitles;
+        private readonly Utils.MediaTitleWatcher.Judge _newVideoJudge = new Utils.MediaTitleWatcher.Judge();
+        private int _mediaKeyPid = -1;
+        private string _mediaKeyProc;
+
+        // ── Which window the face reader looks at when a BROWSER plays (round 32) ─────────────────────────────────────────
+        // The user's 32.png: the video played in a background tab while a page of haircut photos was in front; Windows draws
+        // no background tab, so the face reader read the wrong page ("faces on screen: 0" at best). With the playing title
+        // (MediaTitleWatcher) the browser's windows can be told apart: the one whose tab in front IS the video (a tab dragged
+        // into its own window), a picture-in-picture window, or — for sites whose tab title is the channel ("Streamer -
+        // Twitch") — the one naming the channel. None of them: nothing to look at, and the Speakers card says so.
+        // (GetWindowThreadProcessId, GetWindowText and IsWindowVisible are declared in MainForm.Clicker.cs / MainForm.cs.)
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc proc, IntPtr lParam);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct NativeRect { public int Left, Top, Right, Bottom; }
+
+        private volatile IntPtr _faceWindow;
+        private volatile string _faceSkip;
+        private long _faceWindowTick;
+        private readonly object _faceWindowLock = new object();
+        private readonly Dictionary<uint, string> _pidNames = new Dictionary<uint, string>();
+
+        /// <summary>The face reader's window: the browser window showing the playing video, else the audio app's (any thread).</summary>
+        private IntPtr FaceReaderWindow()
+        {
+            ResolveFaceWindow();
+            IntPtr w = _faceWindow;
+            if (w != IntPtr.Zero) { return w; }
+            try { return _mediaDetector != null ? _mediaDetector.CurrentAudioWindow : IntPtr.Zero; } catch { return IntPtr.Zero; }
+        }
+
+        /// <summary>Why the face reader should not look now, or null (any thread).</summary>
+        private string FaceReaderSkip()
+        {
+            ResolveFaceWindow();
+            string why = _faceSkip;
+            return why == null ? null : Utils.Localization.T(why);
+        }
+
+        private void ResolveFaceWindow()
+        {
+            long now = Environment.TickCount64;
+            lock (_faceWindowLock)
+            {
+                if (now - _faceWindowTick < 1000) { return; }
+                _faceWindowTick = now;
+                _faceWindow = IntPtr.Zero;
+                _faceSkip = null;
+                _faceWindowRule = null;
+                var watcher = _mediaTitles;
+                string proc = _mediaKeyProc;
+                if (watcher == null || string.IsNullOrEmpty(proc) || !Utils.MediaDetector.IsBrowserProc(proc)) { return; }
+                string key = watcher.PlayingKey(proc);
+                if (key == null) { return; }   // nothing reported as playing: as before
+                int sep = key.LastIndexOf('|');
+                string title = (sep >= 0 ? key.Substring(0, sep) : key).Trim();
+                string artist = (sep >= 0 ? key.Substring(sep + 1) : "").Trim();
+                if (title.Length < 3) { return; }
+
+                IntPtr byTitle = IntPtr.Zero, pip = IntPtr.Zero, byArtist = IntPtr.Zero;
+                long byTitleArea = 0;
+                var sb = new System.Text.StringBuilder(512);
+                EnumWindows((h, l) =>
+                {
+                    try
+                    {
+                        if (!IsWindowVisible(h) || IsIconic(h) || !GetWindowRect(h, out NativeRect r)) { return true; }
+                        long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
+                        if (r.Right - r.Left < 160 || r.Bottom - r.Top < 120) { return true; }
+                        GetWindowThreadProcessId(h, out uint pid);
+                        if (!_pidNames.TryGetValue(pid, out string name))
+                        {
+                            name = Utils.AppAudioCapture.NameOf((int)pid) ?? "";
+                            if (_pidNames.Count > 256) { _pidNames.Clear(); }
+                            _pidNames[pid] = name;
+                        }
+                        if (!string.Equals(name, proc, StringComparison.OrdinalIgnoreCase)) { return true; }
+                        sb.Clear();
+                        GetWindowText(h, sb, sb.Capacity);
+                        string wt = sb.ToString();
+                        if (wt.Length == 0) { return true; }
+                        if (wt.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            if (area > byTitleArea) { byTitleArea = area; byTitle = h; }
+                        }
+                        else if (wt.StartsWith("Picture in picture", StringComparison.OrdinalIgnoreCase)
+                                 || wt.StartsWith("Picture-in-Picture", StringComparison.OrdinalIgnoreCase))
+                        {
+                            pip = h;
+                        }
+                        else if (artist.Length >= 3 && byArtist == IntPtr.Zero && wt.IndexOf(artist, StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            byArtist = h;
+                        }
+                    }
+                    catch { }
+                    return true;
+                }, IntPtr.Zero);
+
+                if (byTitle != IntPtr.Zero)
+                {
+                    _faceWindow = byTitle;
+                    // This site puts the video's title in its tab title (YouTube does; Twitch and Netflix do not): from now
+                    // on, no window carrying it means the video's tab is not the one in front.
+                    _titleInTabSeen = true;
+                    _faceWindowRule = "the browser window whose tab in front is the video";
+                }
+                else if (pip != IntPtr.Zero) { _faceWindow = pip; _faceWindowRule = "the picture-in-picture window"; }
+                else if (byArtist != IntPtr.Zero) { _faceWindow = byArtist; _faceWindowRule = "the browser window naming the channel"; }
+                // Only once the title has been seen in a tab: for a site whose tab title never carries it, "no match" says
+                // nothing, and faces are read as before.
+                else if (_titleInTabSeen) { _faceSkip = "faces: video not on screen"; _faceWindowRule = "none: the video's tab is not in front in any window"; }
+            }
+        }
+
+        // For Live debug: which of ResolveFaceWindow's rules chose the face reader's window last (null: the audio app's own
+        // window, as before round 32), and how the media titles have been judged this session. Never a title.
+        private volatile string _faceWindowRule;
+        private int _newVideosReset, _newVideosKept, _videosReturnedTo;
+        private DateTime _lastNewVideoUtc;
+
+        /// <summary>Live debug's line about the playing app's media title and the face reader's window (no title in it).</summary>
+        private void AppendVideoStats(StringBuilder sb)
+        {
+            var watcher = _mediaTitles;
+            sb.Append("  videos: ");
+            if (watcher == null) { sb.Append("not watched (captions off)"); }
+            else if (watcher.Unavailable) { sb.Append("Windows' media controls can't be read here — a new video is only noticed by a change of app"); }
+            else
+            {
+                string proc = _mediaKeyProc;
+                bool playing = !string.IsNullOrEmpty(proc) && watcher.PlayingKey(proc) != null;
+                sb.Append(string.IsNullOrEmpty(proc) ? "no app playing yet"
+                          : playing ? proc + " has a title playing" : proc + " shows no title (paused, or not a video)");
+                sb.Append(" · ").Append(_newVideosReset).Append(" new video(s) → speakers reset");
+                if (_newVideosKept > 0) { sb.Append(", ").Append(_newVideosKept).Append(" kept (a reset moments before)"); }
+                if (_videosReturnedTo > 0) { sb.Append(" · ").Append(_videosReturnedTo).Append(" return(s) to an earlier video, speakers kept"); }
+                if (_newVideosReset > 0) { sb.Append(" · last ").Append(AgoText(DateTime.UtcNow - _lastNewVideoUtc)); }
+            }
+            sb.AppendLine();
+            if (_settings != null && _settings.CaptionFaceAnalysis)
+            {
+                string rule = _faceWindowRule;
+                bool browser = !string.IsNullOrEmpty(_mediaKeyProc) && Utils.MediaDetector.IsBrowserProc(_mediaKeyProc);
+                sb.Append("  face reader looks at: ")
+                  .Append(rule ?? (browser ? "the browser's own window (the video's tab title has not been seen in any window yet)"
+                                           : "the playing app's window"))
+                  .AppendLine();
+            }
+        }
+
+        private static string AgoText(TimeSpan ago)
+        {
+            if (ago.TotalSeconds < 90) { return (int)Math.Max(0, ago.TotalSeconds) + " s ago"; }
+            if (ago.TotalMinutes < 90) { return (int)ago.TotalMinutes + " min ago"; }
+            return ago.TotalHours.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " h ago";
+        }
+
+        // The playing title has been found in a browser window's title this session (see ResolveFaceWindow).
+        private volatile bool _titleInTabSeen;
+
+        private void StartMediaTitleWatch()
+        {
+            if (_mediaTitles != null) { return; }
+            try { _mediaTitles = new Utils.MediaTitleWatcher(); } catch { _mediaTitles = null; }
+            _newVideoJudge.Clear();
+            _mediaKeyPid = -1;
+            _titleInTabSeen = false;
+            _faceWindowRule = null;
+            _newVideosReset = 0;
+            _newVideosKept = 0;
+            _videosReturnedTo = 0;
+        }
+
+        private void StopMediaTitleWatch()
+        {
+            try { _mediaTitles?.Dispose(); } catch { }
+            _mediaTitles = null;
+            _newVideoJudge.Clear();
+        }
+
+        /// <summary>
+        /// UI thread, with each caption: when the playing app's media title has changed and held a few seconds, to a title
+        /// not heard in the last 15 minutes (MediaTitleWatcher.Judge), a new video started — its people are not the last
+        /// one's, so the voices, faces, numbering and the NAMES given to them are reset (the same reset as a change of app),
+        /// and the spoken language is checked again.
+        /// </summary>
+        private void CheckForNewVideo(string src)
+        {
+            var watcher = _mediaTitles;
+            if (watcher == null || _mediaDetector == null) { return; }
+            int pid = 0;
+            try { pid = _mediaDetector.CurrentAudioPid; } catch { }
+            if (pid != _mediaKeyPid)
+            {
+                _mediaKeyPid = pid;
+                _mediaKeyProc = pid > 0 ? Utils.AppAudioCapture.NameOf(pid) : null;
+                _titleInTabSeen = false;   // another app: its tab titles are its own (ResolveFaceWindow)
+            }
+            // Null while paused, or for an app with no media title (a game, a call): nothing to judge.
+            var verdict = _newVideoJudge.Look(watcher.PlayingKey(_mediaKeyProc), DateTime.UtcNow);
+            if (verdict == Utils.MediaTitleWatcher.Verdict.Same) { return; }
+            if (verdict == Utils.MediaTitleWatcher.Verdict.NewVideo) { _titleInTabSeen = false; }   // maybe another site
+            DateTime now = DateTime.UtcNow;
+            if (verdict == Utils.MediaTitleWatcher.Verdict.BackToEarlier)
+            {
+                _videosReturnedTo++;
+                Utils.Logger.Info("[Captions] back to a video that played a moment ago in " + src + " — speakers kept.");
+                return;
+            }
+            if ((now - _lastSpeakerResetUtc).TotalSeconds < 20)
+            {
+                _newVideosKept++;
+                Utils.Logger.Info("[Captions] a new video started in " + src + " — speakers kept (they were reset moments ago).");
+                return;
+            }
+            _lastSpeakerResetUtc = now;
+            _newVideosReset++;
+            _lastNewVideoUtc = now;
+            try { _voiceProfiler?.ForgetVoices(); } catch { }
+            _speakerTurns.Reset();
+            ResetSpeakerIdentities();
+            try { _captionTranscriber?.RecheckLanguage("a new video started"); } catch { }
+            // The title itself stays out of the log.
+            Utils.Logger.Info("[Captions] a new video started in " + src + " (the title in Windows' media controls changed) — "
+                              + "speakers, their names and numbering reset, language to be checked.");
+            try { RefreshCaptionsTab(); } catch { }
+        }
+
         private void ResetSpeakerIdentities()
         {
             _speakerLinker.Reset();
@@ -238,6 +493,12 @@ namespace AutoClicker.UI
                     // under the matcher it belongs to, rather than below the face detail.
                     string vd = vp.DebugDetail();
                     if (!string.IsNullOrEmpty(vd)) { sb.Append(vd); }
+                    // The voice-fingerprint model on its way (round 34): how much of it has come.
+                    if (Utils.VoicePrint.Downloading)
+                    {
+                        sb.Append("    voice-fingerprint model: downloading — ").Append(Utils.VoicePrint.DownloadedBytes / 1048576)
+                          .Append(" of ").Append(Utils.VoicePrint.ModelBytes / 1048576).Append(" MB").AppendLine();
+                    }
                 }
                 else
                 {
@@ -261,6 +522,9 @@ namespace AutoClicker.UI
                               .Append(fa.SlotRecycles == 1 ? " slot" : " slots")
                               .Append(" reused (each newcomer is linked afresh)");
                         }
+                        // Round 32: not looking at all while the video's tab is not on screen — speakers by voice alone.
+                        string skipped = fa.SkippedBecause;
+                        if (!string.IsNullOrEmpty(skipped)) { sb.Append(" · NOT LOOKING (").Append(skipped).Append(") — speakers by voice alone"); }
                         sb.AppendLine();
                         // Recognising returning faces (Utils/FaceAppearance.cs): who came back and was
                         // known again, and who turned up where someone else had been.
@@ -274,6 +538,7 @@ namespace AutoClicker.UI
                         sb.Append("  face analysis: on in Settings, but not running").AppendLine();
                     }
                 }
+                AppendVideoStats(sb);
             }
             catch (Exception ex)
             {

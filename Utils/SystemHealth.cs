@@ -28,7 +28,8 @@ namespace AutoClicker.Utils
         public long TakenTick;                       // Environment.TickCount64 when it was taken
         public double CpuPercent = double.NaN;       // the whole machine, every core
         public double MemoryLoadPercent = double.NaN; // physical memory in use
-        public double CommitPercent = double.NaN;    // committed memory against the commit limit (RAM + page file)
+        public double CommitPercent = double.NaN;    // committed memory against the most the commit limit can reach (RAM + page files, grown)
+        public ulong PageFileGrowBytes;              // how much more the page files can still grow (SystemHealthMonitor.PageFileGrowRoom)
         public double GpuPercent = double.NaN;       // the busiest GPU engine, counted the way Task Manager counts it
 
         public bool OnBattery;
@@ -222,16 +223,140 @@ namespace AutoClicker.Utils
             return GlobalMemoryStatusEx(ref m) ? (m.ullAvailPhys, m.ullTotalPhys) : ((ulong, ulong)?)null;
         }
 
+        /// <summary>
+        /// Commit room, in bytes: how much more memory programs may still be promised (the commit limit — RAM plus page
+        /// files — less the commit charge), and the limit itself; null when Windows can't say. Running OUT of this is what
+        /// makes a program's next allocation fail and the program crash; a low physical "Available" only means paging.
+        /// </summary>
+        public static (ulong Available, ulong Limit)? CommitRoom()
+        {
+            var m = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
+            return GlobalMemoryStatusEx(ref m) ? (m.ullAvailPageFile, m.ullTotalPageFile) : ((ulong, ulong)?)null;
+        }
+
         private static void ReadMemory(HealthSnapshot s)
         {
             var m = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
             if (!GlobalMemoryStatusEx(ref m)) { return; }
             s.MemoryLoadPercent = m.dwMemoryLoad;
-            // "PageFile" here is the commit limit (RAM + page files), and its use is the commit charge.
+            // "PageFile" here is the commit limit (RAM + page files), and its use is the commit charge — counted against
+            // the limit the page files can still grow to, which is where an allocation would really fail.
             if (m.ullTotalPageFile > 0)
             {
-                s.CommitPercent = 100.0 * (m.ullTotalPageFile - Math.Min(m.ullAvailPageFile, m.ullTotalPageFile)) / m.ullTotalPageFile;
+                ulong grow = PageFileGrowRoom();
+                s.PageFileGrowBytes = grow;
+                double used = m.ullTotalPageFile - Math.Min(m.ullAvailPageFile, m.ullTotalPageFile);
+                s.CommitPercent = 100.0 * used / ((double)m.ullTotalPageFile + grow);
             }
+        }
+
+        // ── page files: how far the commit limit can still grow ─────────────────────────────────────
+
+        private static readonly object _growLock = new object();
+        private static long _growReadTick;
+        private static ulong _growRoom;
+        private static string _growHow = "";
+
+        /// <summary>
+        /// How much more Windows can still add to the page files, in bytes. A system-managed page file grows "when the system
+        /// commit charge is more than 90 percent of the system commit limit", up to "3 × RAM or 4 GB, whichever is larger",
+        /// "limited to the volume size ÷ 8" (Microsoft Learn: "How to determine the appropriate page file size for 64-bit
+        /// versions of Windows"); a custom size grows up to its maximum; both stop at the disk's free space. So the commit
+        /// limit GlobalMemoryStatusEx reports is not the ceiling, and "1 GB of commit left" on a PC whose page file can still
+        /// grow by 20 GB is nowhere near an allocation failing — the "almost out of memory" warnings while everything ran
+        /// fine (2026-11-14). Read from Windows' own setting (Memory Management\PagingFiles) and the page files on disk;
+        /// kept for a minute.
+        /// </summary>
+        public static ulong PageFileGrowRoom() => PageFileGrowth().Room;
+
+        /// <summary><see cref="PageFileGrowRoom"/> and how it was worked out, drive by drive (Live debug, the log).</summary>
+        public static (ulong Room, string How) PageFileGrowth()
+        {
+            long now = Environment.TickCount64;
+            lock (_growLock)
+            {
+                if (_growReadTick != 0 && now - _growReadTick < 60000) { return (_growRoom, _growHow); }
+                ulong room;
+                string how;
+                try { room = ReadPageFileGrowRoom(out how); }
+                catch (Exception ex) { room = 0; how = "not known (" + ex.GetType().Name + ")"; }
+                _growRoom = room;
+                _growHow = how;
+                _growReadTick = now;
+                return (room, how);
+            }
+        }
+
+        private static ulong ReadPageFileGrowRoom(out string how)
+        {
+            const ulong MB = 1024UL * 1024, GB = 1024 * MB;
+            string[] setting = null, existing = null;
+            using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"))
+            {
+                setting = key?.GetValue("PagingFiles") as string[];
+                existing = key?.GetValue("ExistingPageFiles") as string[];
+            }
+            if (setting == null || setting.Length == 0) { how = "no page file is set"; return 0; }
+            var m = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
+            bool haveMemory = GlobalMemoryStatusEx(ref m);
+            ulong ram = haveMemory ? m.ullTotalPhys : 0;
+
+            // Each page file: its path, and its sizes in MB (0 0, or none, = system-managed).
+            var files = new List<(string Path, bool SystemManaged, ulong MaxMb)>();
+            foreach (string raw in setting)
+            {
+                string[] bits = (raw ?? "").Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (bits.Length == 0) { continue; }
+                ulong initialMb = 0, maxMb = 0;
+                bool sized = bits.Length >= 3 && ulong.TryParse(bits[1], out initialMb) && ulong.TryParse(bits[2], out maxMb);
+                bool systemManaged = !sized || (initialMb == 0 && maxMb == 0);
+                if (bits[0].StartsWith("?:", StringComparison.Ordinal))
+                {
+                    // "Automatically manage paging file size for all drives": the page files Windows made this boot
+                    // ("\??\C:\pagefile.sys"), or the system drive's.
+                    bool any = false;
+                    foreach (string e in existing ?? new string[0])
+                    {
+                        string p = (e ?? "").Trim();
+                        if (p.StartsWith(@"\??\", StringComparison.Ordinal)) { p = p.Substring(4); }
+                        if (p.Length >= 3 && p[1] == ':') { files.Add((p, true, 0)); any = true; }
+                    }
+                    if (!any)
+                    {
+                        string sys = Environment.GetEnvironmentVariable("SystemDrive");
+                        files.Add(((string.IsNullOrEmpty(sys) ? "C:" : sys.TrimEnd('\\')) + bits[0].Substring(2), true, 0));
+                    }
+                    continue;
+                }
+                files.Add((bits[0], systemManaged, maxMb));
+            }
+
+            ulong total = 0;
+            var parts = new List<string>();
+            foreach (var f in files)
+            {
+                string root;
+                try { root = System.IO.Path.GetPathRoot(f.Path); } catch { continue; }
+                if (string.IsNullOrEmpty(root)) { continue; }
+                var drive = new System.IO.DriveInfo(root);
+                if (!drive.IsReady) { continue; }
+                ulong volume = (ulong)Math.Max(0L, drive.TotalSize);
+                ulong free = (ulong)Math.Max(0L, drive.AvailableFreeSpace);
+                ulong current = 0;
+                try { var info = new System.IO.FileInfo(f.Path); if (info.Exists) { current = (ulong)info.Length; } } catch { }
+                // Unreadable with one page file in all: the commit limit beyond RAM is that file.
+                if (current == 0 && files.Count == 1 && haveMemory && m.ullTotalPageFile > ram) { current = m.ullTotalPageFile - ram; }
+                ulong max = f.SystemManaged ? Math.Min(Math.Max(3 * ram, 4 * GB), volume / 8) : f.MaxMb * MB;
+                ulong room = max > current ? max - current : 0;
+                // Never past what the disk holds, with a little kept back.
+                ulong diskRoom = free > 512 * MB ? free - 512 * MB : 0;
+                room = Math.Min(room, diskRoom);
+                total += room;
+                parts.Add(root.TrimEnd('\\') + " " + (f.SystemManaged ? "system-managed" : "up to " + f.MaxMb + " MB")
+                          + ", " + current / MB + " MB now, can grow " + room / MB + " MB");
+            }
+            how = parts.Count == 0 ? "no page file found" : string.Join("; ", parts);
+            return total;
         }
 
         // ── GPU, as Task Manager counts it ──────────────────────────────────────────────────────────

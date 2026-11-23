@@ -73,6 +73,8 @@ namespace AutoClicker.UI
                 BackColor = _theme.InputBackground,
                 ForeColor = _theme.Text,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+                // Up to 300 rows of four cells: one element for assistive tools (ListAsOneAccessibleObject).
+                CellsForAccessibility = false,
             };
             _list.Columns.Add(Localization.T("When"), 128);
             _list.Columns.Add(Localization.T("From"), 130);
@@ -259,6 +261,10 @@ namespace AutoClicker.UI
                 _list.Items.Clear();
 
                 int missed = 0, total = 0;
+                // Made first and handed over in one batch: added one by one, each row was its own insert with its own
+                // bookkeeping, every time the history changed with the window open.
+                var rows = new List<ListViewItem>(items.Count);
+                ListViewItem selectRow = null;
                 foreach (NotificationHistory.Entry e in items)
                 {
                     int times = Math.Max(1, e.Count);
@@ -305,10 +311,12 @@ namespace AutoClicker.UI
                     // A list row's tip is as wide as the screen allows too, and a notification's
                     // text can be a paragraph: broken into lines like every other tip.
                     row.ToolTipText = TipStyle.Wrap(row.ToolTipText);
-                    _list.Items.Add(row);
-                    if (selectedEntry != null && ReferenceEquals(e, selectedEntry)) { row.Selected = true; }
+                    rows.Add(row);
+                    if (selectedEntry != null && ReferenceEquals(e, selectedEntry)) { selectRow = row; }
                 }
 
+                _list.Items.AddRange(rows.ToArray());
+                if (selectRow != null) { selectRow.Selected = true; }
                 _list.EndUpdate();
 
                 // Only when the reader had actually scrolled, and only when entries were ADDED —

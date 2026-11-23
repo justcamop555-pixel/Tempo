@@ -58,7 +58,18 @@ namespace AutoClicker.Utils
             public bool CrossTalk;
             /// <summary>Occupant ids of the living faces on screen.</summary>
             public long[] VisibleFaces;
+            /// <summary>
+            /// Occupant ids of the faces the detector actually found this moment (not coasting on an old box): only two of
+            /// these at once are two faces on screen together.
+            /// </summary>
+            public long[] DetectedFaces;
         }
+
+        /// <summary>
+        /// Whether two faces are the same person by their face fingerprints (the face analyzer's SamePerson): +1 the same,
+        /// −1 different, 0 cannot say. Null = no such knowledge (faces are then only told apart by being seen together).
+        /// </summary>
+        public Func<long, long, int> SamePerson { get; set; }
 
         /// <summary>One speaker as the Captions tab shows it.</summary>
         public sealed class SpeakerInfo
@@ -168,6 +179,9 @@ namespace AutoClicker.Utils
                 _current = 0;
                 _why = "";
                 _splits = _rejoins = _overrides = 0;
+                _seenTogether.Clear();
+                _merges = 0;
+                _lastMergeCheckUtc = DateTime.MinValue;
                 // Deliberately NOT cleared: incarnations keep counting across resets, so a name
                 // given in an earlier session can never match a label handed out in this one.
                 foreach (int l in new List<int>(_incarnation.Keys)) { _incarnation[l]++; }
@@ -183,6 +197,8 @@ namespace AutoClicker.Utils
         {
             lock (_gate)
             {
+                if (e.FaceRunning) { NoteSeenTogether(e.DetectedFaces); }
+                MergeSamePeople(utc);
                 int label;
                 string why;
                 if (e.FaceRunning && e.CrossTalk)
@@ -227,7 +243,7 @@ namespace AutoClicker.Utils
             int linked = LinkedLabel(face, e, utc);
             if (linked > 0)
             {
-                Info(linked, utc).SawFace(face);
+                ShowFaceUnder(linked, face, utc);
                 if (e.ActiveVoice > 0)
                 {
                     if (!_voiceLabel.TryGetValue(e.ActiveVoice, out int voiceLabel))
@@ -272,7 +288,7 @@ namespace AutoClicker.Utils
                     _faceLabel[face] = own;
                 }
                 Info(own, utc).HasFace = true;
-                Info(own, utc).SawFace(face);
+                ShowFaceUnder(own, face, utc);
                 why = "face → Speaker " + own + " (voice matching is off)";
                 return own;
             }
@@ -319,11 +335,15 @@ namespace AutoClicker.Utils
             }
             if (!_linkedSince.ContainsKey(face)) { _linkedSince[face] = utc; }
 
-            // Another face on screen RIGHT NOW linked to the same voice, and linked first: two people
-            // the voice profiler hears as one. This face gets a speaker of its own.
-            if (e.VisibleFaces != null)
+            // Another face on screen RIGHT NOW linked to the same voice, and linked first: two people the voice profiler
+            // hears as one. This face gets a speaker of its own — when the two are really two (round 26, the user's 22.png:
+            // one man became Speakers 1 and 2). Both must be DETECTED now: a face coasting on its old box after a cut is
+            // the same person's ghost, not a second person. And not when their fingerprints say one person; when the
+            // fingerprints cannot say, only after the two have been seen together for a while (CoSeenToSplit).
+            long[] together = e.DetectedFaces ?? e.VisibleFaces;
+            if (together != null && Array.IndexOf(together, face) >= 0)
             {
-                foreach (long other in e.VisibleFaces)
+                foreach (long other in together)
                 {
                     if (other == face || _faceLabel.ContainsKey(other)) { continue; }
                     if (TopVoice(other, out int ov, out double ow, out double os)
@@ -331,6 +351,13 @@ namespace AutoClicker.Utils
                         && _linkedSince.TryGetValue(other, out DateTime otherSince)
                         && otherSince < _linkedSince[face])
                     {
+                        if (!OldSplitRule)
+                        {
+                            int same = AskSamePerson(face, other);
+                            if (same > 0) { continue; }                 // one person, two views of them
+                            int seen = CountSeenTogether(face, other);
+                            if (same == 0 && seen < CoSeenToSplit) { continue; }
+                        }
                         int mine = NewLabel(utc);
                         _faceLabel[face] = mine;
                         Info(mine, utc).HasFace = true;
@@ -342,6 +369,113 @@ namespace AutoClicker.Utils
             int label = LabelForVoice(voice, utc);
             Info(label, utc).HasFace = true;
             return label;
+        }
+
+        // Samples two faces must be found TOGETHER before they count as two people sharing a voice, when their fingerprints
+        // cannot say (~1 s): a ghost and its person never are, two people at one table are all the time.
+        private const int CoSeenToSplit = 10;
+        // Test switch (scratchpad/facetrack): the split as it was before round 26 — any two faces "on screen".
+        internal static bool OldSplitRule;
+        private readonly Dictionary<long, int> _seenTogether = new Dictionary<long, int>();
+        private DateTime _lastMergeCheckUtc = DateTime.MinValue;
+        private int _merges;
+
+        /// <summary>Speakers found to be one person (by their faces' fingerprints) and joined, this session.</summary>
+        public int Merges { get { lock (_gate) { return _merges; } } }
+
+        private static long PairKey(long a, long b) => a < b ? (a << 32) ^ b : (b << 32) ^ a;
+
+        private int AskSamePerson(long a, long b)
+        {
+            Func<long, long, int> ask = SamePerson;
+            if (ask == null) { return 0; }
+            try { return ask(a, b); } catch { return 0; }
+        }
+
+        private int CountSeenTogether(long a, long b) => _seenTogether.TryGetValue(PairKey(a, b), out int n) ? n : 0;
+
+        /// <summary>Counts, for every pair of faces found this moment, how long they have been seen together.</summary>
+        private void NoteSeenTogether(long[] detected)
+        {
+            var now = new HashSet<long>();
+            if (detected != null && detected.Length > 1)
+            {
+                for (int i = 0; i < detected.Length; i++)
+                {
+                    for (int j = i + 1; j < detected.Length; j++)
+                    {
+                        long key = PairKey(detected[i], detected[j]);
+                        now.Add(key);
+                        _seenTogether[key] = Math.Min(1000, (_seenTogether.TryGetValue(key, out int n) ? n : 0) + 1);
+                    }
+                }
+            }
+            foreach (long key in new List<long>(_seenTogether.Keys))
+            {
+                if (now.Contains(key)) { continue; }
+                int left = _seenTogether[key] - 1;
+                if (left <= 0) { _seenTogether.Remove(key); } else { _seenTogether[key] = left; }
+            }
+        }
+
+        /// <summary>
+        /// Shows <paramref name="face"/> under <paramref name="label"/> — and under no other speaker: two speakers were
+        /// showing one man's picture (22.png) because a face seen first under one label kept its place in that label's
+        /// pictures after it was linked to another.
+        /// </summary>
+        private void ShowFaceUnder(int label, long face, DateTime utc)
+        {
+            Info(label, utc).SawFace(face);
+            foreach (KeyValuePair<int, SpeakerInfo> kv in _speakers)
+            {
+                if (kv.Key == label || !kv.Value.Faces.Remove(face)) { continue; }
+                kv.Value.Face = kv.Value.Faces.Count > 0 ? kv.Value.Faces[0] : 0;
+            }
+        }
+
+        /// <summary>
+        /// Every couple of seconds: two speakers whose faces are the same person (fingerprints) are one speaker. The later
+        /// number joins the earlier — its voices, its faces — and is freed. Undoes a split made before the fingerprints
+        /// knew better, and a person whose voice the profiler learned twice.
+        /// </summary>
+        private void MergeSamePeople(DateTime utc)
+        {
+            if (SamePerson == null || (utc - _lastMergeCheckUtc).TotalSeconds < 2) { return; }
+            _lastMergeCheckUtc = utc;
+            var labels = new List<int>(_speakers.Keys);
+            labels.Sort();
+            for (int i = 0; i < labels.Count; i++)
+            {
+                for (int j = i + 1; j < labels.Count; j++)
+                {
+                    int keep = labels[i], gone = labels[j];
+                    if (!_speakers.TryGetValue(keep, out SpeakerInfo a) || !_speakers.TryGetValue(gone, out SpeakerInfo b)) { continue; }
+                    if (a.Faces.Count == 0 || b.Faces.Count == 0) { continue; }
+                    bool same = false, differ = false;
+                    foreach (long fa in a.Faces)
+                    {
+                        foreach (long fb in b.Faces)
+                        {
+                            int v = AskSamePerson(fa, fb);
+                            if (v > 0) { same = true; }
+                            if (v < 0) { differ = true; }
+                        }
+                    }
+                    if (!same || differ) { continue; }
+                    foreach (int v in new List<int>(_voiceLabel.Keys)) { if (_voiceLabel[v] == gone) { _voiceLabel[v] = keep; } }
+                    foreach (long f in new List<long>(_faceLabel.Keys)) { if (_faceLabel[f] == gone) { _faceLabel.Remove(f); } }
+                    for (int k = b.Faces.Count - 1; k >= 0; k--) { if (!a.Faces.Contains(b.Faces[k])) { a.Faces.Add(b.Faces[k]); } }
+                    while (a.Faces.Count > SpeakerInfo.FacesKept) { a.Faces.RemoveAt(a.Faces.Count - 1); }
+                    a.HasVoice |= b.HasVoice;
+                    a.HasFace = true;
+                    if (b.LastHeardUtc > a.LastHeardUtc) { a.LastHeardUtc = b.LastHeardUtc; }
+                    _speakers.Remove(gone);
+                    _merges++;
+                    if (_current == gone) { _current = keep; }
+                    labels.RemoveAt(j);
+                    j--;
+                }
+            }
         }
 
         private void Vote(long face, int voice, DateTime utc)
@@ -650,10 +784,11 @@ namespace AutoClicker.Utils
                       .Append(w >= LinkWeight && share >= LinkShare ? " · linked" : " · not linked yet")
                       .AppendLine();
                 }
-                if (_splits + _rejoins + _overrides > 0)
+                if (_splits + _rejoins + _overrides + _merges > 0)
                 {
                     sb.Append("    faces told apart ").Append(_splits).Append(" · voices re-joined ").Append(_rejoins)
-                      .Append(" · sight overruled the voice ").Append(_overrides).Append('×').AppendLine();
+                      .Append(" · sight overruled the voice ").Append(_overrides).Append('×')
+                      .Append(" · speakers joined as one person ").Append(_merges).AppendLine();
                 }
                 return sb.ToString();
             }

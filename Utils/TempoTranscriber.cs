@@ -68,6 +68,12 @@ namespace AutoClicker.Utils
         // engine that can't keep pace, a generous buffer doesn't rescue the words, it
         // just makes every word arrive late — permanently.
         private const double MaxBacklogSeconds = 3.0;
+        // A chunk that took this many times its own length to decode is one no lighter decoding can rescue: the model
+        // is stepped down at once instead of after the beam rung (see the too-slow ladder in TranscribeLoop).
+        private const double HopelessFactor = 3.0;
+        // How sure a slow language-detecting chunk must be (its average token probability) to lock its language at once
+        // instead of after LanguageLock.LockAfter agreeing chunks (see the session language lock in TranscribeLoop).
+        private const double FastLockProb = 0.5;
         // whisper.cpp skips any input shorter than one second outright ("input is too short - 914 ms < 1000 ms"), and a
         // whole second still counts as short. A word said on its own after a pause — "Testing.", "Two.", "Hello." — makes
         // a quick-start chunk of 0.8–1.0 s, so it came out as nothing at all: 3 of 7 isolated words, a whole "Can you hear
@@ -274,6 +280,16 @@ namespace AutoClicker.Utils
         private volatile string _srcDesc;       // "48 kHz · stereo float" etc.
         private long _lastEmitTick;             // TickCount64 of the last caption (Interlocked)
         private long _lastDropLogMs;            // rate-limits the "falling behind" warning
+
+        // The "falling behind" warning, rolled up (2026-11-16, "improve … tempo log"): one session on the GPU wrote it 25
+        // times in an hour, a line every two or three minutes. The first of a stretch is a WARN; the ones within the next
+        // ten minutes go to Live debug only and are counted, and the next WARN (or the end of the session) says how many
+        // there were and how much audio they cost.
+        private const long DropWarnEveryMs = 10 * 60 * 1000;
+        private long _dropWarnAtMs;
+        private int _dropRollCount;
+        private long _dropRollMs;
+        private string _dropRollAdvice;
 
         /// <summary>
         /// When true, every transcription pass logs one [Trace] line (chunk length,
@@ -494,6 +510,7 @@ namespace AutoClicker.Utils
         public volatile SelfVoiceGuard OwnVoiceGuard;
         private volatile int _ownVoiceSkipped;
         private volatile int _lastOwnVoiceSimX100;
+        private bool _echoNoted;   // "the mic hears the speakers" logged this session (worker thread only)
         /// <summary>Chunks skipped this session because they were the user's own voice.</summary>
         public int OwnVoiceSkippedChunks => _ownVoiceSkipped;
         /// <summary>Similarity (0..1) between the last checked chunk and the mic envelope.</summary>
@@ -554,7 +571,7 @@ namespace AutoClicker.Utils
                 if (GpuWouldHelp || RuntimeGpuRequested || !VulkanProbe.HasUsableDevice) { return; }
                 GpuWouldHelp = true;
                 Logger.Warn("[Captions] this PC HAS a usable GPU engine (" + VulkanProbe.Summary +
-                            "). Turning on Settings → Advanced → More caption options → \"Try GPU engine\" and " +
+                            "). Ticking Settings → Advanced → More caption options → \"Use the graphics card for captions\" and " +
                             "restarting would run this model far faster instead of shrinking it.");
             }
             catch { }
@@ -628,6 +645,36 @@ namespace AutoClicker.Utils
         // The language StartCore built the session's processor with, handed to TranscribeLoop (which
         // clears it): the choice can change while the model loads, and the loop must know what it HAS.
         private volatile string _builtLanguage;
+        // ...and the CHOICE it was built for ("auto" when it was built locked to a carried language).
+        private volatile string _builtChoice;
+
+        /// <summary>
+        /// The language a detecting session last locked onto, for the next session of this run to start from: every
+        /// start of captions — the hotkey, a model stepped down for speed, a restart of the engine — began detecting
+        /// again, and on a slow PC each detecting chunk costs a large model ~20 s of the speech (see FastLockProb).
+        /// Cleared when a lock is given up (the audio changed language) or the spoken-language choice changes.
+        /// </summary>
+        private static volatile string _carriedLanguage;
+        internal static string CarriedLanguage => _carriedLanguage;
+
+        /// <summary>
+        /// The language an EARLIER run of Tempo settled on (the host keeps it in AppSettings.CaptionLastLanguage). A start
+        /// with nothing carried in this run begins in it — but only where the first speech can be checked against it
+        /// quickly (LanguageCheckMaxMs: the GPU, the small models), so a video in another language moves the lock within a
+        /// second instead of being written in the wrong one. Round 30: detecting from nothing took 7–60 s on the user's PC.
+        /// </summary>
+        public static volatile string RememberedLanguage;
+
+        /// <summary>The language for the host to remember for the next run (what this run carries), or null.</summary>
+        public static string LanguageToRemember => _carriedLanguage;
+
+        /// <summary>A Whisper language code: two or three lower-case letters ("en", "haw", "yue").</summary>
+        private static bool IsLanguageCode(string code)
+        {
+            if (string.IsNullOrEmpty(code) || code.Length < 2 || code.Length > 3) { return false; }
+            foreach (char c in code) { if (c < 'a' || c > 'z') { return false; } }
+            return true;
+        }
 
         /// <summary>
         /// The language a run should BUILD its processor with: the pinned code when one
@@ -668,6 +715,116 @@ namespace AutoClicker.Utils
         private int _headroomChunks;
         private int _slowChunks;
         private bool _slowFired;
+        /// <summary>Hopeless chunks in a row (over HopelessFactor × their speech); two ask for a smaller model.</summary>
+        private int _hopelessChunks;
+
+        /// <summary>
+        /// A language locked FAST (from one slow, confident chunk) that is not carried to the next session yet: it is once
+        /// two more chunks have been written under it. A wrong fast guess — on music, a shout, a few words of another
+        /// language — would otherwise start every later session in it ("locked: … (as last time)").
+        /// </summary>
+        private string _fastLockUnconfirmed;
+        private int _fastLockConfirmations;
+
+        /// <summary>
+        /// Tempo is about to restart this engine itself (a faster model to keep pace): the speech has not changed, so a
+        /// fast language lock not yet confirmed is carried to the next session anyway. Each rung of the ladder used to
+        /// detect the language again — 22 s of the speech on the user's PC (2026-11-14), while nothing was captioned.
+        /// </summary>
+        public void CarryLanguageForRestart()
+        {
+            string fast = _fastLockUnconfirmed;
+            if (fast == null || _carriedLanguage != null) { return; }
+            _carriedLanguage = fast;
+            _fastLockUnconfirmed = null;
+            Logger.Info("[Captions] keeping the language '" + fast + "' for the faster model — no second detection.");
+        }
+
+        /// <summary>
+        /// Checks of a language lock against the audio itself (round 25, 2026-11-15). A lock ended only when three chunks in
+        /// a row came out unsure (LanguageLock), and once the audio changes language a lock never does that: decoded as
+        /// Spanish, English speech comes out as a confident mix of both — "y luego walk to the Old Market", "El quick brown
+        /// fox…", "Gracias por ver el video." at 0.49–0.87 (scratchpad/langcheck) — so the user's English video stayed
+        /// captioned in "any language" after a Spanish one. Whisper's own detection on the SAME locked engine hears the
+        /// change at once (English at 1.00 on every chunk of speech; music and noise 0.35–0.50), at a price that differs by
+        /// two orders of magnitude: ~0.45 s with Large Turbo on the user's RTX 5060, ~24 s with Large Turbo Compact on the
+        /// processor (it always runs the encoder over the whole 30 s window). So it is asked for when the audio may have
+        /// changed — the sound moved to another app (the host), a session starting in the language of the last one, the
+        /// written words looking like another language (EnglishShare), a long pause — and now and then, all by its
+        /// measured cost (LanguageCheckAffordable). Attempts left; an unclear answer (music, a shout) spends one.
+        /// </summary>
+        private volatile int _langCheckAsked;
+        private volatile string _langCheckWhy;
+        private volatile string _langCheckLast = "";
+
+        /// <summary>The last check of the language lock, for Live debug ("" before any).</summary>
+        public string LanguageCheckState => _langCheckLast;
+
+        /// <summary>When the last check ran (Environment.TickCount64; 0 = none yet).</summary>
+        public long LanguageCheckTick => Interlocked.Read(ref _langCheckLastTick);
+        private long _langCheckLastTick;
+
+        /// <summary>
+        /// The most a check may cost. The audio queued behind it is thrown away past MaxBacklogSeconds, so a check much
+        /// longer than this costs speech — and 24 s (Large Turbo Compact on the processor) would cost the captions.
+        /// </summary>
+        private const double LanguageCheckMaxMs = 6000;
+
+        /// <summary>
+        /// What a check should cost before one has been measured this session: Whisper's detection runs the encoder over the
+        /// whole 30 s window where a decode runs it over the chunk (WithAudioContextSize). Measured (scratchpad/langcheck):
+        /// on the RTX 5060 ~0.45 s with Large Turbo (a decode 0.25 s) and 2.4 s with Large v3; on the processor ~7× a decode
+        /// (Large Turbo Compact: 24.6 s against 3.4 s).
+        /// </summary>
+        private double EstimateLanguageCheckMs(bool gpu, string modelPath)
+        {
+            string file = System.IO.Path.GetFileName(modelPath ?? "").ToLowerInvariant();
+            bool heavyDecoder = file.Contains("medium") || (file.Contains("large-v3") && !file.Contains("turbo"));
+            if (gpu) { return heavyDecoder ? 2500 : 600; }
+            if (_avgInferMs > 0) { return _avgInferMs * 7.0; }
+            bool light = file.Contains("tiny") || file.Contains("base") || file.Contains("small");
+            return light ? 2500 : 25000;
+        }
+
+        /// <summary>The audio may be in another language now (the sound moved to another app): check the lock on the next speech.</summary>
+        public void RecheckLanguage(string why)
+        {
+            _langCheckWhy = why;
+            _langCheckAsked = 3;
+        }
+
+        // Distinctly English words that make up much of any English sentence and next to none of the other languages Tempo
+        // lists ("a", "i", "in", "on", "so", "come" left out: Spanish, Italian, German and French have them too).
+        private static readonly HashSet<string> EnglishMarkers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            // Not "he"/"me" (Spanish), "do" (Portuguese), "was"/"will" (German), "okay" (everyone's).
+            "the", "and", "to", "of", "is", "you", "that", "it", "for", "with", "this", "are", "have", "not", "we",
+            "they", "what", "my", "your", "at", "but", "just", "can", "there", "she", "his", "her",
+            "our", "been", "were", "would", "could", "should", "about", "from", "which", "when", "where", "who", "how",
+            "why", "if", "or", "all", "out", "up", "get", "like", "know", "think", "going", "really", "yeah",
+            "well", "right", "now", "then", "them", "be", "he's", "it's", "that's", "i'm", "don't", "can't",
+            "you're", "we're", "they're", "let's", "what's", "here", "over", "into", "after", "because", "some",
+        };
+
+        /// <summary>
+        /// The share of <paramref name="text"/>'s words that are distinctly English (EnglishMarkers), or -1 with fewer than
+        /// four words. Written under a lock to another language, English speech still comes out with its own small words
+        /// ("y luego walk to the Old Market", "El quick brown fox jumps over the lazy dog.") — free evidence, no inference.
+        /// </summary>
+        internal static double EnglishShare(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) { return -1; }
+            int words = 0, english = 0;
+            foreach (string raw in text.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string w = raw.Trim('.', ',', '!', '?', ';', ':', '"', '“', '”', '¿', '¡', '(', ')', '…', '-', '—', '\'')
+                              .Replace('’', '\'');
+                if (w.Length == 0) { continue; }
+                words++;
+                if (EnglishMarkers.Contains(w)) { english++; }
+            }
+            return words < 4 ? -1 : (double)english / words;
+        }
 
         public bool IsRunning => _running;
 
@@ -699,6 +856,11 @@ namespace AutoClicker.Utils
         /// </summary>
         public bool IsStarting => _starting;
 
+        // What a start is doing right now, for the start-up stall watch (ScreenStallWatch): which step held the screen.
+        private volatile string _startStep = "";
+        /// <summary>The start-up step under way ("loading the speech model onto the GPU", …), or "" between starts.</summary>
+        public string StartStep => _startStep;
+
         /// <summary>
         /// Mean per-segment probability of the most recent decoded chunk (0..1), or -1
         /// before anything has been decoded.
@@ -721,7 +883,10 @@ namespace AutoClicker.Utils
         {
             if (_running || _starting) return true;
 
-            if (string.IsNullOrEmpty(modelPath) || !System.IO.File.Exists(modelPath))
+            // A Whisper model is a file; a Nemotron streaming model (round 35) is a folder of ONNX files.
+            bool streaming = !string.IsNullOrEmpty(modelPath) && System.IO.Directory.Exists(modelPath);
+            if (string.IsNullOrEmpty(modelPath)
+                || !(streaming ? NemotronStreaming.IsModelDir(modelPath) : System.IO.File.Exists(modelPath)))
             {
                 // Where a model actually comes from: "Settings > Captions" is not a place.
                 RaiseStatus("No speech model is installed. Download one with Models… on the Captions tab.");
@@ -736,7 +901,8 @@ namespace AutoClicker.Utils
             _cts = new CancellationTokenSource();
             CancellationToken token = _cts.Token;
             RaiseStatus("Loading the speech model\u2026");
-            Task.Run(() => StartCore(modelPath, token));
+            if (streaming) { Task.Run(() => StartStreamingCore(modelPath, token)); }
+            else { Task.Run(() => StartCore(modelPath, token)); }
             return true;
         }
 
@@ -762,6 +928,15 @@ namespace AutoClicker.Utils
             // what it built until the moment it hands off to the worker.
             WhisperFactory factory = null;
             WhisperProcessor processor = null;
+            // One native engine at a time (NativeEngineGate): wait for the previous one to be gone first.
+            _startStep = "waiting for the last engine to close";
+            EngineLease lease = EngineLease.Take(token);
+            if (lease == null)
+            {
+                _starting = false;   // stopped while waiting
+                return;
+            }
+            bool handedToWorker = false;
             try
             {
                 // Everything from here until warm-up completes runs inside the NATIVE
@@ -769,14 +944,33 @@ namespace AutoClicker.Utils
                 // dies outright and no catch block below will ever run — so record which
                 // model we are about to load FIRST. A marker left behind on the next
                 // launch is proof this model killed us, and it gets quarantined.
-                CaptionCrashGuard.MarkLoading(System.IO.Path.GetFileName(modelPath));
+                CaptionCrashGuard.MarkLoading(System.IO.Path.GetFileName(modelPath), RuntimeGpuRequested);
 
                 try
                 {
+                    _startStep = "loading the speech model (" + System.IO.Path.GetFileName(modelPath)
+                                 + (RuntimeGpuRequested ? ") onto the graphics card" : ") into memory");
                     factory = WhisperFactory.FromPath(modelPath);
-                    string builtLanguage = englishOnly ? "en" : StartLanguage();
+                    _startStep = "building the decoder";
+                    // Detecting: start from the language the last session locked onto, if there is one (see
+                    // CarriedLanguage) — still unlocking by itself if the audio turns out to be something else.
+                    string choice = englishOnly ? "en" : StartLanguage();
+                    string carried = CarriedLanguage;
+                    if (carried == null && choice == "auto")
+                    {
+                        string remembered = RememberedLanguage;
+                        if (IsLanguageCode(remembered)
+                            && EstimateLanguageCheckMs(RuntimeGpuRequested, modelPath) <= LanguageCheckMaxMs)
+                        {
+                            carried = remembered;
+                            Logger.Info("[Captions] starting in '" + remembered + "', the language the last run settled on — "
+                                        + "checked against the first speech.");
+                        }
+                    }
+                    string builtLanguage = choice == "auto" && carried != null ? carried : choice;
                     processor = BuildProcessor(factory, modelPath, builtLanguage);
                     _builtLanguage = builtLanguage;
+                    _builtChoice = choice;
 
                     // Report which native engine actually loaded (GPU via Vulkan, or
                     // CPU fallback) — decides whether the big models run real-time.
@@ -797,6 +991,7 @@ namespace AutoClicker.Utils
                     // instead, while the status still says the model is loading.
                     try
                     {
+                        _startStep = "the engine's first run (warm-up, " + (_runtimeDesc ?? "?") + ")";
                         var warmClock = System.Diagnostics.Stopwatch.StartNew();
                         var silence = new float[(int)(WhisperSampleRate * 1.5)];
                         // NO cancellation token here — for exactly the reason the main
@@ -850,6 +1045,7 @@ namespace AutoClicker.Utils
                     }
                     try { processor?.Dispose(); } catch { }
                     try { factory?.Dispose(); } catch { }
+                    lease.Release();
                     _starting = false;
                     return;
                 }
@@ -859,60 +1055,22 @@ namespace AutoClicker.Utils
                 {
                     try { processor?.Dispose(); } catch { }
                     try { factory?.Dispose(); } catch { }
+                    lease.Release();
                     _starting = false;
                     return;
                 }
 
-                _bytesSeen = 0;
-                _loudSeen = false;
-                _lastEmitted = "";
-                _captureRestarts = 0;   // fresh session, fresh device-change budget
-                _slowChunks = 0;
-                _slowFired = false;
-                // Fresh session, fresh debug numbers.
-                _chunksDone = 0;
-                _chunksSilent = 0;
-                _chunksNearMiss = 0;
-                _noSpeechDropped = 0;
-                _vadSkipped = 0;
-                _vadHistory = Array.Empty<float>();
-                _emits = 0;
-                _avgInferMs = 0;
-                _droppedMs = 0;
-                _rtfX100 = 0;
-                _lastConfidenceX1000 = -1;
-                _earlyTakes = 0;
-                _catchUpTakes = 0;
-                _syncDelayMs = -1;
-                _syncNewestMs = -1;
-                _syncOldestMs = -1;
-                _sessionWorstDelayMs = 0;
-                _lateCaptions = 0;
-                Interlocked.Exchange(ref _lastLateLogTick, 0);
-                lock (_syncLock) { _syncRecent.Clear(); }
-                Interlocked.Exchange(ref _lastSpokenUtcTicks, 0);
-                Interlocked.Exchange(ref _lastSpokenEndUtcTicks, 0);
-                _stepMsActive = 0;
-                _needSamples = 0;
-                _bufferedSamples = 0;
-                Interlocked.Exchange(ref _decodeStartTick, 0);
-                Interlocked.Exchange(ref _lastRealDropTick, 0);
-                _lastRealDropMs = 0;
-                _worstInferMs = 0;
-                Interlocked.Exchange(ref _worstInferTick, 0);
-                _levelDb = -60;
-                _gainX100 = 100;
-                // Unknown until this session's capture actually opens — never report a
-                // volume/mute reading left over from a previous run.
-                _systemVolume = -1f;
-                _systemMuted = false;
-                Interlocked.Exchange(ref _lastEmitTick, 0);
+                ResetSessionStats();
+                _streaming = false;
+                _startStep = "opening the audio";
                 _capture = CreateCapture(out string captureError, out string captureDesc);
+                _startStep = "captioning";
                 if (_capture == null)
                 {
                     RaiseStatus(captureError ?? "No audio device is available to listen to.");
                     try { processor?.Dispose(); } catch { }
                     try { factory?.Dispose(); } catch { }
+                    lease.Release();
                     _starting = false;
                     return;
                 }
@@ -923,6 +1081,7 @@ namespace AutoClicker.Utils
                     _capture = null;
                     try { processor?.Dispose(); } catch { }
                     try { factory?.Dispose(); } catch { }
+                    lease.Release();
                     _starting = false;
                     return;
                 }
@@ -964,6 +1123,7 @@ namespace AutoClicker.Utils
                         // clean up here instead.
                         try { processor?.Dispose(); } catch { }
                         try { factory?.Dispose(); } catch { }
+                        lease.Release();
                         _running = false;
                         return;
                     }
@@ -981,6 +1141,7 @@ namespace AutoClicker.Utils
                 WhisperFactory ownedFactory = factory;
                 string ownedModelPath = modelPath;
                 bool multilingual = !englishOnly;
+                EngineLease ownedLease = lease;
                 _worker = Task.Run(async () =>
                 {
                     try { await TranscribeLoop(ownedFactory, holder, ownedModelPath, multilingual, token); }
@@ -992,8 +1153,11 @@ namespace AutoClicker.Utils
                         // language lock may have swapped it mid-session).
                         try { holder.P?.Dispose(); } catch { }
                         try { ownedFactory?.Dispose(); } catch { }
+                        // Only now, with its native objects gone, may the next engine load (NativeEngineGate).
+                        ownedLease.Release();
                     }
                 });
+                handedToWorker = true;
                 }   // end lock (_lifecycleLock)
 
                 _capture.StartRecording();
@@ -1017,7 +1181,875 @@ namespace AutoClicker.Utils
                 RaiseStatus("Couldn't start audio capture: {0}", ex.Message);
                 _starting = false;
                 Stop();
+                // The worker owns the engine (and the gate) once it exists; before that, this start still holds both.
+                if (!handedToWorker)
+                {
+                    try { processor?.Dispose(); } catch { }
+                    try { factory?.Dispose(); } catch { }
+                    lease.Release();
+                }
             }
+        }
+
+        /// <summary>
+        /// One native speech engine alive at a time. Stop() never waits for the engine — its worker frees the native objects
+        /// itself once the decode in flight returns (seconds, for a big model) — so a quick stop-and-start (the too-slow
+        /// ladder's switch to a faster model) loaded the next model WHILE the last one was being freed. On the GPU that
+        /// corrupted the process heap: 2026-11-15 02:36:33, Large v3 → Base on the RTX 5060, Tempo gone with 0xc0000374
+        /// in ntdll the moment Base's Vulkan engine came up. A start now waits for the previous engine to be gone: up to a
+        /// minute on the GPU (a decode in flight always ends), 5 s on the CPU, where two engines side by side have never
+        /// failed and a slow decode should not hold the faster model back.
+        /// </summary>
+        private static readonly SemaphoreSlim NativeEngineGate = new SemaphoreSlim(1, 1);
+
+        /// <summary>A start's hold on <see cref="NativeEngineGate"/>, given back exactly once, after its engine is freed.</summary>
+        private sealed class EngineLease
+        {
+            private int _released;
+            private bool _held;
+
+            /// <summary>Waits for the gate (see NativeEngineGate). Null when stopped while waiting.</summary>
+            public static EngineLease Take(CancellationToken token)
+            {
+                var lease = new EngineLease();
+                int waitMs = RuntimeGpuRequested ? 60000 : 5000;
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    lease._held = NativeEngineGate.Wait(waitMs, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return null;
+                }
+                if (!lease._held)
+                {
+                    Logger.Warn("[Captions] the previous speech engine was still finishing after " + waitMs / 1000
+                                + " s — loading the next one beside it.");
+                }
+                else if (clock.ElapsedMilliseconds > 250)
+                {
+                    Logger.Info("[Captions] waited " + clock.ElapsedMilliseconds + " ms for the previous speech engine to finish before loading the next.");
+                }
+                return lease;
+            }
+
+            public void Release()
+            {
+                if (Interlocked.Exchange(ref _released, 1) != 0 || !_held) { return; }
+                try { NativeEngineGate.Release(); } catch { }
+            }
+        }
+
+        /// <summary>Every per-session counter and reading back to "nothing yet" — for both engines' starts.</summary>
+        private void ResetSessionStats()
+        {
+            _bytesSeen = 0;
+            _loudSeen = false;
+            _lastEmitted = "";
+            _echoNoted = false;
+            _captureRestarts = 0;   // fresh session, fresh device-change budget
+            _slowChunks = 0;
+            _slowFired = false;
+            _hopelessChunks = 0;
+            _fastLockUnconfirmed = null;
+            _fastLockConfirmations = 0;
+            // Fresh session, fresh debug numbers.
+            _chunksDone = 0;
+            _chunksSilent = 0;
+            _chunksNearMiss = 0;
+            _noSpeechDropped = 0;
+            _drafts = 0;
+            _draftShowing = false;
+            _vadSkipped = 0;
+            _vadHistory = Array.Empty<float>();
+            _emits = 0;
+            _avgInferMs = 0;
+            _droppedMs = 0;
+            _dropWarnAtMs = 0;
+            _dropRollCount = 0;
+            _dropRollMs = 0;
+            _rtfX100 = 0;
+            _lastConfidenceX1000 = -1;
+            _earlyTakes = 0;
+            _catchUpTakes = 0;
+            _syncDelayMs = -1;
+            _syncNewestMs = -1;
+            _syncOldestMs = -1;
+            _sessionWorstDelayMs = 0;
+            _lateCaptions = 0;
+            Interlocked.Exchange(ref _lastLateLogTick, 0);
+            lock (_syncLock) { _syncRecent.Clear(); }
+            Interlocked.Exchange(ref _lastSpokenUtcTicks, 0);
+            Interlocked.Exchange(ref _lastSpokenEndUtcTicks, 0);
+            _stepMsActive = 0;
+            _needSamples = 0;
+            _bufferedSamples = 0;
+            Interlocked.Exchange(ref _decodeStartTick, 0);
+            Interlocked.Exchange(ref _lastRealDropTick, 0);
+            _lastRealDropMs = 0;
+            _worstInferMs = 0;
+            Interlocked.Exchange(ref _worstInferTick, 0);
+            _levelDb = -60;
+            _gainX100 = 100;
+            // Unknown until this session's capture actually opens — never report a
+            // volume/mute reading left over from a previous run.
+            _systemVolume = -1f;
+            _systemMuted = false;
+            Interlocked.Exchange(ref _lastEmitTick, 0);
+            _streamDetail = "";
+            _streamLines = 0;
+        }
+
+        // ── Nemotron streaming (round 35) ───────────────────────────────────────────────────────────────────────────────
+        //
+        // NVIDIA's Nemotron streaming models (NemotronStreaming) hear the sound as it arrives, 560 ms at a time, and their
+        // words never change once out. None of the Whisper machinery applies — no windows, carries or seams, no beam, no
+        // language lock, no too-slow ladder of decode settings — so they have a loop of their own (StreamLoop), fed from the
+        // same capture (OnDataAvailable → _mono16k) and answering to the same gates: the voice detection (unless song lyrics
+        // are let through), the own-voice filter, the backlog cap. A word goes on the bar as final once the next word has
+        // begun or a punctuation mark has closed it; the word still growing shows as a draft.
+
+        private volatile bool _streaming;
+        private volatile string _streamDetail = "";
+        private volatile int _streamLines;
+
+        /// <summary>True when the session runs a Nemotron streaming model.</summary>
+        public bool IsStreamingEngine => _streaming;
+
+        /// <summary>Live debug: the streaming engine's own line ("2 threads · 560 ms chunks · 14 lines · hearing de"), or "".</summary>
+        public string StreamingDetail => _streaming ? _streamDetail : "";
+
+        // The longest line (the engine's endpoint rule 3) — a backstop: a line is started afresh at the first rest once it
+        // is StreamSentenceResetSec long (policy 1), where rule 3 cuts wherever it is.
+        private const float StreamMaxLineSec = 60f;
+
+        /// <summary>
+        /// What a pause (the engine's endpoint) does to the line: 0 = a new line in the same stream (sherpa-onnx's Reset);
+        /// 1 = nothing — the words are out, the line goes on, and a long one is started afresh (a new stream) at the next
+        /// rest; 2 = a new stream at every pause. Measured (scratchpad/nemocheck, 2026-11-21, the twelve caprecall clips):
+        /// Reset lost the first word after a pause — "We", "two", "I can" (518 of 554 words, against 531 for 1 and 525 for
+        /// 2). A new stream starts the engine cold, and with music under the speech it lost "Pack my" after a pause, and the
+        /// 40-language model lost "The" (it detects the language again from nothing). So 1: nothing is restarted while
+        /// sound goes on. (It wrote the sentence after a pause's full stop in lower case — "Testing. one two." — until
+        /// the next words were given their capital: StreamLoop's Emit.) A harness switch (nemocheck --policy).
+        /// </summary>
+        internal static int StreamLinePolicy = 1;
+
+        /// <summary>A pause after words the model left unpunctuated ends them with a full stop (nemocheck --nostops).</summary>
+        internal static bool PauseFullStops = true;
+
+        /// <summary>The engine's endpoint: quiet after the last word that counts as a pause (nemocheck --pause).</summary>
+        internal static float StreamPauseSec = 1.2f;
+        private const double StreamSentenceResetSec = 12;
+        // A fresh stream at a pause once this much audio went through the current one: a stream keeps what it was fed, and
+        // a session can run for hours.
+        private const double StreamRenewSec = 120;
+        // Quiet for this long with no words waiting for their line's end: the engine is not fed until there is sound again.
+        private const double StreamRestAfterSec = 1.0;
+        // Sound before the first block that has some: what the engine hears of a voice's lead-in after a rest.
+        private const int StreamPrerollSamples = WhisperSampleRate * 3 / 10;
+        // Audio is fed in blocks of at least this much (the engine decodes 560 ms at a time; a few ms per feed is waste).
+        private const int StreamMinFeedSamples = WhisperSampleRate * 8 / 100;
+        // The voice gate's window around a piece's tokens. The English model puts a token down up to 0.65 s BEFORE Silero
+        // calls its word voice; the 40-language model anywhere from the word's start to half a second after the word has
+        // ended (nemocheck "isolated" traces, 2026-11-21: "one", "Check" were dropped with 0.3 s before the token).
+        private const double VoiceBeforeSec = 0.8;
+        private const double VoiceAfterSec = 0.9;
+
+        /// <summary>
+        /// One thread. Measured on the user's i5-14400F (scratchpad/nemocheck --ortbench, 69 s of speech fed as it plays,
+        /// 2026-11-21): ONE thread decodes at 0.40× real time for 0.41 cores of CPU; TWO decode at 0.25× — and cost 2.49
+        /// cores, because ONNX Runtime's worker threads spin between the engine's many small calls (sherpa-onnx offers no
+        /// way to turn that off). Captions run beside games: a tenth of a second of delay is the better trade by far. A
+        /// PC too slow for one thread is what the too-slow ladder is for (a Whisper model).
+        /// </summary>
+        private static int StreamingThreads() => 1;
+
+        /// <summary>
+        /// StartCore for a Nemotron streaming model (a folder): load it, warm it up, open the audio, start StreamLoop. The
+        /// same order and the same hand-over to the worker as the Whisper start (see StartCore for why each step is there).
+        /// </summary>
+        private void StartStreamingCore(string modelPath, CancellationToken token)
+        {
+            NemotronStreaming nem = null;
+            _startStep = "waiting for the last engine to close";
+            EngineLease lease = EngineLease.Take(token);
+            if (lease == null)
+            {
+                _starting = false;   // stopped while waiting
+                return;
+            }
+            bool handedToWorker = false;
+            try
+            {
+                // Native code from here (ONNX Runtime): a model that takes the process down is not given to it again.
+                CaptionCrashGuard.MarkLoading(System.IO.Path.GetFileName(modelPath), false);
+                int threads = StreamingThreads();
+                _startStep = "loading the speech model (" + System.IO.Path.GetFileName(modelPath) + ") into memory";
+                var loadClock = System.Diagnostics.Stopwatch.StartNew();
+                nem = NemotronStreaming.TryLoad(modelPath, threads, StreamPauseSec, StreamMaxLineSec, out string why);
+                if (nem == null)
+                {
+                    RaiseStatus("Couldn't load the speech model: {0}", why ?? "?");
+                    lease.Release();
+                    _starting = false;
+                    return;
+                }
+                long loadMs = loadClock.ElapsedMilliseconds;
+                // Warm-up, as the Whisper start does: the first decodes page the model in. On silence, while the status still
+                // says the model is loading.
+                _startStep = "the engine's first run (warm-up, Nemotron on the processor)";
+                var warmClock = System.Diagnostics.Stopwatch.StartNew();
+                nem.Begin(nem.Multilingual ? "auto" : "en");
+                var silence = new float[(int)(WhisperSampleRate * 1.2)];
+                nem.Feed(silence, 0, silence.Length);
+                CaptionCrashGuard.MarkLoaded();
+                _runtimeDesc = "Cpu · Nemotron streaming, " + threads + (threads == 1 ? " thread" : " threads");
+                Logger.Info("[Captions] Nemotron streaming loaded in " + loadMs + " ms, warmed up in " + warmClock.ElapsedMilliseconds
+                            + " ms (" + (nem.Multilingual ? "40 languages" : "English") + ", " + threads + " thread(s), "
+                            + (int)Math.Round(nem.ChunkSeconds * 1000) + " ms chunks).");
+
+                if (token.IsCancellationRequested)
+                {
+                    try { nem.Dispose(); } catch { }
+                    lease.Release();
+                    _starting = false;
+                    return;
+                }
+
+                ResetSessionStats();
+                _startStep = "opening the audio";
+                _capture = CreateCapture(out string captureError, out string captureDesc);
+                _startStep = "captioning";
+                if (_capture == null)
+                {
+                    RaiseStatus(captureError ?? "No audio device is available to listen to.");
+                    try { nem.Dispose(); } catch { }
+                    lease.Release();
+                    _starting = false;
+                    return;
+                }
+                if (token.IsCancellationRequested)
+                {
+                    try { _capture.Dispose(); } catch { }
+                    _capture = null;
+                    try { nem.Dispose(); } catch { }
+                    lease.Release();
+                    _starting = false;
+                    return;
+                }
+
+                _sourceFormat = _capture.WaveFormat;
+                _srcDesc = DescribeFormat(_sourceFormat);
+                ResetResampler();
+                _capture.DataAvailable += OnDataAvailable;
+                _capture.RecordingStopped += OnRecordingStopped;
+                lock (_bufferLock) { _mono16k.Clear(); }
+
+                _running = true;
+                _starting = false;
+
+                // Published with its worker under the lifecycle lock, as the Whisper start publishes its processor (see there).
+                lock (_lifecycleLock)
+                {
+                    if (token.IsCancellationRequested)
+                    {
+                        try { nem.Dispose(); } catch { }
+                        lease.Release();
+                        _running = false;
+                        return;
+                    }
+                    _streaming = true;
+                    NemotronStreaming owned = nem;
+                    EngineLease ownedLease = lease;
+                    _worker = Task.Run(async () =>
+                    {
+                        try { await StreamLoop(owned, token); }
+                        catch (OperationCanceledException) { }
+                        catch (Exception ex) { Logger.Warn("Transcribe worker stopped: " + ex.Message); }
+                        finally
+                        {
+                            // Freed by the worker once its last decode has returned — never under a decode in flight.
+                            try { owned.Dispose(); } catch { }
+                            ownedLease.Release();
+                        }
+                    });
+                    handedToWorker = true;
+                }
+
+                _capture.StartRecording();
+                EnsureKeepAlive();
+                RaiseStatus("Tempo Live Captions started · {0}{1}", captureDesc, " · Nemotron streaming (CPU)");
+                StartNoAudioWatchdog();
+            }
+            catch (Exception ex)
+            {
+                RaiseStatus("Couldn't start audio capture: {0}", ex.Message);
+                _starting = false;
+                Stop();
+                if (!handedToWorker)
+                {
+                    try { nem?.Dispose(); } catch { }
+                    lease.Release();
+                }
+            }
+        }
+
+        /// <summary>
+        /// The Nemotron worker: the audio as it arrives into the engine, and its words out — final as soon as they stand,
+        /// the growing one as a draft — through the same gates the Whisper path applies. Times every word on the clock the
+        /// audio arrived by (the caption's "said at", the measured sync), and keeps Live debug's numbers.
+        /// </summary>
+        private async Task StreamLoop(NemotronStreaming nem, CancellationToken token)
+        {
+            bool multilingual = nem.Multilingual;
+            string applied = multilingual ? StartLanguage() : "en";
+            nem.Begin(applied);
+            // The states the Captions tab reads (CaptionLanguageStateText): "hearing: de" once the 40-language model has
+            // named the language of a line — per line, nothing is locked.
+            _langState = !multilingual ? "English model" : applied == "auto" ? "auto-detect" : "pinned: " + applied;
+            string heardLang = null;
+
+            // Voice detection, as the Whisper path's step gate (VadGate): words go out only where Silero heard a voice, unless
+            // the user lets song lyrics through. An instance of its own, run along the stream frame after frame without resets.
+            SileroVad vad = null;
+            if (VadGate)
+            {
+                try { vad = SileroVad.LoadEmbedded(); }
+                catch (Exception vex) { Logger.Swallow("Captions/VAD (streaming)", vex); }
+            }
+            const int VadRing = 4096;                                  // 512-sample frames: ~131 s of the stream
+            var vadProb = new float[VadRing];
+            long vadFrames = 0;                                        // frames judged since the stream began
+            var vadPending = new float[SileroVad.ChunkSamples];
+            int vadPendingCount = 0;
+
+            // The sound's loudness every 20 ms of the stream (before any gain), for the own-voice check.
+            const int EnvFrame = WhisperSampleRate / 50;
+            const int EnvRing = 8192;                                  // ~164 s
+            var envRms = new double[EnvRing];
+            long envFrames = 0;
+            double envSq = 0;
+            int envCount = 0;
+
+            // When the stream's samples arrived: (stream sample at the end of a block, TickCount64 when it was taken).
+            var anchors = new Queue<KeyValuePair<long, long>>();
+
+            double smoothGain = 1.0;
+            long quietRun = 0;                                         // quiet samples in a row
+            bool resting = false;                                      // not being fed: nothing to hear
+            var preroll = new List<float>(StreamPrerollSamples);       // the last of what a rest skipped
+            string shownDraft = "";
+            bool capitalizeNext = false;                               // the last caption ended a sentence
+            long paceAudio = 0, paceMs = 0;                            // the pace over the last few seconds fed
+            int dropStrikes = 0;
+            long lastDropTick = 0;
+            long waitingSince = 0;
+
+            void NewStreamBookkeeping()
+            {
+                anchors.Clear();
+                vadFrames = 0;
+                vadPendingCount = 0;
+                envFrames = 0;
+                envSq = 0;
+                envCount = 0;
+                try { vad?.Reset(); } catch { }
+            }
+
+            // The TickCount64 at which stream second `sec` arrived (linear within a block: audio arrives as fast as it plays).
+            long TickAt(double sec)
+            {
+                long s = (long)Math.Round(sec * WhisperSampleRate);
+                bool any = false;
+                KeyValuePair<long, long> last = default;
+                foreach (var a in anchors)
+                {
+                    any = true;
+                    if (a.Key >= s) { return a.Value - (a.Key - s) * 1000L / WhisperSampleRate; }
+                    last = a;
+                }
+                return any ? last.Value + (s - last.Key) * 1000L / WhisperSampleRate : Environment.TickCount64;
+            }
+
+            // Whether Silero heard a voice in [s0, s1] of the stream: two 32 ms frames at even odds, as a step must have.
+            bool Voiced(double s0, double s1)
+            {
+                if (vad == null) { return true; }
+                long f0 = Math.Max(0, (long)Math.Floor(s0 * WhisperSampleRate / SileroVad.ChunkSamples));
+                long f1 = (long)Math.Ceiling(s1 * WhisperSampleRate / SileroVad.ChunkSamples);
+                f0 = Math.Max(f0, vadFrames - VadRing);
+                f1 = Math.Min(f1, vadFrames);
+                if (f1 <= f0) { return true; }                         // not judged: let it through
+                int voiced = 0;
+                for (long f = f0; f < f1; f++)
+                {
+                    if (vadProb[f % VadRing] >= 0.5f && ++voiced >= 2) { return true; }
+                }
+                return false;
+            }
+
+            // For the trace: what Silero heard over [s0, s1].
+            string VoiceDetail(double s0, double s1)
+            {
+                long f0 = Math.Max(0, (long)Math.Floor(s0 * WhisperSampleRate / SileroVad.ChunkSamples));
+                long f1 = Math.Min((long)Math.Ceiling(s1 * WhisperSampleRate / SileroVad.ChunkSamples), vadFrames);
+                f0 = Math.Max(f0, vadFrames - VadRing);
+                float best = 0f;
+                int over = 0;
+                var sb = new System.Text.StringBuilder();
+                for (long f = f0; f < f1; f++)
+                {
+                    float pv = vadProb[f % VadRing];
+                    if (pv > best) { best = pv; }
+                    if (pv >= 0.5f) { over++; }
+                    sb.Append((int)Math.Round(pv * 9));
+                }
+                return "frames " + f0 + "–" + f1 + " of " + vadFrames + ", best " + best.ToString("0.00") + ", " + over + " voiced: " + sb;
+            }
+
+            // The 20 ms loudness over [s0, s1] of the stream.
+            double[] Envelope(double s0, double s1)
+            {
+                long e0 = Math.Max(0, (long)Math.Floor(s0 * 50));
+                long e1 = (long)Math.Ceiling(s1 * 50);
+                e0 = Math.Max(e0, envFrames - EnvRing);
+                e1 = Math.Min(e1, envFrames);
+                if (e1 <= e0) { return Array.Empty<double>(); }
+                var env = new double[e1 - e0];
+                for (long e = e0; e < e1; e++) { env[e - e0] = envRms[e % EnvRing]; }
+                return env;
+            }
+
+            void Emit(NemotronStreaming.Piece p, bool pause = false)
+            {
+                if (p == null || string.IsNullOrWhiteSpace(p.Text)) { return; }
+                // The model puts a sentence's full stop down when the next sentence begins — with the line going on across
+                // a pause, that is after the pause, at the front of the next words. The pause put one there already (below):
+                // the model's own is dropped rather than shown as a stray " ." at the start of the next words (and with the
+                // full stops at pauses off, it is lost: a mark cannot be put back on words already shown).
+                string text = p.Text;
+                {
+                    // (Only words taken at a pause can be followed by a piece that opens with a mark: anywhere else the mark
+                    // comes out together with the word it closes — NemotronStreaming.StablePoint.)
+                    int lead = 0;
+                    while (lead < text.Length && (".?!…,;:。，？！".IndexOf(text[lead]) >= 0 || text[lead] == ' ')) { lead++; }
+                    text = text.Substring(lead);
+                    if (text.Length == 0) { return; }
+                }
+                // A pause after words with no punctuation of the model's: the words end a sentence, as Whisper writes them
+                // ("Testing." "Can you hear me." — the model's own "?" may follow, and is dropped as above). Not in scripts
+                // written without spaces (their marks are the model's own).
+                if (pause && PauseFullStops && text.Length > 0 && char.IsLetterOrDigit(text[text.Length - 1])
+                    && !HasNoSpaceLetters(text))
+                {
+                    text += ".";
+                }
+                // After a full stop the next words begin a sentence. The model capitalises after its own; after one a pause
+                // put down it goes on as within the sentence it was in ("Testing. one two." — nemocheck, policy 1).
+                if (capitalizeNext && text.Length > 0 && char.IsLower(text[0]))
+                {
+                    text = char.ToUpperInvariant(text[0]) + text.Substring(1);
+                }
+                // No voice under the words (music, a game): not shown, as the step gate skips such a step. The window runs
+                // well to both sides of the tokens (VoiceBeforeSec, VoiceAfterSec): a token and the voice Silero hears for
+                // it can be more than half a second apart either way, and a tight window dropped four of seven isolated
+                // words ("One", "Two", "Hello" — scratchpad/nemocheck "isolated").
+                if (vad != null && _voiceGateOn && !Voiced(p.Start - VoiceBeforeSec, p.End + VoiceAfterSec))
+                {
+                    _vadSkipped++;
+                    if (VerboseTrace)
+                    {
+                        Logger.Info("[Trace] stream: no voice under “" + p.Text + "” (" + p.Start.ToString("0.00") + "–" + p.End.ToString("0.00")
+                                    + " s; " + VoiceDetail(p.Start - VoiceBeforeSec, p.End + VoiceAfterSec) + ") — not shown.");
+                    }
+                    return;
+                }
+                // The user's own voice coming back through the speakers (see the step's own-voice check in TranscribeLoop).
+                var ownGuard = _activeMode == CaptureMode.Microphone ? null : OwnVoiceGuard;
+                if (ownGuard != null && ownGuard.Running)
+                {
+                    // At least 1.5 s ending with the words: the mic is matched over a stretch, as a step is.
+                    double from = Math.Max(0, Math.Min(p.Start - 0.3, p.End - 1.5));
+                    double[] env = Envelope(from, p.End + 0.5);
+                    if (env.Length >= 12)
+                    {
+                        double sim = ownGuard.Similarity(TickAt(from), env, out bool micHot);
+                        _lastOwnVoiceSimX100 = (int)Math.Round(sim * 100);
+                        if (!_echoNoted && ownGuard.EchoMatches > 0)
+                        {
+                            _echoNoted = true;
+                            Logger.Info("[OwnVoice] the microphone (" + ownGuard.DeviceName + ") hears the speakers — the video's sound "
+                                        + "reaches it after it plays, so it is the video, not your voice: captioned, not skipped.");
+                        }
+                        if (micHot && sim >= OwnVoiceSimilarity)
+                        {
+                            _ownVoiceSkipped++;
+                            if (VerboseTrace) { Logger.Info("[Trace] stream: own voice skipped (similarity " + sim.ToString("0.00") + ", mic hot)."); }
+                            return;
+                        }
+                    }
+                }
+                long now = Environment.TickCount64;
+                Interlocked.Exchange(ref _lastEmitTick, now);
+                _emits++;
+                _retractWords = 0;
+                // A token's time is about where its word begins (the said-at stamps came out 0.16–0.24 s early with 0.2 s
+                // taken off, nemocheck); the last word lasts a few tenths past its token.
+                NoteCaptionTiming(now, TickAt(p.Start), TickAt(p.End + 0.3));
+                if (VerboseTrace)
+                {
+                    Logger.Info("[Trace] stream: “" + text + "” heard " + p.Start.ToString("0.00") + "–" + p.End.ToString("0.00")
+                                + " s, out " + (Math.Max(0, now - TickAt(p.End)) / 1000.0).ToString("0.00") + " s after its last token ("
+                                + VoiceDetail(p.Start - VoiceBeforeSec, p.End + VoiceAfterSec) + ")" + (pause ? " · at a pause" : "") + ".");
+                }
+                RaiseText(text);
+                capitalizeNext = ".?!…".IndexOf(text[text.Length - 1]) >= 0;
+                shownDraft = "";                                       // the caption replaced any draft
+            }
+
+            // Chinese, Japanese or Thai letters in the text (written without spaces between words).
+            bool HasNoSpaceLetters(string s)
+            {
+                foreach (char c in s)
+                {
+                    if ((c >= '぀' && c <= 'ヿ') || (c >= '㐀' && c <= '鿿') || (c >= '฀' && c <= '๿')) { return true; }
+                }
+                return false;
+            }
+
+            void Draft()
+            {
+                if (!DraftWords) { return; }
+                string tail = nem.Tail;
+                if (tail.Length > 0 && vad != null && _voiceGateOn)
+                {
+                    // Shown until Silero has had its chance at the words (VoiceAfterSec) and heard no voice: a draft is
+                    // meant to be early, and the final gate is still to come.
+                    double t0 = nem.TailStart;
+                    double now = nem.StreamSeconds;
+                    if (t0 >= 0 && now - t0 >= VoiceAfterSec && !Voiced(t0 - VoiceBeforeSec, now)) { tail = ""; }
+                }
+                if (tail == shownDraft) { return; }
+                shownDraft = tail;
+                RaiseDraft(tail);
+            }
+
+            Logger.Info("[Captions] Nemotron streaming: " + (multilingual
+                ? "40 languages, " + (applied == "auto" ? "the language heard on every line" : "in '" + applied + "'")
+                : "English") + " · voice gate " + (vad != null ? "on" : "unavailable") + ".");
+
+            while (!token.IsCancellationRequested)
+            {
+                // A different spoken language chosen while running: a fresh stream in it, from the next block (the 40-language
+                // model; the English model has nothing to switch). The words waiting go out first.
+                if (multilingual)
+                {
+                    string want = StartLanguage();
+                    if (!string.Equals(want, applied, StringComparison.Ordinal))
+                    {
+                        Emit(nem.TakeFinal(true));
+                        applied = want;
+                        nem.Begin(applied);
+                        NewStreamBookkeeping();
+                        heardLang = null;
+                        _langState = applied == "auto" ? "auto-detect" : "pinned: " + applied;
+                        Logger.Info(applied == "auto"
+                            ? "[Captions] spoken language changed to auto-detect — applied without a restart."
+                            : "[Captions] spoken language changed to " + applied + " — applied without a restart.");
+                    }
+                }
+
+                float[] block = null;
+                int dropped = 0;
+                bool lostReal = false;
+                lock (_bufferLock)
+                {
+                    int have = _mono16k.Count;
+                    if (have > 0 && waitingSince == 0) { waitingSince = Environment.TickCount64; }
+                    // A block of 80 ms at least — or whatever has waited 150 ms (the sound stopped arriving).
+                    bool take = have >= StreamMinFeedSamples || (have > 0 && Environment.TickCount64 - waitingSince >= 150);
+                    if (take)
+                    {
+                        int max = (int)(WhisperSampleRate * MaxBacklogSeconds);
+                        if (have > max)
+                        {
+                            // Behind by more than the backlog allows (a stall): the oldest goes, as on the Whisper path.
+                            dropped = have - max;
+                            double floor = _activeMode == CaptureMode.SystemAudio ? 0.0004 : 0.0015;
+                            lostReal = !RangeIsMostlySilent(_mono16k, dropped, floor);
+                            _mono16k.RemoveRange(0, dropped);
+                        }
+                        block = new float[_mono16k.Count];
+                        _mono16k.CopyTo(0, block, 0, block.Length);
+                        _mono16k.Clear();
+                        _bufferedSamples = 0;
+                        waitingSince = 0;
+                    }
+                    _needSamples = 0;
+                }
+                long takenTick = Environment.TickCount64;
+
+                if (dropped > 0 && lostReal)
+                {
+                    long droppedMs = dropped * 1000L / WhisperSampleRate;
+                    _droppedMs += (int)droppedMs;
+                    _lastRealDropMs = (int)droppedMs;
+                    Interlocked.Exchange(ref _lastRealDropTick, takenTick);
+                    string advice = LowImpactMode
+                        ? "The game has the processor right now — normal during play; captions catch up between fights."
+                        : "Nemotron streaming runs on the processor: something else was using it, or this PC is too slow for it (a smaller Whisper model would keep up).";
+                    string behind = "[Captions] engine is behind live audio — dropped " + droppedMs + " ms to catch up (total "
+                                    + (_droppedMs / 1000.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s). " + advice;
+                    if (_dropWarnAtMs == 0 || takenTick - _dropWarnAtMs >= DropWarnEveryMs)
+                    {
+                        FlushDropRollUp();
+                        _dropWarnAtMs = takenTick;
+                        Logger.Warn(behind);
+                    }
+                    else
+                    {
+                        Logger.Debug(behind);
+                        _dropRollCount++;
+                        _dropRollMs += droppedMs;
+                        _dropRollAdvice = advice;
+                    }
+                    // Speech lost over and over outside a game: the engine cannot keep up on this PC — the host moves to a
+                    // Whisper model that can (OnTempoModelTooSlow). Three stretches with no minute's peace between them.
+                    dropStrikes = lastDropTick != 0 && takenTick - lastDropTick > 60000 ? 1 : dropStrikes + 1;
+                    lastDropTick = takenTick;
+                    if (!LowImpactMode && dropStrikes >= 3 && !_slowFired)
+                    {
+                        _slowFired = true;
+                        Logger.Warn("[Captions] Nemotron streaming keeps falling behind on this PC (pace "
+                                    + (_rtfX100 / 100.0).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
+                                    + "× real time) — asking for a model that keeps up.");
+                        try { RealTimeTooSlow?.Invoke(); } catch { }
+                    }
+                }
+
+                if (block == null)
+                {
+                    try { await _samplesReady.WaitAsync(100, token); }
+                    catch (OperationCanceledException) { break; }
+                    continue;
+                }
+
+                // Nothing to hear (silence, or the keep-alive's digital silence) and no words waiting for their line to end:
+                // the engine rests — a second of quiet is fed first, so a line can end.
+                double quietFloor = _activeMode == CaptureMode.SystemAudio ? 0.0004 : 0.0015;
+                bool quiet = IsMostlySilent(block, quietFloor, out double _);
+                quietRun = quiet ? quietRun + block.Length : 0;
+                if (quiet && quietRun >= 4L * WhisperSampleRate && nem.HasUntaken)
+                {
+                    // Words, then four seconds of quiet the engine has not called a pause (a backstop): out they go.
+                    Emit(nem.TakeFinal(true), pause: true);
+                    Draft();
+                }
+                if (quiet && quietRun >= StreamRestAfterSec * WhisperSampleRate && !nem.HasUntaken)
+                {
+                    if (!resting)
+                    {
+                        resting = true;
+                        _chunksSilent++;
+                        // A rest after a long line, or a long stream: a fresh one, in the quiet, where nothing can be cut —
+                        // the engine keeps every token of a line and what it was fed of a stream, and a session can run
+                        // for hours.
+                        if (StreamLinePolicy != 0 && (nem.LineSeconds >= StreamSentenceResetSec || nem.StreamSeconds >= StreamRenewSec))
+                        {
+                            nem.Begin(applied);
+                            NewStreamBookkeeping();
+                            _streamLines++;
+                        }
+                        else if (StreamLinePolicy == 0 && nem.StreamSeconds >= StreamRenewSec)
+                        {
+                            nem.Begin(applied);
+                            NewStreamBookkeeping();
+                        }
+                    }
+                    // Keep the last 0.3 s of it: the lead-in of whatever sound comes next.
+                    preroll.AddRange(block);
+                    if (preroll.Count > StreamPrerollSamples) { preroll.RemoveRange(0, preroll.Count - StreamPrerollSamples); }
+                    continue;
+                }
+                if (resting && preroll.Count > 0)
+                {
+                    var joined = new float[preroll.Count + block.Length];
+                    preroll.CopyTo(joined, 0);
+                    Array.Copy(block, 0, joined, preroll.Count, block.Length);
+                    // The lead-in arrived before the block: the stream's clock is kept by the anchor below (its end).
+                    block = joined;
+                }
+                resting = false;
+                preroll.Clear();
+
+                // The loudness envelope first (the own-voice check compares the sound as it is, not as lifted).
+                for (int i = 0; i < block.Length; i++)
+                {
+                    double v = block[i];
+                    envSq += v * v;
+                    if (++envCount == EnvFrame)
+                    {
+                        envRms[envFrames % EnvRing] = Math.Sqrt(envSq / EnvFrame);
+                        envFrames++;
+                        envSq = 0;
+                        envCount = 0;
+                    }
+                }
+
+                // Quiet sound lifted toward a healthy level, as the Whisper path does (loopback is captured after the volume
+                // slider). Smoothed over about half a second, and held while the sound is quiet, so a voice that resumes has
+                // the gain it had.
+                {
+                    double sq = 0;
+                    float peak = 0f;
+                    for (int i = 0; i < block.Length; i++)
+                    {
+                        float v = block[i];
+                        sq += (double)v * v;
+                        float a = v < 0 ? -v : v;
+                        if (a > peak) { peak = a; }
+                    }
+                    double rms = Math.Sqrt(sq / Math.Max(1, block.Length));
+                    bool loopback = _activeMode == CaptureMode.SystemAudio;
+                    double liftFloor = loopback ? 0.00025 : 0.0015;
+                    double maxLift = loopback ? 16.0 : 8.0;
+                    if (rms > liftFloor)
+                    {
+                        double target = rms < 0.05 ? Math.Min(maxLift, 0.1 / rms) : 1.0;
+                        double k = Math.Min(1.0, block.Length / (double)(WhisperSampleRate / 2));
+                        smoothGain += (target - smoothGain) * k;
+                    }
+                    double applied2 = smoothGain;
+                    if (peak > 0f && applied2 * peak > 0.95) { applied2 = 0.95 / peak; }
+                    if (applied2 > 1.02)
+                    {
+                        float gain = (float)applied2;
+                        for (int i = 0; i < block.Length; i++) { block[i] *= gain; }
+                        _gainX100 = (int)Math.Round(applied2 * 100);
+                    }
+                    else
+                    {
+                        _gainX100 = 100;
+                    }
+                }
+                // Finite and in range before native code sees it (see the same clamp in TranscribeLoop).
+                for (int i = 0; i < block.Length; i++)
+                {
+                    float v = block[i];
+                    if (float.IsNaN(v) || float.IsInfinity(v)) { block[i] = 0f; }
+                    else if (v > 1f) { block[i] = 1f; }
+                    else if (v < -1f) { block[i] = -1f; }
+                }
+
+                // Silero along the stream, 512 samples at a time.
+                if (vad != null)
+                {
+                    try
+                    {
+                        int at = 0;
+                        while (at < block.Length)
+                        {
+                            int n = Math.Min(SileroVad.ChunkSamples - vadPendingCount, block.Length - at);
+                            Array.Copy(block, at, vadPending, vadPendingCount, n);
+                            vadPendingCount += n;
+                            at += n;
+                            if (vadPendingCount == SileroVad.ChunkSamples)
+                            {
+                                vadProb[vadFrames % VadRing] = vad.Process(vadPending, 0);
+                                vadFrames++;
+                                vadPendingCount = 0;
+                            }
+                        }
+                    }
+                    catch (Exception vex)
+                    {
+                        Logger.Swallow("Captions/VAD (streaming)", vex);
+                        vad = null;                                    // the gate goes; the captions stay
+                    }
+                }
+
+                anchors.Enqueue(new KeyValuePair<long, long>(nem.StreamSamples + block.Length, takenTick));
+                while (anchors.Count > 4000) { anchors.Dequeue(); }
+
+                // The decode.
+                Interlocked.Exchange(ref _decodeStartTick, Environment.TickCount64);
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                try { nem.Feed(block, 0, block.Length); }
+                finally { Interlocked.Exchange(ref _decodeStartTick, 0); }
+                clock.Stop();
+
+                // Live debug's numbers: a "decode" here is one feed of the audio that arrived.
+                _lastInferMs = (int)clock.ElapsedMilliseconds;
+                _lastChunkMs = (int)(block.Length * 1000L / WhisperSampleRate);
+                _stepMsActive = _lastChunkMs;
+                long doneTick = Environment.TickCount64;
+                if (_lastInferMs >= _worstInferMs || doneTick - Interlocked.Read(ref _worstInferTick) > 60000)
+                {
+                    _worstInferMs = _lastInferMs;
+                    Interlocked.Exchange(ref _worstInferTick, doneTick);
+                }
+                _chunksDone++;
+                _avgInferMs = _avgInferMs == 0 ? _lastInferMs : (_avgInferMs * 7 + _lastInferMs) / 8;
+                paceAudio += block.Length;
+                paceMs += clock.ElapsedMilliseconds;
+                if (paceAudio >= WhisperSampleRate * 3)
+                {
+                    int rtfNow = (int)(paceMs * 100 * WhisperSampleRate / (paceAudio * 1000));
+                    _rtfX100 = _rtfX100 == 0 ? rtfNow : (_rtfX100 * 3 + rtfNow) / 4;
+                    paceAudio = 0;
+                    paceMs = 0;
+                }
+
+                // The 40-language model names the language it hears on each line.
+                if (multilingual && applied == "auto")
+                {
+                    string lang = nem.DetectedLanguage;
+                    if (lang != null && lang != heardLang)
+                    {
+                        heardLang = lang;
+                        _langState = "hearing: " + lang;
+                    }
+                }
+
+                // Words out: what stands — and at a pause (the engine's endpoint), all of it.
+                bool endpoint = nem.AtEndpoint;
+                Emit(nem.TakeFinal(endpoint), pause: endpoint);
+                if (endpoint)
+                {
+                    if (StreamLinePolicy == 0 || nem.LineSeconds >= StreamMaxLineSec - 1)
+                    {
+                        // A new line in the same stream (policy 0), or the line at the engine's own cap (rule 3).
+                        nem.NextLine();
+                        _streamLines++;
+                    }
+                    else if (StreamLinePolicy == 2)
+                    {
+                        nem.Begin(applied);
+                        NewStreamBookkeeping();
+                        _streamLines++;
+                    }
+                    // Policy 1: the line goes on. The words are out; the engine keeps its context for the next sentence
+                    // (see StreamLinePolicy), and a fresh stream comes at the next rest of a long line.
+                }
+                else if (StreamLinePolicy == 0 && nem.LineSeconds >= StreamSentenceResetSec && nem.AtSentenceEnd)
+                {
+                    // A long line without a pause: ended at its full stop, where the engine's own cap would cut a word.
+                    nem.NextLine();
+                    _streamLines++;
+                }
+                Draft();
+
+                _streamDetail = nem.Threads + (nem.Threads == 1 ? " thread" : " threads") + " · "
+                                + (int)Math.Round(nem.ChunkSeconds * 1000) + " ms chunks · " + _streamLines + " line(s) · stream "
+                                + (int)nem.StreamSeconds + " s" + (heardLang != null ? " · hearing " + heardLang : "")
+                                + (vad == null ? " · voice gate unavailable" : !_voiceGateOn ? " · voice gate off (lyrics)" : "");
+            }
+
+            // Stopped: the words still waiting go out as they are (a restart of the engine keeps the session).
+            try { Emit(nem.TakeFinal(true), pause: true); } catch { }
+            try { RaiseDraft(""); } catch { }
         }
 
         /// <summary>
@@ -1259,6 +2291,75 @@ namespace AutoClicker.Utils
         public int NoSpeechDropped => _noSpeechDropped;
 
         /// <summary>
+        /// The shortest caption step an engine may earn by its measured speed: 2 = "very fast" (×0.6 of the standard
+        /// step), 1 = "fast" (×0.75), 0 = the standard step only. A static so the harnesses can compare them.
+        /// </summary>
+        internal static int FastestCadence = 2;
+
+        /// <summary>
+        /// The decoder-level sound-tag ban (WithSuppressRegex, see BuildProcessor) — OFF. whisper.cpp tests the pattern
+        /// against all 51,866 tokens at EVERY decoding step: measured 2026-11-16 (scratchpad/loadstall --beamcost, Large
+        /// Turbo on the RTX 5060) 875 ms a decode with it, 400 ms without, every other setting free — the CPU pays the same
+        /// per step. caprecall (regex-batch.ps1), with the ban → without: Large Turbo on the GPU 94.9 → 96.4 % of words, median
+        /// latency 2.9 → 1.7 s, decode 1468 → 523 ms; under a music bed 94.4 → 97.4 %, 3.2 → 1.6 s; base.en on the CPU 93.6 →
+        /// 93.1 %, 1.9 → 1.1 s, 787 → 232 ms; under music 92.9 → 93.9 %; the noise clip 6 → 0 invented words on the GPU, 0
+        /// → 0 on the CPU. The bracketed tags it kept out ("[Music]", "(applause)") are scrubbed after the decode anyway
+        /// (CleanWhisperArtifacts). A static so the harnesses can compare.
+        /// </summary>
+        internal static bool SuppressTagsInDecoder = false;
+
+        /// <summary>Harnesses only: that cadence (0–2, as above) whatever the engine's measured speed; -1 = earned by speed.</summary>
+        internal static int ForcedCadence = -1;
+
+        // No prompt of any kind (round 32, 2026-11-16): the playing video's title and channel as Whisper's prompt was
+        // built and measured (caprecall prompt-batch.ps1) — it fixed one name in the title (Garou 2/8 → 8/8) and broke another
+        // (Saitama 8/9 → 4–6/9), doubled the extra words (names clip 22–49 → 70–120: "Sogenos. Sogenos. Sogenos.", "asks him to
+        // come… and ask him to come"), and an unrelated title made it invent YouTube talk over pure noise ("RIP RIP INTRO",
+        // "To be continued...") where it invents nothing without. Round 29's names list did the same. Whisper with a prompt
+        // is less stable in these short windows; any future prompt needs those same three measurements first.
+
+        /// <summary>
+        /// Draft words (round 30, 2026-11-16 — the user's "always delay before arrive"): while a step's audio is still
+        /// arriving, an engine with time to spare decodes what has come so far and raises it as <see cref="DraftRecognized"/>
+        /// — shown at once, fainter, after the caption — until the step's own decode, with its whole window, gives the final
+        /// words. The final words alone go to the transcript and the speaker labels. On; off only to measure it.
+        /// </summary>
+        internal static bool DraftWords = true;
+
+        // A draft needs this much new audio (and this much more than the last draft): less is a word or two the step will
+        // hear better anyway.
+        private const int DraftMinSamples = WhisperSampleRate * 6 / 10;
+        private const int DraftStepSamples = WhisperSampleRate * 45 / 100;
+        // And room before the step is due, as a share of what a draft costs: 1.0 = it never holds up the step's decode. On
+        // the Vulkan engine a decode costs ~0.85 s whatever it decodes (per-token round trips; greedy saves 10 %), so at
+        // 1.0 a draft never fits a 2 s step there; below 1.0 it may make the step wait (DraftMaxHoldMs at most).
+        internal static double DraftRoomFactor = 1.0;
+        private const int DraftRoomSlackMs = 120;
+        private const int DraftMaxHoldMs = 450;
+
+        /// <summary>
+        /// Raised (on the engine's thread) with the words heard so far in audio still arriving — a DRAFT, replaced by the next
+        /// <see cref="TextRecognized"/> (which supersedes any draft) or by the next draft; "" takes a draft back (the step
+        /// turned out to hold nothing new). Never retracts or repeats words already raised as text.
+        /// </summary>
+        public event Action<string> DraftRecognized;
+
+        private volatile bool _draftShowing;
+        private volatile int _drafts;
+        /// <summary>Drafts raised this session (Live debug).</summary>
+        public int DraftsShown => _drafts;
+
+        private void RaiseDraft(string draft)
+        {
+            draft = draft ?? "";
+            if (draft.Length == 0 && !_draftShowing) { return; }
+            _draftShowing = draft.Length > 0;
+            if (draft.Length > 0) { _drafts++; }
+            try { DraftRecognized?.Invoke(draft); } catch { }
+        }
+
+
+        /// <summary>
         /// Voice detection (Silero VAD) on every step before Whisper hears it (on; off only to
         /// measure it). A step with sound but no VOICE — music, a fan, gunfire, a game's menus —
         /// is skipped like silence, because that is where Whisper writes the words nobody said.
@@ -1316,6 +2417,14 @@ namespace AutoClicker.Utils
                 if (t.Contains(sig)) { return true; }
             }
             return false;
+        }
+
+        /// <summary>How many of the last six decodes were speech (TranscribeLoop's speechBits).</summary>
+        internal static int SpeechDecodes(int bits)
+        {
+            int n = 0;
+            for (int i = 0; i < 6; i++) { if (((bits >> i) & 1) != 0) { n++; } }
+            return n;
         }
 
         /// <summary>
@@ -1419,7 +2528,10 @@ namespace AutoClicker.Utils
                 .WithMaxTokensPerSegment(TokenCapFor(language))
                 // With no fallback left this only marks a low-entropy decode as degenerate
                 // for whisper's own bookkeeping; kept at the value tuned before.
-                .WithEntropyThreshold(2.8f)
+                .WithEntropyThreshold(2.8f);
+            if (SuppressTagsInDecoder)
+            {
+                builder
                 // Decoder-level sound-tag ban: tokens OPENING a bracketed
                 // annotation ("[Music]", "(applause)") are suppressed at
                 // sampling time, so the decoder spends its probability on real
@@ -1435,15 +2547,21 @@ namespace AutoClicker.Utils
                 // this pattern, output is byte-identical to no-regex on clean
                 // speech.
                 .WithSuppressRegex("^ ?(\\[($|[^_])|\\().*");
+            }
             string fileName = System.IO.Path.GetFileName(modelPath ?? "").ToLowerInvariant();
             bool lightModel = fileName.Contains("tiny") || fileName.Contains("base") ||
                               fileName.Contains("small");
             // Beam search hears clearly better than greedy at ~2× decode cost.
             // Affordable where speed is abundant: the light models on a multi-core
-            // CPU — and EVERY model once the GPU engine is doing the work (measured
-            // ~10× real time here). The too-slow ladder drops beam first if a
-            // weaker GPU can't afford it after all.
-            bool beam = allowBeam && ((lightModel && Environment.ProcessorCount >= 6) || gpuLoaded);
+            // CPU — and on the GPU engine (Large Turbo measured ~10× real time here),
+            // EXCEPT the models whose decoder is the heavy part: Large v3 (32 decoder
+            // layers to Turbo's 4) and Medium (24). On the user's RTX 5060 Large v3 was
+            // 2.3× SLOWER than the speech even greedy (2026-11-15); with beam it lost
+            // the first ~20 s of captions before the ladder dropped it. The too-slow
+            // ladder still drops beam first if a weaker GPU can't afford it after all.
+            bool heavyDecoder = fileName.Contains("medium") ||
+                                (fileName.Contains("large-v3") && !fileName.Contains("turbo"));
+            bool beam = allowBeam && ((lightModel && Environment.ProcessorCount >= 6) || (gpuLoaded && !heavyDecoder));
             if (beam)
             {
                 // Three beams, not whisper's default five. On the same 124 chunks, with the cap
@@ -1515,11 +2633,21 @@ namespace AutoClicker.Utils
                     return null;
                 }
                 _activeMode = CaptureMode.SystemAudio;
+                // Only the app that plays, when one is asked for and Windows can (round 27, see HearOnlyApp).
+                IWaveIn app = OpenAppCapture();
+                if (app != null)
+                {
+                    description = "system audio · only " + (_openAppName ?? "one app") +
+                                  (_openDeviceName != null ? " (" + _openDeviceName + ")" : "");
+                    return app;
+                }
                 // Name the actual device so the status line answers "which speaker
-                // is Tempo hearing?" at a glance.
-                string spk = DefaultDeviceName(DataFlow.Render);
+                // is Tempo hearing?" at a glance — the one OPENED (a picked speaker, or the
+                // output captions followed the sound to), not Windows' default read beforehand.
+                IWaveIn loopback = OpenLoopbackCapture();
+                string spk = _openDeviceName ?? DefaultDeviceName(DataFlow.Render);
                 description = spk == null ? "system audio" : "system audio · " + spk;
-                return OpenLoopbackCapture();
+                return loopback;
             }
 
             // Microphone mode.
@@ -1529,9 +2657,10 @@ namespace AutoClicker.Utils
                 return null;
             }
             _activeMode = CaptureMode.Microphone;
-            string micName = DefaultDeviceName(DataFlow.Capture);
+            IWaveIn mic = OpenMicCapture();
+            string micName = _openDeviceName ?? DefaultDeviceName(DataFlow.Capture);
             description = micName == null ? "microphone" : "microphone · " + micName;
-            return OpenMicCapture();
+            return mic;
         }
 
         // NAudio's stock capture classes are hard-wired to a 100 ms WASAPI buffer —
@@ -1557,6 +2686,187 @@ namespace AutoClicker.Utils
             }
         }
 
+        // ── Hearing only the app that plays (round 27, 2026-11-15) ─────────────────────────────────────────────────
+        //
+        // Loopback is the speaker's whole mix, so every other app's sound went into the words: the user's "my apps play
+        // random [sounds] that interrupt live caption — that's why it appears late and misspelled while the streamers say
+        // something" (Discord, Teams, Medal and Steam beside a stream in Edge). MainForm passes the app MediaDetector has
+        // settled on (IsolationPid) and captions hear that app alone (AppAudioCapture); 0 = the whole speaker, as before.
+        private volatile int _onlyAppPid;      // asked for
+        private volatile int _openAppPid;      // what the open capture hears alone (0 = the speaker's whole mix)
+        private volatile string _openAppName;
+        private volatile int _appRefusedPid;   // the last app Windows would not let captions hear alone (not retried)
+
+        /// <summary>The process captions hear alone, or 0 while they hear the speaker's whole mix.</summary>
+        public int HearingOnlyApp => _activeMode == CaptureMode.SystemAudio ? _openAppPid : 0;
+
+        /// <summary>Executable name of <see cref="HearingOnlyApp"/> ("msedge"), or null.</summary>
+        public string HearingOnlyAppName => HearingOnlyApp != 0 ? _openAppName : null;
+
+        /// <summary>
+        /// Hear only the process <paramref name="pid"/> plays (with the processes it started); 0 = every app on the
+        /// speaker. Applies at once while captions run — the capture is handed over without a gap — and at the next
+        /// start otherwise. Microphone captions are not affected. Safe from any thread.
+        /// </summary>
+        public void HearOnlyApp(int pid)
+        {
+            if (pid < 0 || !AppAudioCapture.Supported) { pid = 0; }
+            _onlyAppPid = pid;
+            if (!_running || _activeMode != CaptureMode.SystemAudio || _openAppPid == pid) { return; }
+            if (pid != 0 && pid == _appRefusedPid) { return; }   // refused once: the whole mix stays
+            HandOverCapture();
+        }
+
+        /// <summary>The asked-for app's own capture, or null (none asked, or Windows refused: the whole mix then).</summary>
+        private IWaveIn OpenAppCapture()
+        {
+            int pid = _onlyAppPid;
+            if (pid <= 0 || pid == _appRefusedPid)
+            {
+                _openAppPid = 0;
+                return null;
+            }
+            AppAudioCapture cap = AppAudioCapture.TryOpen(pid, out string why);
+            if (cap == null)
+            {
+                _appRefusedPid = pid;
+                _openAppPid = 0;
+                Logger.Info("[Captions] can't hear process " + pid + " on its own (" + why + ") — hearing the whole speaker.");
+                return null;
+            }
+            // The speaker it most likely plays to, for the volume and mute readings only: the capture hears the app on
+            // whichever output it uses.
+            try
+            {
+                using (var en = new MMDeviceEnumerator())
+                {
+                    MMDevice dev = AudioDeviceSelection.Resolve(en, DataFlow.Render, out _);
+                    if (dev != null)
+                    {
+                        try { _openDeviceId = dev.ID; } catch { _openDeviceId = null; }
+                        _openDeviceName = AudioDeviceSelection.NameOf(dev, DataFlow.Render);
+                        ReadEndpointVolume(dev);
+                    }
+                }
+            }
+            catch { }
+            _captureBufMs = 10;   // Windows hands the app's audio over every 10 ms
+            _openAppName = cap.ProcessName.Length > 0 ? cap.ProcessName : "process " + pid;
+            _openAppPid = pid;
+            return cap;
+        }
+
+        /// <summary>Captions run on system audio and hear something other than what is asked for (and Windows has not refused it).</summary>
+        private bool HandOverWanted()
+        {
+            int want = _onlyAppPid;
+            return _running && _activeMode == CaptureMode.SystemAudio && _capture != null && !_captureLost
+                   && want != _openAppPid && !(want != 0 && want == _appRefusedPid);
+        }
+
+        /// <summary>Two capture formats whose buffers read the same way (the resampler can carry straight on).</summary>
+        private static bool SameLayout(WaveFormat a, WaveFormat b)
+        {
+            return a != null && b != null && a.Encoding == b.Encoding && a.SampleRate == b.SampleRate
+                   && a.Channels == b.Channels && a.BitsPerSample == b.BitsPerSample;
+        }
+
+        /// <summary>
+        /// Moves captions to the capture <see cref="_onlyAppPid"/> asks for — that app alone, or the whole speaker — without
+        /// a gap: the new capture starts before the old one stops, and the engine takes the new one's buffers from its first
+        /// on. Both are 48 kHz stereo float in the usual case, so nothing downstream restarts; a different layout takes the
+        /// ordinary reopen path. A hand-over that cannot happen now (another reopen in flight) is asked again by MainForm.
+        /// </summary>
+        private void HandOverCapture()
+        {
+            Task.Run(() =>
+            {
+                if (Interlocked.CompareExchange(ref _reopening, 1, 0) != 0)
+                {
+                    // Another reopen is in flight (a device change): look again once it is through — it opens what is
+                    // asked for by itself, and then there is nothing left to do.
+                    Task.Delay(500).ContinueWith(_ => { if (HandOverWanted()) { HandOverCapture(); } });
+                    return;
+                }
+                try
+                {
+                    if (!HandOverWanted()) { return; }
+                    int was = _openAppPid;
+                    string wasName = _openAppName;
+
+                    IWaveIn fresh = CreateCapture(out string err, out string desc);
+                    if (fresh == null)
+                    {
+                        _activeMode = CaptureMode.SystemAudio;   // CreateCapture may have looked at a microphone; the old capture stays
+                        return;                                  // keep hearing what is heard now
+                    }
+                    if (AbandonReopenIfStopped(fresh, "app hand-over")) { return; }
+                    if (_activeMode != CaptureMode.SystemAudio)
+                    {
+                        // The speaker went away and the mode fell back to a microphone: that is the device paths' business.
+                        try { fresh.Dispose(); } catch { }
+                        _activeMode = CaptureMode.SystemAudio;
+                        return;
+                    }
+
+                    IWaveIn old = _capture;
+                    WaveFormat now = fresh.WaveFormat;
+                    if (old != null && SameLayout(_sourceFormat, now))
+                    {
+                        using (var first = new ManualResetEventSlim(false))
+                        {
+                            EventHandler<WaveInEventArgs> onFirst = (s, e) => { try { first.Set(); } catch { } };
+                            fresh.DataAvailable += onFirst;
+                            fresh.DataAvailable += OnDataAvailable;
+                            fresh.RecordingStopped += OnRecordingStopped;
+                            fresh.StartRecording();
+                            first.Wait(300);
+                            fresh.DataAvailable -= onFirst;
+                        }
+                        _capture = fresh;           // from here on only the new one's buffers are taken
+                        _sourceFormat = now;
+                        _srcDesc = DescribeFormat(now);
+                    }
+                    else
+                    {
+                        _capture = null;
+                        _sourceFormat = now;
+                        _srcDesc = DescribeFormat(now);
+                        ResetResampler();
+                        fresh.DataAvailable += OnDataAvailable;
+                        fresh.RecordingStopped += OnRecordingStopped;
+                        _capture = fresh;
+                        fresh.StartRecording();
+                    }
+                    if (old != null)
+                    {
+                        try
+                        {
+                            old.DataAvailable -= OnDataAvailable;
+                            old.RecordingStopped -= OnRecordingStopped;
+                            old.StopRecording();
+                            old.Dispose();
+                        }
+                        catch { }
+                    }
+                    _captureLost = false;
+                    EnsureKeepAlive();
+                    if (AbandonReopenIfStopped(fresh, "app hand-over")) { return; }
+                    Logger.Info(_openAppPid != 0
+                        ? "[Captions] hearing only " + _openAppName + " (process " + _openAppPid + ") — other apps' sounds are left out · " + desc
+                        : "[Captions] hearing every app on the speaker again" + (was != 0 ? " (was only " + wasName + ")" : "") + " · " + desc);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn("[Captions] app hand-over failed: " + ex.Message);
+                }
+                finally
+                {
+                    Volatile.Write(ref _reopening, 0);
+                }
+            });
+        }
+
         /// <summary>
         /// Opens system-audio (loopback) capture with the small buffer, falling back
         /// to the stock 100 ms NAudio class if anything about the fast path fails —
@@ -1564,6 +2874,7 @@ namespace AutoClicker.Utils
         /// </summary>
         private IWaveIn OpenLoopbackCapture()
         {
+            _openAppPid = 0;
             try
             {
                 MMDevice dev;
@@ -1642,9 +2953,17 @@ namespace AutoClicker.Utils
         private string _elsewhereId;
         private int _elsewhereLooks;
 
-        /// <summary>Looks in a row (4 s apart) the sound must stay on another output, with ours quiet, before captions
-        /// follow it there: 12 s — a game's pause or a notification on another device is not a move.</summary>
-        private const int FollowSoundAfterLooks = 3;
+        /// <summary>
+        /// Looks in a row (<see cref="RoutingCheckMs"/> apart) the sound must stay on another output, with ours quiet,
+        /// before captions follow it there: two, so it has held there for 1.5 s or more — a notification's ping does not,
+        /// a game or a video does. A wrong follow corrects itself the same way, back.
+        /// </summary>
+        private const int FollowSoundAfterLooks = 2;
+        private const int RoutingCheckMs = 1500;
+
+        /// <summary>Output names CheckAudioRouting has read, by endpoint id.</summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> RoutingNames =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Raised (on a worker thread) when captions moved to the output the sound is on — the voice profiler,
         /// which listens to the same speaker, follows too.</summary>
@@ -1673,12 +2992,16 @@ namespace AutoClicker.Utils
                 _elsewhereLooks = 0;
                 return;
             }
-            if (Environment.TickCount64 - _lastRoutingCheckTick < 4000) { return; }
+            if (Environment.TickCount64 - _lastRoutingCheckTick < RoutingCheckMs) { return; }
             _lastRoutingCheckTick = Environment.TickCount64;
 
             try
             {
                 string ours = _captureDeviceId;
+                // Which output is ours unknown: every output would count as "another", ours included, and following one
+                // opened a second capture beside the first. A test harness feeding audio with no capture at all mixed the
+                // PC's real sound into its clip this way whenever a video played (round 29, 2026-11-15).
+                if (string.IsNullOrEmpty(ours)) { return; }
                 string loudest = null, loudestId = null;
                 float best = 0.02f;      // above the meter's noise floor
 
@@ -1693,7 +3016,18 @@ namespace AutoClicker.Utils
                                 continue;   // that is the one we are already listening to
                             }
                             float peak = d.AudioMeterInformation.MasterPeakValue;
-                            if (peak > best) { best = peak; loudest = d.FriendlyName; loudestId = d.ID; }
+                            if (peak > best)
+                            {
+                                best = peak;
+                                loudestId = d.ID;
+                                // FriendlyName opens the device's whole property store (tens of ms — see AudioDeviceWatcher):
+                                // read once per device, not on every look now that the looks come every 1.5 s.
+                                if (!RoutingNames.TryGetValue(loudestId, out loudest))
+                                {
+                                    loudest = d.FriendlyName;
+                                    RoutingNames[loudestId] = loudest;
+                                }
+                            }
                         }
                         catch { }
                         finally { try { d.Dispose(); } catch { } }
@@ -1972,6 +3306,8 @@ namespace AutoClicker.Utils
             }
             catch { }
             _capture = null;
+            _openAppPid = 0;
+            _appRefusedPid = 0;   // a new session may try that app again
 
             // Do NOT dispose the Whisper processor here, and do NOT block the UI thread
             // waiting for the worker. The worker disposes its own Whisper objects in its
@@ -2109,6 +3445,8 @@ namespace AutoClicker.Utils
                     if (_activeMode == CaptureMode.SystemAudio && !_captureLost && _capture != null
                         && (Mode == CaptureMode.SystemAudio || Mode == CaptureMode.Auto))
                     {
+                        // One app heard alone is heard on any output: a new default speaker changes nothing it hears.
+                        if (_openAppPid != 0) { return; }
                         string open = _openDeviceId;
                         string target = AudioDeviceSelection.ResolveId(DataFlow.Render);
                         if (open != null && target != null &&
@@ -2570,13 +3908,19 @@ namespace AutoClicker.Utils
             _builtLanguage = null;
             // The language CHOICE that processor answers to ("auto" or a pinned code), so a new
             // choice made while the session runs is noticed at the next step (see below).
-            string appliedPreference = activeLang;
+            string appliedPreference = multilingual ? (_builtChoice ?? activeLang) : activeLang;
+            _builtChoice = null;
+            // Detecting, but built locked to the language the last session settled on (CarriedLanguage): the lock
+            // starts there, and unlocks back to detection if the audio says otherwise.
+            bool carriedLock = multilingual && appliedPreference == "auto" && activeLang != "auto";
+            if (carriedLock) { langLock.Applied(activeLang); }
             // A pinned language takes the lock out of the loop entirely: there is
             // nothing to detect, nothing to settle on, and nothing that can wander off
             // onto a burst of gunfire. It also shows as pinned rather than sitting on
             // "auto-detect" forever, which is what the readout did on game audio that
             // never produced four agreeing chunks in a row.
             if (!multilingual) { _langState = "English model"; }
+            else if (carriedLock) { _langState = "locked: " + activeLang + " (as last time)"; }
             else if (activeLang != "auto") { _langState = "pinned: " + activeLang; }
             // Detection starts over with every run: the language the previous session locked onto
             // ("locked: es") was shown from the first moment of the next one, before anything was heard.
@@ -2635,6 +3979,118 @@ namespace AutoClicker.Utils
             int skippedQuietMs = 0;
             bool english = !multilingual || string.Equals(activeLang, "en", StringComparison.OrdinalIgnoreCase);
 
+            // Checks of the language lock against the audio (see _langCheckAsked).
+            long loopStartTick = Environment.TickCount64;
+            long lastLangCheckTick = 0;
+            double langCheckCostMs = -1;            // measured this session (smoothed); -1 = not yet
+            string mismatchLang = null;             // another language heard once, not yet sure enough to move for
+            int englishTextChunks = 0;              // chunks in a row written mostly in English words under another lock
+            // Started in the language of the last session: the audio may not be in it any more (a Spanish video then, an
+            // English one now). The first speech says.
+            if (carriedLock && _langCheckAsked == 0)
+            {
+                _langCheckWhy = "the session started in the language of the last one";
+                _langCheckAsked = 2;
+            }
+
+            // Moves the lock to another language: the processor rebuilt for it from the model already loaded (a moment, like
+            // the lock's own rebuilds), and the next session starts in it.
+            bool MoveLanguageLock(string lang, string evidence)
+            {
+                try
+                {
+                    var fresh = BuildProcessor(factory, modelPath, lang, _beamActive);
+                    var old = holder.P;
+                    holder.P = fresh;
+                    try { old?.Dispose(); } catch { }
+                    string was = activeLang;
+                    langLock.Applied(lang);
+                    activeLang = lang;
+                    english = string.Equals(lang, "en", StringComparison.OrdinalIgnoreCase);
+                    _carriedLanguage = lang;
+                    _fastLockUnconfirmed = null;
+                    _langState = "locked: " + lang;
+                    mismatchLang = null;
+                    englishTextChunks = 0;
+                    _langCheckAsked = 0;
+                    Logger.Info("[Captions] the audio is in '" + lang + "' now, not '" + was + "' (" + evidence +
+                                ") — the language lock moved with it.");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn("[Captions] language switch failed: " + ex.Message);
+                    return false;
+                }
+            }
+
+            // One check of the lock: Whisper's own detection on this audio (DetectLanguageWithProbability, on the same
+            // locked processor — it leaves its settings alone, scratchpad/langcheck), and what to do about the answer.
+            void CheckLanguageLock(float[] audio, bool asked, bool afterPause)
+            {
+                if (asked) { _langCheckAsked = Math.Max(0, _langCheckAsked - 1); }
+                string why = asked ? (_langCheckWhy ?? "asked") : afterPause ? "after a pause" : "a routine check";
+                var checkClock = System.Diagnostics.Stopwatch.StartNew();
+                string heard = null;
+                float sure = 0f;
+                try
+                {
+                    var found = holder.P.DetectLanguageWithProbability(audio);
+                    heard = found.Item1;
+                    sure = found.Item2;
+                }
+                catch (Exception dex)
+                {
+                    Logger.Warn("[Captions] language check failed: " + dex.Message);
+                }
+                checkClock.Stop();
+                lastLangCheckTick = Environment.TickCount64;
+                langCheckCostMs = langCheckCostMs < 0 ? checkClock.ElapsedMilliseconds
+                                : (langCheckCostMs * 3 + checkClock.ElapsedMilliseconds) / 4;
+                string verdict;
+                bool other = !string.IsNullOrEmpty(heard) && !string.Equals(heard, activeLang, StringComparison.OrdinalIgnoreCase);
+                if (!other && sure >= 0.5f)
+                {
+                    verdict = "the lock holds";
+                    mismatchLang = null;
+                    englishTextChunks = 0;
+                    _langCheckAsked = 0;
+                }
+                else if (other && sure >= 0.8f)
+                {
+                    // Clearly another language. Once is enough where a change was to be expected (asked, after a pause) and
+                    // Whisper is all but certain; otherwise the next check must hear the same.
+                    bool move = (sure >= 0.9f && (asked || afterPause))
+                                || string.Equals(mismatchLang, heard, StringComparison.OrdinalIgnoreCase);
+                    if (move)
+                    {
+                        verdict = MoveLanguageLock(heard, why + "; Whisper heard it " +
+                            sure.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + " sure")
+                            ? "moved to " + heard : "move failed";
+                    }
+                    else
+                    {
+                        verdict = "heard " + heard + " — checking again";
+                        mismatchLang = heard;
+                        _langCheckWhy = "confirming " + heard;
+                        _langCheckAsked = Math.Max(_langCheckAsked, 2);
+                    }
+                }
+                else
+                {
+                    // Music, a shout, a few words: nothing either way. An asked check tries again (attempts left).
+                    verdict = "unclear";
+                }
+                _langCheckLast = (heard ?? "?") + " " + sure.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
+                                 + " in " + checkClock.ElapsedMilliseconds + " ms (" + why + ") → " + verdict;
+                Interlocked.Exchange(ref _langCheckLastTick, lastLangCheckTick);
+                // Asked-for checks are logged whatever they found; routine ones only when they found something.
+                if (VerboseTrace || asked || (verdict != "the lock holds" && verdict != "unclear"))
+                {
+                    Logger.Info("[Captions] language check: " + _langCheckLast + ".");
+                }
+            }
+
             // Auto-gain level carried across chunks (see below): smoothed so the
             // loudness Whisper hears doesn't pump 8× between chunks.
             double smoothGain = 1.0;
@@ -2680,6 +4136,9 @@ namespace AutoClicker.Utils
             // smaller-model ladder.
             int dropStrikes = 0;
             long lastDropTick = 0;
+            // The last six decodes, newest in bit 0: 1 = it was speech (words kept, Whisper sure someone spoke, no decode
+            // loop). The too-slow ladder judges the model's pace on those only (SpeechDecodes).
+            int speechBits = 0;
 
             // Tracks which state the processor was last built for, so entering or
             // leaving a game rebuilds it (beam off/on) exactly once per transition.
@@ -2690,6 +4149,11 @@ namespace AutoClicker.Utils
             // thing sacrificed is the first thing restored.
             bool beamDroppedByLadder = false;
             int beamRestoreChunks = 0;
+            // Draft words (DraftWords): how much of the step's audio the last draft heard, what a draft decode costs, and
+            // whether the loop has just come back from one (see the step's take).
+            int lastDraftHave = 0;
+            double draftMsEma = -1;
+            bool draftJustRan = false;
 
             while (!token.IsCancellationRequested)
             {
@@ -2741,6 +4205,7 @@ namespace AutoClicker.Utils
                             try { old?.Dispose(); } catch { }
                             // Whatever detection had settled on belonged to the old choice.
                             langLock = new LanguageLock();
+                            _carriedLanguage = null;
                             activeLang = wantLang;
                             english = wantLang == "en";
                             _langState = wantLang == "auto" ? "auto-detect" : "pinned: " + wantLang;
@@ -2762,12 +4227,15 @@ namespace AutoClicker.Utils
                 // A VERY fast engine also earns a shorter first-words threshold: the
                 // onset-trim + minimum-speech guards still protect word integrity,
                 // the take just happens ~0.3 s sooner after someone starts talking.
-                int fastNow = engineVeryFast && !lowImpact ? (int)(WhisperSampleRate * 0.9) : fastStartSamples;
+                // The shorter steps an engine has earned, up to the fastest cadence allowed (FastestCadence).
+                bool veryFastStep = ForcedCadence >= 0 ? ForcedCadence == 2 : engineVeryFast && FastestCadence >= 2;
+                bool fastStep = ForcedCadence >= 0 ? ForcedCadence == 1 : (engineFast || engineVeryFast) && FastestCadence >= 1;
+                int fastNow = veryFastStep && !lowImpact ? (int)(WhisperSampleRate * 0.9) : fastStartSamples;
                 int need = quickStart ? fastNow
                          : engineSlow ? (stepSamples * 3) / 2
                          : lowImpact ? stepSamples
-                         : engineVeryFast ? (stepSamples * 3) / 5
-                         : engineFast ? (stepSamples * 3) / 4
+                         : veryFastStep ? (stepSamples * 3) / 5
+                         : fastStep ? (stepSamples * 3) / 4
                          : stepSamples;
                 // Stretched steps need the buffer cap to sit ABOVE the take size,
                 // or the backlog trim would starve the take forever.
@@ -2794,7 +4262,18 @@ namespace AutoClicker.Utils
                     // their bigger-chunks-keep-pace strategy isn't undermined.
                     bool earlyTake = false;
                     int have = _mono16k.Count;
-                    if (!engineSlow && !quickStart && have >= (int)(WhisperSampleRate * 0.8)
+                    // Just back from a draft decode (DraftWords): the loop did not watch the buffer meanwhile, so the moment
+                    // it would have taken the step — a pause after speech (the early take below), or the step coming due —
+                    // may have passed. Take the step where it would have been, not where the buffer now ends: drafts must
+                    // not move the steps' edges (they did, and the edges' new places made seam repeats — round 30).
+                    bool backFromDraft = draftJustRan;
+                    draftJustRan = false;
+                    if (backFromDraft && !engineSlow && !quickStart)
+                    {
+                        int pauseAt = EarlyTakeSpot(_mono16k, Math.Min(have, Math.Min(need, stepSamples)));
+                        if (pauseAt > 0) { need = pauseAt; earlyTake = true; _earlyTakes++; }
+                    }
+                    if (!backFromDraft && !engineSlow && !quickStart && have >= (int)(WhisperSampleRate * 0.8)
                         && have < stepSamples)
                     {
                         int tail = (int)(WhisperSampleRate * 0.25);
@@ -2884,9 +4363,12 @@ namespace AutoClicker.Utils
                         // pass still uses all the audio that has already arrived.
                         // (CopyTo, not GetRange().ToArray() — one copy instead of two.)
                         int take = Math.Min(_mono16k.Count, takeCap);
+                        // Back from a draft: the step it would have taken (see above), the rest left for the next.
+                        if (backFromDraft && !pressureTake) { take = Math.Min(take, need); }
                         step = new float[take];
                         _mono16k.CopyTo(0, step, 0, take);
                         _mono16k.RemoveRange(0, take);
+                        lastDraftHave = 0;   // the next step's drafts start from nothing
                         if (pressureTake && take > stepSamples) { _catchUpTakes++; }
                         _stepMsActive = (int)(take * 1000L / WhisperSampleRate);
                         // What's left in the buffer is newer than the step, so the
@@ -2908,16 +4390,41 @@ namespace AutoClicker.Utils
                     // Honest advice: during a fullscreen game the GAME owns the
                     // GPU/CPU and no engine choice fixes that — don't tell the
                     // user to change settings that aren't the cause.
+                    // A language check held the engine just now (see _langCheckAsked): the audio queued behind it says
+                    // nothing about the model's pace, and must not count towards a smaller one.
+                    bool afterLangCheck = lastLangCheckTick != 0 && Environment.TickCount64 - lastLangCheckTick < 6000;
                     string advice = LowImpactMode
                         ? "The game has the GPU/CPU right now — normal during play; captions catch up between fights."
+                        : afterLangCheck ? "A check of the spoken language held the engine (" + (int)Math.Max(0, langCheckCostMs) + " ms) — not counted against the model."
+                        // Already on the GPU engine: suggesting it (as this line did) sent the user looking for a switch
+                        // that was already on.
+                        : gpuCarry ? "Already on the GPU engine: something else was using the graphics card, or this model is at its limit there (a smaller one would keep up)."
                         : "A smaller model, or the GPU engine, would keep up.";
-                    Logger.Warn("[Captions] engine is behind live audio — dropped " +
-                                (droppedThisPass * 1000L / WhisperSampleRate) + " ms to catch up (total " +
-                                (_droppedMs / 1000.0).ToString("0.0") + " s). " + advice);
+                    long droppedMsNow = droppedThisPass * 1000L / WhisperSampleRate;
+                    string behind = "[Captions] engine is behind live audio — dropped " + droppedMsNow + " ms to catch up (total "
+                                    + (_droppedMs / 1000.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s). " + advice;
+                    long nowMs = Environment.TickCount64;
+                    if (_dropWarnAtMs == 0 || nowMs - _dropWarnAtMs >= DropWarnEveryMs)
+                    {
+                        FlushDropRollUp();
+                        _dropWarnAtMs = nowMs;
+                        Logger.Warn(behind);
+                    }
+                    else
+                    {
+                        // Within ten minutes of the last warning: the line to Live debug, the count to the roll-up.
+                        Logger.Debug(behind);
+                        _dropRollCount++;
+                        _dropRollMs += droppedMsNow;
+                        _dropRollAdvice = advice;
+                    }
 
                     // Persistent word loss OUTSIDE a game is the marginal band the
-                    // per-chunk watchdog can't see — escalate on the outcome.
-                    if (!LowImpactMode && ++dropStrikes >= 3)
+                    // per-chunk watchdog can't see — escalate on the outcome. Only on SPEECH the engine was behind on
+                    // (recentSpeechDecodes): over music or a game's noise a decode runs long writing words nobody said (and
+                    // then throws them away), which is no sign the model can't keep up with someone talking — round 25: the
+                    // user's "audio is playing but nobody is speaking, and Tempo picked another model".
+                    if (!LowImpactMode && !afterLangCheck && SpeechDecodes(speechBits) >= 2 && ++dropStrikes >= 3)
                     {
                         dropStrikes = 0;
                         if (_beamActive)
@@ -2957,6 +4464,15 @@ namespace AutoClicker.Utils
                     _vadHistory = Array.Empty<float>();   // and it is not "what came before" any more
                 }
 
+                // Neither mute nor volume explains a silent capture when the sound is simply going to another output
+                // (a game on the headset, a browser pinned to the monitor's speakers). Checked only while OUR endpoint is
+                // quiet, so a working session never pays for it — and on its OWN pace (CheckAudioRouting: every 1.5 s).
+                // It sat inside the 15 s volume check below, so following the sound took three looks 15 s apart: the
+                // first 30–45 s of a game or a video on another output went uncaptioned (round 24, 2026-11-15).
+                // Not while one app is heard alone: that capture hears the app on whichever output it plays to, and its quiet
+                // is the APP's quiet — another output being loud then is another app, which captions leave out on purpose.
+                if (_activeMode == CaptureMode.SystemAudio && _openAppPid == 0) { CheckAudioRouting(_levelDb <= -60); }
+
                 // Re-check the speaker's volume and mute while the session runs.
                 //
                 // These were read once, when capture opened, so turning the volume down
@@ -2972,11 +4488,6 @@ namespace AutoClicker.Utils
                     bool wasMuted = _systemMuted;
                     float wasVol = _systemVolume;
                     RefreshEndpointVolume();
-
-                    // Neither mute nor volume explains a silent capture when the sound is
-                    // simply going to another output. Checked only while OUR endpoint is
-                    // quiet, so a working session never pays for it.
-                    CheckAudioRouting(_levelDb <= -60);
                     if (_systemMuted && !wasMuted)
                     {
                         RaiseStatus("Your speaker was just MUTED — there is no sound left for Tempo to caption. " +
@@ -3000,6 +4511,95 @@ namespace AutoClicker.Utils
 
                 if (step == null)
                 {
+                    // Draft words (DraftWords): the audio this step has so far, decoded and shown now, where the engine
+                    // has the time — never while a game has the machine, nor on a marginal engine, nor while the language
+                    // is still being detected (a draft would pay the detection too), and only when the decode fits before
+                    // the step is due, by its own measured cost: the step's decode must not wait for it.
+                    if (DraftWords && !quickStart && !lowImpact && !engineSlow && holder.P != null
+                        && (gpuCarry || engineFast || engineVeryFast) && !(multilingual && activeLang == "auto"))
+                    {
+                        int haveNow;
+                        lock (_bufferLock) { haveNow = _mono16k.Count; }
+                        double expectMs = draftMsEma > 0 ? draftMsEma : Math.Max(150.0, _avgInferMs);
+                        double roomMs = (need - haveNow) * 1000.0 / WhisperSampleRate;
+                        // Room enough (DraftRoomFactor); never more hold than DraftMaxHoldMs, never with audio dropped in
+                        // the last 30 s (the engine is short of time as it is).
+                        bool roomy = roomMs >= expectMs * DraftRoomFactor + DraftRoomSlackMs
+                                     && expectMs + DraftRoomSlackMs - roomMs <= DraftMaxHoldMs
+                                     && (lastDropTick == 0 || Environment.TickCount64 - lastDropTick > 30000);
+                        if (haveNow >= DraftMinSamples && haveNow >= lastDraftHave + DraftStepSamples && roomy)
+                        {
+                            float[] arrived;
+                            lock (_bufferLock) { arrived = _mono16k.ToArray(); }
+                            double draftFloor = _activeMode == CaptureMode.SystemAudio ? 0.0004 : 0.0015;
+                            lastDraftHave = haveNow;
+                            // Only while the speech goes on: on a quiet tail a sentence may be ending, and the step is then
+                            // taken the moment it does (the end-of-utterance early take) — a draft decoding through that
+                            // moment moved the step's edge into the next sentence, and the long60 clip got 12–13 words twice
+                            // over instead of 1 (draft-batch, round 30).
+                            if (!IsMostlySilent(arrived, draftFloor, out _) && !TailIsSilent(arrived))
+                            {
+                                // What the step's decode will hear: the carry it re-hears, then what has arrived — at the
+                                // gain the last decode had (never stepping it: that is the step's to do).
+                                var draftAudio = new float[carry.Length + arrived.Length];
+                                Array.Copy(carry, 0, draftAudio, 0, carry.Length);
+                                Array.Copy(arrived, 0, draftAudio, carry.Length, arrived.Length);
+                                float draftPeak = 0f;
+                                double draftSq = 0;
+                                for (int i = 0; i < draftAudio.Length; i++)
+                                {
+                                    float v = draftAudio[i];
+                                    if (float.IsNaN(v) || float.IsInfinity(v)) { draftAudio[i] = v = 0f; }
+                                    draftSq += v * v;
+                                    float a = v < 0 ? -v : v;
+                                    if (a > draftPeak) { draftPeak = a; }
+                                }
+                                double draftRms = Math.Sqrt(draftSq / Math.Max(1, draftAudio.Length));
+                                double draftGain = smoothGain;
+                                if (draftPeak > 0f && draftGain * draftPeak > 0.95) { draftGain = 0.95 / draftPeak; }
+                                if (draftGain > 1.02)
+                                {
+                                    for (int i = 0; i < draftAudio.Length; i++) { draftAudio[i] = Math.Max(-1f, Math.Min(1f, draftAudio[i] * (float)draftGain)); }
+                                }
+                                var draftClock = System.Diagnostics.Stopwatch.StartNew();
+                                string draft = null;
+                                try { draft = await DecodeDraftAsync(holder.P, draftAudio, token); }
+                                catch (Exception dex) { Logger.Swallow("draft decode", dex); }
+                                draftClock.Stop();
+                                draftMsEma = draftMsEma < 0 ? draftClock.ElapsedMilliseconds : draftMsEma * 0.7 + draftClock.ElapsedMilliseconds * 0.3;
+                                if (draft == null && token.IsCancellationRequested) { continue; }
+                                draft = CollapseRepeats(CleanWhisperArtifacts(draft ?? "", draftRms));
+                                // Only what the shown caption does not already hold: the carry re-heard is stripped as at a
+                                // seam, and a word the seam would take back stays the caption's (a draft retracts nothing).
+                                if (draft.Length > 0 && lastEmitMs != 0 && Environment.TickCount64 - lastEmitMs < 6000)
+                                {
+                                    int captionedDraft = lastAddedWords ? carry.Length : carry.Length - Math.Min(carry.Length, lastCarryFromStep);
+                                    int draftCarrySound = carry.Length > 0 ? SoundMs(draftAudio, captionedDraft) : 0;
+                                    draft = JoinSeam(_lastEmitted, draft, carry.Length > 0, draftCarrySound, out int draftRetract, prevTailQuietMs);
+                                    if (draftRetract > 0) { draft = DropWords(draft, draftRetract, fromEnd: false); }
+                                }
+                                // The audio stops mid-speech (always, see above): its last word is most likely a piece of one
+                                // ("…follows Saat").
+                                if (draft.Length > 0) { draft = DropWords(draft, 1, fromEnd: true); }
+                                // Not a sentence end: the window's own full stop.
+                                if (draft.EndsWith(".", StringComparison.Ordinal) && !draft.EndsWith("..", StringComparison.Ordinal))
+                                {
+                                    draft = draft.Substring(0, draft.Length - 1);
+                                }
+                                if (draft.Length > 0)
+                                {
+                                    RaiseDraft(draft);
+                                    if (VerboseTrace)
+                                    {
+                                        Logger.Info("[Trace] draft " + (int)(draftAudio.Length * 1000L / WhisperSampleRate) + " ms → "
+                                                    + draftClock.ElapsedMilliseconds + " ms · “" + draft + "”");
+                                    }
+                                }
+                                draftJustRan = true;
+                                continue;   // straight back: the step may be due already
+                            }
+                        }
+                    }
                     // Sleep until the capture callback signals fresh audio (100 ms
                     // timeout as a safety net) rather than polling every 50 ms — the
                     // pass now begins the moment enough sound has arrived instead of
@@ -3092,9 +4692,11 @@ namespace AutoClicker.Utils
                     // said" and "Tempo could not hear it", which the old counter could
                     // not tell apart.
                     if (gatePeak > gateFloor * 0.5) { _chunksNearMiss++; }
+                    _prevStepVoiced = false;   // a pause ends the speech: the next voice starts at the full bar again
                     carry = Array.Empty<float>();
                     skippedQuietMs += (int)(step.Length * 1000L / WhisperSampleRate);   // all of it pause
                     RememberForVad(step, step.Length);
+                    RaiseDraft("");            // a draft of nothing goes too
                     continue;
                 }
 
@@ -3124,6 +4726,7 @@ namespace AutoClicker.Utils
                     carry = Array.Empty<float>();
                     skippedQuietMs += (int)((step.Length - back) * 1000L / WhisperSampleRate);
                     RememberForVad(step, step.Length - back);
+                    RaiseDraft("");            // no voice: a draft written over it goes
                     continue;
                 }
                 RememberForVad(step, step.Length);
@@ -3207,6 +4810,13 @@ namespace AutoClicker.Utils
                     double[] env = EnvelopeOf(step);
                     double sim = ownGuard.Similarity(stepStartTick, env, out bool micHot);
                     _lastOwnVoiceSimX100 = (int)Math.Round(sim * 100);
+                    if (!_echoNoted && ownGuard.EchoMatches > 0)
+                    {
+                        // Once a session: why the "own voice" filter is letting loud matching stretches through (round 27).
+                        _echoNoted = true;
+                        Logger.Info("[OwnVoice] the microphone (" + ownGuard.DeviceName + ") hears the speakers — the video's sound "
+                                    + "reaches it after it plays, so it is the video, not your voice: captioned, not skipped.");
+                    }
                     if (micHot && sim >= OwnVoiceSimilarity)
                     {
                         _ownVoiceSkipped++;
@@ -3305,9 +4915,28 @@ namespace AutoClicker.Utils
                     else if (v < -1f) { chunk[i] = -1f; }
                 }
 
+                // The language lock against the audio (see _langCheckAsked). An ASKED check — the sound moved to another app,
+                // a session started in the last one's language, English words written under another lock — runs BEFORE
+                // this chunk is decoded: a lock that moves is then already right for the chunk that showed it. From 1.0 s of
+                // voice: a session's first chunk is a quick 1.2 s one, and checked only from the second it came out in the
+                // old language ("Este es un test de audio." for "This is an audio test.", caprecall --carry es); an unclear
+                // answer only spends one of the attempts. The routine and after-a-pause checks run AFTER the caption is out
+                // (below), so they never hold a caption back. Outside a game, and only within the check's measured cost.
+                bool langAfterPause = lastEmitMs != 0 && Environment.TickCount64 - lastEmitMs >= 10000;
+                if (_langCheckAsked > 0 && multilingual && !LanguagePinned && activeLang != "auto" && !lowImpact
+                    && holder.P != null && chunk.Length >= WhisperSampleRate
+                    && Environment.TickCount64 - lastLangCheckTick >= 1500
+                    && (langCheckCostMs >= 0 ? langCheckCostMs : EstimateLanguageCheckMs(gpuCarry, modelPath)) <= LanguageCheckMaxMs)
+                {
+                    CheckLanguageLock(chunk, asked: true, afterPause: langAfterPause);
+                }
+
                 try
                 {
                     var inferClock = System.Diagnostics.Stopwatch.StartNew();
+                    // Decoded while the language is still being detected: Whisper's language pass makes such a chunk
+                    // far slower than the model itself is (see FastLockProb), so it says nothing about the model's pace.
+                    bool detectingThisChunk = multilingual && activeLang == "auto";
                     Interlocked.Exchange(ref _decodeStartTick, Environment.TickCount64);
                     var sb = new System.Text.StringBuilder();
                     string segLang = null;
@@ -3427,7 +5056,44 @@ namespace AutoClicker.Utils
 
                     if (multilingual && !LanguagePinned && probCount > 0)
                     {
-                        string want = langLock.WantedLanguage(segLang, probSum / probCount);
+                        double avgProb = probSum / probCount;
+                        string want = langLock.WantedLanguage(segLang, avgProb);
+                        // Detection is the expensive part on a slow PC: Whisper runs its language pass over the whole
+                        // 30 s window, every chunk, and on the processor that cost a large model ~20 s a chunk — the
+                        // engine then threw nearly everything away (caprecall 2026-11-12, Large Turbo q5 on the CPU:
+                        // 0 of 17 words detecting the language, 13–17 of 17 with English pinned; the user's own large-v3
+                        // sessions dropped ~19 s at a time). Waiting for LockAfter agreeing chunks cost a minute or more
+                        // of lost speech. A slow chunk with a confident answer locks it NOW; three unsure chunks after
+                        // it unlock it again, as for any lock, so a wrong guess does not stick.
+                        double chunkAudioMs = chunk.Length * 1000.0 / WhisperSampleRate;
+                        // Only on SPEECH: words kept after the noise filters, every one of them in segments Whisper itself
+                        // thought were speech (no-speech under 0.05 — real speech reads 0.00–0.01, invented words over
+                        // music and noise 0.05–0.59, see the gate above). A guess made on a music bed or a shout is
+                        // exactly the one that would lock the session into the wrong language.
+                        bool fastLock = false;
+                        if (want == null && detectingThisChunk && !string.IsNullOrEmpty(segLang) && avgProb >= FastLockProb
+                            && chunkAudioMs >= 500 && inferClock.ElapsedMilliseconds > chunkAudioMs * 1.4
+                            && sb.Length > 0 && keptNoSpeech < 0.05f)
+                        {
+                            want = segLang;
+                            fastLock = true;
+                            Logger.Info("[Captions] detecting the language takes longer than the speech on this PC (" +
+                                        inferClock.ElapsedMilliseconds + " ms for " + (int)chunkAudioMs + " ms) — locking '" +
+                                        segLang + "' now (confidence " +
+                                        avgProb.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + ").");
+                        }
+                        // A fast lock that keeps being written under, with words and a fair confidence, has earned its
+                        // carry to the next session.
+                        if (want == null && _fastLockUnconfirmed != null)
+                        {
+                            if (activeLang != _fastLockUnconfirmed) { _fastLockUnconfirmed = null; }
+                            else if (sb.Length > 0 && avgProb >= FastLockProb && ++_fastLockConfirmations >= 2)
+                            {
+                                _carriedLanguage = _fastLockUnconfirmed;
+                                _fastLockUnconfirmed = null;
+                                Logger.Info("[Captions] the fast language lock held for two more chunks — the next session starts in it.");
+                            }
+                        }
                         // Show what detection is CURRENTLY leaning towards, not just the
                         // end state. While unsettled this used to read "auto-detect" and
                         // nothing else, so on audio that never settles — most game mixes
@@ -3447,6 +5113,28 @@ namespace AutoClicker.Utils
                                 try { old?.Dispose(); } catch { }
                                 langLock.Applied(want);
                                 activeLang = want;
+                                // English's own repairs (laughter, seam punctuation) follow the language the text is now in:
+                                // a session that started detecting kept them off after it had locked onto English.
+                                english = string.Equals(want, "en", StringComparison.OrdinalIgnoreCase);
+                                mismatchLang = null;
+                                englishTextChunks = 0;
+                                // The next session of this run starts from it (CarriedLanguage); an unlock forgets it. A fast
+                                // lock is carried only once two more chunks have been written under it (_fastLockUnconfirmed).
+                                if (want == "auto")
+                                {
+                                    _carriedLanguage = null;
+                                    _fastLockUnconfirmed = null;
+                                }
+                                else if (fastLock)
+                                {
+                                    _fastLockUnconfirmed = want;
+                                    _fastLockConfirmations = 0;
+                                }
+                                else
+                                {
+                                    _carriedLanguage = want;
+                                    _fastLockUnconfirmed = null;
+                                }
                                 _langState = want == "auto" ? "auto-detect" : "locked: " + want;
                                 Logger.Info(want == "auto"
                                     ? "[Captions] language unlocked - re-detecting (confidence fell)."
@@ -3530,6 +5218,60 @@ namespace AutoClicker.Utils
                         }
                     }
                     lastAddedWords = text.Length > 0;
+                    // The step's whole hearing added nothing: whatever a draft showed of it is taken back.
+                    if (text.Length == 0) { RaiseDraft(""); }
+                    // Speech, for the too-slow ladder (speechBits): words kept, Whisper sure someone spoke, no decode loop.
+                    bool speechDecode = text.Length > 0 && keptNoSpeech < 0.2f && !IsDecodeLoop(sb.ToString());
+                    speechBits = ((speechBits << 1) | (speechDecode ? 1 : 0)) & 0x3F;
+
+                    // The lock's routine check, and the one after a long pause (where one video ends and the next begins):
+                    // now that this caption is out, on the speech it was made from (at least 1.5 s of it). Now and then
+                    // means at most ~1/40 of the engine's time, every 20 s at the most often; after a pause only where a
+                    // check is quick (≤ 1 s — the GPU), or the first caption after every pause would wait for it.
+                    if (speechDecode && _langCheckAsked == 0 && multilingual && !LanguagePinned && activeLang != "auto"
+                        && !LowImpactMode && holder.P != null && chunk.Length >= WhisperSampleRate * 3 / 2)
+                    {
+                        long nowTick = Environment.TickCount64;
+                        double costMs = langCheckCostMs >= 0 ? langCheckCostMs : EstimateLanguageCheckMs(gpuCarry, modelPath);
+                        double periodMs = Math.Min(600000, Math.Max(20000, costMs * 40));
+                        bool due = nowTick - Math.Max(lastLangCheckTick, loopStartTick) >= periodMs;
+                        bool pauseCheck = langAfterPause && costMs <= 1000;
+                        if (nowTick - lastLangCheckTick >= 8000 && (due || pauseCheck) && costMs <= LanguageCheckMaxMs)
+                        {
+                            // Not the decode's time: the pace the too-slow ladder reads must not include it.
+                            inferClock.Stop();
+                            CheckLanguageLock(chunk, asked: false, afterPause: langAfterPause);
+                            inferClock.Start();
+                        }
+                    }
+
+                    // Written under a lock to another language, English speech keeps its own small words (EnglishShare) —
+                    // free evidence the audio changed, put to Whisper's own detection where that is affordable.
+                    if (multilingual && !LanguagePinned && activeLang != "auto" && text.Length > 0
+                        && !string.Equals(activeLang, "en", StringComparison.OrdinalIgnoreCase))
+                    {
+                        double share = EnglishShare(text);
+                        if (share >= 0.25) { englishTextChunks++; }
+                        else if (share >= 0) { englishTextChunks = 0; }
+                        if (englishTextChunks >= 1)
+                        {
+                            double cost = langCheckCostMs >= 0 ? langCheckCostMs : EstimateLanguageCheckMs(gpuCarry, modelPath);
+                            if (cost <= LanguageCheckMaxMs)
+                            {
+                                if (_langCheckAsked == 0)
+                                {
+                                    _langCheckWhy = "the words read as English";
+                                    _langCheckAsked = 2;
+                                }
+                            }
+                            else if (englishTextChunks >= 2)
+                            {
+                                // Too costly to ask Whisper on this PC: two chunks in a row of English words are the answer.
+                                MoveLanguageLock("en", "two chunks in a row written in English words; asking Whisper would cost ~"
+                                                       + (int)Math.Round(cost / 1000) + " s on this PC");
+                            }
+                        }
+                    }
 
                     // Real-time watchdog: if transcribing a chunk keeps taking longer
                     // than the audio it covers, this model can NEVER catch up on this
@@ -3557,7 +5299,10 @@ namespace AutoClicker.Utils
                     // Smoothed real-time factor for Live Debug — only meaningful
                     // chunks count (a short quick-start chunk's flat encoder cost
                     // makes its ratio look far worse than the engine really is).
-                    if (audioMs >= 800)
+                    // On speech only (speechDecode): a decode over music that runs on writing words nobody said — to the
+                    // token cap, then thrown away — is no measure of how the model keeps up with a voice, and this pace is
+                    // what the too-slow ladder sizes its jump by.
+                    if (audioMs >= 800 && speechDecode)
                     {
                         int rtfNow = (int)(inferClock.ElapsedMilliseconds * 100 / audioMs);
                         _rtfX100 = _rtfX100 == 0 ? rtfNow : (_rtfX100 * 7 + rtfNow) / 8;
@@ -3580,7 +5325,9 @@ namespace AutoClicker.Utils
                     // encoder cost makes the ratio look far worse than it is).
                     if (audioMs >= WindowSeconds * 600)   // ≥60% of a full window
                     {
-                        if (inferClock.ElapsedMilliseconds > audioMs * 0.95) { slowStreak++; fastStreak = 0; }
+                        // A slow decode counts only on speech (speechDecode), like the too-slow ladder below: the stretch drops
+                        // beam search with it, and music that loops the decoder to its token cap is not the model's pace.
+                        if (inferClock.ElapsedMilliseconds > audioMs * 0.95) { if (speechDecode) { slowStreak++; fastStreak = 0; } }
                         else if (inferClock.ElapsedMilliseconds < audioMs * 0.75) { fastStreak++; slowStreak = 0; }
                         // Between the two thresholds: HOLD both streaks. A marginal
                         // engine hovers around 1.0× and constantly dips through this
@@ -3626,8 +5373,8 @@ namespace AutoClicker.Utils
 
                     _cadenceTier = LowImpactMode ? "low-impact (game)"
                                  : engineSlow ? "stretched ×1.5 (marginal engine)"
-                                 : engineVeryFast ? "very fast ×0.6"
-                                 : engineFast ? "fast ×0.75"
+                                 : (ForcedCadence >= 0 ? ForcedCadence == 2 : engineVeryFast && FastestCadence >= 2) ? "very fast ×0.6"
+                                 : (ForcedCadence >= 0 ? ForcedCadence == 1 : (engineFast || engineVeryFast) && FastestCadence >= 1) ? "fast ×0.75"
                                  : "standard";
 
                     // Beat-by-beat pipeline trace for the Live Debug window (opt-in).
@@ -3698,6 +5445,9 @@ namespace AutoClicker.Utils
                         _headroomChunks = 0;
                     }
 
+                    // A chunk that kept pace (or was only marginally slow) ends a run of hopeless ones.
+                    if (!(audioMs >= 500 && inferClock.ElapsedMilliseconds > audioMs * HopelessFactor)) { _hopelessChunks = 0; }
+
                     if (LowImpactMode)
                     {
                         // A fullscreen game owns the GPU/CPU: slow chunks are the
@@ -3708,6 +5458,39 @@ namespace AutoClicker.Utils
                         // closes — the backlog drop above already keeps captions
                         // live in the meantime.
                         _slowChunks = 0;
+                    }
+                    else if (detectingThisChunk)
+                    {
+                        // Slow because Whisper was detecting the language, not because the model can't keep pace: the
+                        // fix for that is locking the language (above), and stepping the model down instead would have
+                        // traded accuracy for nothing — large-v3 → Turbo → Turbo q5, each still detecting just as slowly.
+                    }
+                    else if (!speechDecode)
+                    {
+                        // Not speech (speechDecode): music, a game's noise, a decode loop run out to the token cap. How long
+                        // that took says nothing about keeping up with someone talking — round 25, the user's "audio is
+                        // playing but nobody is speaking, and Tempo thought it wasn't working and picked another model".
+                        // Neither counted nor forgiven: the next speech decides.
+                    }
+                    else if (!_slowFired && audioMs >= 500 && inferClock.ElapsedMilliseconds > audioMs * HopelessFactor
+                             && ++_hopelessChunks >= 2)
+                    {
+                        // Twice in a row, not once. A session's first chunk — and the first after the engine is rebuilt —
+                        // carries one-off costs (the model's first touch of its weights, the GPU engine compiling its
+                        // shaders) that can take several times the speech without the model being slow at all; stepped
+                        // down on that alone, a fine model was traded for a smaller one for the whole session. A first
+                        // hopeless chunk falls through to the ladder below as an ordinary slow one.
+                        // Hopeless, not marginal. Beam search off buys about 1.5×; it cannot close a gap of three times
+                        // and more, and every chunk spent finding that out throws its own length of speech away. The
+                        // user's large-v3 on the processor (2026-11-03): ~20 s a 2 s chunk, 38.6 s of speech dropped in
+                        // a minute, two captions — the two-rung ladder below needed four such chunks before it asked for
+                        // a smaller model. Straight to the next one.
+                        _slowFired = true;
+                        // Tagged (2026-11-16): untagged, Live debug's "tag:captions" filter and its colours missed it.
+                        Logger.Warn("[Captions] model far too slow for real time: " + inferClock.ElapsedMilliseconds + " ms for " +
+                                    (int)audioMs + " ms of audio — asking for the next smaller model now.");
+                        NoteGpuCouldHelp();
+                        try { RealTimeTooSlow?.Invoke(); } catch { }
                     }
                     else if (inferClock.ElapsedMilliseconds > audioMs * 1.4)
                     {
@@ -3737,7 +5520,7 @@ namespace AutoClicker.Utils
                         else if (_slowChunks >= 2 && !_slowFired)
                         {
                             _slowFired = true;
-                            Logger.Warn("Model too slow for real time: " +
+                            Logger.Warn("[Captions] model too slow for real time: " +
                                 inferClock.ElapsedMilliseconds + " ms for " + (int)audioMs + " ms of audio.");
                             NoteGpuCouldHelp();
                             try { RealTimeTooSlow?.Invoke(); } catch { }
@@ -3835,7 +5618,33 @@ namespace AutoClicker.Utils
         /// made the synthetic melody read as a voice more often. True whenever the model is missing
         /// or fails: then this gate simply is not there.
         /// </summary>
+        /// <summary>
+        /// Whether the step before this one was heard as a voice (cleared by a silent step) — for the continuation bar,
+        /// which is off (see <see cref="VadHysteresis"/>).
+        /// </summary>
+        private bool _prevStepVoiced;
+
+        /// <summary>
+        /// A lower bar for a step that follows a voiced one (Silero's own continuation rule). OFF: measured 2026-11-15
+        /// (caprecall, Large Turbo Compact on the GPU, speech with a music bed under it and music alone, two batches),
+        /// it caught no more words — 240 / 241 / 240 of 276 at 0.35×2, 0.35×4 and 0.42×2 frames against 239 without —
+        /// while 30 s of music alone gave 14 invented words in every variant against 4 without. A harness switch now
+        /// (caprecall --vadbar / --vadframes; --nohyst is the default).
+        /// </summary>
+        internal static bool VadHysteresis = false;
+        /// <summary>The continuation bar, and how many 32 ms frames must reach it (caprecall --vadbar / --vadframes).</summary>
+        internal static float VadContinueBar = 0.35f;
+        internal static int VadContinueFrames = 2;
+
         private bool StepHasVoice(float[] step)
+        {
+            bool continuing = _prevStepVoiced && VadHysteresis;
+            bool voicedNow = StepHasVoiceAt(step, continuing ? VadContinueBar : 0.5f, continuing ? VadContinueFrames : 2);
+            _prevStepVoiced = voicedNow;
+            return voicedNow;
+        }
+
+        private bool StepHasVoiceAt(float[] step, float threshold, int needFrames)
         {
             if (!_vadLoaded)
             {
@@ -3877,14 +5686,14 @@ namespace AutoClicker.Utils
                     float p = vad.Process(x, i);
                     if (i < warm) { continue; }
                     if (p > best) { best = p; }
-                    if (p >= 0.5f && ++voiced >= 2 && !trace) { return true; }
+                    if (p >= threshold && ++voiced >= needFrames && !trace) { return true; }
                 }
                 if (trace)
                 {
                     Logger.Info("[Trace] voice check: " + voiced + " voiced frame(s) of " + ((x.Length - warm + 511) / 512)
                         + ", best " + best.ToString("0.00") + ", gain " + gain.ToString("0.0") + "x, warm-up " + warm + " samples.");
                 }
-                return voiced >= 2;
+                return voiced >= needFrames;
             }
             catch (Exception ex)
             {
@@ -4020,6 +5829,18 @@ namespace AutoClicker.Utils
         };
 
         /// <summary>True when a tag's words are a short sound descriptor ("Music", "outro music", "clapping").</summary>
+        /// <summary>A bracketed run short enough to be one of Whisper's sound notes (see CleanWhisperArtifacts).</summary>
+        private static bool ShortBracketRun(string run)
+        {
+            if (string.IsNullOrEmpty(run) || run.Length < 3) { return false; }
+            string inner = run.Substring(1, run.Length - 2);
+            int words = inner.Split(new[] { ' ', '_' }, StringSplitOptions.RemoveEmptyEntries).Length;
+            if (words == 0) { return true; }
+            if (run[0] == '[') { return words <= 6; }
+            foreach (char c in inner) { if (char.IsDigit(c)) { return false; } }
+            return words <= 4;
+        }
+
         private static bool IsSoundTag(string inner)
         {
             string[] words = inner.Trim().ToLowerInvariant().Split(new[] { ' ', '_', '-' },
@@ -4047,10 +5868,15 @@ namespace AutoClicker.Utils
         {
             if (string.IsNullOrWhiteSpace(text)) return "";
 
-            // Remove [tag] / (tag) runs whose content is a short sound descriptor.
+            // Remove [tag] / (tag) runs whose content is a short sound descriptor. Since round 30 the decoder no longer
+            // bans the tokens that open them (SuppressTagsInDecoder: it cost ~450 ms a decode), so any short bracketed run
+            // goes: Whisper writes square brackets only round sounds ("[indistinct chatter]", "[BLANK_AUDIO]"), and round
+            // brackets round sounds and stage directions ("(gasps)", "(speaking in foreign language)") — never round words
+            // somebody said. Up to six words in square brackets; up to four in round ones, and none with a digit in it
+            // ("(2020)" may be a year read out).
             text = System.Text.RegularExpressions.Regex.Replace(text,
                 @"[\[\(]([^\]\)]{1,40})[\]\)]",
-                m => IsSoundTag(m.Groups[1].Value) ? "" : m.Value);
+                m => IsSoundTag(m.Groups[1].Value) || ShortBracketRun(m.Value) ? "" : m.Value);
             // Sound effects between asterisks — how the English-only models write them ("*outro
             // music*", "*clap*", "*boom*", "*DUN DUN DUN DUN*"), which went straight onto the bar —
             // and asterisks left on their own ("* * * *"). Whisper never wraps spoken words in
@@ -4562,12 +6388,29 @@ namespace AutoClicker.Utils
                 }
             }
 
+            // The re-hearing lined up word by word (round 27): garbled at its front, a word added or dropped, the
+            // caption's last word heard differently — what real fast speech did at most seams (see AlignedSeam).
+            if (SeamRepairs && AlignedSeam(p, n, carrySoundMs, prevWhole, out int alignedDrop, out int alignedRetract))
+            {
+                retractWords = alignedRetract;
+                return string.Join(" ", n, alignedDrop, n.Length - alignedDrop).Trim();
+            }
+
             // A single word of overlap, spelled differently: the new chunk re-heard only the previous
             // caption's last word ("…boats in the harbour." then "harbor, which is…"), and nothing
             // above looks at one word. Long words, one letter apart, only — the new hearing stays.
             string prevLast = LettersOf(p, p.Length - 1, 1);
             string nextFirst = LettersOf(n, 0, 1);
             if (!FitsInCarry(n, 1, carrySoundMs)) { return next; }
+            // The new chunk's first word is the END of the caption's last word: the carry began inside that word, so the
+            // window heard only its tail as a word of its own ("…then Chatsumaki." + "Tsumaki shows up", round 29's names
+            // clip). The k ≥ 2 rule above has this for a longer overlap ("photographs" / "Graphs"); alone it needs four
+            // letters and half the word at least — "classroom" / "room" could be two words someone said.
+            if (SeamRepairs && n.Length >= 2 && nextFirst.Length >= 4 && prevLast.Length > nextFirst.Length
+                && nextFirst.Length * 2 >= prevLast.Length && prevLast.EndsWith(nextFirst, StringComparison.Ordinal))
+            {
+                return string.Join(" ", n, 1, n.Length - 1).Trim();
+            }
             if (SeamRepairs && prevLast.Length >= 5 && nextFirst.Length >= 5 && prevLast != nextFirst
                 && EditDistance(prevLast, nextFirst, 1) <= 1)
             {
@@ -4588,6 +6431,173 @@ namespace AutoClicker.Utils
         /// <summary>A window that ended on at least this much quiet heard its last word whole: speech has gaps of
         /// 50–150 ms between words, and a pause this long is the word over (JoinSeam).</summary>
         private const int WholeWordQuietMs = 250;
+
+        /// <summary>
+        /// The syllable pace AlignedSeam allows the re-heard words: stricter than FitsInCarry's 100 ms floor, because its
+        /// matching is looser — a phrase said again straight after needs more sound in the carry than it had to pass.
+        /// </summary>
+        private const int AlignedMsPerSyllable = 120;
+
+        /// <summary>
+        /// The new chunk's opening lined up word by word with the caption's last 2–8 words (round 27, 2026-11-15). The
+        /// user's OPM review — one fast talker, Large Turbo on the GPU, a 1.15 s carry — put both hearings on screen at
+        /// most seams, every one a shape the rules above do not look for:
+        ///  • garbled at its front, then the caption's own last words: "…kind of cool but" + "We're kind cool, but I guess"
+        ///    (a word dropped as well), "…weird, and silly" + "and weird and silly. He just…";
+        ///  • a word added: "…I was looking where he was," + "I was looking at where he was and…";
+        ///  • the caption's last word heard differently behind exact ones: "…back to the right place." + "Bring them back
+        ///    to the right path and…", "…waste of potential cruel," + "the potential crew, and then…".
+        /// Up to three words of garble in front; then a word-level alignment (exact 0, one letter off 0.5, another word or
+        /// a word added or dropped 1) ending on the caption's last word, which may be dropped but never followed by an
+        /// extra word of the new text. Accepted only with real evidence — half the caption's words exact, 8+ exact letters,
+        /// little else wrong — and only when every word taken as re-heard fits the MEASURED sound of the carry at
+        /// <see cref="AlignedMsPerSyllable"/>. When the caption's last word was heard differently, the new hearing replaces
+        /// it (<paramref name="retract"/> = 1) unless its window ended in a pause (<paramref name="prevWhole"/>).
+        /// </summary>
+        internal static bool AlignedSeam(string[] p, string[] n, int carrySoundMs, bool prevWhole, out int drop, out int retract)
+        {
+            drop = 0;
+            retract = 0;
+            if (carrySoundMs == int.MaxValue || carrySoundMs <= 0 || p == null || n == null || p.Length < 2 || n.Length < 2)
+            {
+                return false;
+            }
+            double bestScore = double.MinValue;
+            bool found = false;
+            for (int m = Math.Min(8, p.Length); m >= 2; m--)
+            {
+                var a = new string[m];
+                bool okA = true;
+                for (int i = 0; i < m; i++)
+                {
+                    a[i] = LettersOf(p, p.Length - m + i, 1);
+                    if (a[i].Length == 0) { okA = false; }
+                }
+                if (!okA) { continue; }
+                double maxCost = m <= 3 ? 1.0 : m <= 5 ? 1.5 : 2.0;
+                for (int g = 0; g <= 3; g++)
+                {
+                    for (int len = Math.Max(1, m - 2); len <= m + 2 && g + len <= n.Length; len++)
+                    {
+                        int taken = g + len;
+                        if (!FitsAtPace(n, taken, carrySoundMs, AlignedMsPerSyllable)) { break; }
+                        var b = new string[len];
+                        bool okB = true;
+                        for (int i = 0; i < len; i++)
+                        {
+                            b[i] = LettersOf(n, g + i, 1);
+                            if (b[i].Length == 0) { okB = false; }
+                        }
+                        if (!okB) { continue; }
+                        if (!AlignWords(a, b, out double cost, out int exactWords, out int exactLetters, out int longestExact,
+                                        out int lastOp))
+                        {
+                            continue;
+                        }
+                        if (cost > maxCost || exactLetters < 8 || exactWords * 2 < m) { continue; }
+                        bool lastHeardOtherwise = lastOp == OpFuzzy || lastOp == OpSameFirst;
+                        if (lastOp == OpOther || lastOp == OpInsert) { continue; }
+                        // The caption's last word left out only because the pace cut the new words short, the new text
+                        // going on with that very word: "Can you hear me?" + "Can you hear me now?" lined up as "can you
+                        // hear", "me" dropped (round 29) — the whole phrase said again, too long for the carry to hold.
+                        if (lastOp == OpDropped && g + len < n.Length && LettersOf(n, g + len, 1) == a[m - 1]) { continue; }
+                        if (exactWords < 2 && !(m == 2 && longestExact >= 7 && lastHeardOtherwise)) { continue; }
+                        // Three words or fewer are too little to stretch: no word added or dropped, and every word but the
+                        // last exact. "…we should go." + "Should we go now?" lined up "should … go" around an added "we".
+                        if (m <= 3)
+                        {
+                            if (len != m) { continue; }
+                            bool headExact = true;
+                            for (int i = 0; i < m - 1; i++) { if (a[i] != b[i]) { headExact = false; break; } }
+                            if (!headExact) { continue; }
+                        }
+                        // The most exact letters wins; then the cheaper alignment; then the longer one; then the one that
+                        // takes the new hearing of the caption's last word ("place" / "path") over leaving it out.
+                        double score = exactLetters - 3 * cost + 0.01 * m + 0.001 * taken;
+                        if (score <= bestScore) { continue; }
+                        bestScore = score;
+                        found = true;
+                        if (lastHeardOtherwise && !prevWhole)
+                        {
+                            drop = taken - 1;     // the new hearing of the caption's last word stays…
+                            retract = 1;          // …in place of the caption's
+                        }
+                        else
+                        {
+                            drop = taken;
+                            retract = 0;
+                        }
+                    }
+                }
+            }
+            return found && drop > 0;
+        }
+
+        private const int OpExact = 0, OpFuzzy = 1, OpSameFirst = 2, OpOther = 3, OpDropped = 4, OpInsert = 5;
+
+        /// <summary>
+        /// Word-level alignment of <paramref name="a"/> (the caption's last words) with <paramref name="b"/> (the new text's
+        /// opening): exact 0, one letter off (4+ letters) 0.5, another word 1, a word of either side unmatched 1. Ties go
+        /// to more exact letters. <paramref name="lastOp"/> is how the alignment ENDS: the caption's last word exact, one
+        /// letter off, another word with its first letter (<see cref="OpSameFirst"/>) or not, dropped by the new hearing,
+        /// or the new text going on past it (<see cref="OpInsert"/> — then the alignment does not end on that word).
+        /// </summary>
+        private static bool AlignWords(string[] a, string[] b, out double cost, out int exactWords, out int exactLetters,
+                                       out int longestExact, out int lastOp)
+        {
+            int m = a.Length, k = b.Length;
+            var c = new double[m + 1, k + 1];
+            var ew = new int[m + 1, k + 1];
+            var el = new int[m + 1, k + 1];
+            var lx = new int[m + 1, k + 1];
+            var op = new int[m + 1, k + 1];
+            for (int i = 0; i <= m; i++)
+            {
+                for (int j = 0; j <= k; j++)
+                {
+                    if (i == 0 && j == 0) { op[i, j] = -1; continue; }
+                    double best = double.MaxValue;
+                    int bw = 0, bl = 0, bx = 0, bo = -1;
+                    void Take(double cc, int w, int l, int x, int o)
+                    {
+                        if (cc < best - 1e-9 || (Math.Abs(cc - best) < 1e-9 && l > bl)) { best = cc; bw = w; bl = l; bx = x; bo = o; }
+                    }
+                    if (i > 0 && j > 0)
+                    {
+                        string x = a[i - 1], y = b[j - 1];
+                        if (x == y)
+                        {
+                            Take(c[i - 1, j - 1], ew[i - 1, j - 1] + 1, el[i - 1, j - 1] + x.Length,
+                                 Math.Max(lx[i - 1, j - 1], x.Length), OpExact);
+                        }
+                        else
+                        {
+                            bool near = Math.Min(x.Length, y.Length) >= 4 && EditDistance(x, y, 1) <= 1;
+                            int o = near ? OpFuzzy : x[0] == y[0] ? OpSameFirst : OpOther;
+                            Take(c[i - 1, j - 1] + (near ? 0.5 : 1.0), ew[i - 1, j - 1], el[i - 1, j - 1], lx[i - 1, j - 1], o);
+                        }
+                    }
+                    if (i > 0) { Take(c[i - 1, j] + 1.0, ew[i - 1, j], el[i - 1, j], lx[i - 1, j], OpDropped); }
+                    if (j > 0) { Take(c[i, j - 1] + 1.0, ew[i, j - 1], el[i, j - 1], lx[i, j - 1], OpInsert); }
+                    c[i, j] = best; ew[i, j] = bw; el[i, j] = bl; lx[i, j] = bx; op[i, j] = bo;
+                }
+            }
+            cost = c[m, k];
+            exactWords = ew[m, k];
+            exactLetters = el[m, k];
+            longestExact = lx[m, k];
+            lastOp = op[m, k];
+            return m > 0 && k > 0;
+        }
+
+        /// <summary>Whether the first <paramref name="count"/> words could have been said in <paramref name="soundMs"/> at
+        /// <paramref name="msPerSyllable"/> (FitsInCarry with its own pace).</summary>
+        private static bool FitsAtPace(string[] words, int count, int soundMs, int msPerSyllable)
+        {
+            int syllables = 0;
+            for (int i = 0; i < count && i < words.Length; i++) { syllables += Syllables(words[i]); }
+            return syllables * msPerSyllable <= soundMs + CarrySlackMs;
+        }
 
         /// <summary>True for one number written once in words and once in digits ("nine" / "9").</summary>
         private static bool SameNumber(string a, string b)
@@ -4893,9 +6903,9 @@ namespace AutoClicker.Utils
         }
 
         /// <summary>
-        /// A floor on the syllables a written word takes to say: its vowel groups in Latin letters, one per digit, one
-        /// per character of a script written by syllable (kana, Han, Hangul), a third of the letters of any other
-        /// script — and at least one.
+        /// A floor on the syllables a written word takes to say: its vowel groups in Latin letters (less an ending that
+        /// is usually silent, see SilentEnding), one per digit, one per character of a script written by syllable (kana,
+        /// Han, Hangul), a third of the letters of any other script — and at least one.
         /// </summary>
         private static int Syllables(string word)
         {
@@ -4911,7 +6921,38 @@ namespace AutoClicker.Utils
                 else if ((c >= '぀' && c <= 'ヿ') || (c >= '一' && c <= '鿿') || (c >= '가' && c <= '힯')) { syllabic++; }
                 else if (char.IsLetter(c) && c > 'ɏ') { other++; }
             }
+            if (groups >= 2 && SilentEnding(word)) { groups--; }
             return Math.Max(1, groups + digits + syllabic + other / 3);
+        }
+
+        /// <summary>
+        /// A last vowel group that is usually not said: a final "e" after a consonant ("some", "are", "there", "home" —
+        /// English, and French), and "-es"/"-ed" after most consonants ("makes", "named"; not "boxes", "places",
+        /// "wanted"). Counted, it lifted the floor ABOVE the word, which is what a floor must never be: round 29's names
+        /// clip re-heard "Some are worried about" in a carry with 720 ms of sound, 8 syllables by vowel groups (6 said),
+        /// and the seam kept both copies on screen. Where the ending is said (Spanish "grande", English "people") the
+        /// floor is only lower, as a floor may be.
+        /// </summary>
+        private static bool SilentEnding(string word)
+        {
+            int end = word.Length - 1;
+            while (end >= 0 && !char.IsLetter(word[end])) { end--; }
+            if (end < 2) { return false; }
+            const string vowels = "aeiouy";
+            char last = char.ToLowerInvariant(word[end]);
+            if (last == 'e')
+            {
+                // Not after a vowel: "free", "agree", "blue" end in a sound.
+                return char.IsLetter(word[end - 1]) && vowels.IndexOf(char.ToLowerInvariant(word[end - 1])) < 0;
+            }
+            if ((last == 's' || last == 'd') && end >= 3 && char.ToLowerInvariant(word[end - 1]) == 'e')
+            {
+                char before = char.ToLowerInvariant(word[end - 2]);
+                if (!char.IsLetter(word[end - 2]) || vowels.IndexOf(before) >= 0) { return false; }
+                // "-es" is said after a hiss ("boxes", "places", "judges", "wishes"), "-ed" after t or d ("wanted").
+                return last == 's' ? "sxzcgh".IndexOf(before) < 0 : before != 't' && before != 'd';
+            }
+            return false;
         }
 
         /// <summary>True when <paramref name="longer"/> is <paramref name="start"/> carried on (3+ letters in common).</summary>
@@ -5288,9 +7329,15 @@ namespace AutoClicker.Utils
                     if (emitTick - last > 30000)
                     {
                         Interlocked.Exchange(ref _lastLateLogTick, emitTick);
-                        Logger.Warn("[Captions] a caption left the engine " + (oldest / 1000.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
-                                    + " s after its first words were heard (decode " + (_avgInferMs / 1000.0).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
-                                    + " s on average, backlog " + BacklogSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+                        var ci = System.Globalization.CultureInfo.InvariantCulture;
+                        // Before the first decode has finished there is no average yet: the line said "decode 0.00 s on average"
+                        // beside a 26 s wait (11-14, a start on the CPU after a GPU crash) — the audio heard while the model loaded.
+                        string decode = _avgInferMs > 0
+                            ? "decode " + (_avgInferMs / 1000.0).ToString("0.00", ci) + " s on average"
+                            : "the session's first decode — the audio heard while the engine was starting waited for it";
+                        Logger.Warn("[Captions] a caption left the engine " + (oldest / 1000.0).ToString("0.0", ci)
+                                    + " s after its first words were heard (" + decode
+                                    + ", backlog " + BacklogSeconds.ToString("0.0", ci)
                                     + " s" + (LowImpactMode ? ", game mode" : "") + ").");
                     }
                 }
@@ -5304,10 +7351,24 @@ namespace AutoClicker.Utils
         /// audio thrown away to catch up. A word reported missing or late can then be told apart from the log alone:
         /// never heard as a voice, dropped as a phantom, or decoded late.
         /// </summary>
+        /// <summary>The "falling behind" warnings held back since the last one written (see DropWarnEveryMs), as one line.</summary>
+        private void FlushDropRollUp()
+        {
+            if (_dropRollCount <= 0) { return; }
+            var ci = System.Globalization.CultureInfo.InvariantCulture;
+            Logger.Warn("[Captions] the engine fell behind " + _dropRollCount + " more time(s) after that, "
+                        + _dropRollMs + " ms of audio in all (session total " + (_droppedMs / 1000.0).ToString("0.0", ci) + " s); each is in Live debug. "
+                        + (_dropRollAdvice ?? ""));
+            _dropRollCount = 0;
+            _dropRollMs = 0;
+            _dropRollAdvice = null;
+        }
+
         private void LogSessionSummary()
         {
             try
             {
+                FlushDropRollUp();
                 if (_chunksDone == 0 && _vadSkipped == 0 && _chunksSilent == 0) { return; }
                 var ci = System.Globalization.CultureInfo.InvariantCulture;
                 Logger.Info("[Captions] session: " + _emits + " caption(s) from " + _chunksDone + " decode(s)"
@@ -5323,8 +7384,104 @@ namespace AutoClicker.Utils
             catch { }
         }
 
+        /// <summary>
+        /// Where the end-of-utterance early take would have taken the step had the loop been watching (it was decoding a
+        /// draft): the first point, from 0.8 s of audio and at most <paramref name="limit"/> samples, where the last 250 ms
+        /// were quiet (RMS under 0.002) after sound (a sample over 0.004 before them) — the same test the loop makes as audio
+        /// arrives. 0 when there is none.
+        /// </summary>
+        private static int EarlyTakeSpot(List<float> buffer, int limit)
+        {
+            int tail = (int)(WhisperSampleRate * 0.25);
+            int from = (int)(WhisperSampleRate * 0.8);
+            limit = Math.Min(limit, buffer.Count);
+            if (limit < from) { return 0; }
+            // Running sum of squares over the 250 ms ending at e, and whether any sound came before that window.
+            double sq = 0;
+            for (int i = from - tail; i < from; i++) { float v = buffer[i]; sq += (double)v * v; }
+            bool soundBefore = false;
+            int scannedBody = 0;
+            for (int e = from; e <= limit; e++)
+            {
+                if (e > from)
+                {
+                    float add = buffer[e - 1], drop = buffer[e - 1 - tail];
+                    sq += (double)add * add - (double)drop * drop;
+                    if (sq < 0) { sq = 0; }
+                }
+                // The body before the window, every 16th sample as the loop looks at it.
+                for (; scannedBody < e - tail; scannedBody += 16)
+                {
+                    float v = buffer[scannedBody];
+                    if (v > 0.004f || v < -0.004f) { soundBefore = true; }
+                }
+                if (soundBefore && Math.Sqrt(sq / tail) < 0.002) { return e; }
+            }
+            return 0;
+        }
+
+        /// <summary><paramref name="text"/> without its first (or last) <paramref name="count"/> words.</summary>
+        internal static string DropWords(string text, int count, bool fromEnd)
+        {
+            if (string.IsNullOrWhiteSpace(text) || count <= 0) { return text ?? ""; }
+            string[] w = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (w.Length <= count) { return ""; }
+            return fromEnd ? string.Join(" ", w, 0, w.Length - count) : string.Join(" ", w, count, w.Length - count);
+        }
+
+        /// <summary>
+        /// One draft decode (see DraftWords): <paramref name="audio"/> through the session's processor with the same gates
+        /// the step's decode applies to what it heard — Whisper's no-speech estimate, short unsure segments — but none of
+        /// its bookkeeping (pace, language lock, the too-slow ladder). Null when the session was stopped meanwhile.
+        /// </summary>
+        private async Task<string> DecodeDraftAsync(WhisperProcessor processor, float[] audio, CancellationToken token)
+        {
+            var sb = new System.Text.StringBuilder();
+            bool cancelled = false;
+            float[] input = audio;
+            if (input.Length < MinDecodeSamples)
+            {
+                input = new float[MinDecodeSamples];
+                Array.Copy(audio, input, audio.Length);
+            }
+            Interlocked.Exchange(ref _decodeStartTick, Environment.TickCount64);
+            try
+            {
+                // Never break out of this enumerable, nor cancel it: the native pass must end on its own (see the step's
+                // decode in TranscribeLoop for why).
+                await foreach (var seg in processor.ProcessAsync(input))
+                {
+                    if (cancelled || token.IsCancellationRequested) { cancelled = true; continue; }
+                    if (seg == null || string.IsNullOrWhiteSpace(seg.Text)) { continue; }
+                    float p = seg.Probability;
+                    float noSpeech = seg.NoSpeechProbability;
+                    if (NoSpeechGate && !float.IsNaN(noSpeech)
+                        && ((noSpeech >= 0.2f && !float.IsNaN(p) && p < 0.6f)
+                            || (noSpeech >= 0.05f && (IsDecodeLoop(seg.Text) || HasOutroSignature(seg.Text)))))
+                    {
+                        continue;
+                    }
+                    if (!float.IsNaN(p) && p > 0f && p < 0.20f)
+                    {
+                        string t = seg.Text.Trim();
+                        int spaces = 0;
+                        for (int i = 0; i < t.Length; i++) { if (t[i] == ' ') { spaces++; } }
+                        if (spaces <= 2) { continue; }
+                    }
+                    sb.Append(seg.Text);
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _decodeStartTick, 0);
+            }
+            return cancelled ? null : sb.ToString().Trim();
+        }
+
         private void RaiseText(string text)
         {
+            // The host's caption replaces any draft of these words.
+            _draftShowing = false;
             try { TextRecognized?.Invoke(text); } catch { }
         }
 
@@ -5346,7 +7503,9 @@ namespace AutoClicker.Utils
             string english = values ? string.Format(System.Globalization.CultureInfo.InvariantCulture, format, args) : format;
             string shown = english;
             try { shown = values ? Localization.F(format, args) : Localization.T(format); } catch { }
-            Logger.Info("[TempoTranscriber] " + english);
+            // Logged here, once, when it happens (the host used to log it again under [Captions] once its UI thread got to
+            // it: every status twice in the file, "[TempoTranscriber] Loading the speech model…" then "[Captions] …").
+            Logger.Info("[Captions] " + english);
             _lastStatusShown = shown;
             try { Status?.Invoke(english); } catch { }
         }

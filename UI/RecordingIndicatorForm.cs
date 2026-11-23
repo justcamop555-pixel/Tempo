@@ -147,6 +147,8 @@ namespace AutoClicker.UI
                 _hint.Width = w - 2;
                 Region = RoundedRegion(Width, Height, D(14));
                 Place();
+                // A resized layered window has a new, empty surface: filled now.
+                PaintNow();
             }
             catch { }
         }
@@ -169,7 +171,8 @@ namespace AutoClicker.UI
             BackColor = theme.Surface;
             _hint.ForeColor = theme.TextMuted;
             // The dot's half of the pulse as it stands now — not a tick of the pulse.
-            _label.ForeColor = Preview || _dotOn ? theme.Danger : theme.Text;
+            // DangerText: the plain Danger is a fill, 2.1:1 as text on Nord.
+            _label.ForeColor = Preview || _dotOn ? theme.DangerText : theme.Text;
             Invalidate(true);
         }
 
@@ -213,11 +216,42 @@ namespace AutoClicker.UI
         public void SetOpacity(int opacityPct)
         {
             _alpha = (byte)Math.Round(Math.Max(40, Math.Min(100, opacityPct)) * 255.0 / 100.0);
-            if (IsHandleCreated)
+            ApplyAlpha();
+        }
+
+        // Never on screen unpainted, like the clicking badge (ClickingIndicatorForm._painted): see-through until it and
+        // its two lines have been painted once — at once, not when the message queue is next empty.
+        private bool _painted;
+
+        private void ApplyAlpha()
+        {
+            if (!IsHandleCreated) { return; }
+            try { SetLayeredWindowAttributes(Handle, 0, _painted ? _alpha : (byte)0, LWA_ALPHA); } catch { }
+        }
+
+        private void PaintNow()
+        {
+            if (!IsHandleCreated || !Visible) { return; }
+            try { RedrawWindow(Handle, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN); } catch { }
+        }
+
+        protected override void SetVisibleCore(bool value)
+        {
+            base.SetVisibleCore(value);
+            if (value && !_painted && IsHandleCreated)
             {
-                try { SetLayeredWindowAttributes(Handle, 0, _alpha, LWA_ALPHA); } catch { }
+                PaintNow();
+                _painted = true;
+                ApplyAlpha();
             }
         }
+
+        /// <summary>For the tests: painted once and showing at its opacity.</summary>
+        internal bool Painted => _painted;
+
+        [DllImport("user32.dll")]
+        private static extern bool RedrawWindow(IntPtr hWnd, IntPtr rect, IntPtr region, uint flags);
+        private const uint RDW_INVALIDATE = 0x0001, RDW_ALLCHILDREN = 0x0080, RDW_UPDATENOW = 0x0100;
 
         private void Place()
         {
@@ -253,8 +287,8 @@ namespace AutoClicker.UI
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            // A layered window stays invisible until its alpha is set.
-            try { SetLayeredWindowAttributes(Handle, 0, _alpha, LWA_ALPHA); } catch { }
+            // A layered window stays invisible until its alpha is set: its opacity once painted, none until then.
+            ApplyAlpha();
         }
 
         protected override void OnShown(EventArgs e)
@@ -329,14 +363,14 @@ namespace AutoClicker.UI
             if (Preview)
             {
                 // Placing it: the look of a recording, without a clock running for nothing.
-                _label.ForeColor = _theme.Danger;
+                _label.ForeColor = _theme.DangerText;
                 _label.Text = Utils.Localization.F("{0} REC  {1}:{2:00}   {3} steps", "●", 0, 0, 0);
                 return;
             }
             _dotOn = !_dotOn;
             TimeSpan elapsed = DateTime.UtcNow - _start;
             string dot = _dotOn ? "●" : "○";
-            _label.ForeColor = _dotOn ? _theme.Danger : _theme.Text;
+            _label.ForeColor = _dotOn ? _theme.DangerText : _theme.Text;
             _label.Text = Utils.Localization.F("{0} REC  {1}:{2:00}   {3} steps",
                 dot, (int)elapsed.TotalMinutes, elapsed.Seconds, _steps);
         }

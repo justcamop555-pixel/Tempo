@@ -21,8 +21,8 @@ namespace AutoClicker.Engine
     /// </summary>
     public sealed class MacroRecorder : IDisposable
     {
-        private readonly LowLevelMouseHook _hook = new LowLevelMouseHook();
-        private readonly LowLevelKeyboardHook _keyHook = new LowLevelKeyboardHook();
+        private readonly LowLevelMouseHook _hook = new LowLevelMouseHook { Name = "macro-recorder mouse" };
+        private readonly LowLevelKeyboardHook _keyHook = new LowLevelKeyboardHook { Name = "macro-recorder keyboard" };
         private Macro _macro;
         // Event timeline is the OS GetTickCount (ms) clock carried on each hook event, so
         // it isn't skewed by hook-callback dispatch latency. _lastEventMs holds the last
@@ -200,6 +200,18 @@ namespace AutoClicker.Engine
             public long MovementMs;
             /// <summary>The take was only movement, and kept it rather than trimming it to nothing.</summary>
             public bool KeptMovementOnly;
+            /// <summary>Camera steps written (a camera take).</summary>
+            public int CameraSteps;
+            /// <summary>
+            /// A take WITHOUT camera turns: hook moves made while a game hid the pointer or held it to a spot — its camera
+            /// turning, which recorded positions cannot replay (round 40: the hint to tick "…as camera turns").
+            /// </summary>
+            public int HeldPointerMoves;
+            /// <summary>Hook moves seen in a take without camera turns (for the share above).</summary>
+            public int MovesSeen;
+
+            /// <summary>Enough of the take's movement happened with a game holding the pointer to say so.</summary>
+            public bool LooksLikeCamera => HeldPointerMoves >= 20 && HeldPointerMoves * 4 >= MovesSeen;
         }
 
         /// <summary>The report on the take <see cref="Stop"/> last returned.</summary>
@@ -278,6 +290,15 @@ namespace AutoClicker.Engine
             _camHave = false;
             _camX = 0;
             _camY = 0;
+            _hold.Reset();
+            _holdProbedMs = long.MinValue;
+            _heldProbedMs = long.MinValue;
+            _lastHeldSample = false;
+            _turning = false;
+            _lastMoveWasRel = false;
+            _cameraSteps = 0;
+            _heldPointerMoves = 0;
+            _movesSeen = 0;
             if (RecordCamera && RecordMovements)
             {
                 // Before _recording is set, so the take never runs without its movement source.
@@ -289,7 +310,9 @@ namespace AutoClicker.Engine
             }
 
             _recording = true;
-            Logger.Info(_camera ? "[Macro] recording started (mouse as camera turns)." : "[Macro] recording started.");
+            Logger.Info(_camera
+                ? "[Macro] recording started (camera turns while a game holds or hides the pointer, positions while it is free)."
+                : "[Macro] recording started.");
             return true;
         }
 
@@ -333,7 +356,7 @@ namespace AutoClicker.Engine
                 // it came out with 0 steps and nothing was saved (the user's report, 2026-10-18; the log's
                 // "recording stopped (0 steps)"). So it is copied here, and kept if the trims leave no
                 // movement at all — when there is more than a moment of it.
-                if (_firstRealStep == null && _pendingMove && RecordMovements && !_camera) { FlushPendingMove(); }
+                if (_firstRealStep == null && _pendingMove && RecordMovements && !(_camera && _turning)) { FlushPendingMove(); }
                 report.MovementSteps = _macro.Actions.FindAll(s => IsMovement(s.Type)).Count;
                 report.MovementMs = MovementSpanMs(_macro.Actions);
                 List<MacroAction> movementOnly = _firstRealStep == null && report.MovementSteps > 0
@@ -383,15 +406,25 @@ namespace AutoClicker.Engine
                     report.KeptMovementOnly = true;
                 }
 
-                // A camera take opens with a camera step, even one of no movement: playback
-                // takes its mode from the latest movement step, and a take that opened with a
-                // click would otherwise have that click jump to its stored position — in a game
-                // with mouse-look, a screen coordinate it can read as a huge turn.
-                if (_camera && _macro.Actions.Count > 0 &&
-                    _macro.Actions[0].Type != MacroActionType.MouseMoveRelative)
+                // A camera take that opens with the game holding the pointer opens with a camera
+                // step, even one of no movement: playback takes its mode from the latest movement
+                // step, and a take that opened with a click would otherwise have that click jump to
+                // its stored position — in a game with mouse-look, a screen coordinate it can read as
+                // a huge turn. One that opens with the pointer free (a game's menu, round 40) opens
+                // in positions, as any take does.
+                if (_camera && _macro.Actions.Count > 0)
                 {
-                    _macro.Actions.Insert(0, new MacroAction(MacroActionType.MouseMoveRelative));
+                    int firstMove = _macro.Actions.FindIndex(s => s.Type == MacroActionType.MouseMove ||
+                                                                  s.Type == MacroActionType.MouseMoveRelative);
+                    bool opensTurning = firstMove >= 0 && _macro.Actions[firstMove].Type == MacroActionType.MouseMoveRelative;
+                    if (opensTurning && _macro.Actions[0].Type != MacroActionType.MouseMoveRelative)
+                    {
+                        _macro.Actions.Insert(0, new MacroAction(MacroActionType.MouseMoveRelative));
+                    }
                 }
+                report.CameraSteps = _cameraSteps;
+                report.HeldPointerMoves = _camera ? 0 : _heldPointerMoves;
+                report.MovesSeen = _movesSeen;
 
                 // 4. Synthesize Up events for any keys or mouse buttons still held, so a
                 //    played-back macro ends with no stuck inputs in the target application.
@@ -440,6 +473,8 @@ namespace AutoClicker.Engine
                         (report.KeptMovementOnly ? $"; movement only ({report.MovementMs} ms), kept whole rather than trimmed to nothing" : "") +
                         (report.OwnWindowInput > 0 ? $"; left out {report.OwnWindowInput} click(s)/key(s) on Tempo's own window" : "") +
                         (report.HotkeyPresses > 0 ? $"; left out {report.HotkeyPresses} press(es) of Tempo's hotkeys" : "") +
+                        (report.CameraSteps > 0 ? $"; {report.CameraSteps} camera step(s)" : "") +
+                        (report.LooksLikeCamera ? $"; {report.HeldPointerMoves} of {report.MovesSeen} pointer move(s) came while a game held or hid the pointer (its camera) — positions cannot replay those" : "") +
                         ").");
             return _macro;
         }
@@ -608,11 +643,32 @@ namespace AutoClicker.Engine
 
                 if (e.Type == MouseHookEventType.Move)
                 {
-                    // In camera mode the movement comes from raw input (OnRawMouse); the
-                    // hook's positions are where a locked pointer sits, not how far it turned.
-                    if (!RecordMovements || _camera)
+                    if (!RecordMovements)
                     {
                         return;
+                    }
+                    // A camera take records positions while the pointer is free and camera turns while a game
+                    // holds or hides it (round 40): then the turn comes from raw input (OnRawMouse), and the
+                    // hook's positions are only where the game holds the pointer, not how far it turned.
+                    if (_camera && _turning)
+                    {
+                        return;
+                    }
+                    if (!_camera) { NoteHeldPointer(now); }
+
+                    // Round 40 ("improve capture mouse movement"): what the throttle used to drop.
+                    //  • A REST: the pointer stopped on the skipped sample and only now moves on. It is written at the
+                    //    time it got there, so playback goes there and waits as the user did — a hover menu, a tooltip
+                    //    — instead of holding the last sample and then jumping past the spot to the next movement.
+                    //  • A CORNER: the skipped sample is where the path turned sharply. Overwritten, the turn was cut
+                    //    across as a diagonal (a menu's L-shaped path cut through the menu).
+                    if (_pendingMove && TickGap(_pendingMs, now) >= RestFlushMs)
+                    {
+                        FlushPendingMove();
+                    }
+                    else if (_pendingMove && IsCorner(_lastMoveX, _lastMoveY, _pendingX, _pendingY, e.X, e.Y))
+                    {
+                        FlushPendingMove();
                     }
 
                     bool farEnough =
@@ -681,6 +737,7 @@ namespace AutoClicker.Engine
                     FlushCamera(now);
                     _pendingMove = false;   // the press carries its own position
                     AppendDelay(now);
+                    EnterModeFor(e.X, e.Y);
                     // Track button-down / button-up transitions so a recording that ends
                     // while a button is held is repaired in Stop().
                     _buttonsDown.Add(type.Value);
@@ -704,6 +761,7 @@ namespace AutoClicker.Engine
                     FlushCamera(now);
                     _pendingMove = false;
                     AppendDelay(now);
+                    EnterModeFor(e.X, e.Y);
                     // Playback releases wherever the pointer is. When the button went up
                     // somewhere else — the end of a drag, which the move throttle may have
                     // cut short and which a take without mouse movement never had — the
@@ -727,6 +785,7 @@ namespace AutoClicker.Engine
                 FlushCamera(now);
                 _pendingMove = false;
                 AppendDelay(now);
+                EnterModeFor(e.X, e.Y);
                 // Windows scrolls whatever is under the pointer, so the scroll goes where
                 // it happened — not wherever the last click left the pointer.
                 MoveIfElsewhere(e.X, e.Y);
@@ -761,6 +820,25 @@ namespace AutoClicker.Engine
 
             lock (_appendLock)
             {
+                // Is the game holding or hiding the pointer — turning its camera — or does the pointer move with
+                // the mouse? (PointerHoldDetector, the same judge camera-relative movement uses.) Round 40: a camera
+                // take used to record ALL movement as turns, so a game's menus, clicked with a free pointer, replayed
+                // as presses wherever the pointer happened to be.
+                bool turning = HoldVerdict(Math.Abs((long)e.Dx) + Math.Abs((long)e.Dy), e.Time);
+                if (!turning)
+                {
+                    // The pointer moves with the mouse: the hook's positions carry this movement. A turn that just
+                    // ended is written first.
+                    if (_turning) { AppendCameraStep(); }
+                    _turning = false;
+                    return;
+                }
+                if (!_turning)
+                {
+                    // A turn starts: the free pointer's last resting spot first (the throttle may still hold it).
+                    FlushPendingMove();
+                    _turning = true;
+                }
                 if (_camHave && TickGap(_camFirstMs, e.Time) >= CameraSampleMs)
                 {
                     AppendCameraStep();
@@ -774,6 +852,113 @@ namespace AutoClicker.Engine
                 _camY += e.Dy;
                 _camLastMs = e.Time;
             }
+        }
+
+        // ── Is a game holding the pointer? (round 40) ──────────────────────────────────────────────────────────────
+        private readonly PointerHoldDetector _hold = new PointerHoldDetector();
+        private PointerHoldDetector.Sample _holdSample;
+        private long _holdProbedMs = long.MinValue;
+        private long _heldProbedMs = long.MinValue;
+        private bool _lastHeldSample;
+        // Whether the newest raw report was a camera turn (a camera take only).
+        private bool _turning;
+        // Whether the newest movement step written was a camera step (playback is then in relative mode).
+        private bool _lastMoveWasRel;
+        // Camera steps written, and hook moves seen while a game hid or confined the pointer in a take WITHOUT camera
+        // turns — the hint at Stop ("tick …as camera turns").
+        private int _cameraSteps;
+        private int _heldPointerMoves;
+        private int _movesSeen;
+
+        /// <summary>For the harnesses: what the pointer is doing, in place of the real one (PointerHoldDetector.Probe).</summary>
+        internal Func<PointerHoldDetector.Sample> ProbeForTest;
+
+        private PointerHoldDetector.Sample ProbePointer() =>
+            ProbeForTest != null ? ProbeForTest() : PointerHoldDetector.Probe();
+
+        /// <summary>
+        /// The detector's verdict for <paramref name="counts"/> of raw movement at <paramref name="time"/>: true = a camera
+        /// turn. The pointer is read at most every 4 ms (a gaming mouse reports every millisecond).
+        /// </summary>
+        private bool HoldVerdict(long counts, long time)
+        {
+            if (_holdProbedMs == long.MinValue || TickGap(_holdProbedMs, time) >= 4 || ProbeForTest != null)
+            {
+                _holdSample = ProbePointer();
+                _holdProbedMs = time;
+            }
+            return _hold.Update(counts, _holdSample, time) == PointerHoldDetector.Verdict.Turning;
+        }
+
+        /// <summary>
+        /// A take WITHOUT camera turns: counts hook moves made while a game hid the pointer or confined it to a spot —
+        /// its camera turning, which positions cannot replay. Read at most every 50 ms.
+        /// </summary>
+        private void NoteHeldPointer(long now)
+        {
+            _movesSeen++;
+            if (_heldProbedMs == long.MinValue || TickGap(_heldProbedMs, now) >= 50 || ProbeForTest != null)
+            {
+                PointerHoldDetector.Sample s = ProbePointer();
+                _lastHeldSample = s.Hidden || s.Confined;
+                _heldProbedMs = now;
+            }
+            if (_lastHeldSample) { _heldPointerMoves++; }
+        }
+
+        /// <summary>
+        /// In a camera take, puts playback in the mode the press at (<paramref name="x"/>, <paramref name="y"/>) needs: while a
+        /// game holds the pointer, relative — a camera step of nothing, if the take was in positions — so the press does not
+        /// jump to a screen spot (in mouse-look, a huge turn); while the pointer is free, positions — a move to the press, if
+        /// the take was in camera turns — so it lands on what was pressed. Under the lock.
+        /// </summary>
+        private void EnterModeFor(int x, int y)
+        {
+            if (!_camera) { return; }
+            bool held = _turning;
+            if (!held)
+            {
+                // Nothing moved yet to tell (a click straight away): ask the pointer itself.
+                PointerHoldDetector.Sample s = ProbePointer();
+                held = s.Hidden || s.Confined;
+            }
+            if (held)
+            {
+                if (!_lastMoveWasRel)
+                {
+                    Append(new MacroAction(MacroActionType.MouseMoveRelative));
+                    _lastMoveWasRel = true;
+                    _lastMoveX = int.MinValue;
+                }
+            }
+            else if (_lastMoveWasRel)
+            {
+                Append(new MacroAction(MacroActionType.MouseMove) { X = x, Y = y });
+                _macroPointerX = x;
+                _macroPointerY = y;
+                _lastMoveX = x;
+                _lastMoveY = y;
+                _lastMoveWasRel = false;
+            }
+        }
+
+        // ── Rests and corners (round 40) ──────────────────────────────────────────────────────────────────────────
+
+        /// <summary>A pause this long between the skipped sample and the next move: the pointer rested there.</summary>
+        internal const uint RestFlushMs = 50;
+
+        /// <summary>
+        /// Whether (<paramref name="px"/>, <paramref name="py"/>) is a corner of the path from the last written sample to the
+        /// newest position: both legs at least the move threshold long and turning by more than 45°.
+        /// </summary>
+        internal static bool IsCorner(int ax, int ay, int px, int py, int bx, int by)
+        {
+            if (ax == int.MinValue) { return false; }
+            double v1x = px - ax, v1y = py - ay, v2x = bx - px, v2y = by - py;
+            double l1 = Math.Sqrt(v1x * v1x + v1y * v1y), l2 = Math.Sqrt(v2x * v2x + v2y * v2y);
+            if (l1 < MoveDistanceThreshold || l2 < MoveDistanceThreshold) { return false; }
+            double cos = (v1x * v2x + v1y * v2y) / (l1 * l2);
+            return cos < 0.7071;
         }
 
         /// <summary>Writes the movement summed so far as one camera step (under the lock).</summary>
@@ -793,6 +978,11 @@ namespace AutoClicker.Engine
             }
             AppendDelay(_camLastMs);
             Append(new MacroAction(MacroActionType.MouseMoveRelative) { X = dx, Y = dy });
+            _cameraSteps++;
+            _lastMoveWasRel = true;
+            // The pointer reappears where the game held it: the next free movement is written however close it is,
+            // so playback leaves relative mode there.
+            _lastMoveX = int.MinValue;
         }
 
         /// <summary>
@@ -830,6 +1020,7 @@ namespace AutoClicker.Engine
             Append(new MacroAction(MacroActionType.MouseMove) { X = x, Y = y });
             _macroPointerX = x;
             _macroPointerY = y;
+            _lastMoveWasRel = false;
         }
 
         /// <summary>
@@ -857,8 +1048,9 @@ namespace AutoClicker.Engine
         /// </summary>
         private void MoveIfElsewhere(int x, int y)
         {
-            // Never in a camera take: a jump to a screen position is exactly what it avoids.
-            if (_camera || IsNearMacroPointer(x, y))
+            // Never while a game holds the pointer (a camera take turning): a jump to a screen position is exactly what
+            // camera turns avoid. With the pointer free, a camera take moves it like any other (round 40).
+            if ((_camera && _turning) || IsNearMacroPointer(x, y))
             {
                 return;
             }
@@ -867,6 +1059,7 @@ namespace AutoClicker.Engine
             _macroPointerY = y;
             _lastMoveX = x;
             _lastMoveY = y;
+            _lastMoveWasRel = false;
         }
 
         private bool IsNearMacroPointer(int x, int y)

@@ -73,8 +73,9 @@ namespace AutoClicker.UI
                 {
                     var fill = new Rectangle(1, 1, fillW, Height - 3);
                     g.SetClip(tp);
+                    // The accent into the theme's second accent (round 42); the hover shade for a palette without one.
                     using (var fb = new LinearGradientBrush(fill,
-                               _theme.Accent, _theme.AccentHover, LinearGradientMode.Horizontal))
+                               _theme.Accent, _theme.Accent2.IsEmpty ? _theme.AccentHover : _theme.Accent2, LinearGradientMode.Horizontal))
                     using (var fpath = Rounded(fill, Math.Min(Height - 3, radius)))
                     {
                         g.FillPath(fb, fpath);

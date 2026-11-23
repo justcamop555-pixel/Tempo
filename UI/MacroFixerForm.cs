@@ -67,7 +67,7 @@ namespace AutoClicker.UI
                 Location = new Point(16, 14),
                 Size = new Size(528, 22),
                 Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
-                ForeColor = problems > 0 ? theme.Danger : theme.Text,
+                ForeColor = problems > 0 ? theme.DangerText : theme.Text,
                 BackColor = Color.Transparent
             };
             Controls.Add(heading);
